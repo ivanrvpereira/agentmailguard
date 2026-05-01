@@ -9,8 +9,9 @@ ID ?=
 QUERY ?=
 SENDER ?=
 RISK ?=
+FILE ?= demo/emails/001-team-standup.eml
 
-.PHONY: help install dev typecheck validate migrate-local migrate-remote deploy tail health mcp-auth-check db-recent db-latest db-entities db-failed-vectors db-search db-get
+.PHONY: help install dev typecheck validate migrate-local migrate-remote deploy tail health mcp-auth-check demo-emails-local demo-email-local db-recent-local db-entities-local db-recent db-latest db-entities db-failed-vectors db-search db-get
 
 help:
 	@echo "AgentMailGuard commands"
@@ -30,6 +31,10 @@ help:
 	@echo "Demo checks:"
 	@echo "  make health           hit deployed health endpoint"
 	@echo "  make mcp-auth-check   verify MCP auth using .env"
+	@echo "  make demo-emails-local post all demo .eml fixtures to local wrangler dev"
+	@echo "  make demo-email-local FILE=demo/emails/003-prompt-injection.eml"
+	@echo "  make db-recent-local  show local demo emails; LIMIT=10"
+	@echo "  make db-entities-local show local extracted entities; LIMIT=20"
 	@echo "  make db-recent        show recent emails; LIMIT=10"
 	@echo "  make db-latest        show latest email details"
 	@echo "  make db-entities      show latest extracted entities"
@@ -78,6 +83,18 @@ mcp-auth-check:
 	  -H "Accept: application/json, text/event-stream" \
 	  $(REMOTE_URL)/mcp || true; \
 	cat /tmp/agentmailguard-mcp-auth.out; echo
+
+demo-emails-local:
+	./demo/scripts/send-local-emails.sh
+
+demo-email-local:
+	./demo/scripts/send-local-emails.sh $(FILE)
+
+db-recent-local:
+	npx wrangler d1 execute $(DB) --local --command "SELECT id, received_at, sender_addr, subject, risk_level, labels, vector_status FROM emails ORDER BY received_at DESC LIMIT $(LIMIT);"
+
+db-entities-local:
+	npx wrangler d1 execute $(DB) --local --command "SELECT e.email_id, e.entity_type, e.value, e.source_field FROM entities e JOIN emails m ON m.id = e.email_id ORDER BY m.received_at DESC LIMIT $(LIMIT);"
 
 db-recent:
 	npx wrangler d1 execute $(DB) --remote --command "SELECT id, received_at, sender_addr, subject, risk_level, labels, vector_status FROM emails ORDER BY received_at DESC LIMIT $(LIMIT);"

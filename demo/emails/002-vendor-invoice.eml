@@ -1,0 +1,18 @@
+Date: Fri, 01 May 2026 09:25:00 +0000
+From: "Northwind Billing" <billing@northwind.example>
+To: "AgentMailGuard Inbox" <inbox@agentmailguard.dev>
+Message-ID: <demo-002-vendor-invoice@northwind.example>
+Subject: Demo: invoice NW-1042 due May 15, 2026
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8
+
+<!doctype html>
+<html>
+  <body>
+    <p>Hello,</p>
+    <p>Invoice NW-1042 for $248.00 is due May 15, 2026.</p>
+    <p>Please review the invoice in the vendor portal:</p>
+    <p><a href="https://billing.northwind.example/invoices/NW-1042">View invoice</a></p>
+    <p>Questions? Contact ar@northwind.example.</p>
+  </body>
+</html>
