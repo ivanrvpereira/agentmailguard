@@ -11,7 +11,7 @@ import type { Contact, Env, ParsedInboundEmail, ProcessedEmail } from "./types";
 export async function processInboundEmail(message: ForwardableEmailMessage, env: Env): Promise<void> {
   const startedAt = Date.now();
   logEmailEvent("email_received", {
-    raw_size: message.rawSize,
+    size: message.rawSize,
   });
 
   try {
@@ -32,12 +32,14 @@ export async function processInboundEmail(message: ForwardableEmailMessage, env:
     await storeProcessedEmail(env.DB, processed);
     logEmailEvent("email_processed", {
       id: processed.id,
-      risk_level: processed.riskLevel,
-      auth: processed.auth,
-      threat_count: processed.threatFlags.length,
-      threat_flags: processed.threatFlags,
-      entity_count: processed.entities.length,
-      has_attachments: processed.hasAttachments,
+      risk: processed.riskLevel,
+      spf: processed.auth.spf,
+      dkim: processed.auth.dkim,
+      dmarc: processed.auth.dmarc,
+      threats: processed.threatFlags.length,
+      flags: processed.threatFlags,
+      entities: processed.entities.length,
+      attachments: processed.hasAttachments,
       duration_ms: Date.now() - startedAt,
     });
 
@@ -126,7 +128,35 @@ function contactFromEnvelope(address: string): Contact {
 }
 
 function logEmailEvent(event: string, fields: Record<string, unknown>): void {
-  console.log(JSON.stringify({ event, ...fields }));
+  const parts = [`event=${event}`];
+
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined) continue;
+    parts.push(`${key}=${formatLogValue(value)}`);
+  }
+
+  console.log(parts.join(" "));
+}
+
+function formatLogValue(value: unknown): string {
+  if (value === null) return "-";
+
+  if (Array.isArray(value)) {
+    return value.length > 0 ? value.map(formatListValue).join(",") : "-";
+  }
+
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    return entries.length > 0 ? entries.map(([key, entryValue]) => `${key}:${formatListValue(entryValue)}`).join(",") : "-";
+  }
+
+  return formatListValue(value);
+}
+
+function formatListValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "-";
+  const text = String(value).replace(/\s+/g, "_");
+  return text.length > 0 ? text : "-";
 }
 
 function errorMessage(error: unknown): string {
