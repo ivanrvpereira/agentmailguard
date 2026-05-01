@@ -1,0 +1,25 @@
+name = "agentmailguard"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "agentmail"
+database_id = "1c1793ce-7c44-49ba-ae03-87ac00a9b858"
+
+[[vectorize]]
+binding = "VECTORS"
+index_name = "email-embeddings"
+
+[durable_objects]
+bindings = [
+  { name = "MCP_AGENT", class_name = "EmailMcpAgent" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["EmailMcpAgent"]
