@@ -1,62 +1,39 @@
 # AgentMailGuard
 
-AgentMailGuard is a Cloudflare-native email gateway for AI agents. It receives inbound mail through Cloudflare Email Routing, cleans and classifies the message, stores only processed content, and exposes read-only MCP tools for agent access.
+Agents accessing your mailbox is a risk. Prompt injection hidden in email bodies, credential exposure from raw IMAP access, and unrestricted read of sensitive threads are real attack surfaces the moment an AI agent connects to your inbox. AgentMailGuard is a firewall between your mail and your agents.
 
-The goal is to let agents search and read email without giving them mailbox credentials or raw mailbox access.
+It receives inbound mail through Cloudflare Email Routing, runs it through a deterministic cleaning and threat detection pipeline, classifies risk with Workers AI, and exposes only the processed output through authenticated MCP tools — never raw mail, never mailbox credentials.
 
-## Core idea
+> Built for the **Cloudflare AgentsDay Hackathon** — "Build a Personal Agent that Automates a Meaningful Task in your Life".
+
+## How it works
 
 ```text
 External sender
-  -> Cloudflare Email Routing
-  -> Email Worker
-  -> deterministic cleaner
-  -> threat detector
-  -> Workers AI classifier
-  -> D1 + Vectorize
-  -> authenticated MCP tools
-  -> AI agent
+  → Cloudflare Email Routing
+  → AgentMailGuard Worker
+      → parse (postal-mime)
+      → clean (strip HTML, neutralize injections, normalize text)
+      → detect (prompt injection, opaque payloads, homoglyphs, evasion)
+      → classify (Workers AI → red / yellow / green)
+      → extract entities (emails, URLs, dates, names, phones)
+      → store metadata + cleaned body in D1
+      → embed in Vectorize
+  → MCP tools (authenticated)
+  → AI agent
 ```
 
 Key invariants:
 
-- Raw email is transient and is never written to D1 or Vectorize.
+- Raw email is transient and never written to storage.
 - Email-derived text is always untrusted, even after cleaning.
 - Agents never hold mailbox credentials; mail arrives via MX routing.
-- Risk level controls which fields an agent can read.
+- Risk level gates which fields an agent can read.
 - Missing trust signals never increase trust.
-
-## Current MVP
-
-The current implementation is the hackathon/store-only version of the design:
-
-- Inbound email is parsed with `postal-mime`.
-- Cleaned email bodies are stored in D1 as text.
-- Embeddings are stored in Cloudflare Vectorize for semantic search.
-- Classification uses Workers AI with a conservative fallback.
-- MCP endpoints are protected by a shared secret.
-- There is no cleaned re-delivery to a human inbox yet.
-- There is no R2 body storage or attachment scanning yet.
-
-## Pipeline
-
-1. **Parse** inbound email from Cloudflare Email Routing.
-2. **Clean** text deterministically:
-   - strip HTML, scripts, styles, and comments
-   - decode HTML entities
-   - normalize Unicode
-   - remove invisible/control characters
-   - neutralize markdown links/images, data URIs, code fences, base64, and hex blobs
-   - truncate subject/body
-3. **Detect threats** using heuristic flags for prompt injection, residual URLs, data URIs, opaque payloads, homoglyphs, and Zalgo-style evasion.
-4. **Classify risk** with Workers AI into `red`, `yellow`, or `green`.
-5. **Extract entities** such as emails, URLs, dates, names, and phone numbers.
-6. **Store** metadata, cleaned body, classification, threat flags, and entities in D1.
-7. **Embed** subject + cleaned body in Vectorize on a best-effort basis.
 
 ## Risk-gated access
 
-`get_email` returns different fields based on the stored risk level:
+`get_email` returns different fields based on risk level:
 
 | Field | Red | Yellow | Green |
 |---|:---:|:---:|:---:|
@@ -69,17 +46,10 @@ The current implementation is the hackathon/store-only version of the design:
 
 ## MCP tools
 
-The Worker exposes authenticated MCP endpoints:
+Endpoints:
 
-- `/sse` — SSE MCP endpoint
-- `/mcp` — streamable HTTP MCP endpoint
-
-Tools:
-
-- `list_emails`
-- `get_email`
-- `search_emails`
-- `semantic_search`
+- `/sse` — SSE MCP transport
+- `/mcp` — streamable HTTP MCP transport
 
 Pass the shared secret as either:
 
@@ -88,19 +58,31 @@ Authorization: Bearer <MCP_SHARED_SECRET>
 x-agentmailguard-token: <MCP_SHARED_SECRET>
 ```
 
-## Cloudflare resources
+Available tools:
 
-Required bindings:
+- `list_emails` — paginated list of processed email summaries
+- `get_email` — single email by id, risk-gated
+- `search_emails` — keyword search over summaries
+- `semantic_search` — Vectorize embedding search
 
-- `AI` — Workers AI
-- `DB` — D1 database named `agentmail`
-- `VECTORS` — Vectorize index named `email-embeddings`
-- `MCP_AGENT` — Durable Object for the MCP agent
-- `MCP_SHARED_SECRET` — Worker secret for MCP authentication
+## Email sender (test worker)
+
+`workers/email-sender/` is a companion Cloudflare Worker that continuously sends realistic phishing and safe test emails at random 1–30 second intervals via the Gmail API. Use it to drive test traffic through the pipeline.
+
+```bash
+# start
+curl -X POST https://agentmailguard-email-sender.<account>.workers.dev/agents/email-sender-agent/main/start
+# stop
+curl -X POST https://agentmailguard-email-sender.<account>.workers.dev/agents/email-sender-agent/main/stop
+# status
+curl https://agentmailguard-email-sender.<account>.workers.dev/agents/email-sender-agent/main
+```
+
+See `workers/email-sender/README.md` for setup instructions.
 
 ## Setup
 
-Install dependencies and authenticate Wrangler:
+Install and authenticate:
 
 ```bash
 npm install
@@ -114,51 +96,22 @@ npx wrangler d1 create agentmail
 npx wrangler vectorize create email-embeddings --dimensions=768 --metric=cosine
 ```
 
-Copy the D1 `database_id` into `wrangler.toml`.
-
-Set the MCP shared secret:
+Copy the D1 `database_id` into `wrangler.toml`, then:
 
 ```bash
 npx wrangler secret put MCP_SHARED_SECRET
-```
-
-Apply D1 migrations:
-
-```bash
 npm run db:migrate:remote
-```
-
-Deploy:
-
-```bash
 npm run deploy
 ```
 
-Then configure Cloudflare Email Routing for `agentmailguard.dev` and route inbound mail to this Worker.
+Configure Cloudflare Email Routing to route inbound mail to this Worker.
 
 ## Development
 
-Run the Worker locally:
-
 ```bash
-npm run dev
-```
-
-Typecheck:
-
-```bash
-npm run typecheck
-```
-
-Generate Cloudflare binding types:
-
-```bash
-npm run cf-typegen
-```
-
-Apply local migrations:
-
-```bash
+npm run dev           # local Worker
+npm run typecheck     # TypeScript check
+npm run cf-typegen    # regenerate Cloudflare binding types
 npm run db:migrate:local
 ```
 
@@ -166,12 +119,12 @@ npm run db:migrate:local
 
 ```text
 src/
-  index.ts              Worker entry, MCP auth, fetch/email handlers
-  mcp-agent.ts          MCP tool definitions
+  index.ts              Worker entry — MCP auth, fetch/email handlers
+  mcp-agent.ts          MCP Durable Object and tool definitions
   pipeline/
     process.ts          Pipeline orchestrator
     cleaner.ts          Deterministic text cleaning
-    detector.ts         Threat detection
+    detector.ts         Heuristic threat detection
     classifier.ts       Workers AI classification and fallback policy
     extractor.ts        Entity extraction
     types.ts            Shared types and Cloudflare env bindings
@@ -179,27 +132,17 @@ src/
     d1.ts               D1 reads/writes and risk-gated output
     vectorize.ts        Embedding and semantic search helpers
 migrations/             D1 schema migrations
-wrangler.toml           Cloudflare Worker bindings
+workers/
+  email-sender/         Standalone test email sender Worker
+wrangler.toml           Cloudflare bindings and deployment config
 ```
 
-## Data model
+## Cloudflare bindings
 
-D1 stores:
-
-- email metadata
-- cleaned body
-- recipients as JSON text
-- risk level and reasons
-- labels and threat flags
-- authentication signal fields
-- Vectorize status/error fields
-- extracted entities
-
-Vectorize stores embeddings keyed as `email:<email_id>` with `email_id` metadata.
-
-## Design references
-
-The design specs live in `specs/`:
-
-- `specs/2026-05-01-agentmail-hackathon-design.md`
-- `specs/2026-05-01-cloudflare-email-gateway.md`
+| Binding | Type | Purpose |
+|---|---|---|
+| `AI` | Workers AI | Email classification |
+| `DB` | D1 | Processed email storage |
+| `VECTORS` | Vectorize | Semantic search embeddings |
+| `MCP_AGENT` | Durable Object | MCP agent state |
+| `MCP_SHARED_SECRET` | Secret | MCP endpoint auth |
