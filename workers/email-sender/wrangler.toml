@@ -1,0 +1,12 @@
+name = "agentmailguard-email-sender"
+main = "src/index.ts"
+compatibility_date = "2026-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[durable_objects.bindings]]
+name = "EmailSenderAgent"
+class_name = "EmailSenderAgent"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["EmailSenderAgent"]
