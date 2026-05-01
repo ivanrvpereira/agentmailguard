@@ -96,8 +96,8 @@ export async function listEmails(db: D1Database, filters: EmailListFilters = {})
   }
 
   if (filters.sender) {
-    clauses.push("sender_addr = ?");
-    bindings.push(filters.sender.toLowerCase());
+    clauses.push("sender_addr LIKE ? ESCAPE '\\'");
+    bindings.push(likeContains(filters.sender.toLowerCase()));
   }
 
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -130,8 +130,8 @@ export async function getEmail(db: D1Database, id: string) {
 }
 
 export async function searchEmails(db: D1Database, filters: EmailSearchFilters) {
-  const clauses = ["(subject LIKE ? OR cleaned_body LIKE ? OR sender_addr LIKE ?)"];
-  const likeQuery = `%${filters.query}%`;
+  const clauses = ["(subject LIKE ? ESCAPE '\\' OR cleaned_body LIKE ? ESCAPE '\\' OR sender_addr LIKE ? ESCAPE '\\')"];
+  const likeQuery = likeContains(filters.query);
   const bindings: unknown[] = [likeQuery, likeQuery, likeQuery];
 
   if (filters.riskFilter) {
@@ -145,8 +145,8 @@ export async function searchEmails(db: D1Database, filters: EmailSearchFilters) 
   }
 
   if (filters.sender) {
-    clauses.push("sender_addr = ?");
-    bindings.push(filters.sender.toLowerCase());
+    clauses.push("sender_addr LIKE ? ESCAPE '\\'");
+    bindings.push(likeContains(filters.sender.toLowerCase()));
   }
 
   const result = await db
@@ -163,17 +163,19 @@ export async function searchEmails(db: D1Database, filters: EmailSearchFilters) 
   return result.results.map(summaryFromRow);
 }
 
-export async function getEmailSummariesByIds(db: D1Database, ids: string[]) {
+export async function getEmailSummariesByIds(db: D1Database, ids: string[], riskFilter?: RiskLevel) {
   if (ids.length === 0) return [];
 
   const placeholders = ids.map(() => "?").join(", ");
+  const riskClause = riskFilter ? " AND risk_level = ?" : "";
+  const bindings = riskFilter ? [...ids, riskFilter] : ids;
   const result = await db
     .prepare(
       `SELECT id, received_at, sender_addr, sender_name, subject, labels, risk_level
        FROM emails
-       WHERE id IN (${placeholders})`,
+       WHERE id IN (${placeholders})${riskClause}`,
     )
-    .bind(...ids)
+    .bind(...bindings)
     .all();
 
   const byId = new Map(result.results.map((row) => [String(row.id), summaryFromRow(row)]));
@@ -239,6 +241,10 @@ function parseJsonArray(value: unknown): unknown[] {
   } catch {
     return [];
   }
+}
+
+function likeContains(value: string): string {
+  return `%${value.replace(/[\\%_]/g, "\\$&")}%`;
 }
 
 function clamp(value: number, min: number, max: number): number {

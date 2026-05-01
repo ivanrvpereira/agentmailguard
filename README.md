@@ -117,6 +117,18 @@ npm run cf-typegen    # regenerate Cloudflare binding types
 npm run db:migrate:local
 ```
 
+Common demo commands are also available through `make`:
+
+```bash
+make help
+make tail
+make db-recent
+make db-latest
+make db-entities
+make db-search QUERY=receipt
+make mcp-auth-check
+```
+
 ## Project structure
 
 ```text

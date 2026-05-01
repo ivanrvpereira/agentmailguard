@@ -8,10 +8,11 @@ const INVISIBLE_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFE00-\uFE0F\u
 const CONTROL_CHARS = /[\u0000-\u001F\u007F]/g;
 
 export function cleanEmail(email: ParsedInboundEmail): CleanedEmail {
-  const bodySource = [email.textBody, stripHtml(email.htmlBody)].filter(Boolean).join("\n");
+  const { textBody, htmlBody, ...rest } = email;
+  const bodySource = [textBody, stripHtml(htmlBody)].filter(Boolean).join("\n");
 
   return {
-    ...email,
+    ...rest,
     sender: cleanContact(email.sender),
     recipients: email.recipients.map(cleanContact),
     subject: truncate(cleanText(email.subject), SUBJECT_LIMIT),
@@ -130,5 +131,6 @@ function collapseWhitespace(value: string): string {
 }
 
 function truncate(value: string, limit: number): string {
-  return value.length > limit ? value.slice(0, limit) : value;
+  const codePoints = Array.from(value);
+  return codePoints.length > limit ? codePoints.slice(0, limit).join("") : value;
 }

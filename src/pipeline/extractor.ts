@@ -8,7 +8,6 @@ const PATTERNS: Array<[EntityType, RegExp]> = [
   ["url", /\bhttps?:\/\/[^\s<>()]+/gi],
   ["phone", /\b(?:\+?\d[\d .()-]{7,}\d)\b/g],
   ["date", /\b\d{4}-\d{2}-\d{2}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b/gi],
-  ["name", /\b[A-Z][a-z]+\s+[A-Z][a-z]+\b/g],
 ];
 
 export function extractEntities(email: CleanedEmail): Entity[] {

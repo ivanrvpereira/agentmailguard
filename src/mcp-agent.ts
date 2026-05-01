@@ -23,7 +23,7 @@ export class EmailMcpAgent extends McpAgent<Env> {
           offset: z.number().int().min(0).optional(),
           risk_filter: riskSchema.optional(),
           since: z.string().optional(),
-          sender: z.string().email().optional(),
+          sender: z.string().min(1).optional(),
         },
       },
       async ({ limit, offset, risk_filter, since, sender }) =>
@@ -58,7 +58,7 @@ export class EmailMcpAgent extends McpAgent<Env> {
         description: "Keyword search processed email summaries.",
         inputSchema: {
           query: z.string().min(1),
-          sender: z.string().email().optional(),
+          sender: z.string().min(1).optional(),
           risk_filter: riskSchema.optional(),
           since: z.string().optional(),
           limit: z.number().int().min(1).max(100).optional(),
@@ -87,9 +87,11 @@ export class EmailMcpAgent extends McpAgent<Env> {
         },
       },
       async ({ query, limit, risk_filter }) => {
-        const ids = await semanticSearchIds(this.env.AI, this.env.VECTORS, query, limit ?? 10);
-        const summaries = await getEmailSummariesByIds(this.env.DB, ids);
-        return jsonResult(risk_filter ? summaries.filter((email) => email.risk_level === risk_filter) : summaries);
+        const requestedLimit = limit ?? 10;
+        const vectorLimit = risk_filter ? Math.min(requestedLimit * 3, 50) : requestedLimit;
+        const ids = await semanticSearchIds(this.env.AI, this.env.VECTORS, query, vectorLimit);
+        const summaries = await getEmailSummariesByIds(this.env.DB, ids, risk_filter);
+        return jsonResult(summaries.slice(0, requestedLimit));
       },
     );
   }

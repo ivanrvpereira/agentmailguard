@@ -42,14 +42,14 @@ export default {
       const authResponse = await authorizeMcpRequest(request, env);
       if (authResponse) return authResponse;
 
-      return EmailMcpAgent.serveSSE("/sse").fetch(request, env, ctx);
+      return EmailMcpAgent.serveSSE("/sse", { binding: "MCP_AGENT" }).fetch(request, env, ctx);
     }
 
     if (url.pathname === "/mcp" || url.pathname.startsWith("/mcp/")) {
       const authResponse = await authorizeMcpRequest(request, env);
       if (authResponse) return authResponse;
 
-      return EmailMcpAgent.serve("/mcp").fetch(request, env, ctx);
+      return EmailMcpAgent.serve("/mcp", { binding: "MCP_AGENT" }).fetch(request, env, ctx);
     }
 
     return Response.json({

@@ -13,6 +13,8 @@
 | Typecheck | `npm run typecheck` |
 | Generate Cloudflare types | `npm run cf-typegen` |
 | Apply local D1 migrations | `npm run db:migrate:local` |
+| Demo command list | `make help` |
+| Tail remote Worker logs | `make tail` |
 | Deploy Worker | `npm run deploy` |
 | Apply remote D1 migrations | `npm run db:migrate:remote` |
 
