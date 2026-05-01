@@ -1,7 +1,7 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { getEmail, getEmailSummariesByIds, listEmails, searchEmails } from "./store/d1";
+import { getEmail, getEmailSummariesByIds, listEmails, searchEmails, type EmailSummary } from "./store/d1";
 import { semanticSearchIds } from "./store/vectorize";
 import type { Env, RiskLevel } from "./pipeline/types";
 
@@ -55,7 +55,7 @@ export class EmailMcpAgent extends McpAgent<Env> {
     this.server.registerTool(
       "search_emails",
       {
-        description: "Keyword search processed email summaries.",
+        description: "Hybrid keyword and semantic search over processed email summaries.",
         inputSchema: {
           query: z.string().min(1),
           sender: z.string().min(1).optional(),
@@ -64,36 +64,59 @@ export class EmailMcpAgent extends McpAgent<Env> {
           limit: z.number().int().min(1).max(100).optional(),
         },
       },
-      async ({ query, sender, risk_filter, since, limit }) =>
-        jsonResult(
-          await searchEmails(this.env.DB, {
-            query,
-            sender,
-            riskFilter: risk_filter,
-            since,
-            limit,
-          }),
-        ),
+      async ({ query, sender, risk_filter, since, limit }) => {
+        return jsonResult(await hybridSearchEmails(this.env, { query, sender, riskFilter: risk_filter, since, limit }));
+      },
     );
+  }
+}
 
-    this.server.registerTool(
-      "semantic_search",
-      {
-        description: "Semantic search processed email summaries using Vectorize embeddings.",
-        inputSchema: {
-          query: z.string().min(1),
-          limit: z.number().int().min(1).max(50).optional(),
-          risk_filter: riskSchema.optional(),
-        },
-      },
-      async ({ query, limit, risk_filter }) => {
-        const requestedLimit = limit ?? 10;
-        const vectorLimit = risk_filter ? Math.min(requestedLimit * 3, 50) : requestedLimit;
-        const ids = await semanticSearchIds(this.env.AI, this.env.VECTORS, query, vectorLimit);
-        const summaries = await getEmailSummariesByIds(this.env.DB, ids, risk_filter);
-        return jsonResult(summaries.slice(0, requestedLimit));
-      },
-    );
+interface HybridSearchFilters {
+  query: string;
+  sender?: string;
+  riskFilter?: RiskLevel;
+  since?: string;
+  limit?: number;
+}
+
+async function hybridSearchEmails(env: Env, filters: HybridSearchFilters): Promise<EmailSummary[]> {
+  const limit = filters.limit ?? 25;
+  const keywordLimit = Math.min(limit * 2, 100);
+  const vectorLimit = Math.min(limit * 2, 50);
+
+  const keywordResults = await searchEmails(env.DB, { ...filters, limit: keywordLimit });
+  const semanticIds = await semanticSearchIds(env.AI, env.VECTORS, filters.query, vectorLimit);
+  const semanticResults = await getEmailSummariesByIds(env.DB, semanticIds, filters);
+
+  return mergeRankedResults(keywordResults, semanticResults, limit);
+}
+
+function mergeRankedResults(
+  keywordResults: EmailSummary[],
+  semanticResults: EmailSummary[],
+  limit: number,
+): EmailSummary[] {
+  const ranked = new Map<string, { summary: EmailSummary; score: number }>();
+
+  addRankedResults(ranked, keywordResults);
+  addRankedResults(ranked, semanticResults);
+
+  return [...ranked.values()]
+    .sort((left, right) => right.score - left.score || right.summary.received_at.localeCompare(left.summary.received_at))
+    .slice(0, limit)
+    .map((item) => item.summary);
+}
+
+function addRankedResults(ranked: Map<string, { summary: EmailSummary; score: number }>, results: EmailSummary[]) {
+  for (const [index, summary] of results.entries()) {
+    const existing = ranked.get(summary.id);
+    const score = 1 / (60 + index + 1);
+
+    if (existing) {
+      existing.score += score;
+    } else {
+      ranked.set(summary.id, { summary, score });
+    }
   }
 }
 

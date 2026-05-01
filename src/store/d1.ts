@@ -32,6 +32,21 @@ export interface EmailSearchFilters {
   limit?: number;
 }
 
+export interface EmailSummary {
+  id: string;
+  sender: Contact;
+  subject: string;
+  received_at: string;
+  risk_level: RiskLevel;
+  labels: unknown[];
+}
+
+export interface EmailSummaryLookupFilters {
+  riskFilter?: RiskLevel;
+  since?: string;
+  sender?: string;
+}
+
 export async function storeProcessedEmail(db: D1Database, email: ProcessedEmail): Promise<void> {
   const statements = [
     db
@@ -129,7 +144,7 @@ export async function getEmail(db: D1Database, id: string) {
   return gateEmail(email, entities.results);
 }
 
-export async function searchEmails(db: D1Database, filters: EmailSearchFilters) {
+export async function searchEmails(db: D1Database, filters: EmailSearchFilters): Promise<EmailSummary[]> {
   const clauses = ["(subject LIKE ? ESCAPE '\\' OR cleaned_body LIKE ? ESCAPE '\\' OR sender_addr LIKE ? ESCAPE '\\')"];
   const likeQuery = likeContains(filters.query);
   const bindings: unknown[] = [likeQuery, likeQuery, likeQuery];
@@ -163,17 +178,37 @@ export async function searchEmails(db: D1Database, filters: EmailSearchFilters) 
   return result.results.map(summaryFromRow);
 }
 
-export async function getEmailSummariesByIds(db: D1Database, ids: string[], riskFilter?: RiskLevel) {
+export async function getEmailSummariesByIds(
+  db: D1Database,
+  ids: string[],
+  filters: EmailSummaryLookupFilters = {},
+): Promise<EmailSummary[]> {
   if (ids.length === 0) return [];
 
   const placeholders = ids.map(() => "?").join(", ");
-  const riskClause = riskFilter ? " AND risk_level = ?" : "";
-  const bindings = riskFilter ? [...ids, riskFilter] : ids;
+  const clauses = [`id IN (${placeholders})`];
+  const bindings: unknown[] = [...ids];
+
+  if (filters.riskFilter) {
+    clauses.push("risk_level = ?");
+    bindings.push(filters.riskFilter);
+  }
+
+  if (filters.since) {
+    clauses.push("received_at >= ?");
+    bindings.push(filters.since);
+  }
+
+  if (filters.sender) {
+    clauses.push("sender_addr LIKE ? ESCAPE '\\'");
+    bindings.push(likeContains(filters.sender.toLowerCase()));
+  }
+
   const result = await db
     .prepare(
       `SELECT id, received_at, sender_addr, sender_name, subject, labels, risk_level
        FROM emails
-       WHERE id IN (${placeholders})${riskClause}`,
+       WHERE ${clauses.join(" AND ")}`,
     )
     .bind(...bindings)
     .all();
@@ -191,7 +226,7 @@ function insertEntity(db: D1Database, entity: Entity): D1PreparedStatement {
     .bind(entity.id, entity.emailId, entity.entityType, entity.value, entity.sourceField);
 }
 
-function summaryFromRow(row: Record<string, unknown>) {
+function summaryFromRow(row: Record<string, unknown>): EmailSummary {
   return {
     id: String(row.id),
     sender: {
