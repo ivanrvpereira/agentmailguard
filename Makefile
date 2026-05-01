@@ -17,7 +17,7 @@ help:
 	@echo "AgentMailGuard commands"
 	@echo ""
 	@echo "Setup/dev:"
-	@echo "  make install          npm install"
+	@echo "  make install          install deps, build CLI, link agentmail"
 	@echo "  make dev              run local Worker"
 	@echo "  make typecheck        TypeScript check"
 	@echo "  make validate         wrangler deploy --dry-run"
@@ -44,6 +44,8 @@ help:
 
 install:
 	npm install
+	npm run build:cli
+	npm link
 
 dev:
 	npx wrangler dev --env-file .env
