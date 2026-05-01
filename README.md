@@ -1,4 +1,3 @@
-![Uploading image.png…]()
 # AgentMailGuard
 
 ![Architecture](architecture.jpg)
