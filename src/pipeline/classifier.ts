@@ -42,9 +42,7 @@ export async function classifyEmail(
 export function fallbackClassification(auth: AuthSignals, threatFlags: string[]): Classification {
   const reasons: string[] = [];
 
-  if (auth.spf !== "pass") reasons.push(`SPF ${auth.spf}`);
-  if (auth.dkim !== "pass") reasons.push(`DKIM ${auth.dkim}`);
-  if (auth.dmarc !== "pass") reasons.push(`DMARC ${auth.dmarc}`);
+  if (!hasTrustedAuth(auth)) reasons.push(`auth ${authSummary(auth)}`);
   if (threatFlags.length > 0) reasons.push(...threatFlags.map((flag) => `threat: ${flag}`));
 
   if (hasAuthFailure(auth) || threatFlags.length >= 2) {
@@ -55,7 +53,7 @@ export function fallbackClassification(auth: AuthSignals, threatFlags: string[])
     };
   }
 
-  if (hasUnknownAuth(auth) || threatFlags.length === 1) {
+  if (!hasTrustedAuth(auth) || threatFlags.length === 1) {
     return {
       riskLevel: "yellow",
       riskReasons: reasons.length > 0 ? reasons : ["external or partially authenticated sender"],
@@ -101,11 +99,11 @@ function enforceRiskPolicy(
     };
   }
 
-  if (classification.riskLevel === "green" && (hasUnknownAuth(auth) || threatFlags.length > 0)) {
+  if (classification.riskLevel === "green" && (!hasTrustedAuth(auth) || threatFlags.length > 0)) {
     return {
       ...classification,
       riskLevel: "yellow",
-      riskReasons: [...classification.riskReasons, "policy: green requires passing auth and no threat flags"],
+      riskReasons: [...classification.riskReasons, "policy: green requires trusted auth and no threat flags"],
     };
   }
 
@@ -155,6 +153,10 @@ function hasAuthFailure(auth: AuthSignals): boolean {
   return auth.spf === "fail" || auth.dkim === "fail" || auth.dmarc === "fail";
 }
 
-function hasUnknownAuth(auth: AuthSignals): boolean {
-  return auth.spf !== "pass" || auth.dkim !== "pass" || auth.dmarc !== "pass";
+function hasTrustedAuth(auth: AuthSignals): boolean {
+  return auth.dmarc === "pass" && (auth.spf === "pass" || auth.dkim === "pass");
+}
+
+function authSummary(auth: AuthSignals): string {
+  return `SPF ${auth.spf}, DKIM ${auth.dkim}, DMARC ${auth.dmarc}`;
 }

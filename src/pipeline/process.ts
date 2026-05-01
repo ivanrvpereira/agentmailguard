@@ -1,11 +1,12 @@
 import PostalMime, { type Address, type Email, type Mailbox } from "postal-mime";
 import { setEmbeddingId, setVectorIndexFailed, storeProcessedEmail } from "../store/d1";
 import { embedAndStoreEmail } from "../store/vectorize";
+import { authSignalsFromHeaders } from "./auth";
 import { cleanEmail } from "./cleaner";
 import { classifyEmail } from "./classifier";
 import { detectThreats } from "./detector";
 import { extractEntities } from "./extractor";
-import type { AuthSignals, Contact, Env, ParsedInboundEmail, ProcessedEmail } from "./types";
+import type { Contact, Env, ParsedInboundEmail, ProcessedEmail } from "./types";
 
 export async function processInboundEmail(message: ForwardableEmailMessage, env: Env): Promise<void> {
   const parsed = await PostalMime.parse(message.raw, { attachmentEncoding: "base64" });
@@ -51,7 +52,7 @@ function toParsedInboundEmail(message: ForwardableEmailMessage, parsed: Email): 
     textBody: parsed.text ?? "",
     htmlBody: parsed.html ?? "",
     hasAttachments: parsed.attachments.length > 0,
-    auth: unknownAuthSignals(),
+    auth: authSignalsFromHeaders(parsed.headers),
   };
 }
 
@@ -90,15 +91,6 @@ function mailboxToContact(mailbox?: Mailbox): Contact | undefined {
 
 function contactFromEnvelope(address: string): Contact {
   return { address };
-}
-
-function unknownAuthSignals(): AuthSignals {
-  // Inbound Authentication-Results headers are email-derived and not provenance-verified here.
-  return {
-    spf: "unknown",
-    dkim: "unknown",
-    dmarc: "unknown",
-  };
 }
 
 function errorMessage(error: unknown): string {
