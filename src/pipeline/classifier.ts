@@ -33,13 +33,10 @@ export async function classifyEmail(
       ],
     });
 
-    const parsed = parseAiResponse(response);
-    if (parsed) return parsed;
+    return enforceRiskPolicy(parseAiResponse(response), email.auth, threatFlags);
   } catch (error) {
-    console.warn("Workers AI classification failed", error);
+    return failClosedClassification(email.auth, threatFlags, error);
   }
-
-  return fallbackClassification(email.auth, threatFlags);
 }
 
 export function fallbackClassification(auth: AuthSignals, threatFlags: string[]): Classification {
@@ -73,32 +70,81 @@ export function fallbackClassification(auth: AuthSignals, threatFlags: string[])
   };
 }
 
-function parseAiResponse(response: unknown): Classification | undefined {
-  const text = extractText(response);
-  if (!text) return undefined;
+function failClosedClassification(auth: AuthSignals, threatFlags: string[], error: unknown): Classification {
+  const fallback = fallbackClassification(auth, threatFlags);
 
-  const json = text.match(/\{[\s\S]*\}/)?.[0];
-  if (!json) return undefined;
-
-  const parsed = JSON.parse(json) as AiClassificationResponse;
-  if (!isRiskLevel(parsed.risk_level)) return undefined;
+  if (fallback.riskLevel === "green") {
+    return {
+      riskLevel: "yellow",
+      riskReasons: ["Workers AI classification failed", errorMessage(error)],
+      labels: ["classification_failed"],
+    };
+  }
 
   return {
-    riskLevel: parsed.risk_level,
-    riskReasons: Array.isArray(parsed.risk_reasons) ? parsed.risk_reasons.map(String) : [],
-    labels: Array.isArray(parsed.labels) ? parsed.labels.map(String) : [],
+    ...fallback,
+    riskReasons: [...fallback.riskReasons, "Workers AI classification failed", errorMessage(error)],
+    labels: [...fallback.labels, "classification_failed"],
   };
 }
 
-function extractText(response: unknown): string | undefined {
+function enforceRiskPolicy(
+  classification: Classification,
+  auth: AuthSignals,
+  threatFlags: string[],
+): Classification {
+  if (hasAuthFailure(auth) || threatFlags.length >= 2) {
+    return {
+      ...classification,
+      riskLevel: "red",
+      riskReasons: [...classification.riskReasons, "policy: auth failure or multiple threat flags"],
+    };
+  }
+
+  if (classification.riskLevel === "green" && (hasUnknownAuth(auth) || threatFlags.length > 0)) {
+    return {
+      ...classification,
+      riskLevel: "yellow",
+      riskReasons: [...classification.riskReasons, "policy: green requires passing auth and no threat flags"],
+    };
+  }
+
+  return classification;
+}
+
+function parseAiResponse(response: unknown): Classification {
+  const text = extractText(response);
+  const json = text.match(/\{[\s\S]*\}/)?.[0];
+  if (!json) throw new Error("Workers AI response did not contain JSON");
+
+  const parsed = JSON.parse(json) as AiClassificationResponse;
+  if (!isRiskLevel(parsed.risk_level)) throw new Error("Workers AI response contained an invalid risk_level");
+
+  return {
+    riskLevel: parsed.risk_level,
+    riskReasons: readStringArray(parsed.risk_reasons, "risk_reasons"),
+    labels: readStringArray(parsed.labels, "labels"),
+  };
+}
+
+function extractText(response: unknown): string {
   if (typeof response === "string") return response;
-  if (!response || typeof response !== "object") return undefined;
+  if (!response || typeof response !== "object") throw new Error("Workers AI response was not an object");
 
   const record = response as Record<string, unknown>;
   if (typeof record.response === "string") return record.response;
   if (typeof record.result === "string") return record.result;
 
-  return undefined;
+  throw new Error("Workers AI response did not include text output");
+}
+
+function readStringArray(value: unknown, field: string): string[] {
+  if (!Array.isArray(value)) throw new Error(`Workers AI response ${field} was not an array`);
+  return value.map(String);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isRiskLevel(value: unknown): value is RiskLevel {

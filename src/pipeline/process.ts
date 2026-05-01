@@ -1,11 +1,11 @@
 import PostalMime, { type Address, type Email, type Mailbox } from "postal-mime";
-import { storeProcessedEmail, setEmbeddingId } from "../store/d1";
+import { setEmbeddingId, setVectorIndexFailed, storeProcessedEmail } from "../store/d1";
 import { embedAndStoreEmail } from "../store/vectorize";
 import { cleanEmail } from "./cleaner";
 import { classifyEmail } from "./classifier";
 import { detectThreats } from "./detector";
 import { extractEntities } from "./extractor";
-import type { AuthResult, AuthSignals, Contact, Env, ParsedInboundEmail, ProcessedEmail } from "./types";
+import type { AuthSignals, Contact, Env, ParsedInboundEmail, ProcessedEmail } from "./types";
 
 export async function processInboundEmail(message: ForwardableEmailMessage, env: Env): Promise<void> {
   const parsed = await PostalMime.parse(message.raw, { attachmentEncoding: "base64" });
@@ -36,7 +36,7 @@ export async function processInboundEmail(message: ForwardableEmailMessage, env:
       await setEmbeddingId(env.DB, processed.id, embeddingId);
     }
   } catch (error) {
-    console.warn("Vectorize embedding failed", error);
+    await setVectorIndexFailed(env.DB, processed.id, errorMessage(error));
   }
 }
 
@@ -51,7 +51,7 @@ function toParsedInboundEmail(message: ForwardableEmailMessage, parsed: Email): 
     textBody: parsed.text ?? "",
     htmlBody: parsed.html ?? "",
     hasAttachments: parsed.attachments.length > 0,
-    auth: authSignalsFromHeaders(message.headers),
+    auth: unknownAuthSignals(),
   };
 }
 
@@ -92,29 +92,15 @@ function contactFromEnvelope(address: string): Contact {
   return { address };
 }
 
-function authSignalsFromHeaders(headers: Headers): AuthSignals {
-  const authResults = headers.get("Authentication-Results") ?? "";
-
+function unknownAuthSignals(): AuthSignals {
+  // Inbound Authentication-Results headers are email-derived and not provenance-verified here.
   return {
-    spf: authResult(authResults, "spf"),
-    dkim: authResult(authResults, "dkim"),
-    dmarc: authResult(authResults, "dmarc"),
+    spf: "unknown",
+    dkim: "unknown",
+    dmarc: "unknown",
   };
 }
 
-function authResult(value: string, key: "spf" | "dkim" | "dmarc"): AuthResult {
-  const match = value.toLowerCase().match(new RegExp(`\\b${key}=([a-z]+)`));
-  const result = match?.[1];
-
-  if (
-    result === "pass" ||
-    result === "fail" ||
-    result === "softfail" ||
-    result === "neutral" ||
-    result === "none"
-  ) {
-    return result;
-  }
-
-  return "unknown";
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

@@ -8,7 +8,7 @@ const INVISIBLE_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFE00-\uFE0F\u
 const CONTROL_CHARS = /[\u0000-\u001F\u007F]/g;
 
 export function cleanEmail(email: ParsedInboundEmail): CleanedEmail {
-  const bodySource = email.textBody || stripHtml(email.htmlBody);
+  const bodySource = [email.textBody, stripHtml(email.htmlBody)].filter(Boolean).join("\n");
 
   return {
     ...email,
@@ -28,11 +28,26 @@ export function cleanText(value: string): string {
 }
 
 export function stripHtml(value: string): string {
-  return value
+  const withoutIgnoredContent = value
     .replace(/<!--[\s\S]*?-->/g, " ")
     .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ");
+    .replace(/<style\b[\s\S]*?<\/style>/gi, " ");
+  const linkTargets = extractHtmlLinkTargets(withoutIgnoredContent);
+  const text = withoutIgnoredContent.replace(/<[^>]+>/g, " ");
+
+  return [text, ...linkTargets].join("\n");
+}
+
+function extractHtmlLinkTargets(value: string): string[] {
+  const targets = new Set<string>();
+  const attributePattern = /\s(?:href|src|action)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi;
+
+  for (const match of value.matchAll(attributePattern)) {
+    const target = match[1] ?? match[2] ?? match[3] ?? "";
+    if (/^(?:https?:|data:)/i.test(target)) targets.add(target);
+  }
+
+  return [...targets];
 }
 
 function cleanContact(contact: Contact): Contact {

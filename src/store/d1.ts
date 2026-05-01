@@ -14,6 +14,8 @@ interface EmailRow {
   threat_flags: string | null;
 }
 
+const MAX_VECTOR_ERROR_LENGTH = 1000;
+
 export interface EmailListFilters {
   limit?: number;
   offset?: number;
@@ -66,7 +68,17 @@ export async function storeProcessedEmail(db: D1Database, email: ProcessedEmail)
 }
 
 export async function setEmbeddingId(db: D1Database, emailId: string, embeddingId: string): Promise<void> {
-  await db.prepare("UPDATE emails SET embedding_id = ? WHERE id = ?").bind(embeddingId, emailId).run();
+  await db
+    .prepare("UPDATE emails SET embedding_id = ?, vector_status = 'indexed', vector_error = NULL WHERE id = ?")
+    .bind(embeddingId, emailId)
+    .run();
+}
+
+export async function setVectorIndexFailed(db: D1Database, emailId: string, error: string): Promise<void> {
+  await db
+    .prepare("UPDATE emails SET vector_status = 'failed', vector_error = ? WHERE id = ?")
+    .bind(error.slice(0, MAX_VECTOR_ERROR_LENGTH), emailId)
+    .run();
 }
 
 export async function listEmails(db: D1Database, filters: EmailListFilters = {}) {

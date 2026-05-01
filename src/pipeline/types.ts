@@ -6,6 +6,7 @@ export interface Env {
   AI: Ai;
   VECTORS: VectorizeIndex;
   MCP_AGENT: DurableObjectNamespace;
+  MCP_SHARED_SECRET?: string;
 }
 
 export interface Contact {

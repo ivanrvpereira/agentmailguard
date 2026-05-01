@@ -38,9 +38,9 @@ export function detectThreats(email: CleanedEmail): string[] {
   }
 
   if (/https?:\/\//i.test(text)) flags.add("residual_url");
-  if (/data:[\w/+.-]+;base64,/i.test(text)) flags.add("data_uri");
-  if (/\b[A-Za-z0-9+/]{80,}={0,2}\b/.test(text)) flags.add("base64_blob");
-  if (/\b[a-f0-9]{80,}\b/i.test(text)) flags.add("hex_payload");
+  if (/data:[\w/+.-]+;base64,|\[removed:data-uri\]/i.test(text)) flags.add("data_uri");
+  if (/\b[A-Za-z0-9+/]{80,}={0,2}\b|\[removed:base64-blob\]/.test(text)) flags.add("base64_blob");
+  if (/\b[a-f0-9]{80,}\b|\[removed:hex-blob\]/i.test(text)) flags.add("hex_payload");
 
   return [...flags];
 }
