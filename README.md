@@ -110,6 +110,37 @@ Configure Cloudflare Email Routing to route inbound mail to this Worker.
 
 ## Development
 
+Run the Worker locally:
+
+```bash
+npm run dev
+```
+
+Typecheck:
+
+```bash
+npm run typecheck
+```
+
+Build the CLI:
+
+```bash
+npm run build:cli
+AGENTMAILGUARD_MCP_URL=http://localhost:8787/mcp \
+AGENTMAILGUARD_TOKEN=<shared-secret> \
+node dist/cli.js list --limit 10
+```
+
+CLI commands mirror the MCP tools:
+
+```bash
+node dist/cli.js list --risk yellow --sender stripe.com
+node dist/cli.js get <email-id>
+node dist/cli.js search "invoice from april" --limit 10
+```
+
+Common development commands:
+
 ```bash
 npm run dev           # local Worker
 npm run typecheck     # TypeScript check
