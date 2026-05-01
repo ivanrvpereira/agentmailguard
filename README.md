@@ -1,3 +1,4 @@
+![Uploading image.png…]()
 # AgentMailGuard
 
 Agents accessing your mailbox is a risk. Prompt injection hidden in email bodies, credential exposure from raw IMAP access, and unrestricted read of sensitive threads are real attack surfaces the moment an AI agent connects to your inbox. AgentMailGuard is a firewall between your mail and your agents.
