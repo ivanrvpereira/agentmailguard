@@ -89,7 +89,7 @@ func preload(ctx context.Context, s *server.Server, stdin io.Reader, stderr io.W
 		prompt = func(ctx context.Context) (string, error) {
 			key, problem := readJevKey(ctx, stdin, stderr, "Jev key not found. Enter the Jev (OpenRouter) API key to save it: ")
 			if problem != "" {
-				fmt.Fprintln(stderr, "error: "+problem)
+				errorLine(stderr, problem)
 				return "", errors.New(problem)
 			}
 			return key, nil

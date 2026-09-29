@@ -53,6 +53,9 @@ type promptWriter struct {
 	respond func(string)
 }
 
+// Color-profile writers may forward plain prompts through io.StringWriter.
+func (w *promptWriter) WriteString(s string) (int, error) { return w.Write([]byte(s)) }
+
 func (w *promptWriter) Write(p []byte) (int, error) {
 	n, err := w.Buffer.Write(p)
 	w.respond(string(p))
