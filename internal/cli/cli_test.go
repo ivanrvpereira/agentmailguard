@@ -16,6 +16,16 @@ import (
 	"github.com/ivanrvpereira/agentmailguard-go/internal/cli"
 )
 
+// stateful reports whether reading k would let the environment change what a command does. The color
+// variables are display-only: they choose escape sequences and never a server, an account, or a file.
+func stateful(k string) bool {
+	switch k {
+	case "NO_COLOR", "CLICOLOR", "CLICOLOR_FORCE", "TERM", "COLORTERM":
+		return false
+	}
+	return true
+}
+
 func TestCommandsUseHTTPWithoutLocalState(t *testing.T) {
 	cases := []struct {
 		args       []string
@@ -77,7 +87,7 @@ func TestCommandsUseHTTPWithoutLocalState(t *testing.T) {
 			defer h.Close()
 			var out, errout bytes.Buffer
 			code := cli.Run(context.Background(), append([]string{"--server", h.URL, "--account", "remote"}, tc.args...), &out, &errout, cli.Options{Now: func() time.Time { return time.Date(2026, 3, 31, 12, 0, 0, 0, loc) }, LookupEnv: func(k string) string {
-				if k != "AGENTMAILGUARD_GO_SERVER" {
+				if k != "AGENTMAILGUARD_GO_SERVER" && stateful(k) {
 					t.Errorf("read local environment %s", k)
 				}
 				return ""
@@ -125,7 +135,12 @@ func TestHelpOutputFailure(t *testing.T) {
 	for _, args := range [][]string{nil, {"--help"}, {"-h"}, {"mail"}, {"mail", "--help"}, {"mail", "-h"}, {"mail", "get", "--help"}, {"stats", "--help"}} {
 		out := &failedOutput{}
 		var errout bytes.Buffer
-		code := cli.Run(context.Background(), args, out, &errout, cli.Options{LookupEnv: func(string) string { t.Fatal("help accessed state"); return "" }})
+		code := cli.Run(context.Background(), args, out, &errout, cli.Options{LookupEnv: func(k string) string {
+			if stateful(k) {
+				t.Fatal("help accessed state")
+			}
+			return ""
+		}})
 		if code != 1 || errout.String() != "error: output failed\n" || out.writes != 1 {
 			t.Errorf("args=%v exit=%d stderr=%q output attempts=%d", args, code, errout.String(), out.writes)
 		}
@@ -150,7 +165,12 @@ func TestExplicitBlankAccountRefusedBeforeHTTPOrLocalState(t *testing.T) {
 				}
 				var out, errout bytes.Buffer
 				lookups := 0
-				code := cli.Run(context.Background(), args, &out, &errout, cli.Options{LookupEnv: func(string) string { lookups++; return h.URL }})
+				code := cli.Run(context.Background(), args, &out, &errout, cli.Options{LookupEnv: func(k string) string {
+					if stateful(k) {
+						lookups++
+					}
+					return h.URL
+				}})
 				if code != 1 || out.Len() != 0 || errout.String() != "error: account must not be blank\n" || calls.Load() != 0 || lookups != 0 {
 					t.Errorf("command=%v global=%t exit=%d stderr=%q requests=%d state lookups=%d", command, global, code, errout.String(), calls.Load(), lookups)
 				}
@@ -208,7 +228,12 @@ func TestUsageAndHelpNeedNoServerOrState(t *testing.T) {
 	}{{nil, []string{"serve", "mail", "calendar", "draft"}}, {[]string{"mail"}, []string{"organize", "categorize", "link"}}} {
 		var out, errout bytes.Buffer
 		args := append([]string{}, tc.args...)
-		code := cli.Run(context.Background(), append(args, "--help"), &out, &errout, cli.Options{LookupEnv: func(string) string { t.Fatal("help accessed state"); return "" }})
+		code := cli.Run(context.Background(), append(args, "--help"), &out, &errout, cli.Options{LookupEnv: func(k string) string {
+			if stateful(k) {
+				t.Fatal("help accessed state")
+			}
+			return ""
+		}})
 		for _, want := range tc.want {
 			if code != 0 || !strings.Contains(out.String(), want) {
 				t.Fatalf("help for %v is missing %s", tc.args, want)

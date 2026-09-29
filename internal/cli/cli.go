@@ -40,8 +40,13 @@ Client/server authentication and built-in TLS are absent. Protect remote access 
 var errUsage = errors.New("invalid command usage")
 var errDone = errors.New("command finished")
 
-func usage(w io.Writer) int                   { fmt.Fprintln(w, "error: invalid command usage; use --help"); return 2 }
-func failure(w io.Writer, message string) int { fmt.Fprintln(w, "error: "+message); return 1 }
+// errorLine writes one message line; the prefix may carry color, the words never change. Run gives
+// every caller a message writer that keeps, downgrades, or removes the color.
+func errorLine(w io.Writer, message string) {
+	fmt.Fprintln(w, errorStyle.Render("error:")+" "+message)
+}
+func usage(w io.Writer) int                   { errorLine(w, "invalid command usage; use --help"); return 2 }
+func failure(w io.Writer, message string) int { errorLine(w, message); return 1 }
 
 // Scope labels come from provider tokens, so each one is quoted.
 func warnExtraScopes(w io.Writer, extra []string) {
@@ -53,7 +58,7 @@ func warnExtraScopes(w io.Writer, extra []string) {
 			note = " role: entries are application permissions."
 		}
 	}
-	fmt.Fprintf(w, "warning: token grants extra scopes the server does not use: %s.%s Remove the extra consent to reduce exposure.\n", strings.Join(quoted, ", "), note)
+	fmt.Fprintf(w, "%s token grants extra scopes the server does not use: %s.%s Remove the extra consent to reduce exposure.\n", warningStyle.Render("warning:"), strings.Join(quoted, ", "), note)
 }
 func output(stdout, stderr io.Writer, text string, code int) int {
 	if _, err := io.WriteString(stdout, text); err != nil {
@@ -74,6 +79,11 @@ type runner struct {
 }
 
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Options) (code int) {
+	if opts.LookupEnv == nil {
+		opts.LookupEnv = os.Getenv
+	}
+	// Messages carry color for one run at most, decided once from the injected writer and environment.
+	stderr = colorized(stderr, opts.LookupEnv)
 	defer func() {
 		if recover() != nil {
 			code = failure(stderr, "operation failed")
@@ -209,9 +219,6 @@ func (r *runner) resolve(c *cobra.Command, allowHome bool) (bool, string, error)
 	if r.timeout <= 0 {
 		return false, "", errUsage
 	}
-	if r.opts.LookupEnv == nil {
-		r.opts.LookupEnv = os.Getenv
-	}
 	envServer := r.opts.LookupEnv("AGENTMAILGUARD_GO_SERVER")
 	base := r.base
 	if !c.Flags().Changed("server") {
@@ -246,14 +253,22 @@ func (r *runner) call(c *cobra.Command, op string, p map[string]any, pretty bool
 		return errDone
 	}
 	text := ""
-	if op == "mail.get" && pretty {
+	switch {
+	case pretty && op == "mail.get":
 		var v views.MailView
 		if json.Unmarshal(b, &v) != nil {
 			r.code = failure(r.stderr, "invalid server response")
 			return errDone
 		}
-		text = views.ToText(v) + "\n"
-	} else {
+		text = styleText(views.ToText(v), v.Verdict) + "\n"
+	case pretty && (op == "mail.list" || op == "mail.search"):
+		var items []views.MailSummary
+		if json.Unmarshal(b, &items) != nil {
+			r.code = failure(r.stderr, "invalid server response")
+			return errDone
+		}
+		text = summaryTable(items) + "\n"
+	default:
 		var indented bytes.Buffer
 		if json.Indent(&indented, bytes.TrimSpace(b), "", "  ") != nil {
 			r.code = failure(r.stderr, "invalid server response")
@@ -261,7 +276,12 @@ func (r *runner) call(c *cobra.Command, op string, p map[string]any, pretty bool
 		}
 		text = indented.String() + "\n"
 	}
-	if output(r.stdout, r.stderr, text, 0) != 0 {
+	// JSON output never carries color; styled text passes the writer's profile.
+	stdout := r.stdout
+	if pretty {
+		stdout = colorized(r.stdout, r.opts.LookupEnv)
+	}
+	if output(stdout, r.stderr, text, 0) != 0 {
 		r.code = 1
 		return errDone
 	}
@@ -387,9 +407,11 @@ func mailCmd(r *runner) *cobra.Command {
 
 func mailListCmd(r *runner) *cobra.Command {
 	folder, count, skip := "inbox", 25, 0
+	pretty := false
 	c := r.leaf("list", "List screened messages in a folder", 0, 0, func(c *cobra.Command, _ []string) error {
-		return r.call(c, "mail.list", map[string]any{"folder": folder, "count": count, "skip": skip}, false)
+		return r.call(c, "mail.list", map[string]any{"folder": folder, "count": count, "skip": skip}, pretty)
 	})
+	negated(c, "pretty", "render the messages as a table instead of JSON", &pretty)
 	c.Flags().StringVar(&folder, "folder", folder, "folder name or identifier")
 	c.Flags().IntVar(&count, "count", count, "number of messages to return")
 	c.Flags().IntVar(&skip, "skip", skip, "number of messages to skip")
@@ -411,6 +433,7 @@ func isDate(v string) bool { _, e := time.Parse("2006-01-02", v); return e == ni
 func mailSearchCmd(r *runner) *cobra.Command {
 	var text, from, subject, after, before, folder string
 	count := 25
+	pretty := false
 	c := r.leaf("search", "Search screened messages", 0, 0, func(c *cobra.Command, _ []string) error {
 		p := map[string]any{"count": count}
 		optional(c, p, "text", &text)
@@ -422,8 +445,9 @@ func mailSearchCmd(r *runner) *cobra.Command {
 		if c.Flags().Changed("after") && !isDate(after) || c.Flags().Changed("before") && !isDate(before) {
 			return errUsage
 		}
-		return r.call(c, "mail.search", p, false)
+		return r.call(c, "mail.search", p, pretty)
 	})
+	negated(c, "pretty", "render the messages as a table instead of JSON", &pretty)
 	c.Flags().StringVar(&text, "text", "", "text to match")
 	c.Flags().StringVar(&from, "from", "", "sender address to match")
 	c.Flags().StringVar(&subject, "subject", "", "subject text to match")

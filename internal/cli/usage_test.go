@@ -17,8 +17,10 @@ import (
 func runOffline(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	var out, errout bytes.Buffer
-	code := cli.Run(context.Background(), args, &out, &errout, cli.Options{LookupEnv: func(string) string {
-		t.Errorf("command %v read local state", args)
+	code := cli.Run(context.Background(), args, &out, &errout, cli.Options{LookupEnv: func(k string) string {
+		if stateful(k) {
+			t.Errorf("command %v read local state", args)
+		}
 		return ""
 	}})
 	return code, out.String(), errout.String()
