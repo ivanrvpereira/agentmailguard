@@ -19,7 +19,8 @@ func (nopWriteCloser) Close() error { return nil }
 // mcpCmd serves the MCP tools on stdin and stdout until the client disconnects. It is a data command:
 // every tool call goes to the server over HTTP, and stdout carries only protocol messages.
 func mcpCmd(r *runner) *cobra.Command {
-	return r.leaf("mcp", "Serve MCP tools over stdio for an AI agent", 0, 0, func(c *cobra.Command, _ []string) error {
+	var allowWrites bool
+	c := r.leaf("mcp", "Serve MCP tools over stdio for an AI agent", 0, 0, func(c *cobra.Command, _ []string) error {
 		_, base, err := r.resolve(c, false)
 		if err != nil {
 			return err
@@ -35,7 +36,7 @@ func mcpCmd(r *runner) *cobra.Command {
 		if stdin == nil {
 			stdin = os.Stdin
 		}
-		s := mcptools.New(cl, mcptools.Options{Account: r.account})
+		s := mcptools.New(cl, mcptools.Options{Account: r.account, AllowWrites: allowWrites})
 		// The SDK error may quote protocol input, so only a fixed line is shown. Cancellation is a clean stop.
 		e = s.Run(c.Context(), &mcp.IOTransport{Reader: io.NopCloser(stdin), Writer: nopWriteCloser{r.stdout}})
 		if e != nil && c.Context().Err() == nil {
@@ -43,4 +44,6 @@ func mcpCmd(r *runner) *cobra.Command {
 		}
 		return errDone
 	})
+	c.Flags().BoolVar(&allowWrites, "allow-writes", false, "also serve the mail change and draft tools")
+	return c
 }

@@ -136,6 +136,37 @@ func TestMCPServesToolsOverStdioUntilTheClientCloses(t *testing.T) {
 	}
 }
 
+func TestMCPServesTheWriteToolsOnlyWithAllowWrites(t *testing.T) {
+	for _, tc := range []struct {
+		args  []string
+		count int
+		trash bool
+	}{
+		{nil, 11, false},
+		{[]string{"--allow-writes"}, 22, true},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		m := startMCP(ctx, t, append([]string{"mcp", "--server", newMCPFake(t).URL}, tc.args...), noEnv)
+		cs := m.connect(ctx, t)
+		tools, e := cs.ListTools(ctx, nil)
+		if e != nil {
+			t.Fatalf("%v: tools/list error %v", tc.args, e)
+		}
+		trash := false
+		for _, tool := range tools.Tools {
+			trash = trash || tool.Name == "mail_trash"
+		}
+		if len(tools.Tools) != tc.count || trash != tc.trash {
+			t.Errorf("%v: tools %d mail_trash %t, want %d %t", tc.args, len(tools.Tools), trash, tc.count, tc.trash)
+		}
+		cs.Close()
+		if code := m.exit(ctx, t); code != 0 || m.stderr.Len() != 0 {
+			t.Errorf("%v: exit %d stderr %q", tc.args, code, m.stderr.String())
+		}
+		cancel()
+	}
+}
+
 func TestMCPExitsCleanlyWhenCancelled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -201,5 +232,9 @@ func TestMCPAppearsInHelp(t *testing.T) {
 	code, out, _ := runOffline(t, "--help")
 	if code != 0 || !strings.Contains(out, "mcp") || !strings.Contains(out, "Serve MCP tools over stdio for an AI agent") {
 		t.Errorf("exit %d help %q", code, out)
+	}
+	code, out, _ = runOffline(t, "mcp", "--help")
+	if code != 0 || !strings.Contains(out, "--allow-writes") || !strings.Contains(out, "also serve the mail change and draft tools") {
+		t.Errorf("exit %d mcp help %q", code, out)
 	}
 }

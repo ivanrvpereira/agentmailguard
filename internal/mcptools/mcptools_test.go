@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -107,6 +108,25 @@ func TestReadOnlyModeListsExactlyTheReadTools(t *testing.T) {
 	}
 }
 
+var writeTools = []string{"draft_forward", "draft_new", "draft_reply", "draft_update", "mail_archive", "mail_categorize", "mail_flag", "mail_move", "mail_read", "mail_trash", "mail_unread"}
+
+func TestWritesModeListsTheReadAndWriteTools(t *testing.T) {
+	cs, _ := connect(t, mcptools.Options{AllowWrites: true}, answer(`{}`), nil)
+	res, e := cs.ListTools(bounded(t), nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	names := []string{}
+	for _, tool := range res.Tools {
+		names = append(names, tool.Name)
+	}
+	slices.Sort(names)
+	want := slices.Sorted(slices.Values(append(slices.Clone(readTools), writeTools...)))
+	if !slices.Equal(names, want) {
+		t.Fatalf("tools = %v, want %v", names, want)
+	}
+}
+
 func TestServerAdvertisesOnlyToolsAndWarnsAboutUntrustedText(t *testing.T) {
 	for _, version := range []string{"", "2025-11-25", "2024-11-05"} {
 		t.Run("version "+version, func(t *testing.T) {
@@ -127,22 +147,68 @@ func TestServerAdvertisesOnlyToolsAndWarnsAboutUntrustedText(t *testing.T) {
 	}
 }
 
-func TestEveryReadToolDescribesItselfAndItsHints(t *testing.T) {
+func TestEveryToolDescribesItselfAndItsHints(t *testing.T) {
 	// Rows of the approved annotation table: readOnly, destructive, idempotent, openWorld.
 	provider := [4]bool{true, false, true, true}
 	local := [4]bool{true, false, true, false}
-	want := map[string][4]bool{
+	change := [4]bool{false, false, true, false}
+	draft := [4]bool{false, false, false, false}
+	readOnly := map[string][4]bool{
 		"mail_list": provider, "mail_search": provider, "mail_get": provider, "mail_link": provider, "calendar_list": provider, "calendar_get": provider,
 		"mail_folders": local, "mail_categories": local, "rules_list": local, "auth_status": local,
 		"mail_organize": provider,
 	}
+	// Writes mode serves the read tools unchanged except mail_organize, plus the write tools.
+	writes := maps.Clone(readOnly)
+	maps.Copy(writes, map[string][4]bool{
+		"mail_organize": {false, true, true, true},
+		"mail_read":     change, "mail_unread": change, "mail_flag": change, "mail_categorize": change, "mail_archive": change, "mail_move": change,
+		"mail_trash": {false, true, true, false},
+		"draft_new":  draft, "draft_reply": draft, "draft_forward": draft,
+		"draft_update": {false, true, true, false},
+	})
+	for _, mode := range []struct {
+		name     string
+		writes   bool
+		want     map[string][4]bool
+		confirms []string // tools that ask the client for user confirmation
+	}{
+		{"read-only", false, readOnly, nil},
+		{"writes", true, writes, []string{"mail_organize", "mail_trash"}},
+	} {
+		t.Run(mode.name, func(t *testing.T) { describesItself(t, mode.writes, mode.want, mode.confirms) })
+	}
+}
+
+func describesItself(t *testing.T, writes bool, want map[string][4]bool, confirms []string) {
 	untrusted := map[string]bool{"mail_list": true, "mail_search": true, "mail_get": true, "mail_link": true, "calendar_list": true, "calendar_get": true, "mail_organize": true}
-	cs, _ := connect(t, mcptools.Options{}, answer(`{}`), nil)
+	mutation := map[string]bool{"mail_read": true, "mail_unread": true, "mail_flag": true, "mail_categorize": true, "mail_archive": true, "mail_move": true, "mail_trash": true}
+	cs, _ := connect(t, mcptools.Options{AllowWrites: writes}, answer(`{}`), nil)
 	res, e := cs.ListTools(bounded(t), nil)
 	if e != nil {
 		t.Fatal(e)
 	}
+	if len(res.Tools) != len(want) {
+		t.Errorf("tools %d, want %d", len(res.Tools), len(want))
+	}
 	for _, tool := range res.Tools {
+		wire, _ := json.Marshal(tool)
+		if slices.Contains(confirms, tool.Name) {
+			if !strings.Contains(string(wire), `"_meta":{"anthropic/requiresUserInteraction":true}`) {
+				t.Errorf("%s: no user interaction meta: %s", tool.Name, wire)
+			}
+		} else if tool.Meta != nil || strings.Contains(string(wire), "_meta") {
+			t.Errorf("%s: unexpected meta: %s", tool.Name, wire)
+		}
+		if mutation[tool.Name] && !(strings.Contains(tool.Description, "per ID") && strings.Contains(tool.Description, "`ok`") && strings.Contains(tool.Description, "`error`") && strings.Contains(tool.Description, "never deleted permanently")) {
+			t.Errorf("%s: description does not explain the results: %q", tool.Name, tool.Description)
+		}
+		if strings.HasPrefix(tool.Name, "draft_") && !strings.Contains(tool.Description, "never sent") {
+			t.Errorf("%s: description does not say drafts are never sent: %q", tool.Name, tool.Description)
+		}
+		if tool.Name == "mail_organize" && writes != (strings.Contains(tool.Description, "apply: true performs the planned moves") && strings.Contains(tool.Description, "trash") && strings.Contains(tool.Description, "apply: false only plans")) {
+			t.Errorf("%s: description does not match the mode: %q", tool.Name, tool.Description)
+		}
 		a := tool.Annotations
 		if a == nil || a.DestructiveHint == nil || a.OpenWorldHint == nil {
 			t.Errorf("%s: hints not all set: %+v", tool.Name, a)
@@ -169,6 +235,12 @@ func TestEveryReadToolDescribesItselfAndItsHints(t *testing.T) {
 		}
 		if _, ok := in.Properties["account"]; !ok || slices.Contains(in.Required, "account") {
 			t.Errorf("%s: no optional account argument: %s", tool.Name, b)
+		}
+		if tool.Name == "mail_flag" && !strings.Contains(string(in.Properties["state"]), "flagged, complete, or none") {
+			t.Errorf("%s: state does not list its values: %s", tool.Name, in.Properties["state"])
+		}
+		if tool.Name == "mail_move" && !(strings.Contains(string(in.Properties["folder"]), "folder ID from mail_folders") && strings.Contains(tool.Description, "folder ID from mail_folders")) {
+			t.Errorf("%s: folder does not require a folder ID: %s %q", tool.Name, in.Properties["folder"], tool.Description)
 		}
 	}
 }
@@ -214,6 +286,40 @@ var toolCases = []toolCase{
 	{"auth_status", "auth_status", map[string]any{}, "auth.status", `{}`, authStatus, ""},
 }
 
+// Mutation results carry null for a success and a safe code for a failure.
+const (
+	results = `[{"id":"a","ok":true,"error":null},{"id":"b","ok":false,"error":"Error 404"}]`
+	draftID = `{"id":"d1"}`
+	updated = `{"id":"d1","ok":true}`
+)
+
+// writeCases run with AllowWrites.
+var writeCases = []toolCase{
+	{"mail_archive", "mail_archive", map[string]any{"ids": []string{"a", "b"}}, "mail.archive", `{"ids":["a","b"]}`, results, "results"},
+	{"mail_trash", "mail_trash", map[string]any{"ids": []string{"a", "b"}}, "mail.trash", `{"ids":["a","b"]}`, results, "results"},
+	{"mail_read", "mail_read", map[string]any{"ids": []string{"a"}}, "mail.read", `{"ids":["a"]}`, results, "results"},
+	{"mail_unread", "mail_unread", map[string]any{"ids": []string{"a"}}, "mail.unread", `{"ids":["a"]}`, results, "results"},
+	{"mail_move", "mail_move", map[string]any{"ids": []string{"a", "b"}, "folder": "f2"}, "mail.move", `{"ids":["a","b"],"folder":"f2"}`, results, "results"},
+	{"mail_flag", "mail_flag", map[string]any{"ids": []string{"a", "b"}, "state": "complete"}, "mail.flag", `{"ids":["a","b"],"state":"complete"}`, results, "results"},
+	{"mail_categorize both", "mail_categorize", map[string]any{"ids": []string{"a"}, "add": []string{"One", "Two"}, "remove": []string{"Old"}}, "mail.categorize", `{"ids":["a"],"add":["One","Two"],"remove":["Old"]}`, results, "results"},
+	{"mail_categorize add", "mail_categorize", map[string]any{"ids": []string{"a"}, "add": []string{"One"}}, "mail.categorize", `{"ids":["a"],"add":["One"]}`, results, "results"},
+	{"mail_categorize remove", "mail_categorize", map[string]any{"ids": []string{"a"}, "add": []string{}, "remove": []string{"Old"}}, "mail.categorize", `{"ids":["a"],"remove":["Old"]}`, results, "results"},
+	{"draft_new", "draft_new", map[string]any{"to": []string{"a@test", "b@test"}, "subject": "s", "body": "b"}, "draft.new", `{"to":["a@test","b@test"],"subject":"s","body":"b"}`, draftID, ""},
+	{"draft_new empty", "draft_new", map[string]any{"to": []string{"a@test"}, "subject": "", "body": ""}, "draft.new", `{"to":["a@test"],"subject":"","body":""}`, draftID, ""},
+	{"draft_reply", "draft_reply", map[string]any{"id": "m", "body": "reply"}, "draft.reply", `{"id":"m","body":"reply"}`, draftID, ""},
+	{"draft_reply empty", "draft_reply", map[string]any{"id": "m", "body": ""}, "draft.reply", `{"id":"m","body":""}`, draftID, ""},
+	{"draft_forward", "draft_forward", map[string]any{"id": "m", "to": []string{"a@test", "b@test"}}, "draft.forward", `{"id":"m","to":["a@test","b@test"]}`, draftID, ""},
+	{"draft_update", "draft_update", map[string]any{"id": "d", "body": ""}, "draft.update", `{"id":"d","body":""}`, updated, ""},
+	{"mail_organize apply", "mail_organize", map[string]any{"since": "1m", "apply": true}, "mail.organize", `{"since":"1m","apply":true}`, report, ""},
+	{"mail_organize plan", "mail_organize", map[string]any{}, "mail.organize", `{"since":"7d","apply":false}`, report, ""},
+}
+
+// modes pairs each case table with the AllowWrites option it runs under.
+var modes = []struct {
+	writes bool
+	cases  []toolCase
+}{{false, toolCases}, {true, writeCases}}
+
 // sameJSON compares two JSON texts by value.
 func sameJSON(t *testing.T, a, b []byte) bool {
 	t.Helper()
@@ -227,33 +333,40 @@ func sameJSON(t *testing.T, a, b []byte) bool {
 }
 
 func TestToolCallsForwardOneServerCall(t *testing.T) {
-	for _, tc := range toolCases {
-		for _, acc := range []struct{ name, option, argument, want string }{
-			{"option", "work", "", "work"},
-			{"argument", "work", "remote", "remote"},
-			{"none", "", "", ""},
-		} {
-			t.Run(tc.name+" "+acc.name, func(t *testing.T) {
-				cs, f := connect(t, mcptools.Options{Account: acc.option}, answer(tc.body), nil)
-				args := map[string]any{}
-				for k, v := range tc.args {
-					args[k] = v
-				}
-				if acc.argument != "" {
-					args["account"] = acc.argument
-				}
-				if _, e := cs.CallTool(bounded(t), &mcp.CallToolParams{Name: tc.tool, Arguments: args}); e != nil {
-					t.Fatal(e)
-				}
-				calls := f.recorded()
-				if len(calls) != 1 {
-					t.Fatalf("server calls %d, want 1", len(calls))
-				}
-				if c := calls[0]; c.Operation != tc.op || c.Account != acc.want || !sameJSON(t, c.Params, []byte(tc.params)) {
-					t.Errorf("call %s account %q params %s, want %s %q %s", c.Operation, c.Account, c.Params, tc.op, acc.want, tc.params)
-				}
-			})
+	for _, mode := range modes {
+		for _, tc := range mode.cases {
+			forwards(t, mode.writes, tc)
 		}
+	}
+}
+
+func forwards(t *testing.T, writes bool, tc toolCase) {
+	t.Helper()
+	for _, acc := range []struct{ name, option, argument, want string }{
+		{"option", "work", "", "work"},
+		{"argument", "work", "remote", "remote"},
+		{"none", "", "", ""},
+	} {
+		t.Run(tc.name+" "+acc.name, func(t *testing.T) {
+			cs, f := connect(t, mcptools.Options{Account: acc.option, AllowWrites: writes}, answer(tc.body), nil)
+			args := map[string]any{}
+			for k, v := range tc.args {
+				args[k] = v
+			}
+			if acc.argument != "" {
+				args["account"] = acc.argument
+			}
+			if _, e := cs.CallTool(bounded(t), &mcp.CallToolParams{Name: tc.tool, Arguments: args}); e != nil {
+				t.Fatal(e)
+			}
+			calls := f.recorded()
+			if len(calls) != 1 {
+				t.Fatalf("server calls %d, want 1", len(calls))
+			}
+			if c := calls[0]; c.Operation != tc.op || c.Account != acc.want || !sameJSON(t, c.Params, []byte(tc.params)) {
+				t.Errorf("call %s account %q params %s, want %s %q %s", c.Operation, c.Account, c.Params, tc.op, acc.want, tc.params)
+			}
+		})
 	}
 }
 
@@ -271,22 +384,26 @@ func text(t *testing.T, res *mcp.CallToolResult) string {
 }
 
 func TestToolResultsCarryTheServerResultAsTextAndStructuredContent(t *testing.T) {
-	for _, tc := range toolCases {
-		t.Run(tc.name, func(t *testing.T) {
-			cs, _ := connect(t, mcptools.Options{}, answer(tc.body), nil)
-			res, e := cs.CallTool(bounded(t), &mcp.CallToolParams{Name: tc.tool, Arguments: tc.args})
-			if e != nil {
-				t.Fatal(e)
-			}
-			want := tc.body
-			if tc.key != "" {
-				want = `{"` + tc.key + `":` + tc.body + `}`
-			}
-			structured, _ := json.Marshal(res.StructuredContent)
-			if res.IsError || !sameJSON(t, []byte(text(t, res)), []byte(want)) || !sameJSON(t, structured, []byte(want)) {
-				t.Errorf("error %t text %s structured %s, want %s", res.IsError, text(t, res), structured, want)
-			}
-		})
+	for _, mode := range modes {
+		for _, tc := range mode.cases {
+			t.Run(tc.name, func(t *testing.T) { carriesResult(t, mode.writes, tc) })
+		}
+	}
+}
+
+func carriesResult(t *testing.T, writes bool, tc toolCase) {
+	cs, _ := connect(t, mcptools.Options{AllowWrites: writes}, answer(tc.body), nil)
+	res, e := cs.CallTool(bounded(t), &mcp.CallToolParams{Name: tc.tool, Arguments: tc.args})
+	if e != nil {
+		t.Fatal(e)
+	}
+	want := tc.body
+	if tc.key != "" {
+		want = `{"` + tc.key + `":` + tc.body + `}`
+	}
+	structured, _ := json.Marshal(res.StructuredContent)
+	if res.IsError || !sameJSON(t, []byte(text(t, res)), []byte(want)) || !sameJSON(t, structured, []byte(want)) {
+		t.Errorf("error %t text %s structured %s, want %s", res.IsError, text(t, res), structured, want)
 	}
 }
 
@@ -297,6 +414,13 @@ func TestFailedCallsBecomeToolErrorsWithFixedText(t *testing.T) {
 		status     int
 		body, want string
 	}{
+		{"flag refusal", "mail_flag", map[string]any{"ids": []string{"a"}, "state": "canary"}, 400, `{"error":"flag state must be one of flagged, complete, none"}`, "flag state must be one of flagged, complete, none"},
+		{"move refusal", "mail_move", map[string]any{"ids": []string{"a"}, "folder": "Archive"}, 400, "{\"error\":\"move refused: the destination must be a folder ID from `folders`\"}", "move refused: the destination must be a folder ID from `folders`"},
+		{"categorize refusal", "mail_categorize", map[string]any{"ids": []string{"a"}}, 400, `{"error":"categorize needs at least one category to add or remove"}`, "categorize needs at least one category to add or remove"},
+		{"trash unknown refusal", "mail_trash", map[string]any{"ids": []string{"a"}}, 500, `{"error":"canary-private-error"}`, "server request failed"},
+		{"trash wrong shape", "mail_trash", map[string]any{"ids": []string{"a"}}, 200, `{"canary-private-key":"x"}`, "invalid server response"},
+		{"mutation wrong field type", "mail_archive", map[string]any{"ids": []string{"a"}}, 200, `[{"id":"canary-private-id","ok":"yes","error":null}]`, "invalid server response"},
+		{"draft wrong shape", "draft_new", map[string]any{"to": []string{"a@test"}, "subject": "", "body": ""}, 200, `["canary-private-id"]`, "invalid server response"},
 		{"refusal", "mail_list", nil, 400, `{"error":"invalid request"}`, "invalid request"},
 		{"link refusal", "mail_link", map[string]any{"id": "m", "all": true}, 400, `{"error":"link refused: message is red, not green"}`, "link refused: message is red, not green"},
 		{"unknown refusal", "mail_get", map[string]any{"id": "m"}, 500, `{"error":"canary-private-error"}`, "server request failed"},
@@ -308,7 +432,7 @@ func TestFailedCallsBecomeToolErrorsWithFixedText(t *testing.T) {
 		{"schema violation", "mail_list", nil, 200, `[{"id":"canary-private-id","verdict":"green","auth":null}]`, "invalid server response"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cs, _ := connect(t, mcptools.Options{}, func(w http.ResponseWriter, _ *http.Request) {
+			cs, _ := connect(t, mcptools.Options{AllowWrites: true}, func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(tc.status)
 				io.WriteString(w, tc.body)
 			}, nil)
@@ -340,23 +464,50 @@ func TestRefusedArgumentsMakeNoServerCall(t *testing.T) {
 		{"not an object", "mail_folders", "canary", "invalid request"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cs, f := connect(t, mcptools.Options{Account: "work"}, answer(report), nil)
-			res, e := cs.CallTool(bounded(t), &mcp.CallToolParams{Name: tc.tool, Arguments: tc.args})
-			if e != nil {
-				t.Fatal(e)
-			}
-			if !res.IsError || text(t, res) != tc.want || len(f.recorded()) != 0 {
-				t.Errorf("error %t text %q server calls %d, want %q and none", res.IsError, text(t, res), len(f.recorded()), tc.want)
-			}
+			refused(t, false, tc.tool, tc.args, tc.want)
 		})
+	}
+	for _, tc := range []struct {
+		name, tool string
+		args       any
+	}{
+		{"ids as a string", "mail_trash", map[string]any{"ids": "a"}},
+		{"missing ids", "mail_archive", map[string]any{}},
+		{"missing folder", "mail_move", map[string]any{"ids": []string{"a"}}},
+		{"missing state", "mail_flag", map[string]any{"ids": []string{"a"}}},
+		{"add as a string", "mail_categorize", map[string]any{"ids": []string{"a"}, "add": "One"}},
+		{"missing subject", "draft_new", map[string]any{"to": []string{"a@test"}, "body": ""}},
+		{"missing body", "draft_new", map[string]any{"to": []string{"a@test"}, "subject": ""}},
+		{"reply without body", "draft_reply", map[string]any{"id": "m"}},
+		{"update without body", "draft_update", map[string]any{"id": "d"}},
+		{"forward without to", "draft_forward", map[string]any{"id": "m"}},
+		{"unknown property", "mail_read", map[string]any{"ids": []string{"a"}, "canary": 1}},
+	} {
+		t.Run("writes "+tc.name, func(t *testing.T) {
+			refused(t, true, tc.tool, tc.args, "invalid request")
+		})
+	}
+}
+
+// refused calls a tool with arguments that must fail with want before any server call.
+func refused(t *testing.T, writes bool, tool string, args any, want string) {
+	t.Helper()
+	cs, f := connect(t, mcptools.Options{Account: "work", AllowWrites: writes}, answer(report), nil)
+	res, e := cs.CallTool(bounded(t), &mcp.CallToolParams{Name: tool, Arguments: args})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if !res.IsError || text(t, res) != want || len(f.recorded()) != 0 {
+		t.Errorf("error %t text %q server calls %d, want %q and none", res.IsError, text(t, res), len(f.recorded()), want)
 	}
 }
 
 func TestUnknownToolIsAProtocolErrorWithoutServerCall(t *testing.T) {
 	cs, f := connect(t, mcptools.Options{}, answer(`{}`), nil)
-	for _, name := range []string{"mail_archive", "stats", "cache_clear"} {
-		if _, e := cs.CallTool(bounded(t), &mcp.CallToolParams{Name: name}); e == nil {
-			t.Errorf("%s: call succeeded", name)
+	// Without AllowWrites the write tools are unknown, like the tools that are never exposed.
+	for _, name := range append([]string{"stats", "cache_clear"}, writeTools...) {
+		if _, e := cs.CallTool(bounded(t), &mcp.CallToolParams{Name: name, Arguments: map[string]any{"ids": []string{"a"}}}); e == nil || !strings.Contains(e.Error(), "unknown tool") {
+			t.Errorf("%s: error %v, want unknown tool", name, e)
 		}
 	}
 	if len(f.recorded()) != 0 {
