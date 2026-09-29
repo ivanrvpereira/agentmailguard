@@ -238,6 +238,7 @@ The entries below record discovery and fixes chronologically. Final verification
 - Before this change, M365 reread the Keychain at each access-token expiry and Gmail/M365 wrote after each refresh. Runtime reads are now gone. Refresh writes remain; the startup write probe asks for that permission early.
 - Red/green: new server tests failed to build before `Preload`, `CredentialCheck`, and `Options.LookupEnv` existed. The serve test failed ("listener did not start") before it had configuration and credentials. Five mutants (loads pass through, saves skip memory, no write probe, late accounts allowed, failures ignored) each fail the new tests.
 - The terminal key prompt shares `readJevKey` with `auth set-jev-key`. Native Keychain prompt behavior was not exercised live.
+- User follow-up: an account that is not logged in must not block the start. Its check reads "not logged in; commands for this account fail until auth login and a server restart", it is not write-probed, `auth status` reports `logged_in: false`, and its mail commands fail. Denied, unreadable, write-failed, missing-key, and missing-configuration results still refuse the start. Red/green: the new server test and the serve test with a missing login both failed before the change.
 
 ## Live credential preparation
 

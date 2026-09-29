@@ -182,7 +182,6 @@ func TestPreloadRefusesWithFixedStatuses(t *testing.T) {
 		item   string
 		status string
 	}{
-		{"not logged in", func(s *preloadStore) { delete(s.records, "m365/work") }, nil, `account "work" (m365)`, "not logged in; run auth login"},
 		{"denied", func(s *preloadStore) { s.loadErr = map[string]error{"gmail/personal": credentials.ErrUnavailable} }, nil, `account "personal" (gmail)`, "Keychain access failed or denied"},
 		{"unreadable", func(s *preloadStore) { s.loadErr = map[string]error{"m365/work": canary} }, nil, `account "work" (m365)`, "credential record unreadable; run auth login"},
 		{"write denied", func(s *preloadStore) { s.saveErr = canary }, nil, `account "work" (m365)`, "Keychain write failed or denied"},
@@ -286,5 +285,36 @@ func TestPreloadRefusesBadConfigurationAndLateAccounts(t *testing.T) {
 	}
 	if reads, _ := store.accesses(); len(reads) != 3 {
 		t.Fatalf("late account reached the backend: %v", reads)
+	}
+}
+
+func TestPreloadStartsWithAccountThatIsNotLoggedIn(t *testing.T) {
+	now := time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC)
+	store := loggedIn(now)
+	delete(store.records, "gmail/personal")
+	s, e := server.New(context.Background(), twoAccountHome(t), server.Options{Credentials: store, LookupEnv: func(string) string { return "" }, Now: func() time.Time { return now }})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	checks, e := s.Preload(context.Background(), nil)
+	if e != nil || checks[1] != (server.CredentialCheck{Item: `account "personal" (gmail)`, Status: "not logged in; commands for this account fail until auth login and a server restart"}) {
+		t.Fatalf("checks=%v err=%v", checks, e)
+	}
+	// Only the logged-in record is write-probed.
+	if _, writes := store.accesses(); !reflect.DeepEqual(writes, []string{"m365/work"}) {
+		t.Fatalf("writes=%v", writes)
+	}
+	h := httptest.NewServer(s)
+	defer h.Close()
+	code, body := rpc(t, h.URL, `{"operation":"auth.status","account":"personal","params":{}}`)
+	if code != 200 || !strings.Contains(body, `"logged_in":false`) {
+		t.Fatalf("status: %d %s", code, body)
+	}
+	if code, _ := rpc(t, h.URL, `{"operation":"mail.folders","account":"personal","params":{}}`); code == 200 {
+		t.Fatal("mail command succeeded without login")
+	}
+	if reads, _ := store.accesses(); len(reads) != 3 {
+		t.Fatalf("backend read after startup: %v", reads)
 	}
 }

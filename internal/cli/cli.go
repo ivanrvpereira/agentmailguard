@@ -48,7 +48,7 @@ draft new --to ADDRESS ... --subject TEXT --body TEXT
 draft reply ID --body TEXT | draft forward ID --to ADDRESS ... | draft update ID --body TEXT
 
 All data commands use the server. No automatic server start. No send or permanent delete.
-serve loads all credentials at start and refuses to start if one is missing or denied.
+serve loads all credentials at start. Accounts without login start disabled; other failures refuse the start.
 Login runs locally on the server host. Restart the server after login or account changes.
 Client/server authentication and built-in TLS are absent. Protect remote access with a tunnel.
 `

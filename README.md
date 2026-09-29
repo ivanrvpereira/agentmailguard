@@ -85,7 +85,7 @@ Run login locally on the server host:
 1. It reads the OAuth record of every account in `config.toml`, and the Jev key unless `OPENROUTER_API_KEY` is set. Approve the macOS Keychain prompts at this time. Choose "Always Allow" to prevent later prompts; a rebuilt binary asks again.
 2. It writes each OAuth record back unchanged, so the Keychain also asks for modify permission now and not at the first token refresh.
 3. If the Jev key is missing and stdin is a terminal, it asks for the key with echo disabled and saves it. Piped or absent stdin gets no prompt.
-4. It prints one `credential check:` line per item, without secrets. If any item fails, the server does not start. Fix the item (for example with `auth login` or `auth set-jev-key`) and start again.
+4. It prints one `credential check:` line per item, without secrets. An account that is not logged in does not stop the start: its commands fail until you run `auth login` and restart the server. Any other failed item (denied or unreadable Keychain access, a failed write, a missing Jev key, or missing configuration) stops the start. Fix the item (for example with `auth set-jev-key`) and start again.
 
 After start, the server never reads the Keychain again. It keeps credentials in memory. Token refreshes are saved to the Keychain first, then to memory. An account added to `config.toml` after start returns the restart-required error.
 

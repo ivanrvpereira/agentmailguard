@@ -69,15 +69,16 @@ func (n *notices) Write(p []byte) (int, error) {
 }
 func TestServeExposureWarningAndBoundedShutdown(t *testing.T) {
 	for _, tc := range []struct {
-		listen  string
-		warning bool
-	}{{"127.0.0.1:0", false}, {"0.0.0.0:0", true}} {
+		listen   string
+		warning  bool
+		loggedIn bool
+	}{{"127.0.0.1:0", false, true}, {"0.0.0.0:0", true, true}, {"127.0.0.1:0", false, false}} {
 		ctx, cancel := context.WithCancel(context.Background())
 		logs := &notices{ready: make(chan struct{})}
 		done := make(chan int, 1)
 		home := serveHome(t)
 		go func() {
-			done <- cli.Run(ctx, []string{"serve", "--home", home, "--listen", tc.listen}, io.Discard, logs, cli.Options{LookupEnv: func(string) string { return "" }, Server: server.Options{Credentials: &serveStore{key: "private-jev-canary"}}})
+			done <- cli.Run(ctx, []string{"serve", "--home", home, "--listen", tc.listen}, io.Discard, logs, cli.Options{LookupEnv: func(string) string { return "" }, Server: server.Options{Credentials: &serveStore{key: "private-jev-canary", missing: !tc.loggedIn}}})
 		}()
 		select {
 		case <-logs.ready:
@@ -97,7 +98,12 @@ func TestServeExposureWarningAndBoundedShutdown(t *testing.T) {
 		logs.mu.Lock()
 		text := logs.text.String()
 		logs.mu.Unlock()
-		checks := "checking credentials; approve any Keychain prompts now\ncredential check: account \"work\" (m365): ok\ncredential check: Jev key: ok\nserver listening\n"
+		account := "ok"
+		if !tc.loggedIn {
+			// An account that is not logged in does not block the start; its commands fail.
+			account = "not logged in; commands for this account fail until auth login and a server restart"
+		}
+		checks := "checking credentials; approve any Keychain prompts now\ncredential check: account \"work\" (m365): " + account + "\ncredential check: Jev key: ok\nserver listening\n"
 		if !strings.HasSuffix(text, checks) || strings.Contains(text, "private-") {
 			t.Errorf("credential checks must precede listening: %q", text)
 		}
@@ -114,7 +120,6 @@ func TestServeRefusesToStartWhenCredentialsAreMissing(t *testing.T) {
 		store *serveStore
 		want  []string
 	}{
-		{"not logged in", serveHome, &serveStore{key: "k", missing: true}, []string{`credential check: account "work" (m365): not logged in; run auth login`, "error: credential check failed; fix the items above and restart the server"}},
 		// A piped or absent stdin never gets a key prompt; automated hosts use OPENROUTER_API_KEY.
 		{"key missing without terminal", serveHome, &serveStore{}, []string{"credential check: Jev key: missing; run auth set-jev-key or set OPENROUTER_API_KEY", "error: credential check failed"}},
 		{"no configuration", func(t *testing.T) string { return t.TempDir() }, &serveStore{key: "k"}, []string{"error: configuration unavailable"}},

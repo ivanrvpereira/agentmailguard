@@ -17,6 +17,9 @@ type CredentialCheck struct{ Item, Status string }
 
 var credentialCheckFailed = errors.New("credential check failed")
 
+// An account without a login does not block the start. Its commands fail with the provider's auth error.
+const notLoggedIn = "not logged in; commands for this account fail until auth login and a server restart"
+
 // memoryStore passes through to the backend until Preload succeeds.
 // After that it answers loads from memory only, so the backend never prompts at runtime.
 // Saves always reach the backend first; memory changes only after the backend accepts them.
@@ -83,7 +86,7 @@ func (m *memoryStore) SaveOpenRouterKey(ctx context.Context, key string) error {
 // (for example macOS Keychain access dialogs) happen at server start while an operator is present.
 // It also rewrites each OAuth record unchanged, so the backend asks for modify permission now,
 // not at the first token refresh. jevKey is called only when the Jev key is missing; nil refuses.
-// Any failed item fails the whole preload. After success, the backend is only written, never read,
+// Any failed item fails the whole preload, except an account that is not logged in. After success, the backend is only written, never read,
 // and accounts added to the configuration later require a restart.
 func (s *Server) Preload(ctx context.Context, jevKey func(context.Context) (string, error)) ([]CredentialCheck, error) {
 	path := filepath.Join(s.home, "config.toml")
@@ -102,7 +105,7 @@ func (s *Server) Preload(ctx context.Context, jevKey func(context.Context) (stri
 	failed := false
 	add := func(item, status string) {
 		checks = append(checks, CredentialCheck{item, status})
-		failed = failed || (status != "ok" && status != "saved" && status != "ok (OPENROUTER_API_KEY)")
+		failed = failed || (status != "ok" && status != "saved" && status != "ok (OPENROUTER_API_KEY)" && status != notLoggedIn)
 	}
 	oauth := map[[2]string]credentials.OAuth{}
 	for _, a := range accounts {
@@ -112,7 +115,7 @@ func (s *Server) Preload(ctx context.Context, jevKey func(context.Context) (stri
 		case ctx.Err() != nil:
 			return checks, ctx.Err()
 		case errors.Is(err, credentials.ErrNotFound):
-			add(item, "not logged in; run auth login")
+			add(item, notLoggedIn)
 		case errors.Is(err, credentials.ErrUnavailable):
 			add(item, "Keychain access failed or denied")
 		case err != nil:
