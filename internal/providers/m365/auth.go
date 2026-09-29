@@ -68,6 +68,12 @@ func New(account config.Account, store credentials.Store, opts Options) *Client 
 
 const authError = model.MailboxError("AuthError")
 
+type scopeError struct{ extra []string }
+
+func (scopeError) Error() string              { return string(authError) }
+func (scopeError) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "AuthError") }
+func (e scopeError) ExtraScopes() []string    { return append([]string(nil), e.extra...) }
+
 func checkedScopes(token string) ([]string, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -92,12 +98,16 @@ func checkedScopes(token string) ([]string, error) {
 	if len(scopes) == 0 {
 		return nil, authError
 	}
+	var extra []string
 	for _, s := range scopes {
 		switch strings.ToLower(s) {
 		case "user.read", "mail.readwrite", "calendars.read", "mailboxsettings.read", "offline_access", "openid", "profile", "email":
 		default:
-			return nil, authError
+			extra = append(extra, s)
 		}
+	}
+	if len(extra) != 0 {
+		return nil, scopeError{extra: extra}
 	}
 	return scopes, nil
 }

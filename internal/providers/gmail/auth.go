@@ -3,6 +3,8 @@ package gmail
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"time"
@@ -10,19 +12,26 @@ import (
 	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
 )
 
+type scopeError struct{ extra []string }
+
+func (scopeError) Error() string              { return "Gmail error ScopeError" }
+func (scopeError) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "Gmail error ScopeError") }
+func (e scopeError) ExtraScopes() []string    { return append([]string(nil), e.extra...) }
+
 func scopes(raw string) ([]string, error) {
 	list := strings.Fields(raw)
 	have := map[string]bool{}
+	var extra []string
 	for _, s := range list {
 		switch s {
 		case gmailScope, calendarScope, "openid", "email", "profile", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile":
 			have[s] = true
 		default:
-			return nil, failure("Gmail", "ScopeError")
+			extra = append(extra, s)
 		}
 	}
-	if !have[gmailScope] || !have[calendarScope] {
-		return nil, failure("Gmail", "ScopeError")
+	if len(extra) != 0 || !have[gmailScope] || !have[calendarScope] {
+		return nil, scopeError{extra: extra}
 	}
 	return list, nil
 }

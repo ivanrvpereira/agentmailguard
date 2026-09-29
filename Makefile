@@ -13,3 +13,5 @@ test:
 
 build:
 	go build ./...
+	mkdir -p bin
+	go build -o bin/agentmailguard-go ./cmd/agentmailguard-go
