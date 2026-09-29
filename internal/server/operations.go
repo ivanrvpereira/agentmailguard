@@ -59,7 +59,7 @@ func (s *Server) load(ctx context.Context, name *string) (config.Account, error)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if old := s.accounts[a.Name]; old != nil && old.config != a {
+	if old := s.accounts[a.Name]; (old != nil && old.config != a) || (old == nil && s.preloaded) {
 		return config.Account{}, restart
 	}
 	return a, nil
@@ -72,6 +72,9 @@ func (s *Server) instance(a config.Account) (*account, error) {
 			return nil, restart
 		}
 		return old, nil
+	}
+	if s.preloaded {
+		return nil, restart
 	}
 	var p provider
 	if a.Provider == "gmail" {

@@ -231,6 +231,14 @@ The entries below record discovery and fixes chronologically. Final verification
 - The user approved a local `auth set-jev-key` command. It reads stdin (terminal: prompt with `/bin/stty -echo`, no new dependency), validates one printable line, and saves through `SaveOpenRouterKey`. It refuses remote targets, `--account`, and `--home`, and never prints the key.
 - CLI tests cover the saved trimmed key, empty/EOF/space/control/multi-line/too-long input, remote flag and environment refusals, flag refusals, and a Keychain failure without leaking the key or backend detail. The tests failed to build before `cli.Options.Stdin` existed.
 
+## Follow-up: credentials load at server start
+
+- The user asked that `serve` request credential-backend access at start, because an operator is present then (a vault could fill this role on automated hosts). Decisions: refuse to start on any missing, denied, or unreadable item; prompt for a missing Jev key on a terminal; rewrite each OAuth record unchanged at start so the Keychain modify prompt also appears then.
+- `server.Server.Preload` reads every configured account's OAuth record and the Jev key (skipped when `OPENROUTER_API_KEY` is set), write-probes each OAuth record, and returns fixed `CredentialCheck` items. A `memoryStore` passes through before preload; after success, loads come from memory only and saves reach the backend before memory. Accounts added after preload return the restart-required error. `serve` prints the checks before `server listening` and refuses to start on failure or missing configuration.
+- Before this change, M365 reread the Keychain at each access-token expiry and Gmail/M365 wrote after each refresh. Runtime reads are now gone. Refresh writes remain; the startup write probe asks for that permission early.
+- Red/green: new server tests failed to build before `Preload`, `CredentialCheck`, and `Options.LookupEnv` existed. The serve test failed ("listener did not start") before it had configuration and credentials. Five mutants (loads pass through, saves skip memory, no write probe, late accounts allowed, failures ignored) each fail the new tests.
+- The terminal key prompt shares `readJevKey` with `auth set-jev-key`. Native Keychain prompt behavior was not exercised live.
+
 ## Live credential preparation
 
 - Parent read only account metadata and existing credentials from `~/.agentmailguard-dev`. It contains `work` (M365) and `gmail`; both auth records exist. `~/.agentmailguard` has no accounts.

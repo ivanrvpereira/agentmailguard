@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -19,7 +20,7 @@ import (
 	"github.com/ivanrvpereira/agentmailguard-go/internal/server"
 )
 
-func serve(ctx context.Context, home, listen string, stdout, stderr io.Writer, opts server.Options) int {
+func serve(ctx context.Context, home, listen string, stdin io.Reader, stderr io.Writer, opts server.Options) int {
 	host, _, e := net.SplitHostPort(listen)
 	if e != nil {
 		return usage(stderr)
@@ -36,6 +37,10 @@ func serve(ctx context.Context, home, listen string, stdout, stderr io.Writer, o
 	s, e := server.New(context.WithoutCancel(ctx), home, opts)
 	if e != nil {
 		return failure(stderr, "server state unavailable")
+	}
+	if code := preload(ctx, s, stdin, stderr); code != 0 {
+		_ = s.Close()
+		return code
 	}
 	h := &http.Server{Handler: s, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, ErrorLog: log.New(io.Discard, "", 0)}
 	done := make(chan error, 1)
@@ -55,6 +60,40 @@ func serve(ctx context.Context, home, listen string, stdout, stderr io.Writer, o
 	case <-done:
 		_ = s.Close()
 		return failure(stderr, "server stopped")
+	}
+}
+
+// preload asks the credential backend for everything before the server accepts requests,
+// because an operator is present at start. A missing Jev key is requested only on a terminal.
+func preload(ctx context.Context, s *server.Server, stdin io.Reader, stderr io.Writer) int {
+	if stdin == nil {
+		stdin = os.Stdin
+	}
+	var prompt func(context.Context) (string, error)
+	if _, ok := terminal(stdin); ok {
+		prompt = func(ctx context.Context) (string, error) {
+			key, problem := readJevKey(ctx, stdin, stderr, "Jev key not found. Enter the Jev (OpenRouter) API key to save it: ")
+			if problem != "" {
+				fmt.Fprintln(stderr, "error: "+problem)
+				return "", errors.New(problem)
+			}
+			return key, nil
+		}
+	}
+	fmt.Fprintln(stderr, "checking credentials; approve any Keychain prompts now")
+	checks, e := s.Preload(ctx, prompt)
+	for _, c := range checks {
+		fmt.Fprintf(stderr, "credential check: %s: %s\n", c.Item, c.Status)
+	}
+	switch {
+	case e == nil:
+		return 0
+	case ctx.Err() != nil:
+		return failure(stderr, "credential check canceled")
+	case e.Error() == "configuration unavailable":
+		return failure(stderr, "configuration unavailable")
+	default:
+		return failure(stderr, "credential check failed; fix the items above and restart the server")
 	}
 }
 

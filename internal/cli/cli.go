@@ -25,7 +25,7 @@ type Options struct {
 	Server    server.Options
 	LookupEnv func(string) string
 	Now       func() time.Time
-	Stdin     io.Reader // defaults to os.Stdin; read only by auth set-jev-key
+	Stdin     io.Reader // defaults to os.Stdin; read by auth set-jev-key and by serve for a missing Jev key
 }
 
 func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "CLIOptions{redacted}") }
@@ -48,6 +48,7 @@ draft new --to ADDRESS ... --subject TEXT --body TEXT
 draft reply ID --body TEXT | draft forward ID --to ADDRESS ... | draft update ID --body TEXT
 
 All data commands use the server. No automatic server start. No send or permanent delete.
+serve loads all credentials at start and refuses to start if one is missing or denied.
 Login runs locally on the server host. Restart the server after login or account changes.
 Client/server authentication and built-in TLS are absent. Protect remote access with a tunnel.
 `
@@ -358,7 +359,10 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Opti
 		if supplied || seen["account"] {
 			return usage(stderr)
 		}
-		return serve(ctx, home, listen, stdout, stderr, opts.Server)
+		if opts.Server.LookupEnv == nil {
+			opts.Server.LookupEnv = opts.LookupEnv
+		}
+		return serve(ctx, home, listen, opts.Stdin, stderr, opts.Server)
 	}
 	if op == "auth.login" {
 		if supplied {

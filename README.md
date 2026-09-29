@@ -67,7 +67,7 @@ The Jev key uses service `agentmailguard-go-openrouter` and account `agentmailgu
 The server can also read `OPENROUTER_API_KEY` from its environment.
 Run `agentmailguard-go auth set-jev-key` on the server host to save the key. On a terminal it prompts with echo disabled; otherwise it reads the key from stdin, for example from a password manager CLI. The key never appears in arguments or output.
 The command is local only: it refuses `--server`, `AGENTMAILGUARD_GO_SERVER`, `--account`, and `--home`. It refuses keys with spaces or control characters and updates an existing Keychain item in place.
-The server reads the key at the first screening call. Restart the server after replacing a key it already loaded.
+The server reads the key at start (see below). Restart the server after replacing the key.
 No client command transfers a provider token or Jev key to the server.
 
 ## Local login and server start
@@ -79,6 +79,15 @@ Run login locally on the server host:
 ./bin/agentmailguard-go --account work auth login --home /private/path/agentmailguard-go --device-code
 ./bin/agentmailguard-go serve --home /private/path/agentmailguard-go
 ```
+
+`serve` loads every credential before it accepts requests, because an operator is present at server start:
+
+1. It reads the OAuth record of every account in `config.toml`, and the Jev key unless `OPENROUTER_API_KEY` is set. Approve the macOS Keychain prompts at this time. Choose "Always Allow" to prevent later prompts; a rebuilt binary asks again.
+2. It writes each OAuth record back unchanged, so the Keychain also asks for modify permission now and not at the first token refresh.
+3. If the Jev key is missing and stdin is a terminal, it asks for the key with echo disabled and saves it. Piped or absent stdin gets no prompt.
+4. It prints one `credential check:` line per item, without secrets. If any item fails, the server does not start. Fix the item (for example with `auth login` or `auth set-jev-key`) and start again.
+
+After start, the server never reads the Keychain again. It keeps credentials in memory. Token refreshes are saved to the Keychain first, then to memory. An account added to `config.toml` after start returns the restart-required error.
 
 Browser login is the default.
 Microsoft 365 supports device-code login.

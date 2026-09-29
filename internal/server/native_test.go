@@ -1,13 +1,12 @@
 package server_test
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,7 +16,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
@@ -212,7 +210,7 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 	if b, e := build.CombinedOutput(); e != nil {
 		t.Fatalf("build: %v %s", e, b)
 	}
-	verifyNativeShutdown(t, binary)
+	verifyNativeRefusal(t, binary)
 	home := t.TempDir()
 	configFile(t, home)
 	f, e := os.OpenFile(filepath.Join(home, "config.toml"), os.O_APPEND|os.O_WRONLY, 0600)
@@ -512,50 +510,21 @@ func verifyNativeOutputFailure(t *testing.T, binary string, handler http.Handler
 	}
 }
 
-func verifyNativeShutdown(t *testing.T, binary string) {
+// The real binary uses the real Keychain, so it runs only to its configuration refusal:
+// serve checks configuration before any credential read and never starts listening.
+// In-process serve tests cover preload, listening, and shutdown with a fake credential store.
+func verifyNativeRefusal(t *testing.T, binary string) {
 	t.Helper()
-	probe, e := net.Listen("tcp", "127.0.0.1:0")
-	if e != nil {
-		t.Fatal(e)
-	}
-	address := probe.Addr().String()
-	probe.Close()
 	home := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, "serve", "--home", home, "--listen", address)
+	cmd := exec.CommandContext(ctx, binary, "serve", "--home", home, "--listen", "127.0.0.1:0")
 	cmd.Env = []string{"HOME=" + home}
-	logs, e := cmd.StderrPipe()
-	if e != nil {
-		t.Fatal(e)
-	}
-	cmd.Stdout = io.Discard
-	if e := cmd.Start(); e != nil {
-		t.Fatal(e)
-	}
-	scanner := bufio.NewScanner(logs)
-	if !scanner.Scan() || scanner.Text() != "server listening" {
-		cmd.Process.Kill()
-		cmd.Wait()
-		t.Fatal("native server startup failed")
-	}
-	resp, e := http.Post("http://"+address+"/v1/call", "application/json", strings.NewReader(`{"operation":"stats","params":{}}`))
-	if e != nil {
-		cmd.Process.Kill()
-		cmd.Wait()
-		t.Fatal(e)
-	}
-	b, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != 200 || strings.TrimSpace(string(b)) != "{}" {
-		t.Error("native serve cache-only call failed")
-	}
-	if e := cmd.Process.Signal(syscall.SIGTERM); e != nil {
-		cmd.Process.Kill()
-		cmd.Wait()
-		t.Fatal(e)
-	}
-	if e := cmd.Wait(); e != nil {
-		t.Fatal("SIGTERM did not produce clean native shutdown")
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = io.Discard, &stderr
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 || stderr.String() != "checking credentials; approve any Keychain prompts now\nerror: configuration unavailable\n" {
+		t.Fatalf("native serve without configuration: %v %q", err, stderr.String())
 	}
 }

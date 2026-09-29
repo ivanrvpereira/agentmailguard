@@ -10,6 +10,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -34,6 +35,7 @@ type Options struct {
 	M365        m365.Options
 	Gmail       gmail.Options
 	Now         func() time.Time
+	LookupEnv   func(string) string // defaults to os.Getenv; used for OPENROUTER_API_KEY
 }
 
 func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "ServerOptions{redacted}") }
@@ -52,6 +54,8 @@ type Server struct {
 	closeOnce *sync.Once
 	closeErr  error
 	accounts  map[string]*account
+	creds     *memoryStore
+	preloaded bool
 }
 
 func (Server) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "Server{redacted}") }
@@ -68,18 +72,22 @@ func New(ctx context.Context, home string, opts Options) (*Server, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	if opts.LookupEnv == nil {
+		opts.LookupEnv = os.Getenv
+	}
 	if opts.Credentials == nil {
 		opts.Credentials, _ = credentials.NewMacOS()
 	}
-	opts.Credentials = safeStore{opts.Credentials}
+	creds := &memoryStore{backend: safeStore{opts.Credentials}}
+	opts.Credentials = creds
 	if opts.Screener == nil {
-		opts.Screener = screening.New(screening.Options{Credentials: opts.Credentials, HTTPClient: safeHTTP(nil)})
+		opts.Screener = screening.New(screening.Options{Credentials: opts.Credentials, HTTPClient: safeHTTP(nil), LookupEnv: opts.LookupEnv})
 	}
 	opts.Screener = safeScreener{opts.Screener}
 	opts.M365.HTTPClient = safeHTTP(opts.M365.HTTPClient)
 	opts.Gmail.HTTPClient = safeHTTP(opts.Gmail.HTTPClient)
 	ctx, cancel := context.WithCancel(ctx)
-	return &Server{home: home, options: opts, cache: c, audit: audit.New(filepath.Join(home, "audit.jsonl")), ctx: ctx, cancel: cancel, slots: make(chan struct{}, 64), accounts: make(map[string]*account), mu: new(sync.Mutex), work: new(sync.WaitGroup), closeOnce: new(sync.Once)}, nil
+	return &Server{home: home, options: opts, cache: c, audit: audit.New(filepath.Join(home, "audit.jsonl")), ctx: ctx, cancel: cancel, slots: make(chan struct{}, 64), accounts: make(map[string]*account), creds: creds, mu: new(sync.Mutex), work: new(sync.WaitGroup), closeOnce: new(sync.Once)}, nil
 }
 
 // Close stops admission, cancels active calls, and waits at most ShutdownTimeout.
