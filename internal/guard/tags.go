@@ -89,7 +89,7 @@ func (g *Guard) tag(ctx context.Context, ids []string, rows map[string]*cache.Ro
 		outcome := g.batches(ctx, audit.Categorize, write, audit.Options{Rule: &rule, Add: []string{tag.name}, Remove: remove})
 		for _, id := range write {
 			if outcome[id] == "ok" {
-				report.count("tagged", rows[id])
+				report.Stats.Tagged++
 				there = append(there, id)
 				confirmed[id] = true
 			} else {

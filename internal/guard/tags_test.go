@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ivanrvpereira/agentmailguard-go/internal/guard"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
 )
 
@@ -46,8 +47,10 @@ func TestTagMetadataFailuresAndScanFailuresNeverMutateThoseIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Counts["failed"][model.Red] != 4 || report.Counts["tagged"][model.Red] != 1 || report.Counts["skipped"][model.Red] != 2 || len(report.Planned) != 0 {
-		t.Fatalf("tag counts: %+v", report)
+	// Failed: gone, swap, draft, scan-bad. Tagged: good. Skipped: good and already.
+	checkStats(t, report.Stats, guard.Stats{Messages: 6, Verdicts: guard.Verdicts{Red: 6}, Tagged: 1, Skipped: 2, Failed: 4})
+	if len(report.Planned) != 0 {
+		t.Fatalf("red mail planned: %+v", report)
 	}
 	want := []string{"Graph error InvalidMetadata", "tag fetch MailboxError", "tag fetch ValueError", "tag draft"}
 	for i, code := range want {
@@ -64,7 +67,8 @@ func TestTagMetadataFailuresAndScanFailuresNeverMutateThoseIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Counts["tagged"][model.Red] != 0 || len(auditRecords(t, path)) != 1 {
+	checkStats(t, report.Stats, guard.Stats{Messages: 6, Verdicts: guard.Verdicts{Red: 6}, Skipped: 2, Failed: 4})
+	if len(auditRecords(t, path)) != 1 {
 		t.Fatal("successful/already-correct tags written twice")
 	}
 	for _, get := range base.gets {
@@ -97,7 +101,8 @@ func TestCompletedGreenCanBeRescreenedAndRetaggedWithoutReclassification(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(report.Planned) != 0 || report.Counts["tagged"][model.Red] != 1 || report.Counts["skipped"][model.Red] != 1 || report.Counts["cached"][model.Red] != 0 || len(s.asked) != 1 {
+	checkStats(t, report.Stats, guard.Stats{Messages: 1, Verdicts: guard.Verdicts{Red: 1}, Tagged: 1, Skipped: 1})
+	if len(report.Planned) != 0 || len(s.asked) != 1 {
 		t.Fatalf("business completion suppressed retag or reclassified: %+v", report)
 	}
 	records := auditRecords(t, path)
@@ -109,7 +114,8 @@ func TestCompletedGreenCanBeRescreenedAndRetaggedWithoutReclassification(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(b.gets) != 0 || len(auditRecords(t, path)) != 3 || report.Counts["skipped"][model.Red] != 1 {
+	checkStats(t, report.Stats, guard.Stats{Messages: 1, Verdicts: guard.Verdicts{Red: 1}, Skipped: 1})
+	if len(b.gets) != 0 || len(auditRecords(t, path)) != 3 {
 		t.Fatal("retag repeat was not complete")
 	}
 }
@@ -124,7 +130,8 @@ func TestMissingSecurityCategoryWarnsOnlyWhenNeeded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(report.Warnings) != 1 || report.Warnings[0].Rule != "security:sealed" || report.Counts["failed"][model.Sealed] != 0 || len(auditRecords(t, path)) != 0 {
+	checkStats(t, report.Stats, guard.Stats{Messages: 1, Verdicts: guard.Verdicts{Sealed: 1}, Skipped: 1})
+	if len(report.Warnings) != 1 || report.Warnings[0].Rule != "security:sealed" || len(auditRecords(t, path)) != 0 {
 		t.Fatalf("wrong missing tag warning: %+v", report)
 	}
 	b.categories = append(b.categories, "Sealed")
@@ -132,7 +139,8 @@ func TestMissingSecurityCategoryWarnsOnlyWhenNeeded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Counts["tagged"][model.Sealed] != 1 || len(report.Warnings) != 0 {
+	checkStats(t, report.Stats, guard.Stats{Messages: 1, Verdicts: guard.Verdicts{Sealed: 1}, Tagged: 1, Skipped: 1})
+	if len(report.Warnings) != 0 {
 		t.Fatalf("new existing tag not applied: %+v", report)
 	}
 	b.categories = []string{"Work"}

@@ -8,8 +8,73 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ivanrvpereira/agentmailguard-go/internal/guard"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
+	"github.com/ivanrvpereira/agentmailguard-go/internal/rules"
 )
+
+func checkStats(t *testing.T, got, want guard.Stats) {
+	t.Helper()
+	if got != want {
+		t.Fatalf("stats = %+v, want %+v", got, want)
+	}
+}
+
+func TestOrganizeReportKeyOrderAndEmptyStats(t *testing.T) {
+	b, s := organizerSetup(t)
+	g, _, _ := setup(t, b, s)
+	since := now.Add(-7 * 24 * time.Hour)
+	until := now.Add(time.Hour)
+	for _, tc := range []struct {
+		until *time.Time
+		keys  []string
+	}{
+		{nil, []string{"planned", "errors", "warnings", "since", "stats"}},
+		{&until, []string{"planned", "errors", "warnings", "since", "until", "stats"}},
+	} {
+		for _, r := range []rules.Rules{{}, orgRules()} {
+			report, err := g.Organize(context.Background(), since, r, now, false, tc.until)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := json.NewDecoder(strings.NewReader(string(data)))
+			keys := []string{}
+			if _, err := d.Token(); err != nil {
+				t.Fatal(err)
+			}
+			for d.More() {
+				key, _ := d.Token()
+				keys = append(keys, key.(string))
+				var skip json.RawMessage
+				if err := d.Decode(&skip); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !reflect.DeepEqual(keys, tc.keys) {
+				t.Fatalf("key order = %v, want %v", keys, tc.keys)
+			}
+			if len(r.Rules) == 0 && !strings.HasSuffix(string(data), `"stats":{"messages":0,"verdicts":{},"applied":0,"tagged":0,"skipped":0,"failed":0}}`) {
+				t.Fatalf("no-work stats: %s", data)
+			}
+		}
+	}
+	report, err := g.Organize(context.Background(), since, orgRules(), now, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(report.Stats)
+	if string(data) != `{"messages":1,"verdicts":{"green":1},"applied":0,"tagged":0,"skipped":0,"failed":0}` {
+		t.Fatalf("stats JSON: %s", data)
+	}
+	data, _ = json.Marshal(guard.Verdicts{Green: 11, Yellow: 2, Red: 1, Error: 1})
+	if string(data) != `{"green":11,"yellow":2,"red":1,"error":1}` {
+		t.Fatalf("verdict order or zero counts: %s", data)
+	}
+}
 
 type organizerBox struct {
 	*writer
@@ -40,7 +105,8 @@ func TestSecurityTagsAreIndependentAndTrustSuccessfulMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Counts["tagged"][model.Yellow] != 1 || report.Counts["failed"][model.Yellow] != 1 || len(report.Planned) != 0 || !reflect.DeepEqual(b.calls, []string{"categorize"}) {
+	checkStats(t, report.Stats, guard.Stats{Messages: 1, Verdicts: guard.Verdicts{Yellow: 1}, Tagged: 1, Failed: 1})
+	if len(report.Planned) != 0 || !reflect.DeepEqual(b.calls, []string{"categorize"}) {
 		t.Fatalf("organization failure prevented independent tag: %+v calls=%v", report, b.calls)
 	}
 	records := auditRecords(t, path)
@@ -53,7 +119,8 @@ func TestSecurityTagsAreIndependentAndTrustSuccessfulMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Counts["tagged"][model.Yellow] != 0 || report.Counts["skipped"][model.Yellow] != 1 || len(b.calls) != 1 {
+	checkStats(t, report.Stats, guard.Stats{Messages: 1, Verdicts: guard.Verdicts{Yellow: 1}, Skipped: 1})
+	if len(b.calls) != 1 {
 		t.Fatalf("tag marker not trusted: %+v", report)
 	}
 	for _, get := range b.gets {
@@ -66,7 +133,8 @@ func TestSecurityTagsAreIndependentAndTrustSuccessfulMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(b.gets) != 0 || report.Counts["cached"][model.Yellow] != 1 {
+	checkStats(t, report.Stats, guard.Stats{Messages: 1, Verdicts: guard.Verdicts{Yellow: 1}, Skipped: 1})
+	if len(b.gets) != 0 || len(s.asked) != 2 {
 		t.Fatalf("security marker incorrectly completed organization: %+v", report)
 	}
 }
@@ -80,8 +148,9 @@ func TestOrganizeApplyCategoriesBeforeMovesAndCompletesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(b.calls, []string{"categorize", "archive"}) || report.Counts["applied"][model.Green] != 1 {
-		t.Fatalf("actions not applied categories-first: calls=%v counts=%v", b.calls, report.Counts)
+	checkStats(t, report.Stats, guard.Stats{Messages: 1, Verdicts: guard.Verdicts{Green: 1}, Applied: 1})
+	if !reflect.DeepEqual(b.calls, []string{"categorize", "archive"}) {
+		t.Fatalf("actions not applied categories-first: calls=%v", b.calls)
 	}
 	records := auditRecords(t, path)
 	if len(records) != 2 || records[0]["rule"] != "work" || records[1]["rule"] != "route" {
@@ -95,7 +164,8 @@ func TestOrganizeApplyCategoriesBeforeMovesAndCompletesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Counts["skipped"][model.Green] != 1 || len(report.Planned) != 0 || len(b.calls) != 2 || len(b.gets) != 0 || len(s.asked) != 1 {
+	checkStats(t, report.Stats, guard.Stats{Messages: 1, Verdicts: guard.Verdicts{Green: 1}, Skipped: 1})
+	if len(report.Planned) != 0 || len(b.calls) != 2 || len(b.gets) != 0 || len(s.asked) != 1 {
 		t.Fatalf("completed item repeated: %+v calls=%v", report, b.calls)
 	}
 }
@@ -112,8 +182,9 @@ func TestOrganizePreviewUsesCurrentAnswersAndSafeReport(t *testing.T) {
 	if len(report.Planned) != 1 || report.Planned[0].ID != "m1" || report.Planned[0].Move == nil || report.Planned[0].Move.To == nil || *report.Planned[0].Move.To != "archive" || !reflect.DeepEqual(report.Planned[0].Categories, []string{"Work"}) {
 		t.Fatalf("missing green plan: %+v", report)
 	}
-	if report.Counts["screened"][model.Green] != 1 || report.Counts["classified"][model.Green] != 1 || len(b.calls) != 0 || len(auditRecords(t, path)) != 0 {
-		t.Fatalf("preview counts or writes incorrect: %+v calls=%v", report, b.calls)
+	checkStats(t, report.Stats, guard.Stats{Messages: 1, Verdicts: guard.Verdicts{Green: 1}})
+	if len(s.asked) != 1 || len(b.calls) != 0 || len(auditRecords(t, path)) != 0 {
+		t.Fatalf("preview classification or writes incorrect: %+v calls=%v", report, b.calls)
 	}
 	data, _ := json.Marshal(report)
 	for _, forbidden := range []string{"BODYTEXT", "CANARY", "DISPLAYNAME", "probabilities", "confidence", "until", "category_results"} {
@@ -126,7 +197,8 @@ func TestOrganizePreviewUsesCurrentAnswersAndSafeReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again.Counts["cached"][model.Green] != 1 || len(b.gets) != 0 || len(s.asked) != 1 {
+	checkStats(t, again.Stats, guard.Stats{Messages: 1, Verdicts: guard.Verdicts{Green: 1}})
+	if len(b.gets) != 0 || len(s.asked) != 1 {
 		t.Fatal("preview did not reuse cached classification")
 	}
 }

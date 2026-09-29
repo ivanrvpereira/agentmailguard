@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard-go/internal/cache"
+	"github.com/ivanrvpereira/agentmailguard-go/internal/guard"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/rules"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/views"
@@ -76,9 +77,11 @@ func TestInvalidCachedScreeningCannotAuthorizeViewsOrOrganization(t *testing.T) 
 						r = rules.Rules{Rules: []rules.Rule{{Name: "route", Kind: rules.Category, Target: "Work", Instructions: "changed kind"}}}
 					}
 					report, err := g.Organize(ctx, now.Add(-7*24*time.Hour), r, now, true, nil)
-					if err != nil || len(report.Planned) != 0 || report.Counts["applied"][model.Green] != 0 || len(base.calls) != 0 {
+					if err != nil || len(report.Planned) != 0 || len(base.calls) != 0 {
 						t.Fatalf("invalid cache authorized business actions/noop: %+v calls=%v error=%v", report, base.calls, err)
 					}
+					// Re-screened red; no Red category, so no tag and nothing applied.
+					checkStats(t, report.Stats, guard.Stats{Messages: 1, Verdicts: guard.Verdicts{Red: 1}, Skipped: 1})
 				}
 				if s.calls+len(s.asked) != 1 {
 					t.Fatalf("invalid screening was not retried exactly once: screen=%d classify=%d", s.calls, len(s.asked))

@@ -31,13 +31,55 @@ type Plan struct {
 	Categories      []string           `json:"categories"`
 	CategoryResults *map[string]string `json:"category_results,omitempty"`
 }
+
+// Verdicts counts messages by verdict. Zero counts are left out; the field order is the JSON order.
+type Verdicts struct {
+	Green  int `json:"green,omitempty"`
+	Yellow int `json:"yellow,omitempty"`
+	Sealed int `json:"sealed,omitempty"`
+	Red    int `json:"red,omitempty"`
+	Error  int `json:"error,omitempty"`
+}
+
+func (v *Verdicts) add(row *cache.Row) {
+	verdict := model.Error
+	if row != nil {
+		verdict = row.Verdict
+	}
+	switch verdict {
+	case model.Green:
+		v.Green++
+	case model.Yellow:
+		v.Yellow++
+	case model.Sealed:
+		v.Sealed++
+	case model.Red:
+		v.Red++
+	default:
+		v.Error++
+	}
+}
+
+// Stats are the short totals at the end of a Report.
+// Messages is the sum of Verdicts. Applied, Tagged, Skipped, and Failed are totals over all verdicts.
+type Stats struct {
+	Messages int      `json:"messages"`
+	Verdicts Verdicts `json:"verdicts"`
+	Applied  int      `json:"applied"`
+	Tagged   int      `json:"tagged"`
+	Skipped  int      `json:"skipped"`
+	Failed   int      `json:"failed"`
+}
+
+// Report is the `mail organize` result: per-message lines first, stats last.
+// The field order is the JSON key order. Until is present only when given.
 type Report struct {
-	Since    string                           `json:"since"`
-	Until    *string                          `json:"until,omitempty"`
-	Counts   map[string]map[model.Verdict]int `json:"counts"`
-	Warnings []Warning                        `json:"warnings"`
-	Errors   []ReportError                    `json:"errors"`
-	Planned  []Plan                           `json:"planned"`
+	Planned  []Plan        `json:"planned"`
+	Errors   []ReportError `json:"errors"`
+	Warnings []Warning     `json:"warnings"`
+	Since    string        `json:"since"`
+	Until    *string       `json:"until,omitempty"`
+	Stats    Stats         `json:"stats"`
 }
 
 func stamp(at time.Time) string {
@@ -51,21 +93,11 @@ func stamp(at time.Time) string {
 	return at.UTC().Format(layout)
 }
 func noWork(since time.Time, until *time.Time) Report {
-	report := Report{Since: stamp(since), Counts: map[string]map[model.Verdict]int{}, Warnings: []Warning{}, Errors: []ReportError{}, Planned: []Plan{}}
+	report := Report{Planned: []Plan{}, Errors: []ReportError{}, Warnings: []Warning{}, Since: stamp(since)}
 	if until != nil {
 		report.Until = pointer(stamp(*until))
 	}
-	for _, name := range []string{"screened", "classified", "cached", "applied", "tagged", "skipped", "failed"} {
-		report.Counts[name] = map[model.Verdict]int{model.Green: 0, model.Yellow: 0, model.Sealed: 0, model.Red: 0, model.Error: 0}
-	}
 	return report
-}
-func (report *Report) count(name string, row *cache.Row) {
-	v := model.Error
-	if row != nil {
-		v = row.Verdict
-	}
-	report.Counts[name][v]++
 }
 func resolve(r rules.Rules, folders []model.Folder, categories []string) (map[string]*string, []Warning) {
 	names := map[string]string{}
@@ -134,6 +166,15 @@ func (g *Guard) markApplied(ctx context.Context, id string, at time.Time, noop b
 	return g.store.MarkOrganizationApplied(ctx, g.account, id, at)
 }
 
+// Organize scans the Inbox in [since, until) (no until: no end), classifies the messages that are not complete, and reports.
+// Scan entries outside the window are dropped: never read, classified, or changed.
+//
+// Stats count each message of this scan once: the in-window IDs, then the scan failures that have an ID.
+// Verdicts use the row after classification in this run, else the cached row; no row counts as error.
+// Skipped was complete before this run or had nothing to apply, and Failed counts each failed message once.
+// A failed scan page is an error, not a message.
+// Planned lists green messages with an action; non-green results appear only in the stats and errors.
+// Without apply, changes no mail and writes no audit line.
 func (g *Guard) Organize(ctx context.Context, since time.Time, r rules.Rules, now time.Time, apply bool, until *time.Time) (Report, error) {
 	report := noWork(since, until)
 	if until != nil && !until.After(since) {
@@ -208,7 +249,7 @@ func (g *Guard) Organize(ctx context.Context, since time.Time, r rules.Rules, no
 		} else if apply && hidden(row.Verdict) && (row.SecurityAppliedVerdict == nil || *row.SecurityAppliedVerdict != row.Verdict) {
 			retag[id] = row
 		} else {
-			report.count("skipped", row)
+			report.Stats.Skipped++
 		}
 	}
 	final := map[string]*cache.Row{}
@@ -223,12 +264,6 @@ func (g *Guard) Organize(ctx context.Context, since time.Time, r rules.Rules, no
 		if _, exists := failed[result.ID]; exists {
 			failed[result.ID] = row
 		}
-		if result.Screened {
-			report.count("screened", row)
-		}
-		if result.Classified {
-			report.count("classified", row)
-		}
 		code := result.Error
 		if code == nil && row != nil && row.Verdict == model.Error {
 			code = row.Error
@@ -237,9 +272,6 @@ func (g *Guard) Organize(ctx context.Context, since time.Time, r rules.Rules, no
 			report.Errors = append(report.Errors, ReportError{pointer(result.ID), *code})
 			failed[result.ID] = row
 			continue
-		}
-		if !result.Screened && !result.Classified {
-			report.count("cached", row)
 		}
 		line, err := plan(row, r, resolved, now, received[result.ID])
 		if err != nil {
@@ -297,14 +329,25 @@ func (g *Guard) Organize(ctx context.Context, since time.Time, r rules.Rules, no
 			if broken[id] {
 				failed[id] = row
 			} else if done[id] {
-				report.count("applied", row)
+				report.Stats.Applied++
 			} else if _, bad := failed[id]; !bad {
-				report.count("skipped", row)
+				report.Stats.Skipped++
 			}
 		}
 	}
-	for _, row := range failed {
-		report.count("failed", row)
+	report.Stats.Failed = len(failed)
+	counted := map[string]bool{}
+	for _, id := range lookup {
+		if counted[id] {
+			continue
+		}
+		counted[id] = true
+		if row, ok := final[id]; ok {
+			report.Stats.Verdicts.add(row)
+		} else {
+			report.Stats.Verdicts.add(rowFor(id))
+		}
+		report.Stats.Messages++
 	}
 	return report, ctx.Err()
 }

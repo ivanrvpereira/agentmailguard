@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ivanrvpereira/agentmailguard-go/internal/guard"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/rules"
 )
@@ -62,9 +63,7 @@ func TestOrganizerNormalizesUnsolicitedMissingAndDuplicateResults(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Counts["failed"][model.Green] != 2 || report.Counts["applied"][model.Green] != 1 {
-		t.Fatalf("wrong failure counts: %+v", report.Counts)
-	}
+	checkStats(t, report.Stats, guard.Stats{Messages: 3, Verdicts: guard.Verdicts{Green: 3}, Applied: 1, Failed: 2})
 	for _, line := range report.Planned {
 		want := "blocked by category"
 		if line.ID == "good" {
@@ -107,9 +106,10 @@ func TestOrganizerWholeCallFailuresAuditEveryRequestedIDAndContinueBatches(t *te
 		t.Fatal(err)
 	}
 	records := auditRecords(t, path)
-	if len(records) != 2 || len(records[0]["ids"].([]any)) != 50 || len(records[1]["ids"].([]any)) != 1 || report.Counts["failed"][model.Green] != 51 {
-		t.Fatalf("batches failed or retried incorrectly: records=%d counts=%v", len(records), report.Counts)
+	if len(records) != 2 || len(records[0]["ids"].([]any)) != 50 || len(records[1]["ids"].([]any)) != 1 {
+		t.Fatalf("batches failed or retried incorrectly: records=%d", len(records))
 	}
+	checkStats(t, report.Stats, guard.Stats{Messages: 51, Verdicts: guard.Verdicts{Green: 51}, Failed: 51})
 	for _, record := range records {
 		for _, raw := range record["results"].([]any) {
 			r := raw.(map[string]any)
@@ -123,7 +123,8 @@ func TestOrganizerWholeCallFailuresAuditEveryRequestedIDAndContinueBatches(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Counts["cached"][model.Green] != 51 || report.Counts["applied"][model.Green] != 51 || len(s.asked) != 51 {
+	checkStats(t, report.Stats, guard.Stats{Messages: 51, Verdicts: guard.Verdicts{Green: 51}, Applied: 51})
+	if len(s.asked) != 51 {
 		t.Fatal("failed actions did not retry with cached answers")
 	}
 }
@@ -153,11 +154,14 @@ func TestOrganizerFiltersHalfOpenScanAndPreservesFractionalAge(t *testing.T) {
 	if len(preview.Planned) != 2 || len(s.asked) != 2 {
 		t.Fatalf("out-of-window or duplicate classification: %+v", preview)
 	}
+	// Messages: young and scan-bad, each once. The page failure is not a message.
+	checkStats(t, preview.Stats, guard.Stats{Messages: 2, Verdicts: guard.Verdicts{Green: 2}, Failed: 1})
 	report, err := g.Organize(ctx, since, r, now, true, &until)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Counts["cached"][model.Green] != 2 || report.Counts["failed"][model.Green] != 1 || report.Counts["skipped"][model.Green] != 1 || *report.Planned[0].Move.After != "2026-09-28T15:30:00.500000Z" || *report.Planned[0].Move.Result != "too young" || *report.Planned[1].Move.Result != "scan failed" {
+	checkStats(t, report.Stats, guard.Stats{Messages: 2, Verdicts: guard.Verdicts{Green: 2}, Skipped: 1, Failed: 1})
+	if len(s.asked) != 2 || *report.Planned[0].Move.After != "2026-09-28T15:30:00.500000Z" || *report.Planned[0].Move.Result != "too young" || *report.Planned[1].Move.Result != "scan failed" {
 		t.Fatalf("scan/age safety failed: %+v", report)
 	}
 	records := auditRecords(t, path)
@@ -168,7 +172,8 @@ func TestOrganizerFiltersHalfOpenScanAndPreservesFractionalAge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Counts["applied"][model.Green] != 1 || *report.Planned[0].Move.Result != "ok" {
+	checkStats(t, report.Stats, guard.Stats{Messages: 2, Verdicts: guard.Verdicts{Green: 2}, Applied: 1, Failed: 1})
+	if *report.Planned[0].Move.Result != "ok" {
 		t.Fatal("move did not occur exactly at fractional boundary")
 	}
 }
@@ -181,6 +186,7 @@ func TestOrganizerNoRulesMissingTargetsAndNoopCompletion(t *testing.T) {
 	if err != nil || len(report.Planned) != 0 || len(s.asked) != 0 || len(b.gets) != 0 {
 		t.Fatalf("no-rule work: %+v %v", report, err)
 	}
+	checkStats(t, report.Stats, guard.Stats{})
 	until := since
 	if _, err := g.Organize(ctx, since, orgRules(), now, true, &until); err == nil {
 		t.Fatal("reversed interval allowed")
@@ -192,7 +198,8 @@ func TestOrganizerNoRulesMissingTargetsAndNoopCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(report.Warnings) != 2 || report.Counts["skipped"][model.Green] != 1 || report.Counts["failed"][model.Green] != 0 || len(b.calls) != 0 || len(auditRecords(t, path)) != 0 {
+	checkStats(t, report.Stats, guard.Stats{Messages: 1, Verdicts: guard.Verdicts{Green: 1}, Skipped: 1})
+	if len(report.Warnings) != 2 || len(b.calls) != 0 || len(auditRecords(t, path)) != 0 {
 		t.Fatalf("missing targets counted as failures or wrote: %+v", report)
 	}
 	// Removed/changed-kind rules cannot act on the old answers; an empty current plan completes green mail.
@@ -201,7 +208,8 @@ func TestOrganizerNoRulesMissingTargetsAndNoopCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(report.Planned) != 0 || report.Counts["applied"][model.Green] != 1 || len(b.calls) != 0 {
+	checkStats(t, report.Stats, guard.Stats{Messages: 1, Verdicts: guard.Verdicts{Green: 1}, Applied: 1})
+	if len(report.Planned) != 0 || len(b.calls) != 0 {
 		t.Fatalf("green no-op did not complete: %+v", report)
 	}
 }
@@ -214,7 +222,8 @@ func TestOrganizationMarkerFailureIsReportedSafely(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Counts["failed"][model.Green] != 1 || report.Counts["applied"][model.Green] != 0 || len(report.Errors) != 1 || report.Errors[0].Error != "cache Error" {
+	checkStats(t, report.Stats, guard.Stats{Messages: 1, Verdicts: guard.Verdicts{Green: 1}, Failed: 1})
+	if len(report.Errors) != 1 || report.Errors[0].Error != "cache Error" {
 		t.Fatalf("cache failure not reported: %+v", report)
 	}
 }
