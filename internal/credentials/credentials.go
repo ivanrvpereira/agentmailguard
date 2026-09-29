@@ -3,16 +3,21 @@ package credentials
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 var ErrNotFound = errors.New("credential not found")
 var ErrUnavailable = errors.New("macOS Keychain unavailable")
+var ErrInvalidRecord = errors.New("invalid credential record")
+var ErrUnsupportedVersion = errors.New("unsupported credential version")
 
 type OAuth struct {
 	AccessToken  string    `json:"access_token"`
@@ -22,14 +27,11 @@ type OAuth struct {
 	Username     string    `json:"username"`
 }
 
-func (OAuth) String() string     { return "OAuth{redacted}" }
-func (o OAuth) GoString() string { return o.String() }
-
-// Format also redacts unsupported verbs, which otherwise expose struct fields.
+func (OAuth) String() string                   { return "OAuth{redacted}" }
+func (o OAuth) GoString() string               { return o.String() }
 func (o OAuth) Format(state fmt.State, _ rune) { _, _ = io.WriteString(state, o.String()) }
 
-// Store is the credential dependency for provider and Jev adapters. It does not
-// obtain tokens, expand scopes, or expose provider secrets to remote clients.
+// Store is the credential dependency for provider and Jev adapters. It does not obtain tokens, expand scopes, or expose provider secrets to remote clients.
 type Store interface {
 	LoadOAuth(ctx context.Context, provider, account string) (OAuth, error)
 	SaveOAuth(ctx context.Context, provider, account string, credential OAuth) error
@@ -37,116 +39,174 @@ type Store interface {
 	SaveOpenRouterKey(ctx context.Context, key string) error
 }
 
-// Platform is the native secret-store seam. A missing item returns nil, nil.
-// Implementations must not use command arguments, environment variables, or files for secrets.
-type Platform interface {
-	Read(ctx context.Context, service, account string) ([]byte, error)
-	Write(ctx context.Context, service, account string, value []byte) error
+// Record holds all secrets. Formatting must never reveal its fields.
+type Record struct {
+	Version       int              `json:"version"`
+	OAuth         map[string]OAuth `json:"oauth"`
+	OpenRouterKey string           `json:"openrouter_key"`
 }
-type Keychain struct{ platform Platform }
 
-// New injects the platform seam; production uses NewMacOS. nil fails closed.
-func New(platform Platform) *Keychain { return &Keychain{platform: platform} }
+func (Record) String() string                   { return "Record{redacted}" }
+func (r Record) GoString() string               { return r.String() }
+func (r Record) Format(state fmt.State, _ rune) { _, _ = io.WriteString(state, r.String()) }
 
-func service(provider string) (string, error) {
-	switch provider {
-	case "m365":
-		return "agentmailguard-go-m365", nil
-	case "gmail":
-		return "agentmailguard-go-gmail", nil
-	default:
-		return "", errors.New("unsupported credential provider")
-	}
+// Backend reads and writes a whole record. A missing record returns ErrNotFound.
+// RecordStore serializes access, including migration, with the home lock.
+type Backend interface {
+	Read(context.Context) (Record, error)
+	Write(context.Context, Record) error
 }
-func (k *Keychain) read(ctx context.Context, service, account string) ([]byte, error) {
+
+type RecordStore struct {
+	home    string
+	backend Backend
+}
+
+func NewStore(home string, backend Backend) *RecordStore {
+	return &RecordStore{home: home, backend: backend}
+}
+func (*RecordStore) Format(s fmt.State, _ rune) {
+	_, _ = io.WriteString(s, "CredentialStore{redacted}")
+}
+
+func emptyRecord() Record { return Record{Version: 1, OAuth: map[string]OAuth{}} }
+func (s *RecordStore) readLocked(ctx context.Context) (Record, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return Record{}, err
 	}
-	if k.platform == nil {
-		return nil, ErrUnavailable
+	if s.backend == nil {
+		return Record{}, ErrUnavailable
 	}
-	value, err := k.platform.Read(ctx, service, account)
+	r, err := s.backend.Read(ctx)
+	if errors.Is(err, ErrNotFound) {
+		return emptyRecord(), nil
+	}
 	if err != nil {
-		return nil, safeError(ctx, err)
+		return Record{}, safeError(ctx, err)
 	}
-	if len(value) == 0 {
-		return nil, ErrNotFound
+	if err := validateRecord(r); err != nil {
+		return Record{}, err
 	}
-	return value, nil
+	return r, nil
 }
-func (k *Keychain) write(ctx context.Context, service, account string, value []byte) error {
+
+// transact locks reads too, because the first read can migrate legacy credentials.
+// Each update reads again under this same cross-process lock; no stale snapshot is saved.
+func (s *RecordStore) transact(ctx context.Context, change func(*Record)) (record Record, err error) {
+	defer func() {
+		if recover() != nil {
+			record, err = Record{}, ErrUnavailable
+		}
+	}()
 	if err := ctx.Err(); err != nil {
+		return Record{}, err
+	}
+	if s.home == "" || os.MkdirAll(s.home, 0700) != nil {
+		return Record{}, ErrUnavailable
+	}
+	lock, err := os.OpenFile(filepath.Join(s.home, "credentials.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return Record{}, ErrUnavailable
+	}
+	defer lock.Close()
+	for {
+		err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN && err != syscall.EINTR {
+			return Record{}, ErrUnavailable
+		}
+		select {
+		case <-ctx.Done():
+			return Record{}, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	r, err := s.readLocked(ctx)
+	if err != nil {
+		return Record{}, err
+	}
+	if change != nil {
+		change(&r)
+		if err := s.backend.Write(ctx, r); err != nil {
+			return Record{}, safeError(ctx, err)
+		}
+	}
+	return r, nil
+}
+
+// Preload reads and rewrites the whole record under one lock to obtain read and modify permission.
+func (s *RecordStore) Preload(ctx context.Context) (Record, error) {
+	return s.transact(ctx, func(*Record) {})
+}
+
+func entry(provider, account string) (string, error) {
+	if !utf8.ValidString(account) {
+		return "", ErrInvalidRecord
+	}
+	if strings.TrimSpace(account) == "" {
+		return "", errors.New("credential account is empty")
+	}
+	if _, err := service(provider); err != nil {
+		return "", err
+	}
+	return provider + "/" + account, nil
+}
+func (s *RecordStore) LoadOAuth(ctx context.Context, provider, account string) (OAuth, error) {
+	key, err := entry(provider, account)
+	if err != nil {
+		return OAuth{}, err
+	}
+	r, err := s.transact(ctx, nil)
+	if err != nil {
+		return OAuth{}, err
+	}
+	v, ok := r.OAuth[key]
+	if !ok {
+		return OAuth{}, ErrNotFound
+	}
+	return v, nil
+}
+func (s *RecordStore) SaveOAuth(ctx context.Context, provider, account string, v OAuth) error {
+	key, err := entry(provider, account)
+	if err != nil {
 		return err
 	}
-	if k.platform == nil {
-		return ErrUnavailable
+	if v.AccessToken == "" && v.RefreshToken == "" {
+		return errors.New("OAuth credential is empty")
 	}
-	if err := k.platform.Write(ctx, service, account, value); err != nil {
-		return safeError(ctx, err)
+	_, err = s.transact(ctx, func(r *Record) { r.OAuth[key] = v })
+	return err
+}
+func (s *RecordStore) LoadOpenRouterKey(ctx context.Context) (string, error) {
+	r, err := s.transact(ctx, nil)
+	if err != nil {
+		return "", err
 	}
-	return nil
+	if r.OpenRouterKey == "" {
+		return "", ErrNotFound
+	}
+	return r.OpenRouterKey, nil
+}
+func (s *RecordStore) SaveOpenRouterKey(ctx context.Context, key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return errors.New("OpenRouter key is empty")
+	}
+	_, err := s.transact(ctx, func(r *Record) { r.OpenRouterKey = key })
+	return err
 }
 func safeError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if errors.Is(err, ErrNotFound) {
-		return ErrNotFound
+	for _, known := range []error{ErrNotFound, ErrUnsupportedVersion, ErrInvalidRecord} {
+		if errors.Is(err, known) {
+			return known
+		}
 	}
-	// Do not wrap the backend error: even its message or unwrap chain may contain secrets.
+	// Do not wrap backend errors: their text and unwrap chains can contain secrets.
 	return ErrUnavailable
-}
-
-func (k *Keychain) LoadOAuth(ctx context.Context, provider, account string) (OAuth, error) {
-	if strings.TrimSpace(account) == "" {
-		return OAuth{}, errors.New("credential account is empty")
-	}
-	namespace, err := service(provider)
-	if err != nil {
-		return OAuth{}, err
-	}
-	value, err := k.read(ctx, namespace, account)
-	if err != nil {
-		return OAuth{}, err
-	}
-	var token OAuth
-	if err := json.Unmarshal(value, &token); err != nil || (token.AccessToken == "" && token.RefreshToken == "") {
-		return OAuth{}, errors.New("invalid OAuth credential")
-	}
-	return token, nil
-}
-func (k *Keychain) SaveOAuth(ctx context.Context, provider, account string, credential OAuth) error {
-	if strings.TrimSpace(account) == "" {
-		return errors.New("credential account is empty")
-	}
-	if credential.AccessToken == "" && credential.RefreshToken == "" {
-		return errors.New("OAuth credential is empty")
-	}
-	namespace, err := service(provider)
-	if err != nil {
-		return err
-	}
-	value, err := json.Marshal(credential)
-	if err != nil {
-		return errors.New("cannot encode OAuth credential")
-	}
-	return k.write(ctx, namespace, account, value)
-}
-func (k *Keychain) LoadOpenRouterKey(ctx context.Context) (string, error) {
-	value, err := k.read(ctx, "agentmailguard-go-openrouter", "agentmailguard-go")
-	if err != nil {
-		return "", err
-	}
-	key := strings.TrimSpace(string(value))
-	if key == "" {
-		return "", ErrNotFound
-	}
-	return key, nil
-}
-func (k *Keychain) SaveOpenRouterKey(ctx context.Context, key string) error {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return errors.New("OpenRouter key is empty")
-	}
-	return k.write(ctx, "agentmailguard-go-openrouter", "agentmailguard-go", []byte(key))
 }

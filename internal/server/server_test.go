@@ -12,7 +12,7 @@ import (
 )
 
 func TestCacheOnlyAndClosedSchema(t *testing.T) {
-	s, err := server.New(context.Background(), t.TempDir(), server.Options{})
+	s, err := server.New(context.Background(), t.TempDir(), server.Options{Credentials: &preloadStore{}})
 	if err != nil {
 		t.Fatal(err)
 	}

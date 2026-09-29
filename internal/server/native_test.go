@@ -524,7 +524,7 @@ func verifyNativeRefusal(t *testing.T, binary string) {
 	cmd.Stdout, cmd.Stderr = io.Discard, &stderr
 	err := cmd.Run()
 	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() != 1 || stderr.String() != "checking credentials; approve any Keychain prompts now\nerror: configuration unavailable\n" {
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 || stderr.String() != "error: configuration unavailable\n" {
 		t.Fatalf("native serve without configuration: %v %q", err, stderr.String())
 	}
 }

@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/server"
 )
 
@@ -17,7 +16,7 @@ const maxJevKeyBytes = 4096
 
 // setJevKey reads the key from stdin so it never appears in arguments or shell history.
 // A terminal gets a prompt with echo disabled; other input is read to EOF.
-func setJevKey(ctx context.Context, stdin io.Reader, stderr io.Writer, opts server.Options) int {
+func setJevKey(ctx context.Context, home string, stdin io.Reader, stderr io.Writer, opts server.Options) int {
 	if stdin == nil {
 		stdin = os.Stdin
 	}
@@ -25,12 +24,9 @@ func setJevKey(ctx context.Context, stdin io.Reader, stderr io.Writer, opts serv
 	if problem != "" {
 		return failure(stderr, problem)
 	}
-	store := opts.Credentials
-	if store == nil {
-		var err error
-		if store, err = credentials.NewMacOS(); err != nil {
-			return failure(stderr, "credential store unavailable")
-		}
+	store, err := localCredentials(ctx, home, opts.Credentials)
+	if err != nil {
+		return failure(stderr, err.Error())
 	}
 	if store.SaveOpenRouterKey(ctx, key) != nil {
 		return failure(stderr, "Keychain save failed")

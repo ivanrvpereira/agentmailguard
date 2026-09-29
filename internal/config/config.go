@@ -78,6 +78,22 @@ func AccountNames(ctx context.Context, path string) ([]string, error) {
 	return names, err
 }
 
+// LoadAccounts validates every configured account before credentials can be migrated.
+func LoadAccounts(ctx context.Context, path string) ([]Account, error) {
+	tables, names, err := accounts(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Account, len(names))
+	for i, name := range names {
+		result[i], err = loadAccount(path, name, tables[name])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
 // LoadAccount selects only the requested account; nil selects the first in file order.
 func LoadAccount(ctx context.Context, path string, name *string) (Account, error) {
 	tables, names, err := accounts(ctx, path)
@@ -92,6 +108,10 @@ func LoadAccount(ctx context.Context, path string, name *string) (Account, error
 	if !exists {
 		return Account{}, fmt.Errorf("unknown account %q; known: %s", selected, strings.Join(names, ", "))
 	}
+	return loadAccount(path, selected, value)
+}
+
+func loadAccount(path, selected string, value any) (Account, error) {
 	table, _ := value.(map[string]any)
 	get := func(key string) (string, error) {
 		text, ok := table[key].(string)

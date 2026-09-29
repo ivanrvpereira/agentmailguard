@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard-go/internal/config"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/gmail"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/m365"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/server"
@@ -36,6 +35,9 @@ func serve(ctx context.Context, home, listen string, stdin io.Reader, stderr io.
 	defer listener.Close()
 	s, e := server.New(context.WithoutCancel(ctx), home, opts)
 	if e != nil {
+		if e.Error() == "configuration unavailable" {
+			return failure(stderr, "configuration unavailable")
+		}
 		return failure(stderr, "server state unavailable")
 	}
 	if code := preload(ctx, s, stdin, stderr); code != 0 {
@@ -114,11 +116,9 @@ func login(ctx context.Context, home, account string, device bool, stdout, stder
 	if e != nil {
 		return failure(stderr, "configuration unavailable")
 	}
-	if opts.Credentials == nil {
-		opts.Credentials, e = credentials.NewMacOS()
-		if e != nil {
-			return failure(stderr, "credential store unavailable")
-		}
+	opts.Credentials, e = localCredentials(ctx, home, opts.Credentials)
+	if e != nil {
+		return failure(stderr, e.Error())
 	}
 	var p loginProvider
 	if a.Provider == "gmail" {

@@ -47,7 +47,7 @@ func securityQuestions() map[string]question {
 
 // Options are external-system seams, not client-controlled request options.
 // Timeout can shorten the production deadline for offline tests, never extend it.
-// A nil credential store creates the Go-specific macOS adapter lazily, without reading it.
+// Without a credential store, only OPENROUTER_API_KEY can supply the key.
 type Options struct {
 	HTTPClient  *http.Client
 	Credentials credentials.Store
@@ -85,9 +85,6 @@ func New(options Options) *Jev {
 	}
 	if options.LookupEnv == nil {
 		options.LookupEnv = os.Getenv
-	}
-	if options.Credentials == nil {
-		options.Credentials, _ = credentials.NewMacOS()
 	}
 	return &Jev{client: client, store: options.Credentials, lookupEnv: options.LookupEnv, endpoint: options.Endpoint, timeout: options.Timeout, limit: make(chan struct{}, MaxParallel), keyLock: make(chan struct{}, 1)}
 }

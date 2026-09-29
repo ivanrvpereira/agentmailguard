@@ -338,7 +338,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Opti
 		}
 		p = map[string]any{"start": start.Format(time.RFC3339), "end": end.Format(time.RFC3339)}
 	}
-	if seen["home"] && op != "serve" && op != "auth.login" {
+	if seen["home"] && op != "serve" && op != "auth.login" && op != "auth.set-jev-key" {
 		return usage(stderr)
 	}
 	if timeout <= 0 {
@@ -377,7 +377,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Opti
 		if supplied {
 			return failure(stderr, "Jev key setup is local only; remove --server and AGENTMAILGUARD_GO_SERVER")
 		}
-		return setJevKey(ctx, opts.Stdin, stderr, opts.Server)
+		return setJevKey(ctx, home, opts.Stdin, stderr, opts.Server)
 	}
 	clientOpts := opts.Client
 	clientOpts.Timeout = timeout

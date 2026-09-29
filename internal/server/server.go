@@ -65,6 +65,16 @@ func New(ctx context.Context, home string, opts Options) (*Server, error) {
 	if err != nil {
 		return nil, errors.New("configuration unavailable")
 	}
+	if opts.Credentials == nil {
+		accounts, err := config.LoadAccounts(ctx, filepath.Join(home, "config.toml"))
+		if err != nil {
+			return nil, configError
+		}
+		opts.Credentials, err = credentials.NewMacOS(home, accounts)
+		if err != nil {
+			return nil, credentials.ErrUnavailable
+		}
+	}
 	c, err := cache.Open(ctx, filepath.Join(home, "cache.db"))
 	if err != nil {
 		return nil, errors.New("cache unavailable")
@@ -74,9 +84,6 @@ func New(ctx context.Context, home string, opts Options) (*Server, error) {
 	}
 	if opts.LookupEnv == nil {
 		opts.LookupEnv = os.Getenv
-	}
-	if opts.Credentials == nil {
-		opts.Credentials, _ = credentials.NewMacOS()
 	}
 	creds := &memoryStore{backend: safeStore{opts.Credentials}}
 	opts.Credentials = creds

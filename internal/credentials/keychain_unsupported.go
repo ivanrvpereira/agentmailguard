@@ -2,5 +2,7 @@
 
 package credentials
 
+import "github.com/ivanrvpereira/agentmailguard-go/internal/config"
+
 // NewMacOS refuses unsupported platforms. There is no plaintext fallback.
-func NewMacOS() (Store, error) { return nil, ErrUnavailable }
+func NewMacOS(string, []config.Account) (Store, error) { return nil, ErrUnavailable }

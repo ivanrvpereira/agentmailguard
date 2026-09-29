@@ -21,10 +21,10 @@ var credentialCheckFailed = errors.New("credential check failed")
 const notLoggedIn = "not logged in; commands for this account fail until auth login and a server restart"
 
 // memoryStore passes through to the backend until Preload succeeds.
-// After that it answers loads from memory only, so the backend never prompts at runtime.
+// After that it answers loads from memory only. Runtime saves still reach the backend.
 // Saves always reach the backend first; memory changes only after the backend accepts them.
 type memoryStore struct {
-	backend   credentials.Store
+	backend   safeStore
 	mu        sync.Mutex
 	loaded    bool
 	oauth     map[[2]string]credentials.OAuth
@@ -84,23 +84,25 @@ func (m *memoryStore) SaveOpenRouterKey(ctx context.Context, key string) error {
 
 // Preload reads every credential the configured accounts and Jev need, so backend prompts
 // (for example macOS Keychain access dialogs) happen at server start while an operator is present.
-// It also rewrites each OAuth record unchanged, so the backend asks for modify permission now,
-// not at the first token refresh. jevKey is called only when the Jev key is missing; nil refuses.
-// Any failed item fails the whole preload, except an account that is not logged in. After success, the backend is only written, never read,
-// and accounts added to the configuration later require a restart.
+// The record store rewrites the whole record once to request modify permission now.
+// Injected legacy Store implementations retain their per-account write probe.
+// jevKey is called only when the Jev key is missing; nil refuses.
+// Missing logins do not block startup. After success, loads use memory; backend saves reread under a lock.
+// Accounts added to the configuration later require a restart.
 func (s *Server) Preload(ctx context.Context, jevKey func(context.Context) (string, error)) ([]CredentialCheck, error) {
 	path := filepath.Join(s.home, "config.toml")
-	names, err := config.AccountNames(ctx, path)
+	accounts, err := config.LoadAccounts(ctx, path)
 	if err != nil {
 		return nil, configError
 	}
-	accounts := make([]config.Account, len(names))
-	for i := range names {
-		if accounts[i], err = config.LoadAccount(ctx, path, &names[i]); err != nil {
-			return nil, configError
-		}
-	}
 	backend := s.creds.backend
+	record, whole, err := backend.preload(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, credentialCheckFailed
+	}
 	var checks []CredentialCheck
 	failed := false
 	add := func(item, status string) {
@@ -110,7 +112,17 @@ func (s *Server) Preload(ctx context.Context, jevKey func(context.Context) (stri
 	oauth := map[[2]string]credentials.OAuth{}
 	for _, a := range accounts {
 		item := fmt.Sprintf("account %q (%s)", a.Name, a.Provider)
-		v, err := backend.LoadOAuth(ctx, a.Provider, a.Name)
+		var v credentials.OAuth
+		var err error
+		if whole {
+			var ok bool
+			v, ok = record.OAuth[a.Provider+"/"+a.Name]
+			if !ok {
+				err = credentials.ErrNotFound
+			}
+		} else {
+			v, err = backend.LoadOAuth(ctx, a.Provider, a.Name)
+		}
 		switch {
 		case ctx.Err() != nil:
 			return checks, ctx.Err()
@@ -120,7 +132,7 @@ func (s *Server) Preload(ctx context.Context, jevKey func(context.Context) (stri
 			add(item, "Keychain access failed or denied")
 		case err != nil:
 			add(item, "credential record unreadable; run auth login")
-		case backend.SaveOAuth(ctx, a.Provider, a.Name, v) != nil:
+		case !whole && backend.SaveOAuth(ctx, a.Provider, a.Name, v) != nil:
 			if ctx.Err() != nil {
 				return checks, ctx.Err()
 			}
@@ -134,7 +146,15 @@ func (s *Server) Preload(ctx context.Context, jevKey func(context.Context) (stri
 	if strings.TrimSpace(s.options.LookupEnv("OPENROUTER_API_KEY")) != "" {
 		add("Jev key", "ok (OPENROUTER_API_KEY)")
 	} else {
-		v, err := backend.LoadOpenRouterKey(ctx)
+		v := record.OpenRouterKey
+		var err error
+		if whole {
+			if v == "" {
+				err = credentials.ErrNotFound
+			}
+		} else {
+			v, err = backend.LoadOpenRouterKey(ctx)
+		}
 		switch {
 		case ctx.Err() != nil:
 			return checks, ctx.Err()

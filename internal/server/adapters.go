@@ -19,6 +19,19 @@ func recoverAdapter(err *error) {
 
 type safeStore struct{ store credentials.Store }
 
+func (s safeStore) preload(ctx context.Context) (r credentials.Record, supported bool, err error) {
+	defer recoverAdapter(&err)
+	loader, ok := s.store.(interface {
+		Preload(context.Context) (credentials.Record, error)
+	})
+	if !ok {
+		return r, false, nil
+	}
+	supported = true
+	r, err = loader.Preload(ctx)
+	return
+}
+
 func (s safeStore) LoadOAuth(ctx context.Context, p, a string) (v credentials.OAuth, err error) {
 	defer recoverAdapter(&err)
 	if s.store == nil {

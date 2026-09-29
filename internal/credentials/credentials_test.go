@@ -13,26 +13,45 @@ import (
 )
 
 type fakePlatform struct {
-	values  map[[2]string][]byte
-	failure error
-	writes  int
+	values       map[[2]string][]byte
+	failure      error
+	readFailure  map[[2]string]error
+	writeFailure error
+	panicOn      string
+	writes       int
 }
 
 func (f *fakePlatform) Read(ctx context.Context, service, account string) ([]byte, error) {
+	if f.panicOn == "read" {
+		panic("private-platform-canary")
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if f.failure != nil {
 		return nil, f.failure
 	}
-	return append([]byte(nil), f.values[[2]string{service, account}]...), nil
+	if err := f.readFailure[[2]string{service, account}]; err != nil {
+		return nil, err
+	}
+	value, ok := f.values[[2]string{service, account}]
+	if !ok {
+		return nil, nil
+	}
+	return append([]byte{}, value...), nil
 }
 func (f *fakePlatform) Write(ctx context.Context, service, account string, value []byte) error {
+	if f.panicOn == "write" {
+		panic("private-platform-canary")
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if f.failure != nil {
 		return f.failure
+	}
+	if f.writeFailure != nil {
+		return f.writeFailure
 	}
 	f.writes++
 	f.values[[2]string{service, account}] = append([]byte(nil), value...)
@@ -40,7 +59,7 @@ func (f *fakePlatform) Write(ctx context.Context, service, account string, value
 }
 func TestCredentialFailuresAreSafeAndNeverFallBack(t *testing.T) {
 	platform := &fakePlatform{values: map[[2]string][]byte{}}
-	store := credentials.New(platform)
+	store := credentials.New(platform, t.TempDir(), nil)
 	ctx := context.Background()
 	token := credentials.OAuth{RefreshToken: "SAVED-CANARY"}
 	if err := store.SaveOAuth(ctx, "m365", "work", token); err != nil {
@@ -67,6 +86,7 @@ func TestCredentialFailuresAreSafeAndNeverFallBack(t *testing.T) {
 	}
 	for _, operation := range []func() error{
 		func() error { return store.SaveOAuth(ctx, "m365", "", token) },
+		func() error { return store.SaveOAuth(ctx, "gmail", "invalid-\xff", token) },
 		func() error { return store.SaveOAuth(ctx, "unsupported", "work", token) },
 		func() error { return store.SaveOpenRouterKey(ctx, "  ") },
 		func() error { return store.SaveOAuth(ctx, "gmail", "work", credentials.OAuth{}) },
@@ -83,14 +103,52 @@ func TestCredentialFailuresAreSafeAndNeverFallBack(t *testing.T) {
 	if platform.writes != 1 {
 		t.Fatalf("unsafe writes reached platform: %d", platform.writes)
 	}
-	if _, err := credentials.New(nil).LoadOpenRouterKey(ctx); !errors.Is(err, credentials.ErrUnavailable) {
+	if _, err := credentials.New(nil, t.TempDir(), nil).LoadOpenRouterKey(ctx); !errors.Is(err, credentials.ErrUnavailable) {
 		t.Fatalf("nil backend=%v", err)
 	}
 }
 
-func TestCredentialsRoundTripWithSeparateServices(t *testing.T) {
+func TestBackendPanicsAndFailureChainsStayPrivate(t *testing.T) {
+	for _, mode := range []string{"read panic", "write panic", "read error", "write error"} {
+		t.Run(mode, func(t *testing.T) {
+			p := &fakePlatform{values: map[[2]string][]byte{
+				{"agentmailguard-go", "credentials"}: []byte(`{"version":1,"oauth":{},"openrouter_key":"original"}`),
+			}}
+			store := credentials.New(p, t.TempDir(), nil)
+			failure := fmt.Errorf("private-wrapper-canary: %w", errors.New("private-cause-canary"))
+			switch mode {
+			case "read panic":
+				p.panicOn = "read"
+			case "write panic":
+				p.panicOn = "write"
+			case "read error":
+				p.failure = failure
+			case "write error":
+				p.writeFailure = failure
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			func() {
+				defer func() {
+					if recover() != nil {
+						t.Error("backend panic escaped the credential store")
+					}
+				}()
+				if err := store.SaveOpenRouterKey(ctx, "replacement"); err != credentials.ErrUnavailable || errors.Unwrap(err) != nil {
+					t.Error("backend failure was not reduced to a fixed error")
+				}
+			}()
+			p.panicOn, p.failure, p.writeFailure = "", nil, nil
+			if key, err := store.LoadOpenRouterKey(ctx); err != nil || key != "original" {
+				t.Fatal("failure changed the record or retained the lock")
+			}
+		})
+	}
+}
+
+func TestCredentialsRoundTripInSingleRecord(t *testing.T) {
 	platform := &fakePlatform{values: map[[2]string][]byte{}}
-	var store credentials.Store = credentials.New(platform)
+	var store credentials.Store = credentials.New(platform, t.TempDir(), nil)
 	ctx := context.Background()
 	token := credentials.OAuth{AccessToken: "ACCESS-CANARY", RefreshToken: "REFRESH-CANARY", ExpiresAt: time.Date(2026, 9, 25, 9, 0, 0, 0, time.UTC), Scopes: []string{"Mail.ReadWrite"}, Username: "synthetic@example.test"}
 	for _, provider := range []string{"m365", "gmail"} {
@@ -110,9 +168,13 @@ func TestCredentialsRoundTripWithSeparateServices(t *testing.T) {
 	if err != nil || key != "KEY-CANARY" {
 		t.Fatalf("key round trip failed: %v", err)
 	}
-	for _, key := range [][2]string{{"agentmailguard-go-m365", "work"}, {"agentmailguard-go-gmail", "work"}, {"agentmailguard-go-openrouter", "agentmailguard-go"}} {
-		if _, ok := platform.values[key]; !ok {
-			t.Errorf("missing Go-specific namespace %v", key)
+	if len(platform.values) != 1 || len(platform.values[[2]string{"agentmailguard-go", "credentials"}]) == 0 {
+		t.Fatal("credentials did not use one Keychain item")
+	}
+	record := credentials.Record{Version: 1, OAuth: map[string]credentials.OAuth{"gmail/work": token}, OpenRouterKey: "KEY-CANARY"}
+	for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d", "%f"} {
+		if strings.Contains(fmt.Sprintf(format, record), "CANARY") || strings.Contains(fmt.Sprintf(format, &record), "CANARY") {
+			t.Fatal("record formatting exposes secrets")
 		}
 	}
 	if _, err := store.LoadOAuth(ctx, "gmail", "other"); !errors.Is(err, credentials.ErrNotFound) {

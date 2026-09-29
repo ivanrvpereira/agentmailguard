@@ -67,12 +67,10 @@ func TestSetJevKeyRefusesUnsafeInputWithoutSaving(t *testing.T) {
 	}
 }
 
-func TestSetJevKeyRejectsAccountAndHomeFlags(t *testing.T) {
-	for _, args := range [][]string{{"--account", "work"}, {"--home", "/tmp"}} {
-		store := &keyStore{}
-		if code, _, _ := runSetKey("sk-or-key\n", store, nil, args...); code != 2 || len(store.saved) != 0 {
-			t.Fatalf("args=%v exit=%d saved=%q", args, code, store.saved)
-		}
+func TestSetJevKeyRejectsAccountFlag(t *testing.T) {
+	store := &keyStore{}
+	if code, _, _ := runSetKey("sk-or-key\n", store, nil, "--account", "work"); code != 2 || len(store.saved) != 0 {
+		t.Fatalf("exit=%d saved=%q", code, store.saved)
 	}
 }
 
