@@ -16,3 +16,5 @@ audit.jsonl
 internal/credentials/*
 !internal/credentials/*.go
 .backup/
+/PLAN.md
+/PROGRESS.md
