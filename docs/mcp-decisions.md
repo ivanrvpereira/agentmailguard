@@ -59,3 +59,25 @@ Only the fixed texts the CLI already shows can reach the agent. Transport failur
 ## 9. Process
 
 Branch `mcp-server` in `../agentmailguard-go-mcp`. Three steps (read tools and command; write tools; docs and native test). Each step: an Opus 5.5 implementation worker, an Opus 5.5 review worker, orchestrator verification, one conventional commit. `PLAN.md` and `PROGRESS.md` stay untracked as in the previous work. This file and the research file are committed under `docs/`.
+
+## 10. Status at hand-off (2026-09-30 morning)
+
+Branch `mcp-server` in `../agentmailguard-go-mcp`, four commits on top of `main`:
+
+- `40faf7c` docs(mcp): research and this file.
+- `fee83d9` feat(mcp): read-only MCP tools over stdio.
+- `4267122` feat(mcp): write tools behind `--allow-writes`.
+- `1f462f0` docs(mcp): README section and built-binary test.
+
+`make` passes. Nothing is pushed or merged. Untracked `PLAN.md` and `PROGRESS.md` in the worktree hold the plan and the verification evidence. `.verify-mcp/` (ignored) holds two Python scripts that drive the built binary over real stdio against a fake `/v1/call` and against a real `serve`.
+
+Try it against your running server (read-only, no configuration change):
+
+```sh
+make -C /Users/ivanpereira/code/ivanrvpereira/agentmailguard-go-mcp
+claude mcp add --transport stdio agentmailguard -- /Users/ivanpereira/code/ivanrvpereira/agentmailguard-go-mcp/bin/agentmailguard-go --account work mcp
+```
+
+Not done, on purpose: no test against a real agent client (it would change your `~/.pi` or Claude configuration), no HTTP MCP endpoint, no merge.
+
+Decisions most worth a second look: §1 (the dependency), §3 (read-only default), §5 (`invalid request` for every argument refusal instead of the SDK's per-argument message).
