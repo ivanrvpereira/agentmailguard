@@ -9,8 +9,8 @@ macOS Keychain is the credential store for this version.
 
 1. Foundation: complete (`b29eef6`). Separate review and parent verification passed.
 2. Content and screening: complete (`e45ad17`). Separate review, parent offline checks, and a live Jev smoke check passed.
-3. Providers: complete in this commit. Four independent reviews, parent probes, and combined offline checks passed. Gmail live reads passed. M365 live reads remain blocked because a fresh restricted refresh still returns extra scopes; the token was refused.
-4. Guard: pending.
+3. Providers: complete (`a3d9158`). Four independent reviews, parent probes, and combined offline checks passed. Gmail live reads passed. M365 live reads remain blocked because a fresh restricted refresh still returns extra scopes; the token was refused.
+4. Guard: complete in this commit. Both reviews, all seven fixes, and final parent verification passed.
 5. Server and client: pending.
 
 ## Baseline and boundaries
@@ -120,13 +120,48 @@ The entries below record discovery and fixes chronologically. Final verification
 - The user was notified of the M365 live blocker. Restricted consent or a separate least-privilege app/login requires user approval. Continue Guard/server work offline; do not retry live M365 checks without resolving the grants safely.
 - Gmail live reads and synthetic Jev screening passed. M365 Graph endpoints, real browser/device login, native Go Keychain integration, and provider acceptance of generated drafts remain unverified.
 
-## Guard preparation (step 4, not started)
+## Guard implementation (step 4)
 
 - Parent reread all 776 lines of the current Python Guard. The approved behavior includes security-only ordinary reads, uncached drafts/events, missing-question classification internal to organization, and verdict-independent manual mutations/draft creation.
 - Preserve cached hidden-body avoidance, cached-green render without Jev, error retry, exact half-open scans and fractional scan timestamps for ages, green-only business actions, categories before moves, and independent fixed security tags/completion markers.
 - Preserve organizer audit normalization: requested IDs only, missing/duplicate results fail, fixed failure codes, whole-call organizer failure audited while ordinary whole-call failure is not. Tag eligibility excludes scan failures, not merely organization failures.
 - Long-lived mutation serialization must cover organize/application without deadlocking when the organizer invokes mutation helpers. Avoid reacquiring the same per-account permit inside an already serialized organize call.
-- No Guard source or tests have been written yet. Provider offline verification is complete; start Guard after the step 3 commit.
+- Provider step committed as `a3d9158`. Worker `25f46381-9a5e-4f1` owns only `internal/guard/**` and is implementing the approved public Guard seam with synthetic adapters, temporary real cache/audit, and a clock. No staging, commits, shared-package edits, live services, or user state access are permitted.
+- Parent generated `/tmp/agentmailguard-go-guard-reference.json` from the unchanged Python public Guard seam using `/tmp/agentmailguard-go-guard-reference.py`. All 29 synthetic oracle scenarios executed successfully in temporary state, with no network or credentials.
+- The oracle covers cached preview/apply, repeated completion, green no-op, category thresholds, folder display names, missing targets, fractional age boundaries, missing/duplicate/unsolicited mutation results, action failures, fixed tags and retags, scan failures, half-open bounds, duplicate scan entries, empty rules, mixed verdicts, and the 50-ID batch boundary.
+- Parent ran the unchanged independent Go consumer `.verify-guard.EYAAqD/main.go`. All 29 scenarios match the Python reports, external actions, metadata reads, cache markers, and content-free audit.
+- Parent read all eight production files and nine test files in the completed Guard package. Its public signatures match the agreed contract, with the existing `views.CalendarView` result type. Source hardening rejects unexpected fetched IDs and ignores stale cached verdicts for known drafts.
+- Parent created and ran `.verify-guard-http.EKQbEz/main.go` with the race detector. Synthetic Graph HTTP flows through the real M365 adapter, Guard, real Jev HTTP adapter, temporary cache, and guarded views. Five verdicts, cached hidden-body avoidance, cached-green reuse, error retries, missing-body refusal, uncached drafts/events, private-event body exclusion, secret links, summaries, and missing-question classification passed. Only loopback servers, synthetic credentials/data, and temporary files were used; no mailbox mutations or mutation audit occurred.
+- Parent ran `make`, uncached Guard race tests, then uncached whole-tree race tests across twelve packages, module verification, and unchanged foundation/content/selector walkthroughs. All passed. Python working tree remains clean.
+- Separate read-only reviews completed against the staged `internal/guard/**` addition at `a3d9158`: Standards `bd3a660f-446b-462` and Spec `74bb732b-ea70-4d2`. No Step 4 commit yet.
+
+### Guard Spec review fixes
+
+- Spec reported two P2 issues. Batch classification, mail summaries, and calendar lists process independent screening serially, contrary to Python's gathered work and explicit peak-eight test. Fixed manual Move/Flag/empty-Categorize refusal reasons also collapse to bare `GuardError`.
+- Parent read the full report and probes, confirmed every target Guard source/test matches the review snapshot, and reran `go test -race -count=1 ./internal/guard -run '^TestSpec' -v` in `/tmp/guard-spec.Pj6tEl`. All reported failures reproduced. Forty synthetic classification requests reached peak one and took 1.17 seconds; List/CalendarList reached peak one. The fresh partial-answer/private-event probe passed.
+- Report: `/tmp/agentmailguard-guard-spec-review.md`. Original unchanged probes: `/tmp/guard-spec.Pj6tEl/internal/guard/{spec_probe_test.go,spec_read_parallel_probe_test.go}`. The reviewer also ran eight unchanged Python tests successfully in a disposable source copy.
+- Fixer `e225db0a-ca8c-47c` owns only `internal/guard/**` working-tree changes. Restore bounded eight-worker screening with ordered results and cancellation/drain; preserve account mutation serialization and all fail-closed behavior. Preserve only trusted fixed refusal strings, not arbitrary provider text, and keep organizer audit codes unchanged.
+- Original staged Guard snapshot stays fixed. Fixes/tests remain unstaged or untracked until final parent verification. The Standards reviewer used the fixed snapshot despite concurrent working-tree fixes.
+
+### Guard Standards review fixes
+
+- Parent reproduced four security/behavior findings with the unchanged original probes in `/tmp/guard-standards.ybGQvv`: Guard pointer/value formatting exposes a synthetic cached Jev key; malformed cached green with missing/.9 score exposes a body without screening; a concurrent read commits red during destination validation but organizer still moves; cancellation after a confirmed final archive drops completion and causes the next apply to repeat both writes.
+- Parent independently applied both review mutants to the disposable snapshot: always pass Flagged; replace DraftUpdate body with empty text. The entire original Guard race suite still passed. Disposable source was restored; target production was never mutated. Tests need exact payload assertions at the external mailbox seam.
+- Report and test inventory: `/tmp/agentmailguard-guard-standards-review.md`. Original probes: `/tmp/guard-standards.ybGQvv/internal/guard/{standards_probe_test.go,standards_format_probe_test.go}`. No real secrets were used or printed.
+- Parent added `/tmp/guard-standards.ybGQvv/internal/guard/parent_security_probe_test.go` and reproduced two sibling paths: a confirmed Yellow tag loses its marker on cancellation and repeats; malformed cached green with saved organization answers authorizes business actions.
+- The same active fixer `e225db0a-ca8c-47c` now owns all seven findings. Required changes: always-redacted value formatter, validation of every loaded cached screening state, coordinated security updates/final organizer authorization through provider writes, bounded cancellation-independent persistence for confirmed completion/tags, and payload-sensitive tests. Parent recommended a separate cancellable security-state gate acquired after destination/category validation, never around screening or nested acquisition of the mutation gate.
+- Parent corrected a verification-fixture defect: the 29-case organizer oracle previously seeded every verdict with injection .1. Seeds now use green=.1, yellow=.35, red=.9, sealed=.1. Python oracle regeneration passed; every expected output is machine-verified identical to `/tmp/agentmailguard-go-guard-reference.before-scores.json`. Only fixture inputs and the ignored Go consumer changed; production validity rules must not be weakened for the old inconsistent fixtures.
+- The fixer completed all seven findings. Parent inspected every final production change, all three new regression files, and the changes to existing tests.
+
+### Final Guard verification
+
+- Parent reran all unchanged Spec, Standards, and added parent probes against copies of the final source. Every probe passed. Classification, List, and CalendarList reached peak eight. Forty synthetic 25ms classification requests took 168ms, versus 1.17 seconds before the fix.
+- Parent inspected the security-state gate. Cache security writes share it with final automatic authorization through the provider write. Destination/category validation and Jev screening remain outside it. Manual mutations remain verdict-independent. Current verdict checks also protect security tags and green no-op completion.
+- Confirmed final writes and security tags save completion with a five-second cancellation-independent context. Partial success remains incomplete. Cancellation starts no further provider writes.
+- Parent independently applied each payload mutant to a disposable copy. The constant-Flagged mutant failed the exact flag-state assertion. The empty-draft-body mutant failed the exact source/body assertion. Disposable source was restored. Target production was never mutated.
+- Parent reran `make`, uncached whole-tree race tests, and 20 repetitions of concurrency/cancellation/final-authorization regressions. All passed across twelve packages. Module verification and unchanged foundation/content/selector walkthroughs passed.
+- Both parent native Guard walkthroughs passed against final code: all 29 Python organizer cases and the synthetic Graph/Jev HTTP integration. Oracle assertions remain unchanged after the documented seed-score correction.
+- Parent inspected the final staged file list and diff checks. Python remains unchanged. Step 5 must retain one Guard per account and one shared Jev adapter, keep classification results internal, and expose only guarded views or existing operation results.
 
 ## Live credential preparation
 
