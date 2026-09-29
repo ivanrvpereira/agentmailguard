@@ -1,0 +1,17 @@
+/bin/
+/.verify-*/
+/.env
+/.env.*
+/config.toml
+/rules.toml
+/.agentmailguard-go/
+*.db
+*.db-*
+audit.jsonl
+.DS_Store
+
+# The user's global ignore excludes directories named credentials.
+# Keep this package's source, but do not allow credential artifacts.
+!internal/credentials/
+internal/credentials/*
+!internal/credentials/*.go
