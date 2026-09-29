@@ -225,13 +225,21 @@ func (o Organization) Validate() error {
 		if _, ok := f.Probabilities[f.Choice]; !ok {
 			return errors.New("invalid answer folder")
 		}
-		total := 0.0
+		total, correction := 0.0, 0.0
 		for name, probability := range f.Probabilities {
 			if !ruleName.MatchString(name) || !unit(probability) {
 				return errors.New("invalid answer folder")
 			}
-			total += probability
+			// Match Python 3.12+ compensated sum without map-order rounding at the boundary.
+			next := total + probability
+			if total >= probability {
+				correction += (total - next) + probability
+			} else {
+				correction += (probability - next) + total
+			}
+			total = next
 		}
+		total += correction
 		if total < .98 || total > 1.02 {
 			return errors.New("invalid answer folder")
 		}

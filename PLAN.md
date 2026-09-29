@@ -68,7 +68,11 @@ Do not push.
 
 ## Verification limits
 
-Only synthetic test targets are authorized for this port.
-No live mailbox access, inference calls, login, or Keychain changes are authorized.
-Live OAuth and real provider smoke checks remain explicitly unverified until the user authorizes them.
-The final offline workflow must exercise the built client against the long-lived server and simulated provider/Jev HTTP endpoints.
+Automated tests and delegated workers use synthetic targets only.
+The user subsequently authorized existing credentials for real verification.
+The orchestrator may read existing credentials and perform bounded read-only provider and Jev smoke checks.
+Live verification reports contain counts and safe results, never email content or secrets.
+Mailbox writes, existing cache clearing, scope/consent changes, new interactive login, and changes to existing configuration require separate permission.
+Stop and notify the user if Keychain access or consent blocks required verification.
+Keep live test state separate from the existing application's cache.
+The final offline workflow must also exercise the built client against the long-lived server and simulated provider/Jev HTTP endpoints.

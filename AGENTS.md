@@ -15,7 +15,8 @@ The Python project and `../agentmailguard` are read-only references.
 - Keep provider credentials and the OpenRouter key on the server host.
 - Use macOS Keychain for secrets. No plaintext token fallback.
 - Client/server authentication is deferred. Bind to loopback by default. Warn on explicit remote listeners.
-- Do not use live providers, real Keychain, or user configuration during implementation or tests.
+- Workers and automated tests must not use live providers, real Keychain, or user configuration.
+- The user authorized the orchestrator to use existing credentials for bounded read-only live checks. No mailbox writes, cache clearing, consent changes, or credential/configuration changes without separate permission.
 - Preserve unrelated work. Do not change environment configuration.
 
 ## Workflow
