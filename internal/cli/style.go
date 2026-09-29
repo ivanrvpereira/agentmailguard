@@ -96,6 +96,12 @@ func styleText(text string, v model.Verdict) string {
 	return strings.Join(lines, "\n")
 }
 
+// Sender and subject cells are cut so a row fits a usual terminal next to a 70-character message ID.
+const senderWidth, subjectWidth = 24, 48
+
+// cell makes server text safe for the terminal and cuts it to width with an ellipsis.
+func cell(s string, width int) string { return ansi.Truncate(terminalSafe(s), width, "\u2026") }
+
 // summaryTable renders the verdict view of a message list. It reads no field the verdict view omits,
 // so a red, sealed, or error row has no sender name and no subject to show.
 func summaryTable(items []views.MailSummary) string {
@@ -111,7 +117,7 @@ func summaryTable(items []views.MailSummary) string {
 		return style
 	})
 	for _, m := range items {
-		t.Row(localTime(m.ReceivedAt), string(m.Verdict), markers(m), terminalSafe(sender(m)), terminalSafe(subject(m)), terminalSafe(m.ID))
+		t.Row(localTime(m.ReceivedAt), string(m.Verdict), markers(m), cell(sender(m), senderWidth), cell(subject(m), subjectWidth), terminalSafe(m.ID))
 	}
 	return t.Render()
 }

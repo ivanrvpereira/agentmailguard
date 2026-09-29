@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ivanrvpereira/agentmailguard-go/internal/cli"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/views"
@@ -225,4 +226,28 @@ func TestPrettyOutputDropsControlSequencesFromServerText(t *testing.T) {
 	if !strings.Contains(out, "line one\n") || !strings.Contains(out, "\nline three") {
 		t.Errorf("body lines were joined: %q", out)
 	}
+}
+
+// Long sender names and subjects are cut so the table fits a terminal; the ID stays whole because it is
+// the argument of the next command.
+func TestPrettyTableTruncatesSenderAndSubject(t *testing.T) {
+	long := strings.Repeat("word ", 30)
+	list := `[{"id":"long-id","verdict":"green","received_at":"` + received(t, 2026, 3, 7, 9, 30) + `","auth":{},"is_read":false,"flag":"none","categories":[],` +
+		`"sender":{"name":"` + long + `","address":"alice@test"},"subject":"` + long + `"}]`
+	code, out, errout := runPretty(t, list, nil, "mail", "list", "--pretty")
+	if code != 0 || errout != "" {
+		t.Fatalf("exit=%d stderr=%q", code, errout)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "long-id") {
+			if utf8.RuneCountInString(line) > 140 {
+				t.Errorf("row is %d cells wide: %q", utf8.RuneCountInString(line), line)
+			}
+			if strings.Count(line, "…") != 2 {
+				t.Errorf("expected two cut cells: %q", line)
+			}
+			return
+		}
+	}
+	t.Fatalf("row missing:\n%s", out)
 }
