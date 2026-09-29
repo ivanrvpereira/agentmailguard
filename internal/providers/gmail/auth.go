@@ -6,34 +6,45 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
 )
 
-type scopeError struct{ extra []string }
+type scopeError struct{ missing []string }
 
 func (scopeError) Error() string              { return "Gmail error ScopeError" }
 func (scopeError) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "Gmail error ScopeError") }
-func (e scopeError) ExtraScopes() []string    { return append([]string(nil), e.extra...) }
+func (e scopeError) MissingScopes() []string  { return append([]string(nil), e.missing...) }
 
+// scopes refuses only grants that cannot work. Extra grants are the user's choice; callers warn through ExtraScopes.
 func scopes(raw string) ([]string, error) {
 	list := strings.Fields(raw)
-	have := map[string]bool{}
+	var missing []string
+	for _, required := range []string{gmailScope, calendarScope} {
+		if !slices.Contains(list, required) {
+			missing = append(missing, required)
+		}
+	}
+	if len(missing) != 0 {
+		return nil, scopeError{missing: missing}
+	}
+	return list, nil
+}
+
+// ExtraScopes lists granted scopes the adapter does not request.
+func ExtraScopes(scopes []string) []string {
 	var extra []string
-	for _, s := range list {
+	for _, s := range scopes {
 		switch s {
 		case gmailScope, calendarScope, "openid", "email", "profile", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile":
-			have[s] = true
 		default:
 			extra = append(extra, s)
 		}
 	}
-	if len(extra) != 0 || !have[gmailScope] || !have[calendarScope] {
-		return nil, scopeError{extra: extra}
-	}
-	return list, nil
+	return extra
 }
 func (c *Client) tokenRequest(ctx context.Context, form url.Values) (credentials.OAuth, error) {
 	form.Set("client_id", c.account.ClientID)

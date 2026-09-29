@@ -198,12 +198,13 @@ type updateDTO struct {
 	OK bool   `json:"ok"`
 }
 type statusDTO struct {
-	Account     string    `json:"account"`
-	OK          bool      `json:"ok"`
-	LoggedIn    bool      `json:"logged_in"`
-	Username    *string   `json:"username,omitempty"`
-	Scopes      *[]string `json:"scopes,omitempty"`
-	ExtraScopes *[]string `json:"extra_scopes,omitempty"`
+	Account       string    `json:"account"`
+	OK            bool      `json:"ok"`
+	LoggedIn      bool      `json:"logged_in"`
+	Username      *string   `json:"username,omitempty"`
+	Scopes        *[]string `json:"scopes,omitempty"`
+	ExtraScopes   *[]string `json:"extra_scopes,omitempty"`
+	MissingScopes *[]string `json:"missing_scopes,omitempty"`
 }
 type ruleDTO struct {
 	Rule     string  `json:"rule"`
@@ -417,21 +418,30 @@ func (s *Server) status(ctx context.Context, a *account) (any, error) {
 	}
 	user, scopes, e := a.provider.Status(ctx)
 	if e != nil {
-		var diagnostic interface{ ExtraScopes() []string }
+		var diagnostic interface{ MissingScopes() []string }
 		if errors.As(e, &diagnostic) {
-			extra := safeScopeDiagnostics(diagnostic.ExtraScopes())
-			out.ExtraScopes = &extra
+			missing := safeScopeDiagnostics(diagnostic.MissingScopes())
+			out.MissingScopes = &missing
 		}
 		return out, nil
 	}
 	out.OK = true
 	out.Username = &user
+	extra := m365.ExtraScopes(scopes)
+	if a.config.Provider == "gmail" {
+		extra = gmail.ExtraScopes(scopes)
+	}
+	// scopes lists requested grants; extra grants appear only as bounded diagnostic labels.
+	scopes = slices.DeleteFunc(scopes, func(s string) bool { return slices.Contains(extra, s) })
 	out.Scopes = &scopes
+	if extra = safeScopeDiagnostics(extra); len(extra) != 0 {
+		out.ExtraScopes = &extra
+	}
 	return out, nil
 }
 
 // Scope labels come from credentials or token responses, not trusted error text.
-var scopeLabel = regexp.MustCompile(`^(?:[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)+|https://www\.googleapis\.com/auth/[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*)$`)
+var scopeLabel = regexp.MustCompile(`^(?:(?:role:)?[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)+|https://www\.googleapis\.com/auth/[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*)$`)
 
 func safeScopeDiagnostics(scopes []string) []string {
 	out := []string{}

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -94,7 +95,18 @@ func login(ctx context.Context, home, account string, device bool, stdout, stder
 		}
 	})
 	if e != nil {
+		var diagnostic m365.LoginError
+		if errors.As(e, &diagnostic) {
+			return failure(stderr, diagnostic.Message())
+		}
 		return failure(stderr, "provider login failed")
+	}
+	extra := m365.ExtraScopes(scopes)
+	if a.Provider == "gmail" {
+		extra = gmail.ExtraScopes(scopes)
+	}
+	if len(extra) != 0 {
+		warnExtraScopes(stderr, extra)
 	}
 	out := struct {
 		Account  string   `json:"account"`

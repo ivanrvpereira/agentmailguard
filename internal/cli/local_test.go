@@ -112,7 +112,11 @@ func TestDeviceCodeAliasesUseLastOption(t *testing.T) {
 		var out, errout bytes.Buffer
 		code := cli.Run(context.Background(), append([]string{"--home", home, "auth", "login"}, tc.flags...), &out, &errout, opts)
 		h.Close()
-		if code != 1 || out.Len() != 0 || !strings.Contains(errout.String(), "error: provider login failed\n") || (deviceCalls == 1) != tc.device || (browserCalls == 1) == tc.device || deviceCalls+browserCalls != 1 {
+		wantError := "error: provider login failed: could not open the browser\n"
+		if tc.device {
+			wantError = "error: provider login failed: device-code request failed\n"
+		}
+		if code != 1 || out.Len() != 0 || !strings.HasSuffix(errout.String(), wantError) || (deviceCalls == 1) != tc.device || (browserCalls == 1) == tc.device || deviceCalls+browserCalls != 1 {
 			t.Errorf("flags=%v exit=%d device=%d browser seam=%d stderr=%q", tc.flags, code, deviceCalls, browserCalls, errout.String())
 		}
 	}

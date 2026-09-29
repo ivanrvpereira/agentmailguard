@@ -15,6 +15,7 @@ import (
 
 	"github.com/ivanrvpereira/agentmailguard-go/internal/config"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/m365"
 )
 
@@ -31,7 +32,7 @@ func goodToken() string {
 type store struct {
 	mu           sync.Mutex
 	token        credentials.OAuth
-	err          error
+	err, saveErr error
 	loads, saves int
 }
 
@@ -48,6 +49,9 @@ func (s *store) SaveOAuth(_ context.Context, p, a string, v credentials.OAuth) e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.saves++
+	if s.saveErr != nil {
+		return s.saveErr
+	}
 	s.token = v
 	return s.err
 }
@@ -110,7 +114,7 @@ func TestCancelledStatusDoesNotWaitForAnotherRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-func TestRefreshExpirySharedAndScopeCheckedBeforeSave(t *testing.T) {
+func TestRefreshExpirySharedAndTokenCheckedBeforeSave(t *testing.T) {
 	s := validStore()
 	var ticks atomic.Int64
 	var calls atomic.Int64
@@ -123,7 +127,7 @@ func TestRefreshExpirySharedAndScopeCheckedBeforeSave(t *testing.T) {
 		}
 		token := goodToken()
 		if unsafe.Load() {
-			token = jwt(map[string]any{"scp": "Mail.Send"})
+			token = "opaque"
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": token, "expires_in": 3600, "refresh_token": "rotated"})
 	}))
@@ -135,7 +139,7 @@ func TestRefreshExpirySharedAndScopeCheckedBeforeSave(t *testing.T) {
 	ticks.Store(3601)
 	unsafe.Store(true)
 	if _, _, err := c.Status(context.Background()); err == nil {
-		t.Fatal("expanded refreshed scopes accepted")
+		t.Fatal("malformed refreshed token accepted")
 	}
 	if s.saves != 0 || s.token.RefreshToken != "refresh" {
 		t.Fatal("failed refresh replaced credential")
@@ -152,6 +156,22 @@ func TestRefreshExpirySharedAndScopeCheckedBeforeSave(t *testing.T) {
 	wg.Wait()
 	if calls.Load() != 2 || s.saves != 1 || s.token.RefreshToken != "rotated" {
 		t.Fatalf("refresh not coordinated: calls=%d saves=%d", calls.Load(), s.saves)
+	}
+}
+
+// Mailbox callers derive safe codes from the error type, so refresh save failures keep the provider's code.
+func TestRefreshSaveFailureKeepsMailboxErrorCode(t *testing.T) {
+	s := validStore()
+	s.token.ExpiresAt = now.Add(-time.Second)
+	s.saveErr = errors.New("private-keychain-canary")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jsonResponse(w, map[string]any{"access_token": goodToken(), "expires_in": 3600})
+	}))
+	defer server.Close()
+	c := m365.New(account(), s, m365.Options{HTTPClient: server.Client(), BaseURL: server.URL, AuthorityURL: server.URL, Now: func() time.Time { return now }})
+	_, _, err := c.Status(context.Background())
+	if _, ok := err.(model.MailboxError); !ok || err.Error() != "AuthError" || s.saves != 1 {
+		t.Fatalf("refresh save failure: %T %v saves=%d", err, err, s.saves)
 	}
 }
 func TestStatusRefreshesRefreshOnlyCredential(t *testing.T) {
@@ -194,9 +214,10 @@ func TestExpiredUnsafeCredentialUsesOnlyValidatedRefresh(t *testing.T) {
 		for _, result := range []struct {
 			name, token, oauthError string
 			allowed                 bool
+			scopes                  []string
 		}{
-			{name: "restricted", token: jwt(map[string]any{"scp": "User.Read Mail.ReadWrite Calendars.Read MailboxSettings.Read"}), allowed: true},
-			{name: "overbroad", token: jwt(map[string]any{"scp": "User.Read Mail.ReadWrite Calendars.Read MailboxSettings.Read Mail.Send"})},
+			{name: "restricted", token: jwt(map[string]any{"scp": "User.Read Mail.ReadWrite Calendars.Read MailboxSettings.Read"}), allowed: true, scopes: []string{"User.Read", "Mail.ReadWrite", "Calendars.Read", "MailboxSettings.Read"}},
+			{name: "overbroad", token: jwt(map[string]any{"scp": "User.Read Mail.ReadWrite Calendars.Read MailboxSettings.Read Mail.Send"}), allowed: true, scopes: []string{"User.Read", "Mail.ReadWrite", "Calendars.Read", "MailboxSettings.Read", "Mail.Send"}},
 			{name: "malformed", token: "opaque"},
 			{name: "failed", oauthError: "invalid_grant"},
 		} {
@@ -224,13 +245,13 @@ func TestExpiredUnsafeCredentialUsesOnlyValidatedRefresh(t *testing.T) {
 				c := m365.New(account(), s, m365.Options{HTTPClient: server.Client(), BaseURL: server.URL, AuthorityURL: server.URL, Now: func() time.Time { return now }})
 				user, scopes, err := c.Status(context.Background())
 				if result.allowed {
-					if err != nil || user != "user@example.test" || !reflect.DeepEqual(scopes, []string{"User.Read", "Mail.ReadWrite", "Calendars.Read", "MailboxSettings.Read"}) {
-						t.Fatalf("restricted refresh status: user=%q scopes=%v err=%v", user, scopes, err)
+					if err != nil || user != "user@example.test" || !reflect.DeepEqual(scopes, result.scopes) {
+						t.Fatalf("usable refresh status: user=%q scopes=%v err=%v", user, scopes, err)
 					}
 					if _, err := c.Mailbox().Get(context.Background(), []string{"message"}, false); err != nil {
 						t.Fatal(err)
 					}
-					if exchanges.Load() != 1 || graphCalls.Load() != 1 || s.saves != 1 || s.token.AccessToken != result.token || s.token.RefreshToken != "rotated" || !reflect.DeepEqual(s.token.Scopes, []string{"User.Read", "Mail.ReadWrite", "Calendars.Read", "MailboxSettings.Read"}) {
+					if exchanges.Load() != 1 || graphCalls.Load() != 1 || s.saves != 1 || s.token.AccessToken != result.token || s.token.RefreshToken != "rotated" || !reflect.DeepEqual(s.token.Scopes, result.scopes) {
 						t.Fatalf("validated refresh not used: exchanges=%d Graph=%d saves=%d", exchanges.Load(), graphCalls.Load(), s.saves)
 					}
 				} else {
@@ -249,29 +270,38 @@ func TestExpiredUnsafeCredentialUsesOnlyValidatedRefresh(t *testing.T) {
 	}
 }
 
-func TestFreshOverbroadCredentialIsNotRefreshedOrUsed(t *testing.T) {
-	old := credentials.OAuth{AccessToken: jwt(map[string]any{"scp": "User.Read Mail.Send"}), RefreshToken: "refresh", ExpiresAt: now.Add(time.Hour), Scopes: []string{"User.Read"}}
+func TestFreshOverbroadCredentialIsUsedWithoutRefresh(t *testing.T) {
+	token := jwt(map[string]any{"scp": "User.Read Mail.ReadWrite Mail.Send", "roles": []string{"Mail.Read"}})
+	old := credentials.OAuth{AccessToken: token, RefreshToken: "refresh", ExpiresAt: now.Add(time.Hour), Username: "user@example.test", Scopes: []string{"User.Read"}}
 	s := &store{token: old}
-	var calls atomic.Int64
+	var refreshes, graphCalls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		jsonResponse(w, map[string]any{"access_token": goodToken(), "expires_in": 3600})
+		if r.URL.Path == "/token" {
+			refreshes.Add(1)
+		} else if r.Header.Get("Authorization") == "Bearer "+token {
+			graphCalls.Add(1)
+		}
+		jsonResponse(w, map[string]any{"id": "message"})
 	}))
 	defer server.Close()
 	c := m365.New(account(), s, m365.Options{HTTPClient: server.Client(), BaseURL: server.URL, AuthorityURL: server.URL, Now: func() time.Time { return now }})
-	if user, scopes, err := c.Status(context.Background()); err == nil || err.Error() != "AuthError" || user != "" || len(scopes) != 0 {
+	user, scopes, err := c.Status(context.Background())
+	if err != nil || user != "user@example.test" || !reflect.DeepEqual(scopes, []string{"User.Read", "Mail.ReadWrite", "Mail.Send", "role:Mail.Read"}) {
 		t.Fatalf("fresh overbroad status: user=%q scopes=%v err=%v", user, scopes, err)
 	}
-	if _, err := c.Mailbox().Get(context.Background(), []string{"message"}, false); err == nil || err.Error() != "AuthError" {
-		t.Fatalf("fresh overbroad token authorized Graph: %v", err)
+	if extra := m365.ExtraScopes(scopes); !reflect.DeepEqual(extra, []string{"Mail.Send", "role:Mail.Read"}) {
+		t.Fatalf("extra scopes not reported: %v", extra)
 	}
-	if calls.Load() != 0 || s.saves != 0 || !reflect.DeepEqual(s.token, old) {
-		t.Fatalf("fresh overbroad token was refreshed, used, or saved: requests=%d saves=%d", calls.Load(), s.saves)
+	if _, err := c.Mailbox().Get(context.Background(), []string{"message"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if refreshes.Load() != 0 || graphCalls.Load() != 1 || s.saves != 0 {
+		t.Fatalf("fresh overbroad token not used as saved: refreshes=%d Graph=%d saves=%d", refreshes.Load(), graphCalls.Load(), s.saves)
 	}
 }
 
 func TestStatusRejectsUnsafeActualToken(t *testing.T) {
-	for _, token := range []string{"", "opaque", "a.b.c", jwt([]string{"User.Read"}), jwt(map[string]any{}), jwt(map[string]any{"scp": []string{"User.Read"}}), jwt(map[string]any{"scp": "User.Read Mail.Send"}), jwt(map[string]any{"scp": "User.Read", "roles": []string{"Mail.Read"}})} {
+	for _, token := range []string{"", "opaque", "a.b.c", jwt([]string{"User.Read"}), jwt(map[string]any{}), jwt(map[string]any{"scp": []string{"User.Read"}}), jwt(map[string]any{"scp": ""}), jwt(map[string]any{"scp": "User.Read", "roles": "Mail.Read"})} {
 		t.Run(token, func(t *testing.T) {
 			s := validStore()
 			s.token.AccessToken = token

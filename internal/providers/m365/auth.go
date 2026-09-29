@@ -68,12 +68,13 @@ func New(account config.Account, store credentials.Store, opts Options) *Client 
 
 const authError = model.MailboxError("AuthError")
 
-type scopeError struct{ extra []string }
+// Keep storage failures distinct without retaining a backend error or changing its safe code.
+type credentialSaveError struct{}
 
-func (scopeError) Error() string              { return string(authError) }
-func (scopeError) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "AuthError") }
-func (e scopeError) ExtraScopes() []string    { return append([]string(nil), e.extra...) }
+func (credentialSaveError) Error() string { return string(authError) }
 
+// checkedScopes refuses only unusable tokens. Extra grants are the user's choice;
+// application roles are returned with a role: prefix so callers can warn about them.
 func checkedScopes(token string) ([]string, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -87,7 +88,8 @@ func checkedScopes(token string) ([]string, error) {
 	if json.Unmarshal(b, &claims) != nil || claims == nil {
 		return nil, authError
 	}
-	if roles, ok := claims["roles"]; ok && string(roles) != "null" && string(roles) != "[]" {
+	var roles []string
+	if raw, ok := claims["roles"]; ok && json.Unmarshal(raw, &roles) != nil {
 		return nil, authError
 	}
 	var scope string
@@ -98,6 +100,14 @@ func checkedScopes(token string) ([]string, error) {
 	if len(scopes) == 0 {
 		return nil, authError
 	}
+	for _, r := range roles {
+		scopes = append(scopes, "role:"+r)
+	}
+	return scopes, nil
+}
+
+// ExtraScopes lists granted permissions the adapter does not request, including role: entries.
+func ExtraScopes(scopes []string) []string {
 	var extra []string
 	for _, s := range scopes {
 		switch strings.ToLower(s) {
@@ -106,10 +116,7 @@ func checkedScopes(token string) ([]string, error) {
 			extra = append(extra, s)
 		}
 	}
-	if len(extra) != 0 {
-		return nil, scopeError{extra: extra}
-	}
-	return scopes, nil
+	return extra
 }
 func (c *Client) credential(ctx context.Context) (credentials.OAuth, error) {
 	select {
@@ -140,6 +147,10 @@ func (c *Client) credential(ctx context.Context) (credentials.OAuth, error) {
 			return credentials.OAuth{}, err
 		}
 		v, err = c.acceptToken(ctx, result, v)
+		if _, saveFailed := err.(credentialSaveError); saveFailed {
+			// Only Login reports save failures separately; mailbox callers derive codes from the type.
+			return credentials.OAuth{}, authError
+		}
 		if err != nil {
 			return credentials.OAuth{}, err
 		}
@@ -221,7 +232,7 @@ func (c *Client) acceptToken(ctx context.Context, r tokenResponse, old credentia
 		old.RefreshToken = r.RefreshToken
 	}
 	if c.store == nil || c.store.SaveOAuth(ctx, "m365", c.account.Name, old) != nil {
-		return credentials.OAuth{}, authError
+		return credentials.OAuth{}, credentialSaveError{}
 	}
 	return old, nil
 }

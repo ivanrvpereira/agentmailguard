@@ -114,8 +114,8 @@ func TestBrowserLoginConsentErrorsAndCancellationNeverPersist(t *testing.T) {
 		})
 	}
 }
-func TestLoginRejectsExpandedScopesBeforeProfileOrSave(t *testing.T) {
-	for _, token := range []string{"opaque", jwt(map[string]any{"scp": "Mail.Send"}), jwt(map[string]any{"scp": "User.Read", "roles": []string{"Mail.Read"}})} {
+func TestLoginRejectsUnusableTokenBeforeProfileOrSave(t *testing.T) {
+	for _, token := range []string{"opaque", jwt(map[string]any{"scp": ""}), jwt(map[string]any{"scp": "User.Read", "roles": "Mail.Read"})} {
 		s := validStore()
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {

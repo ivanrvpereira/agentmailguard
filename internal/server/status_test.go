@@ -72,8 +72,8 @@ func TestAuthStatusSafeDiagnostics(t *testing.T) {
 						}
 					}
 					grant := good
-					scopeFailure := kind == "scope" || kind == "scope-limit" || kind == "malformed-labels" || kind == "missing-scopes"
-					if scopeFailure {
+					extraGrant := kind == "scope" || kind == "scope-limit" || kind == "malformed-labels"
+					if extraGrant {
 						grant += " " + strings.Join(extra, " ")
 					}
 					if kind == "scope-limit" {
@@ -129,34 +129,44 @@ func TestAuthStatusSafeDiagnostics(t *testing.T) {
 					defer h.Close()
 					var out, stderr bytes.Buffer
 					code := cli.Run(context.Background(), []string{"--server", h.URL, "auth", "status"}, &out, &stderr, cli.Options{LookupEnv: func(string) string { return "" }})
+					ok := kind == "success" || extraGrant
 					wantCode, wantError := 1, ""
-					if scopeFailure {
-						wantError = "error: authentication refused: unsupported scopes\n"
+					if kind == "missing-scopes" {
+						wantError = "error: authentication refused: required scopes missing\n"
 					} else if kind == "other-error" {
 						wantError = "error: authentication failed\n"
-					} else if kind == "success" {
+					} else if ok {
 						wantCode = 0
+					}
+					if extraGrant {
+						quoted := make([]string, len(extra))
+						for i, s := range extra {
+							quoted[i] = fmt.Sprintf("%q", s)
+						}
+						wantError = "warning: token grants extra scopes the server does not use: " + strings.Join(quoted, ", ") + ". Remove the extra consent to reduce exposure.\n"
 					}
 					var got map[string]any
 					if code != wantCode || stderr.String() != wantError || json.Unmarshal(out.Bytes(), &got) != nil {
 						t.Fatalf("exit=%d stderr=%q output=%s", code, stderr.String(), out.String())
 					}
-					want := map[string]any{"account": "work", "ok": kind == "success", "logged_in": kind != "missing-login"}
+					want := map[string]any{"account": "work", "ok": ok, "logged_in": kind != "missing-login"}
 					if kind != "missing-login" {
 						want["username"] = "synthetic@example.test"
 					}
-					if kind == "success" {
+					if ok {
 						want["scopes"] = strings.Fields(good)
 					}
-					if scopeFailure {
+					if extraGrant {
 						want["extra_scopes"] = extra
-						wantExchanges := int32(0)
-						if refreshed {
-							wantExchanges = 1
+					}
+					if kind == "missing-scopes" {
+						want["missing_scopes"] = []string{"https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/calendar.events.owned.readonly"}
+						if uses.Load() != 0 || creds.saves.Load() != 0 {
+							t.Fatal("refused token was used or saved")
 						}
-						if exchanges.Load() != wantExchanges || uses.Load() != 0 || creds.saves.Load() != 0 {
-							t.Fatal("rejected token was used/saved or refresh count changed")
-						}
+					}
+					if ok && refreshed && (exchanges.Load() != 1 || creds.saves.Load() != 1) {
+						t.Fatal("usable refreshed token was not saved once")
 					}
 					encoded, _ := json.Marshal(want)
 					var expected map[string]any

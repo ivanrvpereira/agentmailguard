@@ -28,7 +28,7 @@ Preserve the current Jev model, questions, thresholds, timeout, and concurrency 
 Preserve the current verdict-dependent output fields, missing-body semantics, secret-link restrictions, and content-free persistence.
 Preserve ordinary reads as read-only operations.
 No send, permanent delete, folder/category creation, scope expansion, scheduler, MCP, or pending meeting-archival features.
-The temporary Python extra-scope bypass is not a credential policy and is not enabled in the Go server.
+Extra granted scopes are the user's choice (user decision, 2026-09-29). A usable token with extra scopes or Microsoft 365 application roles is accepted, and login and `auth status` warn. The server never uses extra grants. Malformed tokens and Gmail tokens without the required mail and calendar scopes are refused.
 
 Use the standard library first.
 External dependencies cover TOML, SQLite, HTML/CSS parsing, and macOS Keychain access only when needed.
@@ -57,7 +57,7 @@ Serialize mutations for each account in the long-lived server so concurrent clie
 
 1. **Foundation:** Go module and checks, shared domain interfaces, configuration and rule parsing, private SQLite cache and migrations, content-free audit storage, and macOS credential storage.
 2. **Content and screening:** HTML/text rendering, CSS-hidden content, link registration and secret URLs, verdict views, and the actual Jev HTTP protocol.
-3. **Providers:** M365 and Gmail OAuth, refresh and strict scope checks, mailbox operations, draft operations, metadata scans, and calendar reads.
+3. **Providers:** M365 and Gmail OAuth, refresh and scope checks with extra-grant warnings, mailbox operations, draft operations, metadata scans, and calendar reads.
 4. **Guard:** screened reads, validated mutations, draft and calendar operations, classification, organizer preview/apply, security tags, and cached completion behavior.
 5. **Server and client:** long-lived per-account dependencies, server request validation, thin CLI, local provider login, graceful shutdown, usage documentation, and complete offline workflow verification.
 

@@ -25,6 +25,7 @@ type Options struct {
 	Server    server.Options
 	LookupEnv func(string) string
 	Now       func() time.Time
+	Stdin     io.Reader // defaults to os.Stdin; read only by auth set-jev-key
 }
 
 func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "CLIOptions{redacted}") }
@@ -32,7 +33,7 @@ func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "CLIOption
 const help = `agentmailguard-go [--account NAME] [--server URL] [--timeout 30m] COMMAND
 
 serve [--home PATH] [--listen 127.0.0.1:8787]
-auth login [--home PATH] [--device-code | --no-device-code] | auth status
+auth login [--home PATH] [--device-code | --no-device-code] | auth status | auth set-jev-key
 stats [--days 30] | cache clear | rules list
 mail list [--folder inbox] [--count 25] [--skip 0]
 mail get ID [--pretty | --no-pretty]
@@ -53,6 +54,19 @@ Client/server authentication and built-in TLS are absent. Protect remote access 
 
 func usage(w io.Writer) int                   { fmt.Fprintln(w, "error: invalid command usage; use --help"); return 2 }
 func failure(w io.Writer, message string) int { fmt.Fprintln(w, "error: "+message); return 1 }
+
+// Scope labels come from provider tokens, so each one is quoted.
+func warnExtraScopes(w io.Writer, extra []string) {
+	quoted := make([]string, len(extra))
+	note := ""
+	for i, s := range extra {
+		quoted[i] = strconv.Quote(s)
+		if strings.HasPrefix(s, "role:") {
+			note = " role: entries are application permissions."
+		}
+	}
+	fmt.Fprintf(w, "warning: token grants extra scopes the server does not use: %s.%s Remove the extra consent to reduce exposure.\n", strings.Join(quoted, ", "), note)
+}
 func output(stdout, stderr io.Writer, text string, code int) int {
 	if _, err := io.WriteString(stdout, text); err != nil {
 		return failure(stderr, "output failed")
@@ -172,7 +186,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Opti
 	switch op {
 	case "stats":
 		addInt("days", 30)
-	case "cache.clear", "rules.list", "auth.status", "mail.folders", "mail.categories", "mail.archive", "mail.trash", "mail.read", "mail.unread", "mail.move", "calendar.get":
+	case "cache.clear", "rules.list", "auth.status", "auth.set-jev-key", "mail.folders", "mail.categories", "mail.archive", "mail.trash", "mail.read", "mail.unread", "mail.move", "calendar.get":
 	case "serve":
 		f.StringVar(&listen, "listen", listen, "")
 	case "auth.login":
@@ -352,6 +366,15 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Opti
 		}
 		return login(ctx, home, account, *bools["device-code"], stdout, stderr, opts.Server)
 	}
+	if op == "auth.set-jev-key" {
+		if seen["account"] {
+			return usage(stderr)
+		}
+		if supplied {
+			return failure(stderr, "Jev key setup is local only; remove --server and AGENTMAILGUARD_GO_SERVER")
+		}
+		return setJevKey(ctx, opts.Stdin, stderr, opts.Server)
+	}
 	clientOpts := opts.Client
 	clientOpts.Timeout = timeout
 	c, e := client.New(base, clientOpts)
@@ -385,16 +408,20 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Opti
 	}
 	if op == "auth.status" {
 		var v struct {
-			OK          bool      `json:"ok"`
-			LoggedIn    bool      `json:"logged_in"`
-			ExtraScopes *[]string `json:"extra_scopes"`
+			OK            bool      `json:"ok"`
+			LoggedIn      bool      `json:"logged_in"`
+			ExtraScopes   *[]string `json:"extra_scopes"`
+			MissingScopes *[]string `json:"missing_scopes"`
 		}
 		if json.Unmarshal(b, &v) != nil {
 			return failure(stderr, "invalid server response")
 		}
+		if v.OK && v.ExtraScopes != nil {
+			warnExtraScopes(stderr, *v.ExtraScopes)
+		}
 		if !v.OK {
-			if v.ExtraScopes != nil {
-				return failure(stderr, "authentication refused: unsupported scopes")
+			if v.MissingScopes != nil {
+				return failure(stderr, "authentication refused: required scopes missing")
 			}
 			if v.LoggedIn {
 				return failure(stderr, "authentication failed")

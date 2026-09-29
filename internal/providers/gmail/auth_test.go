@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -58,7 +59,8 @@ func respond(w http.ResponseWriter, v any) {
 
 func TestStatusLazyRefreshAndRawScopes(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for _, scope := range []string{granted, "", granted + " https://www.googleapis.com/auth/gmail.readonly"} {
+	// Extra grants are accepted; missing required grants are refused.
+	for _, scope := range []string{granted, "", "https://www.googleapis.com/auth/gmail.modify", granted + " https://www.googleapis.com/auth/gmail.readonly"} {
 		t.Run(scope, func(t *testing.T) {
 			store := validStore()
 			store.token.ExpiresAt = now
@@ -91,13 +93,13 @@ func TestStatusLazyRefreshAndRawScopes(t *testing.T) {
 				t.Fatal("eager credential access")
 			}
 			name, scopes, err := c.Status(context.Background())
-			if scope != granted {
+			if !strings.HasPrefix(scope, granted) {
 				if err == nil || store.saves != 0 || store.token.AccessToken != old.AccessToken {
 					t.Fatal("invalid raw scopes accepted or saved")
 				}
 				return
 			}
-			if err != nil || name != "synthetic@example.test" || len(scopes) != 2 || store.saves != 1 {
+			if err != nil || name != "synthetic@example.test" || !reflect.DeepEqual(scopes, strings.Fields(scope)) || store.saves != 1 {
 				t.Fatalf("status: %q %v %v saves=%d", name, scopes, err, store.saves)
 			}
 			_, _, err = c.Status(context.Background())

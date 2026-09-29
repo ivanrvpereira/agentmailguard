@@ -41,7 +41,7 @@ func TestQueuedRequestsRecheckExpiryBeforeTransmission(t *testing.T) {
 						}
 						token := fresh
 						if outcome == "unsafe" {
-							token = jwt(map[string]any{"scp": "User.Read Mail.Send"})
+							token = "opaque"
 						}
 						jsonResponse(w, map[string]any{"access_token": token, "expires_in": 3600})
 					case "/v1.0/me/messages/queued":

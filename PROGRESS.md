@@ -205,12 +205,38 @@ The entries below record discovery and fixes chronologically. Final verification
 - Parent checked README claims and added the minimum Go version, blank-account refusal, negative flags, and bounded scope-diagnostic behavior. Python remains unchanged. No dependencies, scope allowlists, Jev questions, or verdict thresholds changed.
 - Offline implementation is complete. Live Gmail reads and synthetic-content Jev screening passed earlier. M365 live access remains blocked by extra grants. Real browser/device login, native Go Keychain integration, provider acceptance of generated drafts, and an individual Gmail event read remain unverified. No new consent or live mailbox-write approval arrived.
 
+## Follow-up: safe Microsoft 365 login diagnostics
+
+- The user explicitly approved copying `~/.agentmailguard-dev/config.toml` into the separate Go home. Parent verified an identical copy with mode 0600. No credentials or database were copied.
+- The user reported a browser callback followed by the generic login error. A device-code screenshot showed a Microsoft organization access-policy refusal. The exact browser-login failure remains unconfirmed.
+- The user approved safe login-stage diagnostics and explicitly prohibited commits. This follow-up stays uncommitted. No new live login, consent change, or credential access is authorized by this diagnostic task.
+- Parent reproduced the missing diagnostic through exported `cli.Run`, real synthetic OAuth/Graph HTTP, the loopback browser callback, and an injected credential store. The scope-refusal regression first failed with the old generic message, then passed with the fixed stage message.
+- Subsequent red/green cycles cover token-exchange HTTP/JSON/OAuth failures, profile failures, credential-save failure, malformed/expired/application tokens, browser failure/refusal, cancellation, timeout, and device-code failures. Canary values remain absent from output. Refused tokens never reach profile or credential storage.
+- Provider errors retain the fixed `AuthError` text. A concrete typed diagnostic supplies only locally defined CLI messages. The credential-save distinction retains no backend error or unwrap chain. Scope rules, provider operations, and successful login output remained unchanged in this follow-up; the next follow-up changed the scope rules.
+- Initial parent `make`, uncached whole-tree race tests, and diff checks passed. The CLI binary was rebuilt. Focused Standards and Spec reviews are in progress before final verification. Database-copy validation remains pending.
+- Later review: refresh save failures returned `credentialSaveError`, so mailbox results reported that type name instead of `MailboxError`. `credential()` now maps it back to `authError`; only login reports the save stage. A regression test failed before the fix.
+
+## Follow-up: extra grants warn instead of block
+
+- The user decided extra grants are their choice: a usable token proceeds with a warning; only unusable tokens are refused. The user dropped the server-start warning.
+- `m365.ExtraScopes` and `gmail.ExtraScopes` list unrequested grants. M365 application roles are accepted and reported with a `role:` prefix. Malformed tokens and malformed `roles` claims remain refused. Gmail still refuses tokens missing the mail or calendar scope and reports `missing_scopes`.
+- `auth login` and `auth status` print one quoted stderr warning. `auth status` returns `ok: true`, requested `scopes`, and bounded `extra_scopes` labels.
+- Refusal tests were changed to acceptance-with-warning tests. Two mutants (M365 and Gmail refusing extras again) fail the new CLI, server, and provider tests.
+- Live check with user approval: browser login for `work` succeeded and warned about `Calendars.ReadWrite`, `Contacts.Read`, `IMAP.AccessAsUser.All`, `Mail.Read`, and `Mail.Send`. `auth status` returned `ok: true`. Device-code login may still be blocked by the Microsoft organization access policy recorded above.
+- With user approval, the Python cache was copied read-only with SQLite `.backup` into `~/.agentmailguard-go/cache.db` (identical schema, integrity check passed; the empty Go cache was backed up to `/tmp`). `stats` reads the copied history. `rules.toml` was copied with user approval.
+- The organize preview first failed screening with `ConfigError` because the Go Jev key was absent. After the user saved the key, a 7-day preview screened 26 messages green and planned 18 moves/categories. The preview made no mailbox writes; the user runs `--apply`.
+
+## Follow-up: Jev key onboarding command
+
+- The user approved a local `auth set-jev-key` command. It reads stdin (terminal: prompt with `/bin/stty -echo`, no new dependency), validates one printable line, and saves through `SaveOpenRouterKey`. It refuses remote targets, `--account`, and `--home`, and never prints the key.
+- CLI tests cover the saved trimmed key, empty/EOF/space/control/multi-line/too-long input, remote flag and environment refusals, flag refusals, and a Keychain failure without leaking the key or backend detail. The tests failed to build before `cli.Options.Stdin` existed.
+
 ## Live credential preparation
 
 - Parent read only account metadata and existing credentials from `~/.agentmailguard-dev`. It contains `work` (M365) and `gmail`; both auth records exist. `~/.agentmailguard` has no accounts.
 - `/tmp/agentmailguard-go-credential-bridge.py` can provide existing credentials to a parent verification process through an inherited pipe descriptor. It never prints secrets, refreshes tokens, writes Keychain, or changes the Python cache. Default output is availability/scope metadata only.
 - Gmail has an existing refresh token. M365 has an expired access token and a refresh token. The cached M365 token contains extra `Calendars.ReadWrite`, `Contacts.Read`, `IMAP.AccessAsUser.All`, `Mail.Read`, and `Mail.Send` grants.
-- The expired token is not suitable for Go access. The parent attempted a fresh restricted refresh after all provider fixes. Extra grants persisted, so live M365 verification is blocked. Restricted consent needs separate user approval; never enable the old extra-scope bypass.
+- The expired token is not suitable for Go access. The parent attempted a fresh restricted refresh after all provider fixes. Extra grants persisted, so live M365 verification is blocked. Restricted consent needs separate user approval. Superseded: the user later decided extra grants are accepted with a warning (see the follow-up above).
 - Parent live provider checks will use an in-memory credential store populated through the private pipe. Refreshed test tokens remain in memory, with no writes to existing credentials.
 
 ## Long-lived server considerations

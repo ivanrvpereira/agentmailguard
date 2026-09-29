@@ -33,8 +33,8 @@ Only `serve` and local `auth login` accept `--home`.
 There is no automatic Python configuration, cache, or credential import.
 
 Create a private server-home directory and a `config.toml` file there.
-Use a restricted provider application that grants only the required scopes.
-Do not change existing consent to bypass a refused scope check.
+Prefer a restricted provider application that grants only the required scopes.
+Extra grants are the user's choice: a usable token with extra scopes or Microsoft 365 application roles is accepted with a warning. The server never uses the extra grants.
 These examples contain placeholders, not working credentials.
 
 Microsoft 365 example:
@@ -65,8 +65,10 @@ Keep `config.toml` private because the Gmail application secret belongs on the s
 Provider OAuth records use macOS Keychain services `agentmailguard-go-m365` and `agentmailguard-go-gmail`, with the account name as the Keychain account.
 The Jev key uses service `agentmailguard-go-openrouter` and account `agentmailguard-go`.
 The server can also read `OPENROUTER_API_KEY` from its environment.
-Use approved server-host secret tooling to provision that key without placing it in shell history or source files.
-No client command accepts or transfers a provider token or Jev key.
+Run `agentmailguard-go auth set-jev-key` on the server host to save the key. On a terminal it prompts with echo disabled; otherwise it reads the key from stdin, for example from a password manager CLI. The key never appears in arguments or output.
+The command is local only: it refuses `--server`, `AGENTMAILGUARD_GO_SERVER`, `--account`, and `--home`. It refuses keys with spaces or control characters and updates an existing Keychain item in place.
+The server reads the key at the first screening call. Restart the server after replacing a key it already loaded.
+No client command transfers a provider token or Jev key to the server.
 
 ## Local login and server start
 
@@ -84,15 +86,20 @@ Gmail refuses device-code login because that flow does not support the required 
 Login is never an HTTP operation.
 A supplied `--server` or `AGENTMAILGUARD_GO_SERVER` value makes `auth login` refuse the operation instead of silently logging in locally.
 Data commands and `auth status` never open a login prompt.
-Scope refusals include `extra_scopes` and a fixed error message.
-Diagnostics show at most 100 conventional scope labels of 256 bytes each.
-Malformed labels are omitted, but their grants remain refused.
+Login and `auth status` print a warning on stderr for extra grants. `auth status` lists them in `extra_scopes`; `scopes` lists only requested grants. Application roles appear with a `role:` prefix.
+Tokens that cannot work are refused: malformed tokens, and Gmail tokens without the mail and calendar scopes. Gmail refusals list `missing_scopes`.
+Diagnostics show at most 100 conventional scope labels of 256 bytes each. Malformed labels are omitted.
 The program does not start a server automatically.
+
+Microsoft 365 login reports fixed errors for browser startup, authorization, token exchange, token validation, profile lookup, and Keychain storage.
+Device-code request, polling, refusal, cancellation, and timeout errors are also distinct.
+The browser callback only confirms receipt of a response. The terminal shows the final result.
+These diagnostics contain no raw provider errors, token values, or callback URLs. They do not bypass Microsoft access policies.
 
 **Restart the server after local login or account configuration changes.**
 A cached account with changed configuration returns a fixed restart-required error.
 The server does not replace its cached provider identity in place.
-Provider access tokens still refresh normally after expiry, with strict checks on the refreshed scopes.
+Provider access tokens still refresh normally after expiry, with the same checks and warnings on the refreshed scopes.
 Rules are different: the server reloads and validates `rules.toml` on every `rules list` and `mail organize` call.
 
 ## Local and remote clients
@@ -233,6 +240,6 @@ Transport tests cover redirects, stale connections, cancellation, request valida
 No test needs real mailbox data, a browser, OpenRouter, or Keychain access.
 
 Earlier authorized checks passed for live Gmail reads and a real Jev request containing synthetic text only.
-Live Microsoft 365 access remains blocked: a fresh restricted refresh still returns extra scopes, which the adapter refuses.
+Earlier live Microsoft 365 checks were blocked because the adapter refused extra scopes. The adapter now accepts them with a warning.
 Real browser/device login, native Go Keychain integration, Microsoft 365 Graph access, and provider acceptance of generated drafts remain unverified.
 This step adds offline verification only and does not claim production readiness.

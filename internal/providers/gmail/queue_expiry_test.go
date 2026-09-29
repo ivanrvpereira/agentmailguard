@@ -27,7 +27,7 @@ func TestQueuedMutationRefreshesBeforeTransmission(t *testing.T) {
 }
 
 func TestQueuedMutationRefusesUnvalidatedRefreshWithoutWrite(t *testing.T) {
-	for _, scope := range []string{"", granted + " https://www.googleapis.com/auth/gmail.readonly", "HTTP401"} {
+	for _, scope := range []string{"", "https://www.googleapis.com/auth/gmail.modify", "HTTP401"} {
 		t.Run(scope, func(t *testing.T) { testQueuedExpiry(t, "trash", scope) })
 	}
 }
