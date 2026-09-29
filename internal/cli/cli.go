@@ -145,7 +145,7 @@ func newRoot(r *runner, raw []string) *cobra.Command {
 	f.StringVar(&r.base, "server", "", "server base URL")
 	f.DurationVar(&r.timeout, "timeout", client.DefaultTimeout, "request timeout")
 	f.StringVar(&r.home, "home", "", "configuration directory; serve, auth login, set-jev-key, migrate, and change-password only")
-	root.AddCommand(serveCmd(r), authCmd(r), statsCmd(r), cacheCmd(r), rulesCmd(r), mailCmd(r), calendarCmd(r), draftCmd(r))
+	root.AddCommand(serveCmd(r), mcpCmd(r), authCmd(r), statsCmd(r), cacheCmd(r), rulesCmd(r), mailCmd(r), calendarCmd(r), draftCmd(r))
 	return root
 }
 
