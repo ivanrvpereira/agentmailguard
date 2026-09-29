@@ -19,9 +19,11 @@ Provider OAuth remains mandatory.
 3. Run `./bin/agentmailguard-go --help`.
 
 `make` checks formatting, runs `go vet` and race tests, builds the packages, and creates `bin/agentmailguard-go`.
-SQLite requires CGO.
-Native credential storage requires macOS and CGO.
-Other platforms can run synthetic tests, but they have no plaintext credential fallback.
+SQLite still requires CGO with either credential backend.
+The native Keychain backend requires macOS and CGO.
+The file backend does not require Keychain, but it does not remove the SQLite build requirement.
+Credential locking uses Unix `flock`, and terminal password input uses `stty`. Windows is not supported.
+There is no plaintext credential fallback.
 The build does not install anything into your PATH.
 
 ## Server configuration
@@ -29,7 +31,7 @@ The build does not install anything into your PATH.
 The server owns configuration, OAuth credentials, the Jev key, `cache.db`, and `audit.jsonl`.
 The CLI never loads these files for data commands, even with a loopback server.
 The Go home is separate from Python: `--home`, then `AGENTMAILGUARD_GO_HOME`, then `~/.agentmailguard-go`.
-Only `serve` and local `auth login` accept `--home`.
+`serve` and local `auth login`, `auth set-jev-key`, `auth migrate`, and `auth change-password` accept `--home`.
 There is no automatic Python configuration, cache, or credential import.
 
 Create a private server-home directory and a `config.toml` file there.
@@ -62,13 +64,116 @@ The CLI refuses an explicitly empty or whitespace-only account name before any s
 The server resolves nonempty names, not the client.
 Keep `config.toml` private because the Gmail application secret belongs on the server host.
 
-Provider OAuth records use macOS Keychain services `agentmailguard-go-m365` and `agentmailguard-go-gmail`, with the account name as the Keychain account.
-The Jev key uses service `agentmailguard-go-openrouter` and account `agentmailguard-go`.
-The server can also read `OPENROUTER_API_KEY` from its environment.
-Run `agentmailguard-go auth set-jev-key` on the server host to save the key. On a terminal it prompts with echo disabled; otherwise it reads the key from stdin, for example from a password manager CLI. The key never appears in arguments or output.
-The command is local only: it refuses `--server`, `AGENTMAILGUARD_GO_SERVER`, `--account`, and `--home`. It refuses keys with spaces or control characters and updates an existing Keychain item in place.
-The server reads the key at start (see below). Restart the server after replacing the key.
-No client command transfers a provider token or Jev key to the server.
+## Credential storage
+
+Both backends store all provider OAuth credentials and the Jev (OpenRouter) key in one versioned record.
+The optional configuration table selects the backend:
+
+```toml
+[credentials]
+backend = "keychain" # Default. Use "file" for password-encrypted storage.
+```
+
+An absent table selects `keychain`.
+If present, the table must contain exactly one string field, `backend`.
+Unknown backend values or keys cause a configuration error.
+Neither backend detects rollback: another process under the same user can restore an older valid credential record.
+The lock coordinates only processes that use the same home directory.
+
+### Keychain backend
+
+The Keychain backend uses one non-synchronizable generic-password item: service `agentmailguard-go`, account `credentials`.
+Choose "Always Allow" for this item to avoid repeated access prompts for the same build.
+One item replaces the separate per-account approvals with one item approval per build.
+An ad-hoc-signed rebuild changes the application identity, so it needs approval again.
+Stable code signing is outside this implementation.
+
+If the single item is absent, the first local store operation automatically imports the configured accounts and Jev key from legacy items.
+This applies to `serve`, `auth login`, and `auth set-jev-key`, so an initial login cannot hide other legacy credentials.
+The import leaves legacy items unchanged.
+An unreadable legacy item refuses the operation instead of creating a partial record.
+
+### File backend and password input
+
+The file backend stores the record in `<home>/credentials.age` with mode `0600`.
+It uses age password encryption with scrypt work factor `logN = 18` and refuses a higher decryption work factor.
+Writes use a same-directory temporary file, file fsync, atomic rename, and directory fsync.
+A wrong password or damaged file refuses access with the same fixed error.
+Unknown record versions also refuse access.
+
+The password source is `AGENTMAILGUARD_GO_CREDENTIALS_PASSWORD`, then stdin if the variable is absent.
+An empty password is refused, including an explicitly empty environment variable.
+Passwords must be valid UTF-8, at most 4096 bytes, without control characters.
+Terminal input disables echo. Creation of a new file asks for the password twice.
+Non-terminal stdin supplies one password line without confirmation.
+The process keeps the password in memory for its lifetime.
+
+**Caution:** Environment variables can expose secrets to other processes under the same user.
+The program unsets the password variable after reading it, before it starts child processes such as a browser.
+Unsetting the variable does not remove the initial environment exposure or erase the password from process memory.
+Do not put passwords in command arguments, shell history, or configuration files.
+A secret manager can supply the environment variable or stdin.
+
+Run `agentmailguard-go auth set-jev-key --home /private/path/agentmailguard-go` locally to save the Jev key.
+Terminal input disables echo. Non-terminal stdin supplies the key as one line.
+With the file backend and no password environment variable, piped input must contain two lines: the password first, then the key.
+With the password environment variable, piped input contains only the key line.
+The command refuses keys with spaces or control characters. It never prints the key or accepts it as an argument.
+It also refuses `--server`, `AGENTMAILGUARD_GO_SERVER`, and `--account`.
+
+The server can use `OPENROUTER_API_KEY` instead of the stored key.
+The server selects its Jev key at start. Restart it after replacing the key.
+No remote client command transfers a provider token or Jev key to the server.
+
+### Copy credentials to the other backend
+
+1. Stop the server.
+2. Run one command locally on the server host:
+
+```sh
+./bin/agentmailguard-go auth migrate --home /private/path/agentmailguard-go --to file
+# Or, from a configured file backend on macOS:
+./bin/agentmailguard-go auth migrate --home /private/path/agentmailguard-go --to keychain
+```
+
+3. Set `[credentials] backend` in `config.toml` to the value printed by the command.
+4. Restart the server with the selected backend.
+
+Migration copies the whole record from the configured backend to the other backend under the same-home lock.
+It leaves the source record and configuration unchanged.
+It refuses an existing target record, including legacy Keychain entries. It also refuses a target that matches the configured backend.
+The file password comes from the normal sources. Terminal creation of the file target asks twice.
+Migration refuses `--server`, `AGENTMAILGUARD_GO_SERVER`, and `--account`.
+Migration of your real Keychain needs separate permission and remains unverified by this workflow.
+
+### Change the file password
+
+1. Stop the server.
+2. Run `./bin/agentmailguard-go auth change-password --home /private/path/agentmailguard-go` on a terminal.
+3. Supply the current password through its normal source.
+4. Enter the new password twice at the terminal prompts.
+5. Restart the server with the new password.
+
+This command works only with the file backend and re-encrypts the latest record under the same-home lock.
+The new password cannot come from an environment variable or a pipe.
+A running server retains its old password and cannot save refreshed tokens after this change.
+The command refuses `--server`, `AGENTMAILGUARD_GO_SERVER`, and `--account`.
+
+### Optional manual cleanup of legacy Keychain items
+
+**Caution:** Do not delete legacy items before you verify the copied credentials after a server restart.
+Deletion removes the old copies and can break older binaries that still use them.
+The program never deletes these items.
+
+The following commands are templates, not verification steps. Replace each placeholder with the exact legacy account name and intended Keychain path.
+Use only the commands for items that you intend to delete.
+Do not delete the new `agentmailguard-go` / `credentials` item.
+
+```sh
+security delete-generic-password -s agentmailguard-go-m365 -a '<m365-account-name>' '<keychain-path>'
+security delete-generic-password -s agentmailguard-go-gmail -a '<gmail-account-name>' '<keychain-path>'
+security delete-generic-password -s agentmailguard-go-openrouter -a agentmailguard-go '<keychain-path>'
+```
 
 ## Local login and server start
 
@@ -82,12 +187,23 @@ Run login locally on the server host:
 
 `serve` loads every credential before it accepts requests, because an operator is present at server start:
 
-1. It reads the OAuth record of every account in `config.toml`, and the Jev key unless `OPENROUTER_API_KEY` is set. Approve the macOS Keychain prompts at this time. Choose "Always Allow" to prevent later prompts; a rebuilt binary asks again.
-2. It writes each OAuth record back unchanged, so the Keychain also asks for modify permission now and not at the first token refresh.
-3. If the Jev key is missing and stdin is a terminal, it asks for the key with echo disabled and saves it. Piped or absent stdin gets no prompt.
-4. It prints one `credential check:` line per item, without secrets. An account that is not logged in does not stop the start: its commands fail until you run `auth login` and restart the server. Any other failed item (denied or unreadable Keychain access, a failed write, a missing Jev key, or missing configuration) stops the start. Fix the item (for example with `auth set-jev-key`) and start again.
+1. It reads the whole store and rewrites the record once to check read and write access, not once per account.
+2. Its first `credential check:` item is `credentials (keychain)` or `credentials (file)`. A store failure refuses startup.
+3. It checks every configured account. It also checks the stored Jev key unless `OPENROUTER_API_KEY` supplies the key. Check lines contain fixed statuses, not secrets.
+4. If the Jev key is missing and stdin is a terminal, it prompts with echo disabled and saves the key. Piped password input gets no Jev prompt.
 
-After start, the server never reads the Keychain again. It keeps credentials in memory. Token refreshes are saved to the Keychain first, then to memory. An account added to `config.toml` after start returns the restart-required error.
+An account that is not logged in does not block startup.
+Its commands fail until local `auth login` and a server restart.
+Other credential failures, a missing Jev key, or missing configuration refuse startup.
+Store statuses include `ok`, `access denied`, `wrong password or damaged file`, `password missing`, and `unsupported version`.
+
+After startup, ordinary credential loads use server memory.
+Each runtime save rereads the backend under an exclusive `<home>/credentials.lock` before it changes its own entry.
+A token refresh preserves other accounts' entries and the Jev key from concurrent local commands.
+The running server still keeps its earlier in-memory credentials.
+Token refreshes reach the backend before memory. With Keychain "Always Allow", the reread does not need another prompt for the same build.
+A file save needs one scrypt derivation for the read and another for the write.
+An account added to `config.toml` after startup returns the restart-required error.
 
 Browser login is the default.
 Microsoft 365 supports device-code login.
@@ -100,7 +216,9 @@ Tokens that cannot work are refused: malformed tokens, and Gmail tokens without 
 Diagnostics show at most 100 conventional scope labels of 256 bytes each. Malformed labels are omitted.
 The program does not start a server automatically.
 
-Microsoft 365 login reports fixed errors for browser startup, authorization, token exchange, token validation, profile lookup, and Keychain storage.
+Microsoft 365 `auth status` can use a cached token and username without a Graph request.
+A successful status does not prove current Graph access, all required permissions, or provider acceptance of mailbox operations.
+Microsoft 365 login reports fixed errors for browser startup, authorization, token exchange, token validation, profile lookup, and credential storage.
 Device-code request, polling, refusal, cancellation, and timeout errors are also distinct.
 The browser callback only confirms receipt of a response. The terminal shows the final result.
 These diagnostics contain no raw provider errors, token values, or callback URLs. They do not bypass Microsoft access policies.
@@ -147,7 +265,7 @@ Required text flags distinguish an omitted value from an explicit empty value, i
 
 | Group | Commands |
 | --- | --- |
-| State and auth | `stats --days 30`, `cache clear`, `rules list`, `auth status`, local `auth login [--device-code]` |
+| State and auth | `stats --days 30`, `cache clear`, `rules list`, `auth status`, local `auth login [--device-code]`, `auth set-jev-key`, `auth migrate --to file\|keychain`, `auth change-password` |
 | Mail reads | `mail list`, `mail get ID [--pretty]`, `mail search`, `mail link ID L1 L2` or `mail link ID --all`, `mail folders`, `mail categories` |
 | Mail changes | `mail archive IDS...`, `mail trash IDS...`, `mail move FOLDER_ID IDS...`, `mail read IDS...`, `mail unread IDS...`, `mail flag IDS... --state flagged|complete|none`, `mail categorize IDS... --add NAME --remove NAME` |
 | Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID` |
@@ -243,12 +361,24 @@ There is no scheduler and no automatic mailbox work.
 ## Verification and limits
 
 Offline tests use actual loopback HTTP, temporary SQLite/audit files, synthetic provider/Jev endpoints, and injected credential and clock adapters.
-The native workflow test builds the real binary and runs remote commands against one long-lived server.
+The native workflow test builds the real client binary and runs remote commands against a long-lived in-process server with injected external adapters.
 It covers cached hidden reads, error retry, classification, preview/apply, concurrent completion, security tags, manual mutations, drafts, calendar, stats, rules, and separate accounts.
+Native file-backend tests also cover server startup, password refusal, terminal password changes, and SIGTERM shutdown.
+A separate combined native acceptance run used the file backend, temporary HOME, synthetic credentials, and a non-forwarding loopback HTTPS proxy.
+It passed device-code login, native server startup, an external key update while serving, token refresh, terminal password change, and restart.
+A fresh screened read after restart required the updated Jev key and refreshed OAuth token at fake endpoints.
+This run did not access real providers, Keychain, or user configuration.
 Transport tests cover redirects, stale connections, cancellation, request validation, and content-free errors.
 No test needs real mailbox data, a browser, OpenRouter, or Keychain access.
 
 Earlier authorized checks passed for live Gmail reads and a real Jev request containing synthetic text only.
-Earlier live Microsoft 365 checks were blocked because the adapter refused extra scopes. The adapter now accepts them with a warning.
-Real browser/device login, native Go Keychain integration, Microsoft 365 Graph access, and provider acceptance of generated drafts remain unverified.
-This step adds offline verification only and does not claim production readiness.
+Earlier Microsoft 365 checks refused extra scopes. After the approved policy change, a user-authorized browser login and `auth status` succeeded with warnings.
+That status result alone does not establish live Graph mailbox access.
+A subsequent authorized Microsoft 365 organize preview succeeded with screening and no mailbox writes.
+These earlier read-only checks do not verify the credential-backend changes. This workflow adds no new live provider verification.
+Device-code login can still fail under Microsoft organization policies.
+Real device-code login and provider acceptance of generated drafts remain unverified here.
+Native Keychain migration and the user's real credential migration also remain unverified.
+Migration tests use a fake Keychain Platform at the constructor and CLI seams, not the production Security APIs.
+Production-binary Keychain migration remains deferred; the migration evidence for this change comes from these fake-Platform tests.
+Offline verification does not establish production readiness.

@@ -15,3 +15,4 @@ audit.jsonl
 !internal/credentials/
 internal/credentials/*
 !internal/credentials/*.go
+.backup/

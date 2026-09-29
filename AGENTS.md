@@ -13,7 +13,7 @@ The Python project and `../agentmailguard` are read-only references.
 - Never store or log email subject, sender, body, rule instructions, raw API responses, tokens, or API keys.
 - Keep scopes, Jev questions, thresholds, and supported operations aligned with the approved plan.
 - Keep provider credentials and the OpenRouter key on the server host.
-- Use macOS Keychain for secrets. No plaintext token fallback.
+- Store secrets in the macOS Keychain or the password-encrypted file backend. Never store secrets in plaintext.
 - Client/server authentication is deferred. Bind to loopback by default. Warn on explicit remote listeners.
 - Workers and automated tests must not use live providers, real Keychain, or user configuration.
 - The user authorized the orchestrator to use existing credentials for bounded read-only live checks. No mailbox writes, cache clearing, consent changes, or credential/configuration changes without separate permission.
