@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/ivanrvpereira/agentmailguard-go/internal/server"
 )
@@ -16,22 +17,22 @@ const maxJevKeyBytes = 4096
 
 // setJevKey reads the key from stdin so it never appears in arguments or shell history.
 // A terminal gets a prompt with echo disabled; other input is read to EOF.
-func setJevKey(ctx context.Context, home string, stdin io.Reader, stderr io.Writer, opts server.Options) int {
+func setJevKey(ctx context.Context, home string, stdin io.Reader, stderr io.Writer, opts server.Options, lookup func(string) string) int {
 	if stdin == nil {
 		stdin = os.Stdin
+	}
+	store, err := localCredentials(ctx, home, opts.Credentials, stdin, stderr, lookup)
+	if err != nil {
+		return failure(stderr, err.Error())
 	}
 	key, problem := readJevKey(ctx, stdin, stderr, "Jev (OpenRouter) API key: ")
 	if problem != "" {
 		return failure(stderr, problem)
 	}
-	store, err := localCredentials(ctx, home, opts.Credentials)
-	if err != nil {
-		return failure(stderr, err.Error())
-	}
 	if store.SaveOpenRouterKey(ctx, key) != nil {
-		return failure(stderr, "Keychain save failed")
+		return failure(stderr, "credential save failed")
 	}
-	fmt.Fprintln(stderr, "Jev key saved to Keychain. Restart the server if it already loaded a previous key.")
+	fmt.Fprintln(stderr, "Jev key saved. Restart the server if it already loaded a previous key.")
 	return 0
 }
 
@@ -42,7 +43,14 @@ func terminal(r io.Reader) (*os.File, bool) {
 		return nil, false
 	}
 	info, err := f.Stat()
-	return f, err == nil && info.Mode()&os.ModeCharDevice != 0
+	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+		return f, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	c := exec.CommandContext(ctx, "/bin/stty", "-g")
+	c.Stdin = f
+	return f, c.Run() == nil
 }
 
 // readJevKey returns a validated key, or a fixed problem message. It never echoes or prints the key.

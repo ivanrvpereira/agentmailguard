@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -211,6 +213,7 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 		t.Fatalf("build: %v %s", e, b)
 	}
 	verifyNativeRefusal(t, binary)
+	verifyNativeFileServe(t, binary)
 	home := t.TempDir()
 	configFile(t, home)
 	f, e := os.OpenFile(filepath.Join(home, "config.toml"), os.O_APPEND|os.O_WRONLY, 0600)
@@ -510,9 +513,86 @@ func verifyNativeOutputFailure(t *testing.T, binary string, handler http.Handler
 	}
 }
 
-// The real binary uses the real Keychain, so it runs only to its configuration refusal:
-// serve checks configuration before any credential read and never starts listening.
-// In-process serve tests cover preload, listening, and shutdown with a fake credential store.
+// Missing configuration must be refused before any credential backend is accessed.
+func verifyNativeFileServe(t *testing.T, binary string) {
+	t.Helper()
+	for _, source := range []string{"environment", "pipe"} {
+		t.Run("native_file_"+source, func(t *testing.T) {
+			home := t.TempDir()
+			configFile(t, home)
+			f, err := os.OpenFile(filepath.Join(home, "config.toml"), os.O_APPEND|os.O_WRONLY, 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = f.WriteString("\n[credentials]\nbackend='file'\n")
+			f.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, binary, "serve", "--home", home, "--listen", "127.0.0.1:0")
+			cmd.Env = []string{"HOME=" + home, "OPENROUTER_API_KEY=synthetic-env-key"}
+			if source == "environment" {
+				cmd.Env = append(cmd.Env, credentials.PasswordEnvironment+"=synthetic-password")
+			} else {
+				cmd.Stdin = strings.NewReader("synthetic-password\n")
+			}
+			pipe, err := cmd.StderrPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd.Stdout = io.Discard
+			if cmd.Start() != nil {
+				t.Fatal("native serve start failed")
+			}
+			listening := make(chan struct{}, 1)
+			done := make(chan error, 1)
+			var output strings.Builder
+			go func() {
+				scanner := bufio.NewScanner(pipe)
+				for scanner.Scan() {
+					line := scanner.Text()
+					output.WriteString(line + "\n")
+					if line == "server listening" {
+						listening <- struct{}{}
+					}
+				}
+				done <- cmd.Wait()
+			}()
+			select {
+			case <-listening:
+				if cmd.Process.Signal(syscall.SIGTERM) != nil {
+					t.Fatal("native SIGTERM failed")
+				}
+			case <-done:
+				t.Fatal("native file serve refused start")
+			case <-ctx.Done():
+				t.Fatal("native file serve did not listen")
+			}
+			if err := <-done; err != nil {
+				t.Fatal("native file serve did not shut down cleanly")
+			}
+			text := output.String()
+			if !strings.Contains(text, "credential check: credentials (file): ok") || !strings.Contains(text, "not logged in;") || strings.Contains(text, "synthetic-") || strings.Contains(text, "Keychain") {
+				t.Fatal("native file preload output incorrect")
+			}
+			data, err := os.ReadFile(filepath.Join(home, "credentials.age"))
+			if err != nil || !bytes.Contains(data, []byte(" 18\n")) {
+				t.Fatal("native writer did not use production work factor")
+			}
+			// Even an environment Jev key cannot bypass a failed file store.
+			bad := exec.CommandContext(ctx, binary, "serve", "--home", home, "--listen", "127.0.0.1:0")
+			bad.Env = []string{"HOME=" + home, "OPENROUTER_API_KEY=synthetic-env-key", credentials.PasswordEnvironment + "=wrong-password"}
+			var stderr bytes.Buffer
+			bad.Stderr = &stderr
+			if bad.Run() == nil || !strings.Contains(stderr.String(), "credentials (file): wrong password or damaged file") || strings.Contains(stderr.String(), "server listening") {
+				t.Fatal("native wrong password did not fail closed")
+			}
+		})
+	}
+}
+
 func verifyNativeRefusal(t *testing.T, binary string) {
 	t.Helper()
 	home := t.TempDir()

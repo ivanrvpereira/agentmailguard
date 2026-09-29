@@ -1,4 +1,4 @@
-// Package credentials stores server-host secrets in macOS Keychain only.
+// Package credentials stores server-host secrets in Keychain or a password-encrypted file.
 package credentials
 
 import (
@@ -202,7 +202,7 @@ func safeError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	for _, known := range []error{ErrNotFound, ErrUnsupportedVersion, ErrInvalidRecord} {
+	for _, known := range []error{ErrNotFound, ErrUnsupportedVersion, ErrInvalidRecord, ErrDecrypt, ErrPasswordMissing, ErrInvalidPassword} {
 		if errors.Is(err, known) {
 			return known
 		}

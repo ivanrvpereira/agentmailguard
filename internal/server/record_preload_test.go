@@ -94,10 +94,10 @@ func TestRecordPreloadKeepsMissingLoginAndJevPromptSemantics(t *testing.T) {
 	defer s.Close()
 	prompts := 0
 	checks, err := s.Preload(ctx, func(context.Context) (string, error) { prompts++; return "synthetic-prompt-key", nil })
-	if err != nil || len(checks) != 3 || prompts != 1 || checks[2].Status != "saved" {
+	if err != nil || len(checks) != 4 || prompts != 1 || checks[3].Status != "saved" {
 		t.Fatal("record preload did not prompt and start")
 	}
-	for _, check := range checks[:2] {
+	for _, check := range checks[1:3] {
 		if !strings.HasPrefix(check.Status, "not logged in;") {
 			t.Fatal("missing account no longer starts disabled")
 		}
@@ -134,7 +134,7 @@ func TestRecordPreloadUsesOneReadRewriteAndRuntimeMemory(t *testing.T) {
 	}
 	defer s.Close()
 	checks, err := s.Preload(ctx, nil)
-	if err != nil || len(checks) != 3 {
+	if err != nil || len(checks) != 4 {
 		t.Fatalf("preload failed: %v", err)
 	}
 	p.mu.Lock()

@@ -74,10 +74,10 @@ func TestSetJevKeyRejectsAccountFlag(t *testing.T) {
 	}
 }
 
-func TestSetJevKeyReportsKeychainFailureWithoutKey(t *testing.T) {
+func TestSetJevKeyReportsStoreFailureWithoutKey(t *testing.T) {
 	store := &keyStore{saveErr: errors.New("private-canary backend detail")}
 	code, out, stderr := runSetKey("sk-or-private-canary\n", store, nil)
-	if code != 1 || out != "" || !strings.HasSuffix(stderr, "error: Keychain save failed\n") || strings.Contains(stderr, "private-canary") {
+	if code != 1 || out != "" || !strings.HasSuffix(stderr, "error: credential save failed\n") || strings.Contains(stderr, "private-canary") {
 		t.Fatalf("exit=%d stderr=%q", code, stderr)
 	}
 }

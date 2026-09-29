@@ -95,15 +95,32 @@ func (s *Server) Preload(ctx context.Context, jevKey func(context.Context) (stri
 	if err != nil {
 		return nil, configError
 	}
+	name, err := config.CredentialsBackend(ctx, path)
+	if err != nil {
+		return nil, configError
+	}
 	backend := s.creds.backend
 	record, whole, err := backend.preload(ctx)
+	status := "ok"
+	if err != nil {
+		switch {
+		case errors.Is(err, credentials.ErrDecrypt):
+			status = "wrong password or damaged file"
+		case errors.Is(err, credentials.ErrPasswordMissing):
+			status = "password missing"
+		case errors.Is(err, credentials.ErrUnsupportedVersion):
+			status = "unsupported version"
+		default:
+			status = "access denied"
+		}
+	}
+	checks := []CredentialCheck{{"credentials (" + name + ")", status}}
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return checks, ctx.Err()
 		}
-		return nil, credentialCheckFailed
+		return checks, credentialCheckFailed
 	}
-	var checks []CredentialCheck
 	failed := false
 	add := func(item, status string) {
 		checks = append(checks, CredentialCheck{item, status})

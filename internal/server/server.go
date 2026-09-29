@@ -70,10 +70,22 @@ func New(ctx context.Context, home string, opts Options) (*Server, error) {
 		if err != nil {
 			return nil, configError
 		}
-		opts.Credentials, err = credentials.NewMacOS(home, accounts)
+		backend, err := config.CredentialsBackend(ctx, filepath.Join(home, "config.toml"))
 		if err != nil {
-			return nil, credentials.ErrUnavailable
+			return nil, configError
 		}
+		if backend == "file" {
+			password, _ := credentials.TakePasswordEnv(opts.LookupEnv)
+			opts.Credentials = credentials.NewFile(home, password)
+		} else {
+			opts.Credentials, err = credentials.NewMacOS(home, accounts)
+			if err != nil {
+				return nil, credentials.ErrUnavailable
+			}
+		}
+	}
+	if opts.LookupEnv == nil {
+		opts.LookupEnv = os.Getenv
 	}
 	c, err := cache.Open(ctx, filepath.Join(home, "cache.db"))
 	if err != nil {
@@ -81,9 +93,6 @@ func New(ctx context.Context, home string, opts Options) (*Server, error) {
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
-	}
-	if opts.LookupEnv == nil {
-		opts.LookupEnv = os.Getenv
 	}
 	creds := &memoryStore{backend: safeStore{opts.Credentials}}
 	opts.Credentials = creds

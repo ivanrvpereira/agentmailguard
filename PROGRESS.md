@@ -13,8 +13,8 @@
 
 ## Steps
 
-1. Single-record store and Keychain backend: complete. Separate review, independent verification, and step commit recorded.
-2. File backend: pending.
+1. Single-record store and Keychain backend: complete in `c65ed27`. Separate review and independent verification passed.
+2. File backend: complete. Separate review, independent verification, and step commit recorded.
 3. `auth migrate` and `auth change-password`: pending.
 4. Docs and complete workflow: pending.
 
@@ -27,7 +27,9 @@
 - `internal/server/preload.go`: the production store supplies one record load/rewrite before memory-only runtime loads. Saves reread the backend under lock before updating memory, so another local command's entries survive. Plain injected `Store` implementations retain the existing per-account checks. Missing logins still do not block startup.
 - `internal/server/adapters.go`: `safeStore` converts adapter panics to errors.
 - `internal/cli/local.go`: `serve` calls `preload` before `server listening`. `internal/cli/jev_key.go` has `readJevKey` and `terminal` (a `stty -echo` prompt, with no terminal dependency).
-- `internal/server/native_test.go`: the native binary test currently checks only the no-configuration refusal, because reaching the listener would touch the real Keychain. Step 2 restores native serve coverage with the file backend.
+- `internal/credentials/file.go`: `NewFile` uses age scrypt logN18 and refuses higher decryption work. Ciphertext writes use a 0600 same-directory temporary file, file fsync, rename, and directory fsync. Full authenticated plaintext reaches the shared strict decoder. Wrong passwords and damaged files share one fixed error; unknown versions stay distinct.
+- `[credentials] backend` defaults to `keychain`; `file` selects encrypted storage. Invalid values, keys, and table types refuse configuration. Password input is environment-first, otherwise one bounded stdin line. Terminal creation confirms the password with echo disabled. Local commands remove the process password variable before browser launch. Injected environment lookups do not consult process-variable presence.
+- Preload starts with a fixed `credentials (keychain)` or `credentials (file)` status. Password-acquisition errors also print this check before refusal. `internal/server/native_test.go` now covers real file-backend startup from environment and piped passwords, wrong-password refusal, and SIGTERM shutdown in temporary HOME.
 - The M365 provider rereads the store at every access-token expiry, and both providers save after every refresh.
 
 ## Decisions and research
@@ -65,3 +67,11 @@
 - Orchestrator read the final production and test diff. `make -C /Users/ivanpereira/code/ivanrvpereira/agentmailguard-go-credentials` passed; uncached `go test -race ./internal/credentials ./internal/cli ./internal/server -count=1 -timeout=60s` passed from fish. This exercised fake login, migration, cross-process locking, preload, HTTP auth status, refresh after an external key update, and failed-save memory preservation.
 - Built-binary checks from fish with clean child environments and temporary HOME passed: `--help`; missing-config refusal for `serve --listen 127.0.0.1:0` and `auth set-jev-key --home <temp>` (exit 1); remote-target login refusal (exit 1); account-target key-setup refusal (exit 2).
 - Native Keychain permissions and migration remain unverified. Locks coordinate only processes using the same home, as specified in the plan.
+
+### Step 2
+
+- Worker red/green selections used `go test ./internal/{credentials,server,cli} -run '<selection>' -count=1 -timeout=60s` at the approved seams. Reds covered missing file storage, accepted invalid backend configuration, absent store status, lost stdin key lines, empty-environment fallback, and misleading native startup output. Each selection passed after implementation.
+- Reviewer observed reds for `TestFileServePasswordFailureReportsStoreCheck`, `TestInjectedPasswordLookupIgnoresProcessEnvironment`, and `TestFilePasswordEnvironmentDoesNotReachBrowserChild`; all passed after fixes. A disposable variant raising the decryption cap to 19 failed `TestFileStoreHostileInputs/higher-work`; production cap18 passed.
+- Orchestrator read the final production and test diff. `make -C /Users/ivanpereira/code/ivanrvpereira/agentmailguard-go-credentials` and uncached `go test -race ./internal/credentials ./internal/cli ./internal/server -count=1 -timeout=60s` passed. Coverage includes hostile age data, complete authentication, concurrent saves, failed-write preservation, terminal confirmation/cancellation, child environment isolation, and native startup/shutdown.
+- Independent native walkthrough ran through fish and `uv run --offline --no-project python -`, with temporary HOME and clean child environments. Two-line `auth set-jev-key` created encrypted mode0600/logN18 state; `serve` reached listening; the built client read HTTP `stats`; SIGTERM exited 0. Wrong and missing passwords refused startup without changing the encrypted file, including with an environment Jev key.
+- New dependency: `filippo.io/age v1.2.1`, with pinned `golang.org/x/crypto v0.55.0` and `golang.org/x/sys v0.47.0`. No production work-factor option exists. Power-loss/fsync fault injection remains unverified.

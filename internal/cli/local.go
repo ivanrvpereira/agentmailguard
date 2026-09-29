@@ -14,12 +14,13 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard-go/internal/config"
+	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/gmail"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/m365"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/server"
 )
 
-func serve(ctx context.Context, home, listen string, stdin io.Reader, stderr io.Writer, opts server.Options) int {
+func serve(ctx context.Context, home, listen string, stdin io.Reader, stderr io.Writer, opts server.Options, lookup func(string) string) int {
 	host, _, e := net.SplitHostPort(listen)
 	if e != nil {
 		return usage(stderr)
@@ -33,6 +34,18 @@ func serve(ctx context.Context, home, listen string, stdin io.Reader, stderr io.
 		return failure(stderr, "listener unavailable")
 	}
 	defer listener.Close()
+	opts.Credentials, e = localCredentials(ctx, home, opts.Credentials, stdin, stderr, lookup)
+	if e != nil {
+		var passwordError credentialPasswordError
+		if errors.As(e, &passwordError) {
+			status := "access denied"
+			if errors.Is(passwordError.error, credentials.ErrPasswordMissing) {
+				status = "password missing"
+			}
+			fmt.Fprintln(stderr, "credential check: credentials (file): "+status)
+		}
+		return failure(stderr, e.Error())
+	}
 	s, e := server.New(context.WithoutCancel(ctx), home, opts)
 	if e != nil {
 		if e.Error() == "configuration unavailable" {
@@ -82,7 +95,7 @@ func preload(ctx context.Context, s *server.Server, stdin io.Reader, stderr io.W
 			return key, nil
 		}
 	}
-	fmt.Fprintln(stderr, "checking credentials; approve any Keychain prompts now")
+	fmt.Fprintln(stderr, "checking credentials")
 	checks, e := s.Preload(ctx, prompt)
 	for _, c := range checks {
 		fmt.Fprintf(stderr, "credential check: %s: %s\n", c.Item, c.Status)
@@ -103,7 +116,7 @@ type loginProvider interface {
 	Login(context.Context, bool, func(string, string)) (string, []string, error)
 }
 
-func login(ctx context.Context, home, account string, device bool, stdout, stderr io.Writer, opts server.Options) int {
+func login(ctx context.Context, home, account string, device bool, stdin io.Reader, stdout, stderr io.Writer, opts server.Options, lookup func(string) string) int {
 	home, e := config.Home(home)
 	if e != nil {
 		return failure(stderr, "configuration unavailable")
@@ -116,7 +129,7 @@ func login(ctx context.Context, home, account string, device bool, stdout, stder
 	if e != nil {
 		return failure(stderr, "configuration unavailable")
 	}
-	opts.Credentials, e = localCredentials(ctx, home, opts.Credentials)
+	opts.Credentials, e = localCredentials(ctx, home, opts.Credentials, stdin, stderr, lookup)
 	if e != nil {
 		return failure(stderr, e.Error())
 	}

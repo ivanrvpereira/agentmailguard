@@ -130,7 +130,7 @@ func TestPreloadReadsEverythingAtStartThenServesFromMemory(t *testing.T) {
 	}
 	defer s.Close()
 	checks, e := s.Preload(context.Background(), nil)
-	want := []server.CredentialCheck{{Item: `account "work" (m365)`, Status: "ok"}, {Item: `account "personal" (gmail)`, Status: "ok"}, {Item: "Jev key", Status: "ok"}}
+	want := []server.CredentialCheck{{Item: "credentials (keychain)", Status: "ok"}, {Item: `account "work" (m365)`, Status: "ok"}, {Item: `account "personal" (gmail)`, Status: "ok"}, {Item: "Jev key", Status: "ok"}}
 	if e != nil || !reflect.DeepEqual(checks, want) {
 		t.Fatalf("checks=%v err=%v", checks, e)
 	}
@@ -209,7 +209,7 @@ func TestPreloadRefusesWithFixedStatuses(t *testing.T) {
 					t.Fatal("check exposed backend text or secrets")
 				}
 			}
-			if !found || len(checks) != 3 {
+			if !found || len(checks) != 4 {
 				t.Fatalf("checks=%v", checks)
 			}
 		})
@@ -226,7 +226,7 @@ func TestPreloadPromptsForMissingKeyAndSkipsEnvironmentKey(t *testing.T) {
 	}
 	defer s.Close()
 	checks, e := s.Preload(context.Background(), func(context.Context) (string, error) { return "sk-entered", nil })
-	if e != nil || checks[2] != (server.CredentialCheck{Item: "Jev key", Status: "saved"}) || store.key != "sk-entered" {
+	if e != nil || checks[3] != (server.CredentialCheck{Item: "Jev key", Status: "saved"}) || store.key != "sk-entered" {
 		t.Fatalf("checks=%v err=%v", checks, e)
 	}
 
@@ -243,7 +243,7 @@ func TestPreloadPromptsForMissingKeyAndSkipsEnvironmentKey(t *testing.T) {
 	defer s2.Close()
 	checks, e = s2.Preload(context.Background(), nil)
 	reads, _ := store.accesses()
-	if e != nil || checks[2] != (server.CredentialCheck{Item: "Jev key", Status: "ok (OPENROUTER_API_KEY)"}) || len(reads) != 2 {
+	if e != nil || checks[3] != (server.CredentialCheck{Item: "Jev key", Status: "ok (OPENROUTER_API_KEY)"}) || len(reads) != 2 {
 		t.Fatalf("checks=%v reads=%v err=%v", checks, reads, e)
 	}
 }
@@ -298,7 +298,7 @@ func TestPreloadStartsWithAccountThatIsNotLoggedIn(t *testing.T) {
 	}
 	defer s.Close()
 	checks, e := s.Preload(context.Background(), nil)
-	if e != nil || checks[1] != (server.CredentialCheck{Item: `account "personal" (gmail)`, Status: "not logged in; commands for this account fail until auth login and a server restart"}) {
+	if e != nil || checks[2] != (server.CredentialCheck{Item: `account "personal" (gmail)`, Status: "not logged in; commands for this account fail until auth login and a server restart"}) {
 		t.Fatalf("checks=%v err=%v", checks, e)
 	}
 	// Only the logged-in record is write-probed.

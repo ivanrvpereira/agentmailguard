@@ -44,19 +44,55 @@ func (a Account) GoString() string { return a.String() }
 // Format also redacts unsupported verbs, which otherwise expose struct fields.
 func (a Account) Format(state fmt.State, _ rune) { _, _ = io.WriteString(state, a.String()) }
 
-func accounts(ctx context.Context, path string) (map[string]any, []string, error) {
+func document(ctx context.Context, path string) (map[string]any, toml.MetaData, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+		return nil, toml.MetaData{}, err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("cannot read config file: %s", path)
+		return nil, toml.MetaData{}, fmt.Errorf("cannot read config file: %s", path)
 	}
 	var document map[string]any
 	metadata, err := toml.Decode(string(data), &document)
 	// Parser errors may contain file values. Never return them.
 	if err != nil {
-		return nil, nil, fmt.Errorf("invalid TOML in %s", path)
+		return nil, toml.MetaData{}, fmt.Errorf("invalid TOML in %s", path)
+	}
+	if _, err := credentialBackend(document); err != nil {
+		return nil, toml.MetaData{}, err
+	}
+	return document, metadata, nil
+}
+
+func credentialBackend(document map[string]any) (string, error) {
+	value, exists := document["credentials"]
+	if !exists {
+		return "keychain", nil
+	}
+	table, ok := value.(map[string]any)
+	if !ok || len(table) != 1 {
+		return "", fmt.Errorf("invalid credentials configuration")
+	}
+	backend, ok := table["backend"].(string)
+	if !ok || (backend != "keychain" && backend != "file") {
+		return "", fmt.Errorf("invalid credentials configuration")
+	}
+	return backend, nil
+}
+
+// CredentialsBackend validates the optional backend setting; absent means Keychain.
+func CredentialsBackend(ctx context.Context, path string) (string, error) {
+	d, _, err := document(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	return credentialBackend(d)
+}
+
+func accounts(ctx context.Context, path string) (map[string]any, []string, error) {
+	document, metadata, err := document(ctx, path)
+	if err != nil {
+		return nil, nil, err
 	}
 	tables, ok := document["accounts"].(map[string]any)
 	if !ok || len(tables) == 0 {

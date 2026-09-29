@@ -344,6 +344,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Opti
 	if timeout <= 0 {
 		return usage(stderr)
 	}
+	passwordEnv := opts.LookupEnv
 	if opts.LookupEnv == nil {
 		opts.LookupEnv = os.Getenv
 	}
@@ -362,13 +363,13 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Opti
 		if opts.Server.LookupEnv == nil {
 			opts.Server.LookupEnv = opts.LookupEnv
 		}
-		return serve(ctx, home, listen, opts.Stdin, stderr, opts.Server)
+		return serve(ctx, home, listen, opts.Stdin, stderr, opts.Server, passwordEnv)
 	}
 	if op == "auth.login" {
 		if supplied {
 			return failure(stderr, "login is local only; remove --server and AGENTMAILGUARD_GO_SERVER")
 		}
-		return login(ctx, home, account, *bools["device-code"], stdout, stderr, opts.Server)
+		return login(ctx, home, account, *bools["device-code"], opts.Stdin, stdout, stderr, opts.Server, passwordEnv)
 	}
 	if op == "auth.set-jev-key" {
 		if seen["account"] {
@@ -377,7 +378,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Opti
 		if supplied {
 			return failure(stderr, "Jev key setup is local only; remove --server and AGENTMAILGUARD_GO_SERVER")
 		}
-		return setJevKey(ctx, home, opts.Stdin, stderr, opts.Server)
+		return setJevKey(ctx, home, opts.Stdin, stderr, opts.Server, passwordEnv)
 	}
 	clientOpts := opts.Client
 	clientOpts.Timeout = timeout
