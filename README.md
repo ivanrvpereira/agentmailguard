@@ -255,6 +255,88 @@ An explicit remote listener is available with `serve --listen ADDRESS:PORT`.
 Do not expose it to an untrusted network.
 The tunnel protects the connection, not against other users who can already access either local listener.
 
+## MCP server
+
+`agentmailguard-go mcp` serves MCP tools over stdio for an AI agent.
+The agent's client starts the process and talks to it on stdin and stdout.
+Each accepted tool call becomes one `POST /v1/call` to the server.
+The MCP process holds no provider credentials and no OpenRouter key.
+MCP adds no authentication.
+The MCP process uses the same unauthenticated HTTP connection to the server as the CLI.
+It uses `--server`, `AGENTMAILGUARD_GO_SERVER`, `--account`, and `--timeout` like other data commands, and refuses `--home`.
+Every tool has an optional `account` argument.
+`--account` is the default.
+
+The tool set is read-only by default.
+`--allow-writes` adds the change and draft tools:
+
+| Mode | Tools |
+| --- | --- |
+| Always | `mail_list`, `mail_get`, `mail_search`, `mail_link`, `mail_folders`, `mail_categories`, `mail_organize`, `calendar_list`, `calendar_get`, `rules_list`, `auth_status` |
+| `--allow-writes` only | `mail_archive`, `mail_trash`, `mail_move`, `mail_read`, `mail_unread`, `mail_flag`, `mail_categorize`, `draft_new`, `draft_reply`, `draft_forward`, `draft_update` |
+
+`mail_organize` exists in both modes.
+Without `--allow-writes`, `apply: true` returns the tool error `writes are disabled; start mcp with --allow-writes` and makes no server call.
+No tool exists for `stats`, `cache clear`, `serve`, `auth login`, `auth set-jev-key`, `auth migrate`, or `auth change-password`.
+
+A successful tool result contains the operation's JSON result, as structured content and as a JSON text block.
+Each tool publishes an `outputSchema`.
+List results are wrapped in an object: `messages`, `folders`, `categories`, `links`, `events`, or `results`.
+Argument names match the HTTP parameters.
+`calendar_list` takes RFC 3339 `start` and `end` values, not the CLI's `today` and `+Nd` forms.
+Errors are tool errors with the same fixed text as the CLI, such as `server request failed` or `invalid server response`.
+Arguments that do not match the input schema return `invalid request` and make no server call.
+
+The MCP process supports the legacy `initialize` handshake and the 2026-07-28 `server/discover` flow.
+The documentation of Claude Code, Claude Desktop, Cursor, and pi describes stdio servers.
+Tool annotations and `anthropic/requiresUserInteraction` on `mail_trash` and on `mail_organize` with `--allow-writes` are hints to the client.
+A client can ignore hints, and agents often approve tool calls automatically.
+`--allow-writes` is the actual control.
+It limits only the tools that the MCP process offers.
+An agent that can run shell commands can still use the CLI or the server directly.
+
+Client configuration examples use a placeholder path to the built binary.
+Add `--allow-writes` after `mcp` only if the agent must change mail or create drafts.
+
+Claude Code:
+
+```sh
+claude mcp add --transport stdio agentmailguard -- /absolute/path/to/bin/agentmailguard-go --account work mcp
+```
+
+Claude Desktop, in `~/Library/Application Support/Claude/claude_desktop_config.json`, and Cursor, in `~/.cursor/mcp.json`, use the same entry:
+
+```json
+{
+  "mcpServers": {
+    "agentmailguard": {
+      "command": "/absolute/path/to/bin/agentmailguard-go",
+      "args": ["--account", "work", "mcp"]
+    }
+  }
+}
+```
+
+pi:
+
+```sh
+pi mcp add agentmailguard -- /absolute/path/to/bin/agentmailguard-go --account work mcp
+```
+
+For a remote server, keep the SSH tunnel from the previous section open and add `--server http://127.0.0.1:18787` before `mcp`:
+
+```sh
+claude mcp add --transport stdio agentmailguard -- /absolute/path/to/bin/agentmailguard-go --server http://127.0.0.1:18787 --account work mcp
+```
+
+Limits:
+
+- stdio only. There is no HTTP MCP endpoint, because client/server authentication is deferred.
+- Tools only. There are no resources, prompts, elicitation, or sampling.
+- One MCP process serves one agent client.
+- One inbound protocol message can be at most 16 MiB (the SDK default `DefaultMaxLineLength`). A larger message stops the process with `mcp transport failed`.
+- All email-derived text in tool results remains untrusted, including green output.
+
 ## Commands and output
 
 Run `--help` without a server to see every command and option.
@@ -270,6 +352,7 @@ Required text flags distinguish an omitted value from an explicit empty value, i
 | Mail changes | `mail archive IDS...`, `mail trash IDS...`, `mail move FOLDER_ID IDS...`, `mail read IDS...`, `mail unread IDS...`, `mail flag IDS... --state flagged|complete|none`, `mail categorize IDS... --add NAME --remove NAME` |
 | Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID` |
 | Drafts only | `draft new --to ADDRESS --subject TEXT --body TEXT`, `draft reply ID --body TEXT`, `draft forward ID --to ADDRESS`, `draft update ID --body TEXT` |
+| Agent | `mcp [--allow-writes]` |
 
 Successful commands print the original operation's JSON result, not an RPC envelope.
 `mail get --pretty` formats only the guarded view.
@@ -370,6 +453,9 @@ A fresh screened read after restart required the updated Jev key and refreshed O
 This run did not access real providers, Keychain, or user configuration.
 Transport tests cover redirects, stale connections, cancellation, request validation, and content-free errors.
 No test needs real mailbox data, a browser, OpenRouter, or Keychain access.
+The MCP server is verified against fake `/v1/call` servers and the MCP SDK client, over in-memory, pipe, and built-binary stdio transports.
+The built-binary test covers both protocol handshakes.
+It is not verified against real Claude Code, Claude Desktop, Cursor, or pi clients.
 
 Earlier authorized checks passed for live Gmail reads and a real Jev request containing synthetic text only.
 Earlier Microsoft 365 checks refused extra scopes. After the approved policy change, a user-authorized browser login and `auth status` succeeded with warnings.
