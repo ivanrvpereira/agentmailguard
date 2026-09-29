@@ -183,9 +183,14 @@ func TestPrettyAliasesUseLastOption(t *testing.T) {
 			t.Errorf("flags=%v exit=%d out=%q stderr=%q", tc.flags, code, out.String(), errout.String())
 		}
 	}
-	var out, errout bytes.Buffer
-	if code := cli.Run(context.Background(), []string{"--help"}, &out, &errout, cli.Options{}); code != 0 || !strings.Contains(out.String(), "--no-pretty") || !strings.Contains(out.String(), "--no-device-code") {
-		t.Fatal("negative options absent from help")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{{[]string{"mail", "get", "--help"}, "--no-pretty"}, {[]string{"auth", "login", "--help"}, "--no-device-code"}} {
+		var out, errout bytes.Buffer
+		if code := cli.Run(context.Background(), tc.args, &out, &errout, cli.Options{}); code != 0 || !strings.Contains(out.String(), tc.want) {
+			t.Fatalf("negative option %s absent from %v help", tc.want, tc.args)
+		}
 	}
 }
 
@@ -197,9 +202,17 @@ func TestUsageAndHelpNeedNoServerOrState(t *testing.T) {
 			t.Errorf("%v exit %d stdout %s stderr %s", args, code, out.String(), errout.String())
 		}
 	}
-	var out, errout bytes.Buffer
-	code := cli.Run(context.Background(), []string{"--help"}, &out, &errout, cli.Options{LookupEnv: func(string) string { t.Fatal("help accessed state"); return "" }})
-	if code != 0 || !strings.Contains(out.String(), "serve") || !strings.Contains(out.String(), "organize") {
-		t.Fatal("incomplete help")
+	for _, tc := range []struct {
+		args []string
+		want []string
+	}{{nil, []string{"serve", "mail", "calendar", "draft"}}, {[]string{"mail"}, []string{"organize", "categorize", "link"}}} {
+		var out, errout bytes.Buffer
+		args := append([]string{}, tc.args...)
+		code := cli.Run(context.Background(), append(args, "--help"), &out, &errout, cli.Options{LookupEnv: func(string) string { t.Fatal("help accessed state"); return "" }})
+		for _, want := range tc.want {
+			if code != 0 || !strings.Contains(out.String(), want) {
+				t.Fatalf("help for %v is missing %s", tc.args, want)
+			}
+		}
 	}
 }
