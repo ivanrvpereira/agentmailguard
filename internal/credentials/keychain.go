@@ -52,9 +52,17 @@ func (k *keychainBackend) read(ctx context.Context, service, account string) ([]
 	return value, nil
 }
 func (k *keychainBackend) Read(ctx context.Context) (Record, error) {
+	return k.readRecord(ctx, true)
+}
+
+func (k *keychainBackend) readRecord(ctx context.Context, migrate bool) (Record, error) {
 	value, err := k.read(ctx, "agentmailguard-go", "credentials")
 	if errors.Is(err, ErrNotFound) {
-		return k.migrate(ctx)
+		r, err := k.legacyRecord(ctx)
+		if err == nil && migrate {
+			err = k.Write(ctx, r)
+		}
+		return r, err
 	}
 	if err != nil {
 		return Record{}, err
@@ -62,8 +70,8 @@ func (k *keychainBackend) Read(ctx context.Context) (Record, error) {
 	return decodeRecord(value)
 }
 
-// migrate runs under the store lock. No item is written until every legacy read succeeds.
-func (k *keychainBackend) migrate(ctx context.Context) (Record, error) {
+// legacyRecord runs under the store lock and never changes legacy items.
+func (k *keychainBackend) legacyRecord(ctx context.Context) (Record, error) {
 	r := emptyRecord()
 	for _, a := range k.accounts {
 		namespace, err := service(a.Provider)
@@ -96,9 +104,6 @@ func (k *keychainBackend) migrate(ctx context.Context) (Record, error) {
 	}
 	if len(r.OAuth) == 0 && r.OpenRouterKey == "" {
 		return Record{}, ErrNotFound
-	}
-	if err := k.Write(ctx, r); err != nil {
-		return Record{}, err
 	}
 	return r, nil
 }

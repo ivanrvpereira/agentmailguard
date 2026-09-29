@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
@@ -59,6 +60,14 @@ func passwordLine(ctx context.Context, stdin io.Reader) (string, error) {
 func readCredentialPassword(ctx context.Context, stdin io.Reader, stderr io.Writer, creating bool) (string, error) {
 	f, interactive := terminal(stdin)
 	if interactive {
+		capture, cancel := context.WithTimeout(ctx, time.Second)
+		cmd := exec.CommandContext(capture, "/bin/stty", "-g")
+		cmd.Stdin = f
+		state, err := cmd.Output()
+		cancel()
+		if err != nil || len(state) == 0 {
+			return "", errors.New("cannot read terminal state")
+		}
 		stty := func(arg string) error {
 			// Echo restoration must still run after the caller is canceled.
 			timeout, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -70,7 +79,7 @@ func readCredentialPassword(ctx context.Context, stdin io.Reader, stderr io.Writ
 		if stty("-echo") != nil {
 			return "", errors.New("cannot hide terminal input; pipe the password on stdin instead")
 		}
-		defer func() { _ = stty("echo"); fmt.Fprintln(stderr) }()
+		defer func() { _ = stty(strings.TrimSpace(string(state))); fmt.Fprintln(stderr) }()
 		fmt.Fprint(stderr, "Credential file password: ")
 	}
 	password, err := passwordLine(ctx, stdin)

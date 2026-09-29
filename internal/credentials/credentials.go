@@ -15,7 +15,7 @@ import (
 )
 
 var ErrNotFound = errors.New("credential not found")
-var ErrUnavailable = errors.New("macOS Keychain unavailable")
+var ErrUnavailable = errors.New("credential store unavailable")
 var ErrInvalidRecord = errors.New("invalid credential record")
 var ErrUnsupportedVersion = errors.New("unsupported credential version")
 
@@ -71,6 +71,13 @@ func (*RecordStore) Format(s fmt.State, _ rune) {
 
 func emptyRecord() Record { return Record{Version: 1, OAuth: map[string]OAuth{}} }
 func (s *RecordStore) readLocked(ctx context.Context) (Record, error) {
+	r, err := s.readExistingLocked(ctx)
+	if errors.Is(err, ErrNotFound) {
+		return emptyRecord(), nil
+	}
+	return r, err
+}
+func (s *RecordStore) readExistingLocked(ctx context.Context) (Record, error) {
 	if err := ctx.Err(); err != nil {
 		return Record{}, err
 	}
@@ -78,9 +85,6 @@ func (s *RecordStore) readLocked(ctx context.Context) (Record, error) {
 		return Record{}, ErrUnavailable
 	}
 	r, err := s.backend.Read(ctx)
-	if errors.Is(err, ErrNotFound) {
-		return emptyRecord(), nil
-	}
 	if err != nil {
 		return Record{}, safeError(ctx, err)
 	}
@@ -92,7 +96,23 @@ func (s *RecordStore) readLocked(ctx context.Context) (Record, error) {
 
 // transact locks reads too, because the first read can migrate legacy credentials.
 // Each update reads again under this same cross-process lock; no stale snapshot is saved.
-func (s *RecordStore) transact(ctx context.Context, change func(*Record)) (record Record, err error) {
+func (s *RecordStore) transact(ctx context.Context, change func(*Record)) (Record, error) {
+	return s.withLock(ctx, func() (Record, error) {
+		r, err := s.readLocked(ctx)
+		if err != nil {
+			return Record{}, err
+		}
+		if change != nil {
+			change(&r)
+			if err := s.backend.Write(ctx, r); err != nil {
+				return Record{}, safeError(ctx, err)
+			}
+		}
+		return r, nil
+	})
+}
+
+func (s *RecordStore) withLock(ctx context.Context, operation func() (Record, error)) (record Record, err error) {
 	defer func() {
 		if recover() != nil {
 			record, err = Record{}, ErrUnavailable
@@ -124,17 +144,7 @@ func (s *RecordStore) transact(ctx context.Context, change func(*Record)) (recor
 		}
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	r, err := s.readLocked(ctx)
-	if err != nil {
-		return Record{}, err
-	}
-	if change != nil {
-		change(&r)
-		if err := s.backend.Write(ctx, r); err != nil {
-			return Record{}, safeError(ctx, err)
-		}
-	}
-	return r, nil
+	return operation()
 }
 
 // Preload reads and rewrites the whole record under one lock to obtain read and modify permission.

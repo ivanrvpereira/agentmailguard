@@ -14,8 +14,8 @@
 ## Steps
 
 1. Single-record store and Keychain backend: complete in `c65ed27`. Separate review and independent verification passed.
-2. File backend: complete. Separate review, independent verification, and step commit recorded.
-3. `auth migrate` and `auth change-password`: pending.
+2. File backend: complete in `020621b`. Separate review and independent verification passed.
+3. `auth migrate` and `auth change-password`: complete. Separate review, independent verification, and step commit recorded.
 4. Docs and complete workflow: pending.
 
 ## Current code facts
@@ -30,6 +30,8 @@
 - `internal/credentials/file.go`: `NewFile` uses age scrypt logN18 and refuses higher decryption work. Ciphertext writes use a 0600 same-directory temporary file, file fsync, rename, and directory fsync. Full authenticated plaintext reaches the shared strict decoder. Wrong passwords and damaged files share one fixed error; unknown versions stay distinct.
 - `[credentials] backend` defaults to `keychain`; `file` selects encrypted storage. Invalid values, keys, and table types refuse configuration. Password input is environment-first, otherwise one bounded stdin line. Terminal creation confirms the password with echo disabled. Local commands remove the process password variable before browser launch. Injected environment lookups do not consult process-variable presence.
 - Preload starts with a fixed `credentials (keychain)` or `credentials (file)` status. Password-acquisition errors also print this check before refusal. `internal/server/native_test.go` now covers real file-backend startup from environment and piped passwords, wrong-password refusal, and SIGTERM shutdown in temporary HOME.
+- `internal/credentials/commands.go`: `Migrate` copies only between backends in the same home under one lock. It refuses existing targets, including legacy targets without writing them. `ChangePassword` rereads an existing record under that lock and uses the atomic writer with the new password. Old-password stores cannot subsequently save.
+- `internal/cli/credential_commands.go`: local migration prints the config change and restart instruction; password changes require terminal confirmation. Neither command changes config or accepts account/remote targets. `Options.CredentialPlatform` injects the existing native boundary for migration tests, not for the production binary.
 - The M365 provider rereads the store at every access-token expiry, and both providers save after every refresh.
 
 ## Decisions and research
@@ -75,3 +77,11 @@
 - Orchestrator read the final production and test diff. `make -C /Users/ivanpereira/code/ivanrvpereira/agentmailguard-go-credentials` and uncached `go test -race ./internal/credentials ./internal/cli ./internal/server -count=1 -timeout=60s` passed. Coverage includes hostile age data, complete authentication, concurrent saves, failed-write preservation, terminal confirmation/cancellation, child environment isolation, and native startup/shutdown.
 - Independent native walkthrough ran through fish and `uv run --offline --no-project python -`, with temporary HOME and clean child environments. Two-line `auth set-jev-key` created encrypted mode0600/logN18 state; `serve` reached listening; the built client read HTTP `stats`; SIGTERM exited 0. Wrong and missing passwords refused startup without changing the encrypted file, including with an environment Jev key.
 - New dependency: `filippo.io/age v1.2.1`, with pinned `golang.org/x/crypto v0.55.0` and `golang.org/x/sys v0.47.0`. No production work-factor option exists. Power-loss/fsync fault injection remains unverified.
+
+### Step 3
+
+- Worker observed red/green with `go test ./internal/credentials -run '<selection>' -count=1 -timeout=60s`: missing migration/password APIs became complete-copy and latest-record operations; `TestMigrationDoesNotWriteAnExistingLegacyTarget` exposed a target write on refusal. CLI reds covered missing Platform injection, discarded target passwords, and failure to restore initially disabled echo. Each targeted rerun passed.
+- Reviewer added `TestChangePasswordTerminalSafety/unavailable-current`: it failed on a misleading Keychain error and passed after `ErrUnavailable` became backend-neutral, with ciphertext and terminal state preserved.
+- Orchestrator read the final diff. `make` and uncached `go test -race ./internal/credentials ./internal/cli ./internal/server -count=1 -timeout=60s` passed. The latter exercised fake-Platform migration in both directions, concurrent overwrite refusal, shared-lock cancellation, latest-record password changes, native PTY changes, and running-server refresh refusal after a password change.
+- Independent native walkthrough from fish with temporary HOME passed: piped new passwords refused; PTY input requested and confirmed a new password with echo off; the original terminal state returned; old-password writes failed without changing ciphertext; new-password access succeeded. Same-backend migration, remote migration, and account-target password changes refused without Keychain access.
+- Production-binary migration remains a final-workflow verification blocker pending the user's decision. Migration command behavior is verified at the approved fake-Platform CLI and constructor seams.

@@ -16,16 +16,18 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard-go/internal/client"
+	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/server"
 	"github.com/ivanrvpereira/agentmailguard-go/internal/views"
 )
 
 type Options struct {
-	Client    client.Options
-	Server    server.Options
-	LookupEnv func(string) string
-	Now       func() time.Time
-	Stdin     io.Reader // defaults to os.Stdin; read by auth set-jev-key and by serve for a missing Jev key
+	CredentialPlatform credentials.Platform // optional native Keychain dependency for local migration
+	Client             client.Options
+	Server             server.Options
+	LookupEnv          func(string) string
+	Now                func() time.Time
+	Stdin              io.Reader // defaults to os.Stdin; read by auth set-jev-key and by serve for a missing Jev key
 }
 
 func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "CLIOptions{redacted}") }
@@ -34,6 +36,7 @@ const help = `agentmailguard-go [--account NAME] [--server URL] [--timeout 30m] 
 
 serve [--home PATH] [--listen 127.0.0.1:8787]
 auth login [--home PATH] [--device-code | --no-device-code] | auth status | auth set-jev-key
+auth migrate --to file|keychain [--home PATH] | auth change-password [--home PATH]
 stats [--days 30] | cache clear | rules list
 mail list [--folder inbox] [--count 25] [--skip 0]
 mail get ID [--pretty | --no-pretty]
@@ -188,6 +191,9 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Opti
 	case "stats":
 		addInt("days", 30)
 	case "cache.clear", "rules.list", "auth.status", "auth.set-jev-key", "mail.folders", "mail.categories", "mail.archive", "mail.trash", "mail.read", "mail.unread", "mail.move", "calendar.get":
+	case "auth.migrate":
+		addString("to", "")
+	case "auth.change-password":
 	case "serve":
 		f.StringVar(&listen, "listen", listen, "")
 	case "auth.login":
@@ -338,7 +344,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Opti
 		}
 		p = map[string]any{"start": start.Format(time.RFC3339), "end": end.Format(time.RFC3339)}
 	}
-	if seen["home"] && op != "serve" && op != "auth.login" && op != "auth.set-jev-key" {
+	if seen["home"] && op != "serve" && op != "auth.login" && op != "auth.set-jev-key" && op != "auth.migrate" && op != "auth.change-password" {
 		return usage(stderr)
 	}
 	if timeout <= 0 {
@@ -379,6 +385,22 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Opti
 			return failure(stderr, "Jev key setup is local only; remove --server and AGENTMAILGUARD_GO_SERVER")
 		}
 		return setJevKey(ctx, home, opts.Stdin, stderr, opts.Server, passwordEnv)
+	}
+	if op == "auth.migrate" || op == "auth.change-password" {
+		if seen["account"] {
+			return usage(stderr)
+		}
+		if supplied {
+			return failure(stderr, "credential commands are local only; remove --server and AGENTMAILGUARD_GO_SERVER")
+		}
+		target := ""
+		if op == "auth.migrate" {
+			target = *str["to"]
+			if target != "file" && target != "keychain" {
+				return usage(stderr)
+			}
+		}
+		return credentialCommand(ctx, op, home, target, stdout, stderr, opts, passwordEnv)
 	}
 	clientOpts := opts.Client
 	clientOpts.Timeout = timeout
