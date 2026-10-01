@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/config"
+	"github.com/ivanrvpereira/agentmailguard/internal/config"
 )
 
 func file(t *testing.T, text string) string {
@@ -21,16 +21,15 @@ func file(t *testing.T, text string) string {
 	}
 	return path
 }
-func TestSeparateHomeAndExplicitOverride(t *testing.T) {
+func TestHomeDefaultEnvironmentAndExplicitOverride(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("AGENTMAILGUARD_HOME", "/must-not-use-python-home")
-	t.Setenv("AGENTMAILGUARD_GO_HOME", "")
+	t.Setenv("AGENTMAILGUARD_HOME", "")
 	got, err := config.Home("")
-	if err != nil || got != filepath.Join(home, ".agentmailguard-go") {
+	if err != nil || got != filepath.Join(home, ".agentmailguard") {
 		t.Fatalf("home=%q error=%v", got, err)
 	}
-	t.Setenv("AGENTMAILGUARD_GO_HOME", "~/separate")
+	t.Setenv("AGENTMAILGUARD_HOME", "~/separate")
 	got, err = config.Home("")
 	if err != nil || got != filepath.Join(home, "separate") {
 		t.Fatalf("home=%q error=%v", got, err)

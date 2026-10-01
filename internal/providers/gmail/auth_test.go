@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/config"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/gmail"
+	"github.com/ivanrvpereira/agentmailguard/internal/config"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
 )
 
 const granted = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.events.owned.readonly"

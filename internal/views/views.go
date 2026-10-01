@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/cache"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/content"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/cache"
+	"github.com/ivanrvpereira/agentmailguard/internal/content"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
 type Address struct {

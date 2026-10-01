@@ -4,8 +4,8 @@ import (
 	"context"
 	"slices"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/audit"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/rules"
+	"github.com/ivanrvpereira/agentmailguard/internal/audit"
+	"github.com/ivanrvpereira/agentmailguard/internal/rules"
 )
 
 // The caller already owns the account mutation gate. Internal organizer actions must not acquire it again.

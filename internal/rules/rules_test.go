@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/rules"
+	"github.com/ivanrvpereira/agentmailguard/internal/rules"
 )
 
 func load(t *testing.T, text, account string) (rules.Rules, error) {

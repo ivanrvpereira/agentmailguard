@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/gmail"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
 )
 
 func TestStatusSharesEightAPISlots(t *testing.T) {

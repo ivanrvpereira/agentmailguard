@@ -2,7 +2,7 @@ package gmail_test
 
 import (
 	"context"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/gmail"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
 	"net/http"
 	"net/http/httptest"
 	"reflect"

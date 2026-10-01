@@ -16,10 +16,10 @@ import (
 func Home(override string) (string, error) {
 	path := override
 	if path == "" {
-		path = os.Getenv("AGENTMAILGUARD_GO_HOME")
+		path = os.Getenv("AGENTMAILGUARD_HOME")
 	}
 	if path == "" {
-		path = "~/.agentmailguard-go"
+		path = "~/.agentmailguard"
 	}
 	if path == "~" || strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()

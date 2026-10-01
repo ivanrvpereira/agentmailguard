@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/config"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/config"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 )
 
 func TestFirstOperationMigratesAllConfiguredLegacyCredentials(t *testing.T) {

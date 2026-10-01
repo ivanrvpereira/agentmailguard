@@ -15,7 +15,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 )
 
 func encryptedFixture(t *testing.T, plaintext string) []byte {

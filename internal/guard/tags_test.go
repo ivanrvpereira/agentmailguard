@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/guard"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/guard"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
 type metadataBox struct{ *organizerBox }

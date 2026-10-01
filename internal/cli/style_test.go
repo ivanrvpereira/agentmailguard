@@ -13,8 +13,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/cli"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/views"
+	"github.com/ivanrvpereira/agentmailguard/internal/cli"
+	"github.com/ivanrvpereira/agentmailguard/internal/views"
 )
 
 // received builds a timestamp the local zone renders as the given wall-clock time,

@@ -10,11 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/audit"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/cache"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/content"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/views"
+	"github.com/ivanrvpereira/agentmailguard/internal/audit"
+	"github.com/ivanrvpereira/agentmailguard/internal/cache"
+	"github.com/ivanrvpereira/agentmailguard/internal/content"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/views"
 )
 
 type Options struct{ Now func() time.Time }

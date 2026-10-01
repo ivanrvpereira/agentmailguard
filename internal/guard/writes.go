@@ -4,8 +4,8 @@ import (
 	"context"
 	"slices"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/audit"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/audit"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
 func checkIDs(ids []string) error {

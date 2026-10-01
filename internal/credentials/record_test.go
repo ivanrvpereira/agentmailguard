@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 )
 
 func TestInvalidRecordsFailClosedWithoutFallbackOrOverwrite(t *testing.T) {
@@ -36,7 +36,7 @@ func TestInvalidRecordsFailClosedWithoutFallbackOrOverwrite(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &fakePlatform{values: map[[2]string][]byte{
-				{"agentmailguard-go", "credentials"}:                  []byte(tc.raw),
+				{"agentmailguard", "credentials"}:                     []byte(tc.raw),
 				{"agentmailguard-go-openrouter", "agentmailguard-go"}: []byte("legacy-canary"),
 			}}
 			s := credentials.New(p, t.TempDir(), nil)

@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/gmail"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
 )
 
 func TestFullBodyRequiresUsablePayload(t *testing.T) {

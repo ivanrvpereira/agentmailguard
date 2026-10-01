@@ -3,11 +3,11 @@ package guard
 import (
 	"context"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/cache"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/rules"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/screening"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/views"
+	"github.com/ivanrvpereira/agentmailguard/internal/cache"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/rules"
+	"github.com/ivanrvpereira/agentmailguard/internal/screening"
+	"github.com/ivanrvpereira/agentmailguard/internal/views"
 )
 
 // Classified is internal organizer state, never an agent-facing view.

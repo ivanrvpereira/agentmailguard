@@ -18,7 +18,7 @@ var ErrDecrypt = errors.New("wrong password or damaged file")
 var ErrPasswordMissing = errors.New("password missing")
 var ErrInvalidPassword = errors.New("invalid credential password")
 
-const PasswordEnvironment = "AGENTMAILGUARD_GO_CREDENTIALS_PASSWORD"
+const PasswordEnvironment = "AGENTMAILGUARD_CREDENTIALS_PASSWORD"
 
 // TakePasswordEnv removes the process variable before a browser can inherit it.
 func TakePasswordEnv(lookup func(string) string) (string, bool) {

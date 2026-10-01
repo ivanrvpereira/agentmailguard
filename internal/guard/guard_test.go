@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/audit"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/cache"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/guard"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/audit"
+	"github.com/ivanrvpereira/agentmailguard/internal/cache"
+	"github.com/ivanrvpereira/agentmailguard/internal/guard"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
 var now = time.Date(2026, 9, 28, 15, 30, 0, 0, time.UTC)

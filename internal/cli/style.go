@@ -12,8 +12,8 @@ import (
 	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/views"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/views"
 )
 
 // Basic ANSI colors survive every profile above NoTTY, so a 16-color terminal shows the same meaning.

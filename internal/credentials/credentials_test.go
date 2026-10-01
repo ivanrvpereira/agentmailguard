@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 )
 
 type fakePlatform struct {
@@ -112,7 +112,7 @@ func TestBackendPanicsAndFailureChainsStayPrivate(t *testing.T) {
 	for _, mode := range []string{"read panic", "write panic", "read error", "write error"} {
 		t.Run(mode, func(t *testing.T) {
 			p := &fakePlatform{values: map[[2]string][]byte{
-				{"agentmailguard-go", "credentials"}: []byte(`{"version":1,"oauth":{},"openrouter_key":"original"}`),
+				{"agentmailguard", "credentials"}: []byte(`{"version":1,"oauth":{},"openrouter_key":"original"}`),
 			}}
 			store := credentials.New(p, t.TempDir(), nil)
 			failure := fmt.Errorf("private-wrapper-canary: %w", errors.New("private-cause-canary"))
@@ -168,7 +168,7 @@ func TestCredentialsRoundTripInSingleRecord(t *testing.T) {
 	if err != nil || key != "KEY-CANARY" {
 		t.Fatalf("key round trip failed: %v", err)
 	}
-	if len(platform.values) != 1 || len(platform.values[[2]string{"agentmailguard-go", "credentials"}]) == 0 {
+	if len(platform.values) != 1 || len(platform.values[[2]string{"agentmailguard", "credentials"}]) == 0 {
 		t.Fatal("credentials did not use one Keychain item")
 	}
 	record := credentials.Record{Version: 1, OAuth: map[string]credentials.OAuth{"gmail/work": token}, OpenRouterKey: "KEY-CANARY"}

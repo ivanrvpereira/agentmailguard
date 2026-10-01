@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/audit"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/guard"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/screening"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/views"
+	"github.com/ivanrvpereira/agentmailguard/internal/audit"
+	"github.com/ivanrvpereira/agentmailguard/internal/guard"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/screening"
+	"github.com/ivanrvpereira/agentmailguard/internal/views"
 )
 
 type pendingScreen struct {

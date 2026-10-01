@@ -13,15 +13,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/cli"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/cli"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 )
 
 func TestNativeChangePasswordInTemporaryHome(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	binary := filepath.Join(t.TempDir(), "agentmailguard-go")
-	build := exec.CommandContext(ctx, "go", "build", "-o", binary, "./cmd/agentmailguard-go")
+	binary := filepath.Join(t.TempDir(), "agentmailguard")
+	build := exec.CommandContext(ctx, "go", "build", "-o", binary, "./cmd/agentmailguard")
 	build.Dir = "../.."
 	if data, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build failed: %s", data)

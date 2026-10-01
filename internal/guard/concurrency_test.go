@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
 type concurrentMailbox struct{ model.Mailbox }

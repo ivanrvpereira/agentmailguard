@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 )
 
 type concurrentPlatform struct {
@@ -25,7 +25,7 @@ func (p *concurrentPlatform) Read(_ context.Context, service, account string) ([
 	p.mu.Lock()
 	p.reads++
 	var v []byte
-	if service == "agentmailguard-go" && account == "credentials" {
+	if service == "agentmailguard" && account == "credentials" {
 		v = append([]byte(nil), p.value...)
 	}
 	p.mu.Unlock()

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
 func TestDraftsCreateWithoutSendingAndUpdateOnlyNewDraft(t *testing.T) {

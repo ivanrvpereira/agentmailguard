@@ -10,7 +10,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"golang.org/x/net/idna"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"

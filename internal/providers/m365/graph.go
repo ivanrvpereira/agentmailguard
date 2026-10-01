@@ -10,8 +10,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
 const invalidPage = model.MailboxError("Graph error InvalidPage")

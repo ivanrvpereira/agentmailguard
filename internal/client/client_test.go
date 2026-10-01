@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/client"
+	"github.com/ivanrvpereira/agentmailguard/internal/client"
 )
 
 func TestJSONClientNoRedirectOrRawErrors(t *testing.T) {

@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/config"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/m365"
+	"github.com/ivanrvpereira/agentmailguard/internal/config"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 )
 
 var now = time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC)

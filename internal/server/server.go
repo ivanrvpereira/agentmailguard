@@ -16,14 +16,14 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/audit"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/cache"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/config"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/gmail"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/m365"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/screening"
+	"github.com/ivanrvpereira/agentmailguard/internal/audit"
+	"github.com/ivanrvpereira/agentmailguard/internal/cache"
+	"github.com/ivanrvpereira/agentmailguard/internal/config"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
+	"github.com/ivanrvpereira/agentmailguard/internal/screening"
 )
 
 const MaxRequestBytes = 1 << 20

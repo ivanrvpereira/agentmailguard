@@ -5,8 +5,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
 // Adapters can execute inside provider/Guard workers, outside the HTTP goroutine's recovery.

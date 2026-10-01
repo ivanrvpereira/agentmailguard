@@ -3,7 +3,7 @@ package m365_test
 import (
 	"context"
 	"encoding/json"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/m365"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 )
 
 func graphClient(t *testing.T, h http.HandlerFunc) *m365.Client {

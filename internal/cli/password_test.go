@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/cli"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/m365"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/server"
+	"github.com/ivanrvpereira/agentmailguard/internal/cli"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
+	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
 
 func fileHome(t *testing.T) string {

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/config"
+	"github.com/ivanrvpereira/agentmailguard/internal/config"
 )
 
 // Platform is the native secret-store seam. A missing item returns nil, nil.
@@ -24,6 +24,9 @@ type keychainBackend struct {
 func New(platform Platform, home string, accounts []config.Account) *RecordStore {
 	return NewStore(home, &keychainBackend{platform: platform, accounts: append([]config.Account(nil), accounts...)})
 }
+
+// service names the per-provider legacy items written by builds named agentmailguard-go.
+// Keep the -go prefix: the unprefixed names belong to the retired Python version.
 func service(provider string) (string, error) {
 	switch provider {
 	case "m365":
@@ -56,7 +59,7 @@ func (k *keychainBackend) Read(ctx context.Context) (Record, error) {
 }
 
 func (k *keychainBackend) readRecord(ctx context.Context, migrate bool) (Record, error) {
-	value, err := k.read(ctx, "agentmailguard-go", "credentials")
+	value, err := k.read(ctx, "agentmailguard", "credentials")
 	if errors.Is(err, ErrNotFound) {
 		r, err := k.legacyRecord(ctx)
 		if err == nil && migrate {
@@ -122,7 +125,7 @@ func (k *keychainBackend) Write(ctx context.Context, r Record) error {
 	if err != nil {
 		return ErrInvalidRecord
 	}
-	if err := k.platform.Write(ctx, "agentmailguard-go", "credentials", value); err != nil {
+	if err := k.platform.Write(ctx, "agentmailguard", "credentials", value); err != nil {
 		return safeError(ctx, ErrUnavailable)
 	}
 	return nil

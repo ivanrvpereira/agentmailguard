@@ -3,7 +3,7 @@ package gmail
 import (
 	"context"
 	"encoding/json"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"net/url"
 	"regexp"
 	"strings"

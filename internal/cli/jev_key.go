@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/server"
+	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
 
 const maxJevKeyBytes = 4096

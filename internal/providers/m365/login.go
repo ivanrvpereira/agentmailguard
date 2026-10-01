@@ -12,7 +12,7 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 )
 
 // Login is an interactive server-host operation, never a remote API operation.

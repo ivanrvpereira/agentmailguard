@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 )
 
 // Read one byte at a time: buffering here could consume the following Jev key line.

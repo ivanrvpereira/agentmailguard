@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/cli"
+	"github.com/ivanrvpereira/agentmailguard/internal/cli"
 )
 
 // runOffline runs a command that must not read local state or reach a server.
@@ -54,7 +54,7 @@ func TestHelpExitsZeroOnEveryCommandPath(t *testing.T) {
 func TestCredentialCommandHelpIsScopedAndOffline(t *testing.T) {
 	for _, command := range []string{"migrate", "change-password"} {
 		code, out, errout := runOffline(t, "auth", command, "--help")
-		if code != 0 || !strings.Contains(out, "agentmailguard-go auth "+command+" [flags]") || !strings.Contains(out, "--home") || strings.Contains(out, "--device-code") || errout != "" {
+		if code != 0 || !strings.Contains(out, "agentmailguard auth "+command+" [flags]") || !strings.Contains(out, "--home") || strings.Contains(out, "--device-code") || errout != "" {
 			t.Errorf("%s: exit=%d stdout=%q stderr=%q", command, code, out, errout)
 		}
 		if strings.Contains(out, "--to string") != (command == "migrate") {

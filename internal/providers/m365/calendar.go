@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
 type calendar struct{ c *Client }

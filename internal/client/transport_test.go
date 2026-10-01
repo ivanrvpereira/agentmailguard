@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/client"
+	"github.com/ivanrvpereira/agentmailguard/internal/client"
 )
 
 type staleConn struct {

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/m365"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 )
 
 func TestQueuedRequestsRecheckExpiryBeforeTransmission(t *testing.T) {

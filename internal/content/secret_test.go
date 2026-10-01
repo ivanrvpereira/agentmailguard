@@ -1,7 +1,7 @@
 package content_test
 
 import (
-	"github.com/ivanrvpereira/agentmailguard-go/internal/content"
+	"github.com/ivanrvpereira/agentmailguard/internal/content"
 	"testing"
 )
 

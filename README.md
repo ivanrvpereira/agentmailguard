@@ -1,4 +1,4 @@
-# agentmailguard-go
+# agentmailguard
 
 Guarded Microsoft 365 and Gmail access for AI agents, with a long-lived server and a thin CLI.
 The guard limits what an agent sees in mail and calendar events.
@@ -16,9 +16,9 @@ Provider OAuth remains mandatory.
 
 1. Install Go 1.25 or later with CGO support and a C compiler.
 2. Run `make` from this repository.
-3. Run `./bin/agentmailguard-go --help`.
+3. Run `./bin/agentmailguard --help`.
 
-`make` checks formatting, runs `go vet` and race tests, builds the packages, and creates `bin/agentmailguard-go`.
+`make` checks formatting, runs `go vet` and race tests, builds the packages, and creates `bin/agentmailguard`.
 SQLite still requires CGO with either credential backend.
 The native Keychain backend requires macOS and CGO.
 The file backend does not require Keychain, but it does not remove the SQLite build requirement.
@@ -30,9 +30,9 @@ The build does not install anything into your PATH.
 
 The server owns configuration, OAuth credentials, the Jev key, `cache.db`, and `audit.jsonl`.
 The CLI never loads these files for data commands, even with a loopback server.
-The Go home is separate from Python: `--home`, then `AGENTMAILGUARD_GO_HOME`, then `~/.agentmailguard-go`.
+The server home is `--home`, then `AGENTMAILGUARD_HOME`, then `~/.agentmailguard`.
 `serve` and local `auth login`, `auth set-jev-key`, `auth migrate`, and `auth change-password` accept `--home`.
-There is no automatic Python configuration, cache, or credential import.
+There is no automatic import of configuration, cache, or credentials from the retired Python version.
 
 Create a private server-home directory and a `config.toml` file there.
 Prefer a restricted provider application that grants only the required scopes.
@@ -82,7 +82,7 @@ The lock coordinates only processes that use the same home directory.
 
 ### Keychain backend
 
-The Keychain backend uses one non-synchronizable generic-password item: service `agentmailguard-go`, account `credentials`.
+The Keychain backend uses one non-synchronizable generic-password item: service `agentmailguard`, account `credentials`.
 Choose "Always Allow" for this item to avoid repeated access prompts for the same build.
 One item replaces the separate per-account approvals with one item approval per build.
 An ad-hoc-signed rebuild changes the application identity, so it needs approval again.
@@ -101,7 +101,7 @@ Writes use a same-directory temporary file, file fsync, atomic rename, and direc
 A wrong password or damaged file refuses access with the same fixed error.
 Unknown record versions also refuse access.
 
-The password source is `AGENTMAILGUARD_GO_CREDENTIALS_PASSWORD`, then stdin if the variable is absent.
+The password source is `AGENTMAILGUARD_CREDENTIALS_PASSWORD`, then stdin if the variable is absent.
 An empty password is refused, including an explicitly empty environment variable.
 Passwords must be valid UTF-8, at most 4096 bytes, without control characters.
 Terminal input disables echo. Creation of a new file asks for the password twice.
@@ -114,12 +114,12 @@ Unsetting the variable does not remove the initial environment exposure or erase
 Do not put passwords in command arguments, shell history, or configuration files.
 A secret manager can supply the environment variable or stdin.
 
-Run `agentmailguard-go auth set-jev-key --home /private/path/agentmailguard-go` locally to save the Jev key.
+Run `agentmailguard auth set-jev-key --home /private/path/agentmailguard` locally to save the Jev key.
 Terminal input disables echo. Non-terminal stdin supplies the key as one line.
 With the file backend and no password environment variable, piped input must contain two lines: the password first, then the key.
 With the password environment variable, piped input contains only the key line.
 The command refuses keys with spaces or control characters. It never prints the key or accepts it as an argument.
-It also refuses `--server`, `AGENTMAILGUARD_GO_SERVER`, and `--account`.
+It also refuses `--server`, `AGENTMAILGUARD_SERVER`, and `--account`.
 
 The server can use `OPENROUTER_API_KEY` instead of the stored key.
 The server selects its Jev key at start. Restart it after replacing the key.
@@ -131,9 +131,9 @@ No remote client command transfers a provider token or Jev key to the server.
 2. Run one command locally on the server host:
 
 ```sh
-./bin/agentmailguard-go auth migrate --home /private/path/agentmailguard-go --to file
+./bin/agentmailguard auth migrate --home /private/path/agentmailguard --to file
 # Or, from a configured file backend on macOS:
-./bin/agentmailguard-go auth migrate --home /private/path/agentmailguard-go --to keychain
+./bin/agentmailguard auth migrate --home /private/path/agentmailguard --to keychain
 ```
 
 3. Set `[credentials] backend` in `config.toml` to the value printed by the command.
@@ -143,13 +143,13 @@ Migration copies the whole record from the configured backend to the other backe
 It leaves the source record and configuration unchanged.
 It refuses an existing target record, including legacy Keychain entries. It also refuses a target that matches the configured backend.
 The file password comes from the normal sources. Terminal creation of the file target asks twice.
-Migration refuses `--server`, `AGENTMAILGUARD_GO_SERVER`, and `--account`.
+Migration refuses `--server`, `AGENTMAILGUARD_SERVER`, and `--account`.
 Migration of your real Keychain needs separate permission and remains unverified by this workflow.
 
 ### Change the file password
 
 1. Stop the server.
-2. Run `./bin/agentmailguard-go auth change-password --home /private/path/agentmailguard-go` on a terminal.
+2. Run `./bin/agentmailguard auth change-password --home /private/path/agentmailguard` on a terminal.
 3. Supply the current password through its normal source.
 4. Enter the new password twice at the terminal prompts.
 5. Restart the server with the new password.
@@ -157,7 +157,7 @@ Migration of your real Keychain needs separate permission and remains unverified
 This command works only with the file backend and re-encrypts the latest record under the same-home lock.
 The new password cannot come from an environment variable or a pipe.
 A running server retains its old password and cannot save refreshed tokens after this change.
-The command refuses `--server`, `AGENTMAILGUARD_GO_SERVER`, and `--account`.
+The command refuses `--server`, `AGENTMAILGUARD_SERVER`, and `--account`.
 
 ### Optional manual cleanup of legacy Keychain items
 
@@ -167,7 +167,7 @@ The program never deletes these items.
 
 The following commands are templates, not verification steps. Replace each placeholder with the exact legacy account name and intended Keychain path.
 Use only the commands for items that you intend to delete.
-Do not delete the new `agentmailguard-go` / `credentials` item.
+Do not delete the new `agentmailguard` / `credentials` item.
 
 ```sh
 security delete-generic-password -s agentmailguard-go-m365 -a '<m365-account-name>' '<keychain-path>'
@@ -180,9 +180,9 @@ security delete-generic-password -s agentmailguard-go-openrouter -a agentmailgua
 Run login locally on the server host:
 
 ```sh
-./bin/agentmailguard-go --account work auth login --home /private/path/agentmailguard-go
-./bin/agentmailguard-go --account work auth login --home /private/path/agentmailguard-go --device-code
-./bin/agentmailguard-go serve --home /private/path/agentmailguard-go
+./bin/agentmailguard --account work auth login --home /private/path/agentmailguard
+./bin/agentmailguard --account work auth login --home /private/path/agentmailguard --device-code
+./bin/agentmailguard serve --home /private/path/agentmailguard
 ```
 
 `serve` loads every credential before it accepts requests, because an operator is present at server start:
@@ -209,7 +209,7 @@ Browser login is the default.
 Microsoft 365 supports device-code login.
 Gmail refuses device-code login because that flow does not support the required scopes.
 Login is never an HTTP operation.
-A supplied `--server` or `AGENTMAILGUARD_GO_SERVER` value makes `auth login` refuse the operation instead of silently logging in locally.
+A supplied `--server` or `AGENTMAILGUARD_SERVER` value makes `auth login` refuse the operation instead of silently logging in locally.
 Data commands and `auth status` never open a login prompt.
 Login and `auth status` print a warning on stderr for extra grants. `auth status` lists them in `extra_scopes`; `scopes` lists only requested grants. Application roles appear with a `role:` prefix.
 Tokens that cannot work are refused: malformed tokens, and Gmail tokens without the mail and calendar scopes. Gmail refusals list `missing_scopes`.
@@ -232,13 +232,13 @@ Rules are different: the server reloads and validates `rules.toml` on every `rul
 ## Local and remote clients
 
 ```sh
-./bin/agentmailguard-go auth status
-./bin/agentmailguard-go --account work mail list --count 5
-./bin/agentmailguard-go mail get MESSAGE_ID --pretty
-./bin/agentmailguard-go --timeout 2h mail organize --since 1m
+./bin/agentmailguard auth status
+./bin/agentmailguard --account work mail list --count 5
+./bin/agentmailguard mail get MESSAGE_ID --pretty
+./bin/agentmailguard --timeout 2h mail organize --since 1m
 ```
 
-The server URL comes from `--server`, then `AGENTMAILGUARD_GO_SERVER`, then `http://127.0.0.1:8787`.
+The server URL comes from `--server`, then `AGENTMAILGUARD_SERVER`, then `http://127.0.0.1:8787`.
 The client supports HTTP or HTTPS URLs without userinfo, query parameters, or fragments.
 HTTPS requires an external TLS endpoint because `serve` does not provide TLS.
 The overall client deadline defaults to 30 minutes and accepts a positive `--timeout` duration.
@@ -248,7 +248,7 @@ For protected remote access, keep the server bound to loopback and use an SSH tu
 
 ```sh
 ssh -N -L 18787:127.0.0.1:8787 <server-host>
-./bin/agentmailguard-go --server http://127.0.0.1:18787 --account work mail list
+./bin/agentmailguard --server http://127.0.0.1:18787 --account work mail list
 ```
 
 An explicit remote listener is available with `serve --listen ADDRESS:PORT`.

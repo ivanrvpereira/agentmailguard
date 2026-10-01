@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 	"os"
 	"path/filepath"
 	"strings"
@@ -158,7 +158,7 @@ func TestMigrationDoesNotWriteAnExistingLegacyTarget(t *testing.T) {
 	if source.Migrate(ctx, credentials.New(p, home, nil)) != credentials.ErrTargetExists {
 		t.Fatal("legacy target not refused")
 	}
-	if _, ok := p.values[[2]string{"agentmailguard-go", "credentials"}]; ok {
+	if _, ok := p.values[[2]string{"agentmailguard", "credentials"}]; ok {
 		t.Fatal("refused migration wrote target")
 	}
 }
@@ -170,11 +170,11 @@ func TestMigrationNeverCreatesTargetFromFailedSource(t *testing.T) {
 			p := &fakePlatform{values: map[[2]string][]byte{}}
 			switch mode {
 			case "malformed":
-				p.values[[2]string{"agentmailguard-go", "credentials"}] = []byte(`{`)
+				p.values[[2]string{"agentmailguard", "credentials"}] = []byte(`{`)
 			case "version":
-				p.values[[2]string{"agentmailguard-go", "credentials"}] = []byte(`{"version":2,"oauth":{},"openrouter_key":""}`)
+				p.values[[2]string{"agentmailguard", "credentials"}] = []byte(`{"version":2,"oauth":{},"openrouter_key":""}`)
 			case "denied":
-				p.readFailure = map[[2]string]error{{"agentmailguard-go", "credentials"}: errors.New("private-canary")}
+				p.readFailure = map[[2]string]error{{"agentmailguard", "credentials"}: errors.New("private-canary")}
 			}
 			source := credentials.New(p, home, nil)
 			if err := source.Migrate(context.Background(), credentials.NewFileForTest(home, "synthetic-password")); err == nil || strings.Contains(err.Error(), "private-") {
@@ -196,15 +196,15 @@ func TestMigrationRefusesUnsafeCopies(t *testing.T) {
 			source := credentials.New(p, home, nil)
 			target := credentials.NewFileForTest(home, "synthetic-password")
 			if mode != "missing" {
-				p.values[[2]string{"agentmailguard-go", "credentials"}] = []byte(`{"version":1,"oauth":{},"openrouter_key":"source-key"}`)
+				p.values[[2]string{"agentmailguard", "credentials"}] = []byte(`{"version":1,"oauth":{},"openrouter_key":"source-key"}`)
 			}
 			switch mode {
 			case "malformed":
-				p.values[[2]string{"agentmailguard-go", "credentials"}] = []byte(`{`)
+				p.values[[2]string{"agentmailguard", "credentials"}] = []byte(`{`)
 			case "version":
-				p.values[[2]string{"agentmailguard-go", "credentials"}] = []byte(`{"version":2,"oauth":{},"openrouter_key":""}`)
+				p.values[[2]string{"agentmailguard", "credentials"}] = []byte(`{"version":2,"oauth":{},"openrouter_key":""}`)
 			case "denied":
-				p.readFailure = map[[2]string]error{{"agentmailguard-go", "credentials"}: errors.New("private-canary")}
+				p.readFailure = map[[2]string]error{{"agentmailguard", "credentials"}: errors.New("private-canary")}
 			}
 			if target.SaveOpenRouterKey(ctx, "existing-key") != nil {
 				t.Fatal("seed")

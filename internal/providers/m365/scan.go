@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
 func (b *mailbox) ScanInbox(ctx context.Context, since time.Time, until *time.Time) (model.InboxScan, error) {

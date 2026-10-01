@@ -2,7 +2,7 @@ package gmail
 
 import (
 	"context"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
 func (m *mailbox) each(ctx context.Context, ids []string, call func(string) error) ([]model.MutationResult, error) {

@@ -16,10 +16,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/client"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/server"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/views"
+	"github.com/ivanrvpereira/agentmailguard/internal/client"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/server"
+	"github.com/ivanrvpereira/agentmailguard/internal/views"
 )
 
 type Options struct {
@@ -119,7 +119,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Opti
 
 func newRoot(r *runner, raw []string) *cobra.Command {
 	root := &cobra.Command{
-		Use:           "agentmailguard-go",
+		Use:           "agentmailguard",
 		Short:         "Screened mailbox access through the agentmailguard server",
 		Long:          notes,
 		Args:          cobra.ArbitraryArgs,
@@ -224,7 +224,7 @@ func (r *runner) resolve(c *cobra.Command, allowHome bool) (bool, string, error)
 	if r.timeout <= 0 {
 		return false, "", errUsage
 	}
-	envServer := r.opts.LookupEnv("AGENTMAILGUARD_GO_SERVER")
+	envServer := r.opts.LookupEnv("AGENTMAILGUARD_SERVER")
 	base := r.base
 	if !c.Flags().Changed("server") {
 		base = envServer
@@ -346,7 +346,7 @@ func authCmd(r *runner) *cobra.Command {
 			return err
 		}
 		if supplied {
-			r.code = failure(r.stderr, "login is local only; remove --server and AGENTMAILGUARD_GO_SERVER")
+			r.code = failure(r.stderr, "login is local only; remove --server and AGENTMAILGUARD_SERVER")
 			return errDone
 		}
 		r.code = login(c.Context(), r.home, r.account, device, r.opts.Stdin, r.stdout, r.stderr, r.opts.Server, r.passwordEnv)
@@ -362,7 +362,7 @@ func authCmd(r *runner) *cobra.Command {
 			return errUsage
 		}
 		if supplied {
-			r.code = failure(r.stderr, "Jev key setup is local only; remove --server and AGENTMAILGUARD_GO_SERVER")
+			r.code = failure(r.stderr, "Jev key setup is local only; remove --server and AGENTMAILGUARD_SERVER")
 			return errDone
 		}
 		r.code = setJevKey(c.Context(), r.home, r.opts.Stdin, r.stderr, r.opts.Server, r.passwordEnv)
@@ -386,7 +386,7 @@ func credentialCmd(r *runner, name, short string) *cobra.Command {
 			return errUsage
 		}
 		if supplied {
-			r.code = failure(r.stderr, "credential commands are local only; remove --server and AGENTMAILGUARD_GO_SERVER")
+			r.code = failure(r.stderr, "credential commands are local only; remove --server and AGENTMAILGUARD_SERVER")
 			return errDone
 		}
 		if name == "migrate" && target != "file" && target != "keychain" {

@@ -3,8 +3,8 @@ package screening
 import (
 	"sort"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/rules"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/rules"
 )
 
 const FolderInstructions = "Where does this email belong? Choose the option that fits it best."

@@ -1,4 +1,4 @@
-module github.com/ivanrvpereira/agentmailguard-go
+module github.com/ivanrvpereira/agentmailguard
 
 go 1.25.0
 

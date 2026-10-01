@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/cli"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/cli"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 )
 
 func credentialFileFixture(t *testing.T, home string) []byte {
@@ -59,7 +59,7 @@ func TestCredentialCommandsRefuseRemoteAccountAndPasswordArguments(t *testing.T)
 				}
 				var out, stderr bytes.Buffer
 				opts := cli.Options{Stdin: strings.NewReader(""), LookupEnv: func(k string) string {
-					if mode == "server-env" && k == "AGENTMAILGUARD_GO_SERVER" {
+					if mode == "server-env" && k == "AGENTMAILGUARD_SERVER" {
 						return "http://127.0.0.1:1"
 					}
 					return ""

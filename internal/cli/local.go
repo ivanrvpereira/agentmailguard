@@ -13,11 +13,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/config"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/gmail"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/m365"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/server"
+	"github.com/ivanrvpereira/agentmailguard/internal/config"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
+	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
 
 func serve(ctx context.Context, home, listen string, stdin io.Reader, stderr io.Writer, opts server.Options, lookup func(string) string) int {

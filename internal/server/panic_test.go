@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/m365"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/server"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
+	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
 
 type panicScreener struct{}

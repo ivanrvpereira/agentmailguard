@@ -6,7 +6,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/config"
+	"github.com/ivanrvpereira/agentmailguard/internal/config"
 	"github.com/keybase/go-keychain"
 )
 

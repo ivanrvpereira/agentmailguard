@@ -13,7 +13,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/cli"
+	"github.com/ivanrvpereira/agentmailguard/internal/cli"
 )
 
 func passwordTerminal(t *testing.T) (*os.File, *os.File) {

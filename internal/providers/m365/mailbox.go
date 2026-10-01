@@ -12,7 +12,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
 const meta = "id,from,sender,subject,receivedDateTime,toRecipients,ccRecipients,parentFolderId,isDraft,isRead,flag,categories"

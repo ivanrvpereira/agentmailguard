@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
 func TestOrganizationValidity(t *testing.T) {

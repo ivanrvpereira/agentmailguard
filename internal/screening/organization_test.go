@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/rules"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/screening"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/rules"
+	"github.com/ivanrvpereira/agentmailguard/internal/screening"
 )
 
 const validAnswers = `"injection":{"type":"noul","noul":0.1},"account_security":{"type":"noul","noul":0.1},"folder":{"type":"choice","choice":"finance","confidence":0.7,"probabilities":{"finance":0.8,"stay":0.2}},"category:urgent":{"type":"noul","noul":0.9}`

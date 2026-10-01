@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/cli"
+	"github.com/ivanrvpereira/agentmailguard/internal/cli"
 )
 
 func main() {

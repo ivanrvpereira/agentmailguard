@@ -11,14 +11,14 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/config"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/content"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/guard"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/gmail"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/m365"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/rules"
+	"github.com/ivanrvpereira/agentmailguard/internal/config"
+	"github.com/ivanrvpereira/agentmailguard/internal/content"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/guard"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
+	"github.com/ivanrvpereira/agentmailguard/internal/rules"
 )
 
 type provider interface {

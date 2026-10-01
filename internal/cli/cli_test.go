@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/cli"
+	"github.com/ivanrvpereira/agentmailguard/internal/cli"
 )
 
 // stateful reports whether reading k would let the environment change what a command does. The color
@@ -87,7 +87,7 @@ func TestCommandsUseHTTPWithoutLocalState(t *testing.T) {
 			defer h.Close()
 			var out, errout bytes.Buffer
 			code := cli.Run(context.Background(), append([]string{"--server", h.URL, "--account", "remote"}, tc.args...), &out, &errout, cli.Options{Now: func() time.Time { return time.Date(2026, 3, 31, 12, 0, 0, 0, loc) }, LookupEnv: func(k string) string {
-				if k != "AGENTMAILGUARD_GO_SERVER" && stateful(k) {
+				if k != "AGENTMAILGUARD_SERVER" && stateful(k) {
 					t.Errorf("read local environment %s", k)
 				}
 				return ""

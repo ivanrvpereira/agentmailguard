@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/m365"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 )
 
 func TestExtraScopesListsOnlyUnrequestedGrants(t *testing.T) {

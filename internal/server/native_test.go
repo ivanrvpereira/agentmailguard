@@ -21,11 +21,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/gmail"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/providers/m365"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/screening"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/server"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
+	"github.com/ivanrvpereira/agentmailguard/internal/screening"
+	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
 
 type nativeStore struct{ store }
@@ -206,8 +206,8 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binary := filepath.Join(t.TempDir(), "agentmailguard-go")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/agentmailguard-go")
+	binary := filepath.Join(t.TempDir(), "agentmailguard")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/agentmailguard")
 	build.Dir = root
 	if b, e := build.CombinedOutput(); e != nil {
 		t.Fatalf("build: %v %s", e, b)
@@ -250,7 +250,7 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, binary, append([]string{"--server", h.URL}, args...)...)
-		cmd.Env = []string{"HOME=" + clientHome, "AGENTMAILGUARD_GO_HOME=" + filepath.Join(clientHome, "does-not-exist")}
+		cmd.Env = []string{"HOME=" + clientHome, "AGENTMAILGUARD_HOME=" + filepath.Join(clientHome, "does-not-exist")}
 		var out, errout bytes.Buffer
 		cmd.Stdout = &out
 		cmd.Stderr = &errout

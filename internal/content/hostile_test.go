@@ -8,8 +8,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/content"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/content"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
 // Stylesheets, colour, geometry and clipping are not evaluated; that text stays visible so screening sees it.

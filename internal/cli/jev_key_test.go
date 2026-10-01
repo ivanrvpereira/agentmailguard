@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ivanrvpereira/agentmailguard-go/internal/cli"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/credentials"
-	"github.com/ivanrvpereira/agentmailguard-go/internal/server"
+	"github.com/ivanrvpereira/agentmailguard/internal/cli"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
 
 type keyStore struct {
@@ -54,8 +54,8 @@ func TestSetJevKeyRefusesUnsafeInputWithoutSaving(t *testing.T) {
 		{name: "control", input: "sk-or\x1bprivate-canary\n", want: "error: Jev key must be one line without spaces or control characters\n"},
 		{name: "too long", input: "private-canary" + strings.Repeat("k", 4096), want: "error: Jev key is too long\n"},
 		{name: "two lines", input: "sk-or-a\nprivate-canary\n", want: "error: Jev key must be one line without spaces or control characters\n"},
-		{name: "remote flag", input: "sk-or-private-canary\n", args: []string{"--server", "http://127.0.0.1:1"}, want: "error: Jev key setup is local only; remove --server and AGENTMAILGUARD_GO_SERVER\n"},
-		{name: "remote env", input: "sk-or-private-canary\n", env: map[string]string{"AGENTMAILGUARD_GO_SERVER": "http://127.0.0.1:1"}, want: "error: Jev key setup is local only; remove --server and AGENTMAILGUARD_GO_SERVER\n"},
+		{name: "remote flag", input: "sk-or-private-canary\n", args: []string{"--server", "http://127.0.0.1:1"}, want: "error: Jev key setup is local only; remove --server and AGENTMAILGUARD_SERVER\n"},
+		{name: "remote env", input: "sk-or-private-canary\n", env: map[string]string{"AGENTMAILGUARD_SERVER": "http://127.0.0.1:1"}, want: "error: Jev key setup is local only; remove --server and AGENTMAILGUARD_SERVER\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &keyStore{}
