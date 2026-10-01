@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
@@ -112,11 +113,64 @@ func preload(ctx context.Context, s *server.Server, stdin io.Reader, stderr io.W
 	}
 }
 
+// readCallback consumes one bounded line without buffering a later stdin line.
+func readCallback(ctx context.Context, stdin io.Reader, stderr io.Writer) (string, error) {
+	if stdin == nil {
+		stdin = os.Stdin
+	}
+	if f, ok := terminal(stdin); ok {
+		restore, err := hideTerminalInput(ctx, f)
+		if err != nil {
+			return "", err
+		}
+		defer func() { restore(); fmt.Fprintln(stderr) }()
+	}
+	fmt.Fprint(stderr, "Paste the full callback URL (input hidden on terminals), then press Enter: ")
+	type result struct {
+		raw string
+		err error
+	}
+	done := make(chan result, 1)
+	// ponytail: an arbitrary Reader can block until input closes; cancellation must still finish the CLI.
+	go func() {
+		var data []byte
+		var one [1]byte
+		for {
+			if ctx.Err() != nil {
+				done <- result{err: ctx.Err()}
+				return
+			}
+			n, err := stdin.Read(one[:])
+			if n > 0 {
+				if one[0] == '\n' {
+					done <- result{raw: strings.TrimSuffix(string(data), "\r")}
+					return
+				}
+				data = append(data, one[0])
+				if len(data) > 4096 {
+					done <- result{err: errors.New("callback input too long")}
+					return
+				}
+			}
+			if err != nil {
+				done <- result{err: errors.New("callback input unavailable")}
+				return
+			}
+		}
+	}()
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case r := <-done:
+		return r.raw, r.err
+	}
+}
+
 type loginProvider interface {
 	Login(context.Context, bool, func(string, string)) (string, []string, error)
 }
 
-func login(ctx context.Context, home, account string, device bool, stdin io.Reader, stdout, stderr io.Writer, opts server.Options, lookup func(string) string) int {
+func login(ctx context.Context, home, account string, device, manual bool, stdin io.Reader, stdout, stderr io.Writer, opts server.Options, lookup func(string) string) int {
 	home, e := config.Home(home)
 	if e != nil {
 		return failure(stderr, "configuration unavailable")
@@ -129,12 +183,18 @@ func login(ctx context.Context, home, account string, device bool, stdin io.Read
 	if e != nil {
 		return failure(stderr, "configuration unavailable")
 	}
+	if manual && a.Provider != "gmail" {
+		return failure(stderr, "manual login is Gmail only")
+	}
 	opts.Credentials, e = localCredentials(ctx, home, opts.Credentials, stdin, stderr, lookup)
 	if e != nil {
 		return failure(stderr, e.Error())
 	}
 	var p loginProvider
 	if a.Provider == "gmail" {
+		if manual {
+			opts.Gmail.ReadCallback = func(ctx context.Context) (string, error) { return readCallback(ctx, stdin, stderr) }
+		}
 		p = gmail.New(a, opts.Credentials, opts.Gmail)
 	} else {
 		p = m365.New(a, opts.Credentials, opts.M365)

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -71,7 +72,7 @@ func (c *Client) Login(ctx context.Context, deviceCode bool, prompt func(uri, co
 			return
 		}
 		got := result{code: q.Get("code")}
-		if len(q["code"]) != 1 || got.code == "" || q.Get("error") != "" {
+		if !validCode(q) {
 			got.err = failure("Gmail", "AuthError")
 		}
 		select {
@@ -80,8 +81,11 @@ func (c *Client) Login(ctx context.Context, deviceCode bool, prompt func(uri, co
 		}
 		_, _ = io.WriteString(w, "Authorization received. You may close this window.")
 	})
+	defer listener.Close()
 	defer server.Close()
-	go func() { _ = server.Serve(listener) }()
+	if c.options.ReadCallback == nil {
+		go func() { _ = server.Serve(listener) }()
+	}
 	uri, err := url.Parse(c.options.AuthURL)
 	if err != nil || uri.Host == "" || uri.User != nil || uri.Fragment != "" || (uri.Scheme != "https" && uri.Scheme != "http") {
 		return "", nil, failure("Gmail", "AuthError")
@@ -100,14 +104,30 @@ func (c *Client) Login(ctx context.Context, deviceCode bool, prompt func(uri, co
 	if prompt != nil {
 		prompt(uri.String(), "")
 	}
-	if err = c.options.OpenBrowser(ctx, uri.String()); err != nil {
-		return "", nil, safeContext(ctx, "Gmail")
-	}
 	var got result
-	select {
-	case <-ctx.Done():
-		return "", nil, ctx.Err()
-	case got = <-callback:
+	if c.options.ReadCallback != nil {
+		raw, err := c.options.ReadCallback(ctx)
+		if err != nil || len(raw) > 4096 {
+			return "", nil, safeContext(ctx, "Gmail")
+		}
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme != "http" || u.Host != listener.Addr().String() || u.EscapedPath() != "/" || u.User != nil || u.Opaque != "" || strings.Contains(raw, "#") {
+			return "", nil, failure("Gmail", "AuthError")
+		}
+		q, err := url.ParseQuery(u.RawQuery)
+		if err != nil || len(q["state"]) != 1 || subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(state)) != 1 || !validCode(q) {
+			return "", nil, failure("Gmail", "AuthError")
+		}
+		got.code = q.Get("code")
+	} else {
+		if err = c.options.OpenBrowser(ctx, uri.String()); err != nil {
+			return "", nil, safeContext(ctx, "Gmail")
+		}
+		select {
+		case <-ctx.Done():
+			return "", nil, ctx.Err()
+		case got = <-callback:
+		}
 	}
 	if got.err != nil {
 		return "", nil, got.err
@@ -129,4 +149,8 @@ func (c *Client) Login(ctx context.Context, deviceCode bool, prompt func(uri, co
 	}
 	c.token = &token
 	return token.Username, append([]string{}, token.Scopes...), nil
+}
+
+func validCode(q url.Values) bool {
+	return len(q["code"]) == 1 && q.Get("code") != "" && len(q["error"]) == 0 && len(q["error_description"]) <= 1 && len(q["error_uri"]) <= 1
 }

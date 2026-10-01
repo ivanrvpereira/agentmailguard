@@ -134,6 +134,23 @@ Done when the applied run's `stats` (`applied`, `tagged`, `skipped`, `failed`) a
 - **Empty `--body ''`** is a valid explicit value for `draft update`. It clears the body.
 - **Unread is not important.** Use content and sender, not only `is_read`, to prioritize.
 
+## Operator-only Gmail manual login
+
+For a Gmail account on a server without a browser, tell the user about `agentmailguard --account gmail auth login --manual`.
+The user runs this command on the server host, without `--server` or `AGENTMAILGUARD_SERVER`.
+The user opens the printed `Provider sign-in URL` in their own browser and completes Google sign-in.
+A localhost or `127.0.0.1` page connection failure is expected because the callback address belongs to the server host.
+The user copies the full callback URL from the browser address bar into the server prompt and presses Enter.
+The prompt hides terminal input and accepts one newline-terminated line of at most 4096 bytes.
+The file backend requires the credential password first through its normal source.
+Manual login is Gmail-only, cannot combine with `--device-code`, and retains the five-minute login timeout.
+It does not launch a browser, fetch the callback URL, or restart the server.
+The user must restart the server after successful login.
+
+Do not run this command yourself.
+Do not request, read, store, or repeat the callback URL, authorization code, password, or tokens in chat or logs.
+The existing forbidden-command and server-home restrictions still apply.
+
 ## Verification
 
 - [ ] Every mail fact in the answer came from CLI output, with its verdict respected.

@@ -7,15 +7,25 @@ import (
 	"fmt"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestBrowserLoginPKCERefreshAndPreservesPreviousOnRefusal(t *testing.T) {
+	checkLoginPKCE(t, false)
+}
+
+func TestManualLoginPKCERefreshAndPreservesPreviousOnRefusal(t *testing.T) {
+	checkLoginPKCE(t, true)
+}
+
+func checkLoginPKCE(t *testing.T, manual bool) {
 	for _, badRefresh := range []bool{false, true} {
 		t.Run(fmt.Sprint(badRefresh), func(t *testing.T) {
 			store := validStore()
@@ -93,10 +103,27 @@ func TestBrowserLoginPKCERefreshAndPreservesPreviousOnRefusal(t *testing.T) {
 				_ = resp.Body.Close()
 				return nil
 			}}
+			var pasted string
+			if manual {
+				opts.OpenBrowser = func(context.Context, string) error {
+					t.Error("manual login opened browser")
+					return fmt.Errorf("private-browser-error")
+				}
+				opts.ReadCallback = func(context.Context) (string, error) { return pasted, nil }
+			}
 			c := gmail.New(account, store, opts)
 			prompts := 0
 			name, scopes, err := c.Login(context.Background(), false, func(uri, code string) {
 				prompts++
+				if manual {
+					u, _ := url.Parse(uri)
+					q := u.Query()
+					challenge, redirect = q.Get("code_challenge"), q.Get("redirect_uri")
+					if len(challenge) != 43 || q.Get("code_challenge_method") != "S256" || q.Get("scope") != granted {
+						t.Error("manual authorization parameters")
+					}
+					pasted = redirect + "?state=" + url.QueryEscape(q.Get("state")) + "&code=one-time"
+				}
 				if code != "" || !strings.HasPrefix(uri, api.URL+"/auth?") || strings.Contains(uri, "secret") {
 					t.Error("prompt leakage")
 				}
@@ -118,6 +145,105 @@ func TestBrowserLoginPKCERefreshAndPreservesPreviousOnRefusal(t *testing.T) {
 		})
 	}
 }
+func TestManualLoginRefusesUntrustedCallbackBeforeExchange(t *testing.T) {
+	for _, mode := range []string{"state", "host", "port", "path", "encoded-path", "scheme", "userinfo", "fragment", "empty-fragment", "opaque", "malformed", "query", "duplicate-state", "duplicate-code", "empty-code", "missing-code", "error", "empty-error", "duplicate-error", "duplicate-description", "oversize", "eof", "cancel", "read-error"} {
+		t.Run(mode, func(t *testing.T) {
+			store := validStore()
+			old := store.token
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				t.Error("refused callback reached the network")
+				w.WriteHeader(400)
+			}))
+			defer api.Close()
+			var pasted, redirect string
+			c := gmail.New(account, store, gmail.Options{TokenURL: api.URL, AuthURL: api.URL, OpenBrowser: func(context.Context, string) error {
+				t.Error("manual login opened browser")
+				return nil
+			}, ReadCallback: func(ctx context.Context) (string, error) {
+				switch mode {
+				case "eof":
+					return "", io.EOF
+				case "cancel":
+					cancel()
+					return "", ctx.Err()
+				case "read-error":
+					return "", fmt.Errorf("private-read-error")
+				}
+				return pasted, nil
+			}})
+			_, _, err := c.Login(ctx, false, func(raw, _ string) {
+				auth, _ := url.Parse(raw)
+				redirect = auth.Query().Get("redirect_uri")
+				u, _ := url.Parse(redirect)
+				q := url.Values{"state": {auth.Query().Get("state")}, "code": {"private-code"}}
+				switch mode {
+				case "state":
+					q.Set("state", "wrong")
+				case "host":
+					u.Host = strings.TrimPrefix(api.URL, "http://")
+				case "port":
+					u.Host = "127.0.0.1:0"
+				case "path":
+					u.Path = "/other"
+				case "encoded-path":
+					u.RawPath = "/%2e%2e"
+					u.Path = "/.."
+				case "scheme":
+					u.Scheme = "https"
+				case "userinfo":
+					u.User = url.User("private-user")
+				case "fragment":
+					u.Fragment = "private-fragment"
+				case "empty-fragment":
+					u.ForceQuery = true
+				case "opaque":
+					u.Opaque, u.Host = "private-opaque", ""
+				case "duplicate-state":
+					q.Add("state", q.Get("state"))
+				case "duplicate-code":
+					q.Add("code", "private-second-code")
+				case "empty-code":
+					q.Set("code", "")
+				case "missing-code":
+					q.Del("code")
+				case "error", "duplicate-error":
+					q.Set("error", "private-error")
+					if mode == "duplicate-error" {
+						q.Add("error", "private-second-error")
+					}
+				case "empty-error":
+					q.Set("error", "")
+				case "duplicate-description":
+					q["error_description"] = []string{"private-one", "private-two"}
+				case "oversize":
+					q.Set("extra", strings.Repeat("x", 4097))
+				}
+				u.RawQuery = q.Encode()
+				pasted = u.String()
+				switch mode {
+				case "query":
+					pasted += "&extra=%GG"
+				case "malformed":
+					pasted = "%private-malformed"
+				case "empty-fragment":
+					pasted += "#"
+				}
+			})
+			if err == nil || strings.Contains(err.Error(), "private-") || store.saves != 0 || !reflect.DeepEqual(store.token, old) {
+				t.Fatalf("unsafe refusal: err=%v saves=%d", err, store.saves)
+			}
+			u, _ := url.Parse(redirect)
+			conn, err := net.DialTimeout("tcp4", u.Host, 50*time.Millisecond)
+			if err == nil {
+				conn.Close()
+				t.Fatal("manual callback listener leaked")
+			}
+		})
+	}
+}
+
 func TestLoginDeviceCodeAndCancellation(t *testing.T) {
 	store := validStore()
 	calls := 0

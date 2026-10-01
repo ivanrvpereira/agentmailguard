@@ -216,6 +216,35 @@ Tokens that cannot work are refused: malformed tokens, and Gmail tokens without 
 Diagnostics show at most 100 conventional scope labels of 256 bytes each. Malformed labels are omitted.
 The program does not start a server automatically.
 
+### Gmail manual login
+
+For a server without a browser, use Gmail manual login:
+
+```sh
+./bin/agentmailguard --account gmail auth login --home /private/path/agentmailguard --manual
+```
+
+1. Run the command on the server host without `--server` or `AGENTMAILGUARD_SERVER`.
+2. Open the printed `Provider sign-in URL` in a browser on your computer.
+3. Complete Google sign-in.
+4. Copy the full callback URL from the browser address bar into the server prompt, then press Enter.
+5. Restart the server after successful login.
+
+A localhost or `127.0.0.1` page connection failure after sign-in is expected: the callback address belongs to the server host.
+The full callback URL remains in the browser address bar despite that error.
+Manual login does not launch a browser or fetch the pasted URL.
+It validates the callback locally before the normal PKCE token exchange and refresh validation.
+
+`--manual` is Gmail-only and cannot combine with `--device-code`.
+Login retains its five-minute timeout.
+Stdin supplies one newline-terminated callback line of at most 4096 bytes.
+Terminal input disables echo, and the CLI never prints the callback URL, authorization code, or tokens.
+An empty line, EOF before the newline, invalid input, or cancellation refuses login without replacing credentials.
+With the file backend, supply the credential password first through its normal source, then the callback line.
+Do not put the callback URL in command arguments, shell history, logs, or chat.
+No SSH tunnel or login helper is needed.
+The CLI never restarts the server or deploys changes.
+
 Microsoft 365 `auth status` can use a cached token and username without a Graph request.
 A successful status does not prove current Graph access, all required permissions, or provider acceptance of mailbox operations.
 Microsoft 365 login reports fixed errors for browser startup, authorization, token exchange, token validation, profile lookup, and credential storage.
@@ -265,7 +294,7 @@ Required text flags distinguish an omitted value from an explicit empty value, i
 
 | Group | Commands |
 | --- | --- |
-| State and auth | `stats --days 30`, `cache clear`, `rules list`, `auth status`, local `auth login [--device-code]`, `auth set-jev-key`, `auth migrate --to file\|keychain`, `auth change-password` |
+| State and auth | `stats --days 30`, `cache clear`, `rules list`, `auth status`, local `auth login [--device-code \| --manual]`, `auth set-jev-key`, `auth migrate --to file\|keychain`, `auth change-password` |
 | Mail reads | `mail list`, `mail get ID [--pretty]`, `mail search`, `mail link ID L1 L2` or `mail link ID --all`, `mail folders`, `mail categories` |
 | Mail changes | `mail archive IDS...`, `mail trash IDS...`, `mail move FOLDER_ID IDS...`, `mail read IDS...`, `mail unread IDS...`, `mail flag IDS... --state flagged|complete|none`, `mail categorize IDS... --add NAME --remove NAME` |
 | Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID` |

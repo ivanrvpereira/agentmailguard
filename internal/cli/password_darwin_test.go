@@ -14,6 +14,8 @@ import (
 	"unsafe"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/cli"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
+	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
 
 func passwordTerminal(t *testing.T) (*os.File, *os.File) {
@@ -60,6 +62,37 @@ func (w *promptWriter) Write(p []byte) (int, error) {
 	n, err := w.Buffer.Write(p)
 	w.respond(string(p))
 	return n, err
+}
+
+func TestManualTerminalCallbackEchoAndCancellation(t *testing.T) {
+	for _, mode := range []string{"invalid", "cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			master, slave := passwordTerminal(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			prompted := false
+			stderr := &manualWriter{respond: func(text string) {
+				if strings.Contains(text, "full callback URL") {
+					prompted = true
+					if terminalEcho(t, slave) {
+						t.Error("callback prompt left echo enabled")
+					}
+					if mode == "cancel" {
+						cancel()
+					} else {
+						_, _ = io.WriteString(master, "http://private-callback.invalid/?code=private-code\n")
+					}
+				}
+			}}
+			code := cli.Run(ctx, []string{"--home", manualHome(t), "auth", "login", "--manual"}, io.Discard, stderr, cli.Options{Stdin: slave, LookupEnv: func(string) string { return "" }, Server: server.Options{Credentials: &diagnosticStore{}, Gmail: gmail.Options{AuthURL: "http://127.0.0.1:1/auth", OpenBrowser: func(context.Context, string) error {
+				t.Error("manual login opened browser")
+				return nil
+			}}}})
+			if code != 1 || !prompted || !terminalEcho(t, slave) || strings.Contains(stderr.String(), "private-") {
+				t.Fatal("callback terminal refusal unsafe or echo not restored")
+			}
+		})
+	}
 }
 
 func TestFileTerminalPasswordConfirmationAndEcho(t *testing.T) {

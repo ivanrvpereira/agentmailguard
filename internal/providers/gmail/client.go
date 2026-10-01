@@ -31,6 +31,7 @@ type Options struct {
 	GmailURL, UploadURL, CalendarURL, TokenURL, AuthURL, ProfileURL string
 	Now                                                             func() time.Time
 	OpenBrowser                                                     func(context.Context, string) error
+	ReadCallback                                                    func(context.Context) (string, error) // optional manual login input; never fetched
 	Sleep                                                           func(context.Context, time.Duration) error
 }
 

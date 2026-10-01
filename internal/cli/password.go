@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -57,29 +58,37 @@ func passwordLine(ctx context.Context, stdin io.Reader) (string, error) {
 	}
 }
 
+// hideTerminalInput captures the complete terminal state and restores it even after cancellation.
+func hideTerminalInput(ctx context.Context, f *os.File) (func(), error) {
+	capture, cancel := context.WithTimeout(ctx, time.Second)
+	cmd := exec.CommandContext(capture, "/bin/stty", "-g")
+	cmd.Stdin = f
+	state, err := cmd.Output()
+	cancel()
+	if err != nil || len(state) == 0 {
+		return nil, errors.New("cannot read terminal state")
+	}
+	stty := func(arg string) error {
+		timeout, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(timeout, "/bin/stty", arg)
+		cmd.Stdin = f
+		return cmd.Run()
+	}
+	if stty("-echo") != nil {
+		return nil, errors.New("cannot hide terminal input; pipe input on stdin instead")
+	}
+	return func() { _ = stty(strings.TrimSpace(string(state))) }, nil
+}
+
 func readCredentialPassword(ctx context.Context, stdin io.Reader, stderr io.Writer, creating bool) (string, error) {
 	f, interactive := terminal(stdin)
 	if interactive {
-		capture, cancel := context.WithTimeout(ctx, time.Second)
-		cmd := exec.CommandContext(capture, "/bin/stty", "-g")
-		cmd.Stdin = f
-		state, err := cmd.Output()
-		cancel()
-		if err != nil || len(state) == 0 {
-			return "", errors.New("cannot read terminal state")
+		restore, err := hideTerminalInput(ctx, f)
+		if err != nil {
+			return "", err
 		}
-		stty := func(arg string) error {
-			// Echo restoration must still run after the caller is canceled.
-			timeout, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			cmd := exec.CommandContext(timeout, "/bin/stty", arg)
-			cmd.Stdin = f
-			return cmd.Run()
-		}
-		if stty("-echo") != nil {
-			return "", errors.New("cannot hide terminal input; pipe the password on stdin instead")
-		}
-		defer func() { _ = stty(strings.TrimSpace(string(state))); fmt.Fprintln(stderr) }()
+		defer func() { restore(); fmt.Fprintln(stderr) }()
 		fmt.Fprint(stderr, "Credential file password: ")
 	}
 	password, err := passwordLine(ctx, stdin)
