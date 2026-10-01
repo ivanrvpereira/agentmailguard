@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
@@ -116,7 +117,7 @@ type loginProvider interface {
 	Login(context.Context, bool, func(string, string)) (string, []string, error)
 }
 
-func login(ctx context.Context, home, account string, device bool, stdin io.Reader, stdout, stderr io.Writer, opts server.Options, lookup func(string) string) int {
+func login(ctx context.Context, home, account string, device, noBrowser bool, stdin io.Reader, stdout, stderr io.Writer, opts server.Options, lookup func(string) string) int {
 	home, e := config.Home(home)
 	if e != nil {
 		return failure(stderr, "configuration unavailable")
@@ -129,23 +130,74 @@ func login(ctx context.Context, home, account string, device bool, stdin io.Read
 	if e != nil {
 		return failure(stderr, "configuration unavailable")
 	}
+	if noBrowser && a.Provider != "gmail" {
+		return failure(stderr, "--no-browser is for Gmail; use --device-code for Microsoft 365")
+	}
 	opts.Credentials, e = localCredentials(ctx, home, opts.Credentials, stdin, stderr, lookup)
 	if e != nil {
 		return failure(stderr, e.Error())
 	}
+	title := "Microsoft 365"
+	if a.Provider == "gmail" {
+		title = "Gmail"
+	}
+	fmt.Fprintf(stderr, "\n%s for account %s\n\n", labelStyle.Render(title+" sign-in"), terminalSafe(a.Name))
+	// waiting is set while the cursor sits after the paste prompt, so later output starts on a new line.
+	var waiting atomic.Bool
 	var p loginProvider
 	if a.Provider == "gmail" {
+		if noBrowser {
+			opts.Gmail.OpenBrowser = func(context.Context, string) error { return nil }
+		}
+		if stdin == nil {
+			stdin = os.Stdin
+		}
+		_, interactive := terminal(stdin)
+		opts.Gmail.ReadRedirect = func(ctx context.Context, retry bool) (string, error) {
+			switch {
+			case retry:
+				fmt.Fprintf(stderr, "%s That address is not from this sign-in. Paste the full address again.\n", warningStyle.Render("!"))
+			case noBrowser:
+				fmt.Fprint(stderr, "2. The browser then fails to load a 127.0.0.1 page. That is expected.\n3. Copy the full address from the address bar and paste it here.\n\n")
+			default:
+				fmt.Fprint(stderr, "2. If the browser then fails to load a 127.0.0.1 page, copy the full address from the address bar and paste it here.\n\n")
+			}
+			fmt.Fprint(stderr, labelStyle.Render("Address:")+" ")
+			waiting.Store(true)
+			// passwordLine reads without buffering; its errors only stop pasted input, and the program never prints the line.
+			line, err := passwordLine(ctx, stdin)
+			if err == nil && interactive {
+				waiting.Store(false) // Enter moved the cursor to a new line.
+			}
+			if err == nil && line == "" && !interactive {
+				return "", io.EOF // passwordLine reports EOF as an empty line; closed input would otherwise repeat forever.
+			}
+			return line, err
+		}
 		p = gmail.New(a, opts.Credentials, opts.Gmail)
 	} else {
+		if !device {
+			fmt.Fprintln(stderr, "Complete the sign-in in the browser window that opens.")
+		}
 		p = m365.New(a, opts.Credentials, opts.M365)
 	}
-	fmt.Fprintln(stderr, "Sign in with the provider. Restart the server after successful login.")
 	user, scopes, e := p.Login(ctx, device, func(uri, code string) {
-		fmt.Fprintf(stderr, "Provider sign-in URL: %q\n", uri)
+		step := "1. Open this URL in a browser on any computer and approve access:"
+		switch {
+		case code != "":
+			step = "1. Open this URL in a browser on any computer:"
+		case !noBrowser:
+			step = "1. Approve access in the browser window that opens. If none opens, open this URL:"
+		}
+		// Bare and on its own line, so terminals can link it and a copy takes nothing extra.
+		fmt.Fprintf(stderr, "%s\n\n%s\n\n", step, terminalSafe(uri))
 		if code != "" {
-			fmt.Fprintf(stderr, "Device code: %q\n", code)
+			fmt.Fprintf(stderr, "2. Enter this code: %s\n\nWaiting for sign-in...\n", labelStyle.Render(terminalSafe(code)))
 		}
 	})
+	if waiting.Load() {
+		fmt.Fprintln(stderr)
+	}
 	if e != nil {
 		var diagnostic m365.LoginError
 		if errors.As(e, &diagnostic) {
@@ -157,6 +209,7 @@ func login(ctx context.Context, home, account string, device bool, stdin io.Read
 	if a.Provider == "gmail" {
 		extra = gmail.ExtraScopes(scopes)
 	}
+	fmt.Fprintf(stderr, "\n%s Signed in as %s\n  Restart the server to use the new login.\n", successStyle.Render("\u2713"), terminalSafe(user))
 	if len(extra) != 0 {
 		warnExtraScopes(stderr, extra)
 	}

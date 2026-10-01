@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -22,6 +23,7 @@ func randomText() (string, error) {
 }
 
 // Login runs on the server host only. The callback binds to IPv4 loopback and never redirects or logs authorization codes.
+// A pasted redirect from Options.ReadRedirect gets the same checks as the callback; the first accepted one wins.
 func (c *Client) Login(ctx context.Context, deviceCode bool, prompt func(uri, code string)) (string, []string, error) {
 	if deviceCode {
 		return "", nil, failure("Gmail", "DeviceCodeError")
@@ -59,16 +61,11 @@ func (c *Client) Login(ctx context.Context, deviceCode bool, prompt func(uri, co
 		err  error
 	}
 	callback := make(chan result, 1)
-	server := &http.Server{ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, MaxHeaderBytes: 8192}
-	server.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		q, err := url.ParseQuery(r.URL.RawQuery)
-		if err != nil || r.Method != "GET" || r.URL.Path != "/" || r.Host != listener.Addr().String() || len(q["state"]) != 1 || subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(state)) != 1 {
-			w.WriteHeader(400)
-			_, _ = io.WriteString(w, "Invalid authorization callback.")
-			return
+	// accept reports whether a redirect belongs to this sign-in. A matching redirect that carries a provider error still ends the login.
+	accept := func(host, path, rawQuery string) bool {
+		q, err := url.ParseQuery(rawQuery)
+		if err != nil || path != "/" || host != listener.Addr().String() || len(q["state"]) != 1 || subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(state)) != 1 {
+			return false
 		}
 		got := result{code: q.Get("code")}
 		if len(q["code"]) != 1 || got.code == "" || q.Get("error") != "" {
@@ -77,6 +74,18 @@ func (c *Client) Login(ctx context.Context, deviceCode bool, prompt func(uri, co
 		select {
 		case callback <- got:
 		default:
+		}
+		return true
+	}
+	server := &http.Server{ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, MaxHeaderBytes: 8192}
+	server.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if r.Method != "GET" || !accept(r.Host, r.URL.Path, r.URL.RawQuery) {
+			w.WriteHeader(400)
+			_, _ = io.WriteString(w, "Invalid authorization callback.")
+			return
 		}
 		_, _ = io.WriteString(w, "Authorization received. You may close this window.")
 	})
@@ -100,8 +109,22 @@ func (c *Client) Login(ctx context.Context, deviceCode bool, prompt func(uri, co
 	if prompt != nil {
 		prompt(uri.String(), "")
 	}
-	if err = c.options.OpenBrowser(ctx, uri.String()); err != nil {
-		return "", nil, safeContext(ctx, "Gmail")
+	// The prompt already printed the URL, so a host without a browser can still sign in elsewhere.
+	// Login does not wait: xdg-open can run a browser in the foreground until it exits.
+	go func() { _ = c.options.OpenBrowser(ctx, uri.String()) }()
+	if read := c.options.ReadRedirect; read != nil {
+		go func() {
+			for retry := false; ; retry = true {
+				line, err := read(ctx, retry)
+				if err != nil {
+					return // Closed input leaves the loopback callback.
+				}
+				u, err := url.Parse(strings.TrimSpace(line))
+				if err == nil && u.Scheme == "http" && u.User == nil && accept(u.Host, u.Path, u.RawQuery) {
+					return
+				}
+			}
+		}()
 	}
 	var got result
 	select {

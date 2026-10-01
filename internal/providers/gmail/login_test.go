@@ -118,6 +118,72 @@ func TestBrowserLoginPKCERefreshAndPreservesPreviousOnRefusal(t *testing.T) {
 		})
 	}
 }
+func TestPastedRedirectCompletesLoginWithoutBrowser(t *testing.T) {
+	for _, denied := range []bool{false, true} {
+		t.Run(fmt.Sprint(denied), func(t *testing.T) {
+			store := validStore()
+			var redirect, state string
+			steps := []string{}
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/profile" {
+					steps = append(steps, "profile")
+					respond(w, map[string]string{"emailAddress": "pasted@example.test"})
+					return
+				}
+				_ = r.ParseForm()
+				steps = append(steps, r.Form.Get("grant_type"))
+				if r.Form.Get("grant_type") == "authorization_code" && (r.Form.Get("code") != "pasted-code" || r.Form.Get("redirect_uri") != redirect) {
+					t.Error("pasted code exchange mismatch")
+				}
+				respond(w, map[string]any{"access_token": "refreshed", "refresh_token": "initial-refresh", "expires_in": 3600, "scope": granted})
+			}))
+			defer api.Close()
+			auth := make(chan *url.URL, 1)
+			var retries []bool
+			opts := gmail.Options{HTTPClient: api.Client(), TokenURL: api.URL + "/token", AuthURL: api.URL + "/auth", ProfileURL: api.URL + "/profile",
+				// Like xdg-open running a foreground browser, this opener returns only at the end, and with an error.
+				OpenBrowser: func(ctx context.Context, uri string) error {
+					parsed, _ := url.Parse(uri)
+					auth <- parsed
+					<-ctx.Done()
+					return fmt.Errorf("no browser on this host")
+				},
+				ReadRedirect: func(_ context.Context, retry bool) (string, error) {
+					retries = append(retries, retry)
+					if len(retries) == 1 {
+						u := <-auth
+						redirect, state = u.Query().Get("redirect_uri"), u.Query().Get("state")
+						return u.String(), nil // The sign-in URL is not the redirect.
+					}
+					query := "?state=" + url.QueryEscape(state) + "&code=pasted-code&scope=" + url.QueryEscape(granted)
+					if denied {
+						query = "?state=" + url.QueryEscape(state) + "&error=access_denied"
+					}
+					switch len(retries) {
+					case 2:
+						return redirect + "?state=wrong&code=pasted-code", nil
+					case 3:
+						return strings.Replace(redirect, "127.0.0.1", "localhost", 1) + query, nil
+					default:
+						return "  " + redirect + query + "\n", nil
+					}
+				}}
+			c := gmail.New(account, store, opts)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			name, _, err := c.Login(ctx, false, nil)
+			if denied {
+				if err == nil || ctx.Err() != nil || store.saves != 0 || len(steps) != 0 {
+					t.Fatal("denied paste reached the token endpoint", steps)
+				}
+				return
+			}
+			if err != nil || name != "pasted@example.test" || store.saves != 1 || strings.Join(steps, ",") != "authorization_code,refresh_token,profile" || fmt.Sprint(retries) != "[false true true true]" {
+				t.Fatal(name, err, steps, retries)
+			}
+		})
+	}
+}
 func TestLoginDeviceCodeAndCancellation(t *testing.T) {
 	store := validStore()
 	calls := 0

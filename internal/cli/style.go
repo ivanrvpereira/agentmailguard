@@ -21,6 +21,7 @@ var (
 	labelStyle   = lipgloss.NewStyle().Bold(true)
 	errorStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1"))
 	warningStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3"))
+	successStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("2"))
 )
 
 // verdictColor maps a verdict to its meaning: safe, caution, refused, account security, or failure.

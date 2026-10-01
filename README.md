@@ -182,6 +182,7 @@ Run login locally on the server host:
 ```sh
 ./bin/agentmailguard --account work auth login --home /private/path/agentmailguard
 ./bin/agentmailguard --account work auth login --home /private/path/agentmailguard --device-code
+./bin/agentmailguard --account personal auth login --home /private/path/agentmailguard --no-browser
 ./bin/agentmailguard serve --home /private/path/agentmailguard
 ```
 
@@ -208,6 +209,24 @@ An account added to `config.toml` after startup returns the restart-required err
 Browser login is the default.
 Microsoft 365 supports device-code login.
 Gmail refuses device-code login because that flow does not support the required scopes.
+
+On a headless host, use Gmail login with `--no-browser`. It needs no SSH tunnel:
+
+1. Run `auth login --no-browser` in an SSH session on the server host.
+2. Open the printed sign-in URL in a browser on any computer, and approve access.
+3. The browser goes to `http://127.0.0.1:PORT/?state=...&code=...` and shows a connection error. Copy the full address from the address bar.
+4. Paste the address into the SSH session and press Enter. Finish within five minutes.
+
+The pasted address gets the same checks as the loopback callback: host, port, path, and `state` must match this sign-in.
+If the address does not match, login asks for it again. A provider error in a matching address ends the login.
+The PKCE verifier stays on the server host, so the code in the address cannot be exchanged anywhere else.
+The program does not print or log the pasted address. The terminal shows it as you paste it.
+Without `--no-browser`, Gmail login opens the URL with `open` on macOS or `xdg-open` on Linux. If that fails, login continues and accepts the loopback callback or a pasted address.
+`--no-browser` is refused for Microsoft 365. Use `--device-code` on a headless host.
+
+Gmail login and device-code login print numbered steps on stderr. The sign-in URL is on its own line, without quotes.
+A successful login prints a final `✓ Signed in as ...` line on stderr.
+Stdout gets the JSON result with `account`, `username`, and `scopes`.
 Login is never an HTTP operation.
 A supplied `--server` or `AGENTMAILGUARD_SERVER` value makes `auth login` refuse the operation instead of silently logging in locally.
 Data commands and `auth status` never open a login prompt.
@@ -265,7 +284,7 @@ Required text flags distinguish an omitted value from an explicit empty value, i
 
 | Group | Commands |
 | --- | --- |
-| State and auth | `stats --days 30`, `cache clear`, `rules list`, `auth status`, local `auth login [--device-code]`, `auth set-jev-key`, `auth migrate --to file\|keychain`, `auth change-password` |
+| State and auth | `stats --days 30`, `cache clear`, `rules list`, `auth status`, local `auth login [--device-code] [--no-browser]`, `auth set-jev-key`, `auth migrate --to file\|keychain`, `auth change-password` |
 | Mail reads | `mail list`, `mail get ID [--pretty]`, `mail search`, `mail link ID L1 L2` or `mail link ID --all`, `mail folders`, `mail categories` |
 | Mail changes | `mail archive IDS...`, `mail trash IDS...`, `mail move FOLDER_ID IDS...`, `mail read IDS...`, `mail unread IDS...`, `mail flag IDS... --state flagged|complete|none`, `mail categorize IDS... --add NAME --remove NAME` |
 | Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID` |

@@ -134,6 +134,22 @@ Done when the applied run's `stats` (`applied`, `tagged`, `skipped`, `failed`) a
 - **Empty `--body ''`** is a valid explicit value for `draft update`. It clears the body.
 - **Unread is not important.** Use content and sender, not only `is_read`, to prioritize.
 
+## Operator-only Gmail login on a headless server
+
+If a Gmail account is not logged in and the server host has no browser, tell the user to run this on the server host, without `--server` or `AGENTMAILGUARD_SERVER`:
+
+```sh
+agentmailguard --account NAME auth login --no-browser
+```
+
+The user opens the printed sign-in URL in their own browser and approves access.
+The browser then shows a connection error for `127.0.0.1`. That is expected.
+The user copies the full address from the address bar, pastes it into the server terminal, and presses Enter. If the address does not match, login asks again.
+After a successful login, the user restarts the server.
+
+Do not run this command yourself.
+Do not ask for, read, store, or repeat the pasted address, the authorization code, the password, or tokens.
+
 ## Verification
 
 - [ ] Every mail fact in the answer came from CLI output, with its verdict respected.

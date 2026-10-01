@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -25,13 +26,16 @@ const gmailScope = "https://www.googleapis.com/auth/gmail.modify"
 const calendarScope = "https://www.googleapis.com/auth/calendar.events.owned.readonly"
 const responseLimit = 50 << 20
 
-// Options supplies external-system test seams, not user settings. API URLs include the users/me or calendars/primary prefix; UploadURL is the drafts endpoint.
+// Options supplies external-system seams (APIs, browser, terminal), not user settings. API URLs include the users/me or calendars/primary prefix; UploadURL is the drafts endpoint.
 type Options struct {
 	HTTPClient                                                      *http.Client
 	GmailURL, UploadURL, CalendarURL, TokenURL, AuthURL, ProfileURL string
 	Now                                                             func() time.Time
 	OpenBrowser                                                     func(context.Context, string) error
 	Sleep                                                           func(context.Context, time.Duration) error
+	// ReadRedirect returns the browser's redirected address, pasted on hosts the loopback callback cannot reach.
+	// Login calls it again with retry set after an address that does not belong to this sign-in.
+	ReadRedirect func(ctx context.Context, retry bool) (string, error)
 }
 
 type Client struct {
@@ -81,7 +85,11 @@ func New(account config.Account, store credentials.Store, opts Options) *Client 
 		}
 	}
 	if opts.OpenBrowser == nil {
-		opts.OpenBrowser = func(ctx context.Context, uri string) error { return exec.CommandContext(ctx, "open", uri).Run() }
+		opener := "xdg-open"
+		if runtime.GOOS == "darwin" {
+			opener = "open"
+		}
+		opts.OpenBrowser = func(ctx context.Context, uri string) error { return exec.CommandContext(ctx, opener, uri).Run() }
 	}
 	h := http.Client{}
 	if opts.HTTPClient != nil {

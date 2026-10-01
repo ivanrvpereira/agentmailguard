@@ -9,14 +9,17 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/cli"
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
@@ -79,6 +82,94 @@ func TestLocalDeviceLoginAndRemoteRefusal(t *testing.T) {
 	errout.Reset()
 	if code := cli.Run(context.Background(), []string{"auth", "login"}, &out, &errout, opts); code != 1 || calls != before {
 		t.Fatal("remote environment ignored")
+	}
+}
+
+// signInWriter captures stderr and hands the sign-in URL, printed bare on its own line, to the test.
+type signInWriter struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+	uri chan *url.URL
+}
+
+func (w *signInWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, line := range strings.Split(string(p), "\n") {
+		if u, err := url.Parse(line); err == nil && u.Scheme == "http" && u.Query().Get("redirect_uri") != "" {
+			w.uri <- u
+		}
+	}
+	return w.buf.Write(p)
+}
+func (w *signInWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+func TestGmailLoginWithoutBrowserAcceptsPastedRedirect(t *testing.T) {
+	home := t.TempDir()
+	if e := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[accounts.personal]\nprovider='gmail'\nclient_id='synthetic'\nclient_secret='synthetic'\n[accounts.work]\nprovider='m365'\nclient_id='synthetic'\ntenant_id='synthetic'\n"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/profile" {
+			io.WriteString(w, `{"emailAddress":"synthetic@example.test"}`)
+			return
+		}
+		_ = r.ParseForm()
+		if r.Form.Get("grant_type") == "authorization_code" && r.Form.Get("code") != "private-code-canary" {
+			t.Error("pasted code not exchanged")
+		}
+		io.WriteString(w, `{"access_token":"private-access-canary","refresh_token":"private-refresh-canary","expires_in":3600,"scope":"https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.events.owned.readonly"}`)
+	}))
+	defer api.Close()
+	store := &diagnosticStore{}
+	stdin, paste := io.Pipe()
+	defer paste.Close()
+	stderr := &signInWriter{uri: make(chan *url.URL, 1)}
+	opts := cli.Options{Stdin: stdin, LookupEnv: func(string) string { return "" }, Server: server.Options{Credentials: store, Gmail: gmail.Options{HTTPClient: api.Client(), TokenURL: api.URL + "/token", AuthURL: api.URL + "/auth", ProfileURL: api.URL + "/profile", OpenBrowser: func(context.Context, string) error {
+		t.Error("--no-browser opened a browser")
+		return nil
+	}}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var out bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- cli.Run(ctx, []string{"--home", home, "--account", "personal", "auth", "login", "--no-browser"}, &out, stderr, opts)
+	}()
+	select {
+	case u := <-stderr.uri:
+		q := u.Query()
+		io.WriteString(paste, q.Get("redirect_uri")+"?state="+url.QueryEscape(q.Get("state"))+"&code=private-code-canary\n")
+	case code := <-done:
+		t.Fatalf("login ended before printing the sign-in URL: exit=%d stderr=%q", code, stderr.String())
+	}
+	code, screen := <-done, stderr.String()
+	if code != 0 || store.saves.Load() != 1 || !strings.Contains(out.String(), `"username": "synthetic@example.test"`) || strings.Contains(out.String()+screen, "private-") {
+		t.Fatalf("pasted login: exit=%d saves=%d stdout=%q stderr=%q", code, store.saves.Load(), out.String(), screen)
+	}
+	for _, want := range []string{"Gmail sign-in for account personal\n", "1. Open this URL in a browser on any computer and approve access:\n\nhttp", "Address: ", "\n\n✓ Signed in as synthetic@example.test\n  Restart the server to use the new login.\n"} {
+		if !strings.Contains(screen, want) {
+			t.Errorf("screen lacks %q:\n%s", want, screen)
+		}
+	}
+	if strings.Contains(screen, `"http`) {
+		t.Fatalf("sign-in URL is quoted:\n%s", screen)
+	}
+	var errout bytes.Buffer
+	if code := cli.Run(ctx, []string{"--home", home, "--account", "work", "auth", "login", "--no-browser"}, io.Discard, &errout, opts); code != 1 || !strings.HasSuffix(errout.String(), "error: --no-browser is for Gmail; use --device-code for Microsoft 365\n") {
+		t.Fatalf("Microsoft 365 accepted --no-browser: exit=%d stderr=%q", code, errout.String())
+	}
+	// Closed input leaves only the loopback callback; it must not spin on EOF.
+	short, stop := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer stop()
+	opts.Stdin = strings.NewReader("")
+	closed := &signInWriter{uri: make(chan *url.URL, 1)}
+	if code := cli.Run(short, []string{"--home", home, "--account", "personal", "auth", "login", "--no-browser"}, io.Discard, closed, opts); code != 1 || strings.Count(closed.String(), "Address: ") != 1 {
+		t.Fatalf("closed input: exit=%d stderr=%q", code, closed.String())
 	}
 }
 func TestDeviceCodeAliasesUseLastOption(t *testing.T) {

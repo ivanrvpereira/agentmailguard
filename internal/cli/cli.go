@@ -28,7 +28,7 @@ type Options struct {
 	Server             server.Options
 	LookupEnv          func(string) string
 	Now                func() time.Time
-	Stdin              io.Reader // defaults to os.Stdin; read by auth set-jev-key and by serve for a missing Jev key
+	Stdin              io.Reader // defaults to os.Stdin; read by auth set-jev-key, by auth login for a pasted Gmail address, and by serve for a missing Jev key
 }
 
 func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "CLIOptions{redacted}") }
@@ -339,7 +339,7 @@ func serveCmd(r *runner) *cobra.Command {
 }
 
 func authCmd(r *runner) *cobra.Command {
-	device := false
+	device, noBrowser := false, false
 	signIn := r.leaf("login", "Sign in to a provider on this host", 0, 0, func(c *cobra.Command, _ []string) error {
 		supplied, _, err := r.resolve(c, true)
 		if err != nil {
@@ -349,10 +349,11 @@ func authCmd(r *runner) *cobra.Command {
 			r.code = failure(r.stderr, "login is local only; remove --server and AGENTMAILGUARD_SERVER")
 			return errDone
 		}
-		r.code = login(c.Context(), r.home, r.account, device, r.opts.Stdin, r.stdout, r.stderr, r.opts.Server, r.passwordEnv)
+		r.code = login(c.Context(), r.home, r.account, device, noBrowser, r.opts.Stdin, r.stdout, r.stderr, r.opts.Server, r.passwordEnv)
 		return errDone
 	})
 	negated(signIn, "device-code", "use the provider device-code flow", &device)
+	signIn.Flags().BoolVar(&noBrowser, "no-browser", false, "print the Gmail sign-in URL without opening a browser")
 	jevKey := r.leaf("set-jev-key", "Save the Jev key on this host from stdin", 0, 0, func(c *cobra.Command, _ []string) error {
 		supplied, _, err := r.resolve(c, true)
 		if err != nil {
