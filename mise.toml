@@ -1,0 +1,5 @@
+[shell_alias]
+amg = "{{config_root}}/bin/agentmailguard"
+
+[env]
+_.path = ["{{config_root}}/bin"]
