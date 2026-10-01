@@ -12,48 +12,60 @@ import (
 	"github.com/ivanrvpereira/agentmailguard-go/internal/model"
 )
 
-func TestUnsupportedOrExcessiveCSSFailsClosed(t *testing.T) {
+// Stylesheets, colour, geometry and clipping are not evaluated; that text stays visible so screening sees it.
+func TestStylesheetsAndLayoutAreLeftToScreening(t *testing.T) {
+	deep := strings.Repeat(`<div class="x">`, 36) + `CANARY` + strings.Repeat(`</div>`, 36)
 	for _, body := range []string{
-		`<style>:unsupported-pseudo {display:none}</style><p>CANARY</p>`,
-		`<style>` + strings.Repeat(`p {display:none}`, 2000) + `</style>` + strings.Repeat(`<p>CANARY</p>`, 1001),
+		`<style>.x {display:none}</style><p class="x">CANARY</p>Visible`,
+		`<style>p.a.b, #z {display:none}</style><p class="b a">CANARY</p>Visible`,
+		`<style>span {font-size:0}</style><span>CANARY</span>Visible`,
+		`<style>.hidden{display:none</style><p class="hidden">CANARY</p>Visible`,
+		`<style>}</style><p>CANARY</p>Visible`,
+		`<style>` + strings.Repeat(`p {display:none}`, 2000) + `</style>` + strings.Repeat(`<p>CANARY</p>`, 1001) + `Visible`,
+		`<style>.missing ` + strings.Repeat(`.x `, 18) + `{display:none}</style>` + deep + `Visible`,
+		`<span style="color:#fff">CANARY</span>Visible`,
+		`<p style="color:#123456;background-color:#123456">CANARY</p>Visible`,
+		`<div style="position:absolute;left:-9999px">CANARY</div>Visible`,
+		`<div style="width:0;height:0;overflow:hidden">CANARY</div>Visible`,
+		`<div style="clip-path:inset(50%)">CANARY</div>Visible`,
+		`<img src="https://t.example/x.gif" width="1" height="1" alt="CANARY">Visible`,
 	} {
 		r, err := content.RenderBody(&body, model.HTML)
-		if err == nil || err.Error() != "render ValueError" || r.Markdown != "" || len(r.Links) != 0 {
-			t.Fatalf("CSS not refused safely: %v", err)
+		if err != nil || !strings.Contains(r.Markdown, "CANARY") || !strings.Contains(r.Markdown, "Visible") {
+			t.Errorf("%.60q: got %q %v", body, r.Markdown, err)
 		}
 	}
 }
 
-func TestNewsletterPseudoElementsDoNotBlockVisibleContent(t *testing.T) {
-	body := `<style>p::before {content:"decoration"} p::after, .hidden {display:none} p:first-letter {font-size:18px}</style><p>Visible newsletter</p><p class="hidden">CANARY</p>`
-	r, err := content.RenderBody(&body, model.HTML)
-	if err != nil || r.Markdown != "Visible newsletter" || len(r.Links) != 0 {
-		t.Fatalf("newsletter rendering: %q %v", r.Markdown, err)
-	}
-}
-
-func TestUnclosedStylesheetCannotExposeHiddenContent(t *testing.T) {
-	for _, rule := range []string{`display:none`, `visibility:hidden`, `color:transparent`, `display:none!important`} {
-		body := `<style>.hidden{` + rule + `</style><p class="hidden">CANARY</p>Visible`
-		r, err := content.RenderBody(&body, model.HTML)
-		if err == nil && r.Markdown != "Visible" {
-			t.Errorf("unclosed %s exposed content: %q", rule, r.Markdown)
-		}
-		if err != nil && (err.Error() != "render ValueError" || r.Markdown != "" || len(r.Links) != 0) {
-			t.Fatalf("unsafe rendering failure: %+v %v", r, err)
-		}
-	}
-}
-
-func TestCompoundSelectorsCannotLeak(t *testing.T) {
+func TestInlineHidingHonoursEscapesCommentsAndInheritance(t *testing.T) {
 	for _, body := range []string{
-		`<style>p:not(.x,.y) {display:none}</style><p>CANARY</p>Visible`,
-		`<style>[data-x="a,b"] {display:none}</style><p data-x="a,b">CANARY</p>Visible`,
-		`<style>.x {d\69splay:none}</style><p class="x">CANARY</p>Visible`,
+		`<p style="d\69splay:none">CANARY</p>Visible`,
+		`<p style="display:/**/none">CANARY</p>Visible`,
+		`<p style="DISPLAY: NONE !important">CANARY</p>Visible`,
+		`<p style="mso-hide:all">CANARY</p>Visible`,
+		`<span style="opacity:0">CANARY</span><span style="opacity:.1">Visible</span>`,
+		`<span style="font-size:1pt">CANARY</span><span style="font-size:12px">Visible</span>`,
+		`<div style="visibility:hidden"><span style="visibility:visible">CANARY</span></div>Visible`,
 	} {
 		r, err := content.RenderBody(&body, model.HTML)
-		if err != nil || r.Markdown != "Visible" {
-			t.Fatalf("compound CSS leaks: %q %v", r.Markdown, err)
+		if err != nil || strings.Contains(r.Markdown, "CANARY") || !strings.HasPrefix(r.Markdown, "[hidden text removed]") || !strings.HasSuffix(r.Markdown, "Visible") {
+			t.Errorf("%.60q: got %q %v", body, r.Markdown, err)
+		}
+	}
+}
+
+// The marker tells screening that prose was hidden; it is not emitted for non-rendered markup or empty hidden boxes.
+func TestHiddenTextMarker(t *testing.T) {
+	for _, c := range []struct{ body, want string }{
+		{`<p>Hello <span style="display:none">CANARY</span>world</p>`, "Hello [hidden text removed] world"},
+		{`<p>Hi</p><p style="display:none">A</p><div hidden>B</div><span style="font-size:0">C</span><p>Bye</p>`, "Hi\n\n[hidden text removed]\n\nBye"},
+		{`<style>p{color:red}</style><script>x()</script><!-- c --><div style="display:none"><img src="https://t.example/p.gif"> &nbsp;&zwnj;</div>Visible`, "Visible"},
+		{`<div style="display:none"><style>CANARY</style></div>Visible`, "Visible"},
+		{`<div style="font-size:0"><span style="font-size:14px">Visible</span> <span style="font-size:14px">text</span></div>`, "Visible text"},
+	} {
+		r, err := content.RenderBody(&c.body, model.HTML)
+		if err != nil || r.Markdown != c.want {
+			t.Errorf("%.60q: got %q %v want %q", c.body, r.Markdown, err, c.want)
 		}
 	}
 }
@@ -76,31 +88,6 @@ func TestStructuredMarkdownSourceParity(t *testing.T) {
 	}
 }
 
-func TestCSSCascadeAndInheritedResets(t *testing.T) {
-	cases := []struct{ body, want string }{
-		{`<style>div span {display:none} #a {display:inline} .h {display:none!important}</style><div><span id="a" class="h" style="display:block">CANARY</span></div><p>Visible</p>`, "Visible"},
-		{`<style>#a {display:none!important}</style><p id="a" style="display:block!important">Visible</p>`, "Visible"},
-		{`<style>.h {color:white} .h {color:black}</style><p class="h">Visible</p>`, "Visible"},
-		{`<style>[data-hide] + span {visibility:collapse}</style><i data-hide></i><span>CANARY</span><p>Visible</p>`, "Visible"},
-		{`<div style="font-size:1pt;color:transparent"><span style="font-size:12px;color:black">Visible</span>CANARY</div>`, "Visible"},
-		{`<div style="background:black"><p style="background:transparent;color:rgb(0 0 0)">CANARY</p><p style="color:rgb(255,255,255)">Visible</p></div>`, "Visible"},
-		{`<div style="background-image:url(https://local.invalid/pixel)"><p style="color:white">Visible</p></div>`, "Visible"},
-		{`<style>.h {background-image:url(https://local.invalid/pixel)}</style><div class="h"><p style="color:white">Visible</p></div>`, "Visible"},
-		{`<div style="visibility:hidden"><span style="visibility:visible">CANARY</span></div>Visible`, "Visible"},
-		{`<div style="margin-top:-500px">CANARY</div><span style="opacity:.1">Visible</span>`, "Visible"},
-		{`<p style="clip:">CANARY</p>Visible`, "Visible"},
-		{`<p style="clip-path:">CANARY</p>Visible`, "Visible"},
-	}
-	for i, c := range cases {
-		t.Run(fmt.Sprint(i), func(t *testing.T) {
-			r, err := content.RenderBody(&c.body, model.HTML)
-			if err != nil || r.Markdown != c.want {
-				t.Fatalf("got %q %v, want %q", r.Markdown, err, c.want)
-			}
-		})
-	}
-}
-
 func TestHostileDepthAndRuns(t *testing.T) {
 	start := time.Now()
 	for _, body := range []string{strings.Repeat("<div>", 201), strings.Repeat("<table><tr><td>", 8000)} {
@@ -115,8 +102,8 @@ func TestHostileDepthAndRuns(t *testing.T) {
 	}
 	body = strings.Repeat(`<p style="display:none">CANARY</p>`, 10000) + "Visible"
 	r, err = content.RenderBody(&body, model.HTML)
-	if err != nil || r.Markdown != "Visible" {
-		t.Fatalf("siblings: %q %v", r.Markdown, err)
+	if err != nil || r.Markdown != "[hidden text removed]\n\nVisible" {
+		t.Fatalf("siblings: %.120q %v", r.Markdown, err)
 	}
 	for _, body := range []string{strings.Repeat("x", 1000000) + "://example.test", strings.Repeat("-", 1000000) + "://x"} {
 		r, err = content.RenderBody(&body, model.Text)

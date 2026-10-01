@@ -30,17 +30,20 @@ var pieces = regexp.MustCompile("(?i)\x00[^\x00]*\x00|[a-z0-9+.-]*://[^\\s\\p{Z}
 var hostChars = regexp.MustCompile(`^[a-z0-9._:-]+$`)
 var marker = regexp.MustCompile(`\[[^\[\]\n]{0,500}\]\[L\d+\]|\[L\d+\]`)
 
+// Hangul fillers are letters that render blank; NFKC maps U+3164 and U+FFA0 to U+1160, which is still blank.
+// One basic variation selector per character is legitimate (emoji presentation); a run of them is a byte carrier.
 func stripInvisible(s string) string {
-	s = ansi.ReplaceAllString(s, "")
-	return strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\t' {
-			return r
+	var b strings.Builder
+	selector := false
+	for _, r := range ansi.ReplaceAllString(s, "") {
+		variation := r >= 0xfe00 && r <= 0xfe0f
+		if r != '\n' && r != '\t' && (unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r) || (r >= 0xe0100 && r <= 0xe01ef) || r == 0x115f || r == 0x1160 || r == 0x3164 || r == 0xffa0 || (variation && selector)) {
+			continue
 		}
-		if unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r) || (r >= 0xe0100 && r <= 0xe01ef) {
-			return -1
-		}
-		return r
-	}, s)
+		selector = variation
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 func cleanText(s string) string {
 	return strings.NewReplacer("<", "‹", ">", "›").Replace(norm.NFKC.String(stripInvisible(s)))
@@ -96,6 +99,8 @@ func finish(s string, registry map[string]string) string {
 		}
 		return "[" + id + "]" + suffix
 	})
+	// HTML strips each text node alone; a selector run split across elements only joins here.
+	s = stripInvisible(s)
 	var b strings.Builder
 	space, newlines := false, 0
 	for _, r := range s {

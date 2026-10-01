@@ -77,6 +77,25 @@ func TestPythonReference(t *testing.T) {
 	}
 }
 
+// Variation-selector runs and Hangul fillers are invisible carriers; a single emoji presentation selector is legitimate.
+func TestInvisibleCarriersStripped(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		kind model.ContentType
+		want string
+	}{
+		{"\u2764\ufe0f ok", model.Text, "\u2764\ufe0f ok"},
+		{"X\ufe00\ufe0f\ufe03\ufe0a\ufe01Y", model.Text, "X\ufe00Y"},
+		{"X\ufe00<span>\ufe01</span><!-- -->\ufe02<b></b>\ufe03Y", model.HTML, "X\ufe00Y"},
+		{"a\u3164b\u115fc\u1160d\uffa0e", model.Text, "abcde"},
+	} {
+		r, err := content.RenderBody(&c.in, c.kind)
+		if err != nil || r.Markdown != c.want {
+			t.Errorf("%q: got %q %v want %q", c.in, r.Markdown, err, c.want)
+		}
+	}
+}
+
 func TestFetchedBodyAndCleanText(t *testing.T) {
 	if _, err := content.RenderBody(nil, model.Text); err == nil {
 		t.Fatal("missing body accepted")
