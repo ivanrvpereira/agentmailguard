@@ -28,6 +28,7 @@ type eventChangeParam struct {
 	Duration *string  `json:"duration"`
 	Add      []string `json:"add"`
 	Remove   []string `json:"remove"`
+	Teams    *bool    `json:"teams"` // only true is valid; updates never remove a Teams meeting
 }
 
 type eventCancelParam struct {
@@ -60,10 +61,10 @@ func calendarWriteCall(ctx context.Context, operation string, raw json.RawMessag
 		}, nil
 	case "calendar.update":
 		var p eventChangeParam
-		if params(raw, &p) != nil || !idValid(p.ID) || !listValid(p.Add, 0, 100) || !listValid(p.Remove, 0, 100) || p.Subject != nil && !validString(*p.Subject, 65536, true) || p.Location != nil && !validString(*p.Location, 4096, true) {
+		if params(raw, &p) != nil || !idValid(p.ID) || p.Teams != nil && !*p.Teams || !listValid(p.Add, 0, 100) || !listValid(p.Remove, 0, 100) || p.Subject != nil && !validString(*p.Subject, 65536, true) || p.Location != nil && !validString(*p.Location, 4096, true) {
 			return nil, invalid
 		}
-		change := model.EventChange{Subject: p.Subject, Location: p.Location, AddAttendees: p.Add, RemoveAttendees: p.Remove}
+		change := model.EventChange{Subject: p.Subject, Location: p.Location, AddAttendees: p.Add, RemoveAttendees: p.Remove, Teams: p.Teams != nil}
 		for _, v := range []struct {
 			in  *string
 			out **time.Time
@@ -96,12 +97,13 @@ func calendarWriteCall(ctx context.Context, operation string, raw json.RawMessag
 				}
 			}
 		}
-		if p.Subject == nil && p.Location == nil && p.Start == nil && p.End == nil && p.Duration == nil && len(p.Add)+len(p.Remove) == 0 {
+		if p.Subject == nil && p.Location == nil && p.Start == nil && p.End == nil && p.Duration == nil && len(p.Add)+len(p.Remove) == 0 && p.Teams == nil {
 			return nil, invalid
 		}
 		return func(a *account) (any, error) { return updateDTO{p.ID, true}, a.guard.CalendarUpdate(ctx, p.ID, change) }, nil
 	case "calendar.invite":
-		var p inviteParam
+		// Teams is on unless the caller sends an explicit false.
+		p := inviteParam{Teams: true}
 		if params(raw, &p) != nil || !listValid(p.To, 1, 100) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) || !validString(p.Location, 4096, true) {
 			return nil, invalid
 		}

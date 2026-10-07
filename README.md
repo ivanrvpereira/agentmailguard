@@ -289,7 +289,7 @@ Required text flags distinguish an omitted value from an explicit empty value, i
 | Mail changes | `mail archive IDS...`, `mail trash IDS...`, `mail move FOLDER_ID IDS...`, `mail read IDS...`, `mail unread IDS...`, `mail flag IDS... --state flagged|complete|none`, `mail categorize IDS... --add NAME --remove NAME` |
 | Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID` |
 | Availability (Microsoft 365, read-only) | `calendar availability --to ADDRESS [--to ADDRESS] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'` |
-| Meetings (Microsoft 365, send notifications) | `calendar invite --to ADDRESS --subject TEXT --start 'YYYY-MM-DD HH:MM' --duration 30m\|--end 'YYYY-MM-DD HH:MM' [--body TEXT] [--location TEXT] [--teams]`, `calendar update ID [--subject TEXT] [--location TEXT] [--start TIME] [--duration D\|--end TIME] [--add-attendee ADDRESS] [--remove-attendee ADDRESS]`, `calendar cancel ID [--comment TEXT]`, `calendar respond ID --response accept\|tentative\|decline [--comment TEXT]` |
+| Meetings (Microsoft 365, send notifications) | `calendar invite --to ADDRESS --subject TEXT --start 'YYYY-MM-DD HH:MM' --duration 30m\|--end 'YYYY-MM-DD HH:MM' [--body TEXT] [--location TEXT] [--no-teams]`, `calendar update ID [--subject TEXT] [--location TEXT] [--start TIME] [--duration D\|--end TIME] [--add-attendee ADDRESS] [--remove-attendee ADDRESS] [--teams]`, `calendar cancel ID [--comment TEXT]`, `calendar respond ID --response accept\|tentative\|decline [--comment TEXT]` |
 | Drafts only | `draft new --to ADDRESS --subject TEXT --body TEXT`, `draft reply ID --body TEXT`, `draft forward ID --to ADDRESS`, `draft update ID --body TEXT` |
 
 Successful commands print the original operation's JSON result, not an RPC envelope.
@@ -325,7 +325,8 @@ Go parses `--duration`, for example `30m` or `1h30m`. The duration must be more 
 An invite needs exactly one of `--end` and `--duration`. An update can use one of them, but not both.
 
 An invite needs one or more `--to` addresses and an explicit `--subject`, which can be empty.
-The body is empty if you omit `--body`. A Teams link is added only with `--teams`.
+The body is empty if you omit `--body`.
+Every invite is a Microsoft Teams meeting by default. Use `--no-teams` to create a meeting without an online meeting. `--teams` is accepted, and the last of `--teams` and `--no-teams` wins.
 All invite attendees are required attendees.
 
 An update needs at least one change and sends only the options that you supply.
@@ -333,7 +334,11 @@ An explicit empty `--subject ''` or `--location ''` clears that field.
 If an update changes only `--start`, the server keeps the current duration.
 `--duration` alone or `--end` alone keeps the current start.
 Attendee changes keep the type of existing attendees. Added attendees are required attendees.
-Updates cannot change the body or the Teams setting, so an existing Teams link stays in the body.
+`calendar update ID --teams` adds a Teams meeting to the same event and sends an update notification to the attendees. It does not create a new event.
+With `--teams` alone, the update sends only online-meeting settings.
+It does not replace the body or change the times or attendees. Microsoft Graph can add Teams join details to the body.
+An update without `--teams` leaves the online meeting unchanged. Updates cannot remove a Teams meeting, change the online-meeting provider, or change the body, so an existing Teams link stays in the body.
+`--teams=false` on an update is invalid usage.
 
 Only the organizer can update or cancel an event.
 Only an attendee can respond, and the response always goes to the organizer.

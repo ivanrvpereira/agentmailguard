@@ -141,6 +141,7 @@ func TestCalendarUpdateResolvesOnlyRequestedTimeChanges(t *testing.T) {
 		{"end only", model.EventChange{End: &end}, model.EventChange{End: &end}},
 		{"explicit range", model.EventChange{Start: &start, End: &end}, model.EventChange{Start: &start, End: &end}},
 		{"attendees only", model.EventChange{AddAttendees: []string{"CANARY@example.test"}}, model.EventChange{AddAttendees: []string{"CANARY@example.test"}}},
+		{"teams only", model.EventChange{Teams: true}, model.EventChange{Teams: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := meetingWriter()

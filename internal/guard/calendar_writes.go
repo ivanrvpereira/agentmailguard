@@ -48,7 +48,7 @@ func (g *Guard) CalendarUpdate(ctx context.Context, id string, change model.Even
 	if !ok {
 		return calendarUnsupported
 	}
-	if change.Subject == nil && change.Location == nil && change.Start == nil && change.End == nil && change.Duration == nil && len(change.AddAttendees)+len(change.RemoveAttendees) == 0 {
+	if change.Subject == nil && change.Location == nil && change.Start == nil && change.End == nil && change.Duration == nil && len(change.AddAttendees)+len(change.RemoveAttendees) == 0 && !change.Teams {
 		return GuardError("calendar update needs at least one change")
 	}
 	if change.Duration != nil && (*change.Duration <= 0 || change.End != nil) {

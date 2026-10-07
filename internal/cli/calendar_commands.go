@@ -106,6 +106,7 @@ func calendarUpdateCmd(r *runner) *cobra.Command {
 	var add, remove []string
 	var subject, location, start, end string
 	var duration time.Duration
+	teams := false
 	c := r.leaf("update ID", "Change your own meeting and send the update now", 1, 1, func(c *cobra.Command, args []string) error {
 		p := map[string]any{"id": args[0]}
 		optional(c, p, "subject", &subject)
@@ -144,6 +145,13 @@ func calendarUpdateCmd(r *runner) *cobra.Command {
 		if len(remove) > 0 {
 			p["remove"] = remove
 		}
+		if c.Flags().Changed("teams") {
+			// Updates only add Teams; removing an existing meeting link is not supported.
+			if !teams {
+				return errUsage
+			}
+			p["teams"] = true
+		}
 		if len(p) == 1 {
 			return errUsage
 		}
@@ -156,6 +164,7 @@ func calendarUpdateCmd(r *runner) *cobra.Command {
 	c.Flags().DurationVar(&duration, "duration", 0, "new meeting length, for example 30m or 1h30m")
 	c.Flags().StringArrayVar(&add, "add-attendee", nil, "attendee address to add; repeatable")
 	c.Flags().StringArrayVar(&remove, "remove-attendee", nil, "attendee address to remove; repeatable")
+	c.Flags().BoolVar(&teams, "teams", false, "add a Microsoft Teams meeting to this event; cannot remove one")
 	return c
 }
 
@@ -163,8 +172,8 @@ func calendarInviteCmd(r *runner) *cobra.Command {
 	var to []string
 	var subject, body, location, start, end string
 	var duration time.Duration
-	teams := false
-	c := r.leaf("invite", "Create a meeting and send the invitation now", 0, 0, func(c *cobra.Command, _ []string) error {
+	teams := true
+	c := r.leaf("invite", "Create a meeting, with Teams by default, and send the invitation now", 0, 0, func(c *cobra.Command, _ []string) error {
 		if len(to) == 0 || !c.Flags().Changed("subject") || !c.Flags().Changed("start") {
 			return errUsage
 		}
@@ -179,9 +188,7 @@ func calendarInviteCmd(r *runner) *cobra.Command {
 		}
 		p := map[string]any{"to": to, "subject": subject, "body": body, "start": from.Format(time.RFC3339), "end": until.Format(time.RFC3339)}
 		optional(c, p, "location", &location)
-		if teams {
-			p["teams"] = true
-		}
+		p["teams"] = teams
 		return r.call(c, "calendar.invite", p, false)
 	})
 	c.Flags().StringArrayVar(&to, "to", nil, "attendee address; repeatable")
@@ -191,6 +198,6 @@ func calendarInviteCmd(r *runner) *cobra.Command {
 	c.Flags().StringVar(&start, "start", "", "local start as 'YYYY-MM-DD HH:MM'")
 	c.Flags().StringVar(&end, "end", "", "local end as 'YYYY-MM-DD HH:MM'")
 	c.Flags().DurationVar(&duration, "duration", 0, "meeting length, for example 30m or 1h30m")
-	c.Flags().BoolVar(&teams, "teams", false, "add a Microsoft Teams meeting link")
+	negated(c, "teams", "add a Microsoft Teams meeting link; use --no-teams for none", &teams)
 	return c
 }

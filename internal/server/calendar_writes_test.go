@@ -217,6 +217,7 @@ func TestCalendarHTTPRejectsInvalidInputBeforeAccountAccess(t *testing.T) {
 			strings.Replace(validCalendarParams["calendar.invite"], `2026-10-09T10:00:00Z`, `2026-10-09T09:00:00Z`, 1),
 			strings.Replace(validCalendarParams["calendar.invite"], `2026-10-09T09:00:00Z`, `0000-10-09T09:00:00Z`, 1),
 			strings.Replace(validCalendarParams["calendar.invite"], `2026-10-09T10:00:00Z`, `9999-12-31T23:45:00-01:00`, 1),
+			strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"teams":"false"}`, strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"teams":0}`,
 		},
 		"calendar.update": {
 			`{}`, `{"id":"e1"}`, `{"id":"e1","add":[],"remove":[]}`, `{"id":"e1","body":"forbidden"}`, `{"id":"e1","start":"bad"}`, `{"id":"e1","end":"bad"}`,
@@ -228,13 +229,15 @@ func TestCalendarHTTPRejectsInvalidInputBeforeAccountAccess(t *testing.T) {
 			`{"id":"e1","add":["SAME@example.test"],"remove":["same@example.test"]}`,
 			`{"id":"e1","add":[""]}`, `{"id":"e1","remove":[` + strings.Repeat(`"a",`, 100) + `"a"]}`,
 			`{"id":"e1","subject":"` + strings.Repeat("s", 65537) + `"}`, `{"id":"e1","location":"` + strings.Repeat("s", 4097) + `"}`,
+			// Updates can add Teams but never remove it.
+			`{"id":"e1","teams":false}`, `{"id":"e1","subject":"","teams":false}`, `{"id":"e1","teams":"true"}`,
 		},
 		"calendar.cancel":  {`{}`, `{"id":""}`, `{"id":"` + strings.Repeat("x", 4097) + `"}`, `{"id":"e1","response":"accept"}`},
 		"calendar.respond": {`{}`, `{"id":"e1"}`, `{"id":"e1","response":"Accept"}`, `{"id":"e1","response":"decline","comment":7}`},
 	}
 	for op, fields := range map[string][]string{
 		"calendar.invite":  {"to", "subject", "body", "start", "end", "location", "teams"},
-		"calendar.update":  {"id", "subject", "location", "start", "end", "duration", "add", "remove"},
+		"calendar.update":  {"id", "subject", "location", "start", "end", "duration", "add", "remove", "teams"},
 		"calendar.cancel":  {"id", "comment"},
 		"calendar.respond": {"id", "response", "comment"},
 	} {
@@ -388,6 +391,7 @@ func TestCalendarHTTPPartialUpdatesLeaveUnselectedFieldsAlone(t *testing.T) {
 		{"duration only", `{"id":"e1","duration":"30m"}`, map[string]any{"end": map[string]any{"dateTime": "2026-10-09T09:30:00", "timeZone": "UTC"}}},
 		{"end only", `{"id":"e1","end":"2026-10-09T11:30:00+01:00"}`, map[string]any{"end": map[string]any{"dateTime": "2026-10-09T10:30:00", "timeZone": "UTC"}}},
 		{"remove only", `{"id":"e1","remove":["remove@example.test"]}`, map[string]any{"attendees": []any{map[string]any{"emailAddress": map[string]any{"address": "keep@example.test"}, "type": "optional"}}}},
+		{"teams only", `{"id":"e1","teams":true}`, map[string]any{"isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			writes := make(chan meetingRequest, 4)
@@ -420,29 +424,44 @@ func TestCalendarHTTPPartialUpdatesLeaveUnselectedFieldsAlone(t *testing.T) {
 }
 
 func TestCalendarHTTPInviteWritesExactPayloadAndOnlyReturnsID(t *testing.T) {
-	requests := make(chan meetingRequest, 4)
-	s, _, home := calendarServer(t, "User.Read cAlEnDaRs.ReAdWrItE", func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Error(err)
-		}
-		requests <- meetingRequest{r.Method, r.URL.Path, body}
-		io.WriteString(w, `{"id":"new-event","subject":"CANARY raw"}`)
-	})
-	status, body := meetingRPC(t, s, "calendar.invite", `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body","location":"CANARY room","start":"2026-10-09T10:00:00+01:00","end":"2026-10-09T19:00:00+01:00","teams":true}`)
-	if status != 200 || body != `{"id":"new-event"}` {
-		t.Fatalf("response=%d %s", status, body)
-	}
-	if len(requests) != 1 {
-		t.Fatalf("provider requests=%d", len(requests))
-	}
-	got := <-requests
-	want := map[string]any{"subject": "CANARY subject", "body": map[string]any{"contentType": "text", "content": "CANARY body"}, "location": map[string]any{"displayName": "CANARY room"}, "start": map[string]any{"dateTime": "2026-10-09T09:00:00", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T18:00:00", "timeZone": "UTC"}, "attendees": []any{map[string]any{"emailAddress": map[string]any{"address": "CANARY@example.test"}, "type": "required"}}, "isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"}
-	if got.Method != "POST" || got.Path != "/me/events" || !reflect.DeepEqual(got.Body, want) {
-		t.Fatalf("provider request=%+v", got)
-	}
-	data, err := os.ReadFile(filepath.Join(home, "audit.jsonl"))
-	if err != nil || strings.Contains(string(data), "CANARY") || !strings.Contains(string(data), `"operation":"calendar_invite"`) {
-		t.Fatalf("audit=%s error=%v", data, err)
+	// Teams is the default; only an explicit false opts out.
+	for _, tc := range []struct {
+		name, teams string
+		online      map[string]any
+	}{
+		{"default Teams", "", map[string]any{"isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"}},
+		{"explicit Teams", `,"teams":true`, map[string]any{"isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"}},
+		{"no Teams", `,"teams":false`, map[string]any{"isOnlineMeeting": false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := make(chan meetingRequest, 4)
+			s, _, home := calendarServer(t, "User.Read cAlEnDaRs.ReAdWrItE", func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				requests <- meetingRequest{r.Method, r.URL.Path, body}
+				io.WriteString(w, `{"id":"new-event","subject":"CANARY raw"}`)
+			})
+			status, body := meetingRPC(t, s, "calendar.invite", `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body","location":"CANARY room","start":"2026-10-09T10:00:00+01:00","end":"2026-10-09T19:00:00+01:00"`+tc.teams+`}`)
+			if status != 200 || body != `{"id":"new-event"}` {
+				t.Fatalf("response=%d %s", status, body)
+			}
+			if len(requests) != 1 {
+				t.Fatalf("provider requests=%d", len(requests))
+			}
+			got := <-requests
+			want := map[string]any{"subject": "CANARY subject", "body": map[string]any{"contentType": "text", "content": "CANARY body"}, "location": map[string]any{"displayName": "CANARY room"}, "start": map[string]any{"dateTime": "2026-10-09T09:00:00", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T18:00:00", "timeZone": "UTC"}, "attendees": []any{map[string]any{"emailAddress": map[string]any{"address": "CANARY@example.test"}, "type": "required"}}}
+			for k, v := range tc.online {
+				want[k] = v
+			}
+			if got.Method != "POST" || got.Path != "/me/events" || !reflect.DeepEqual(got.Body, want) {
+				t.Fatalf("provider request=%+v", got)
+			}
+			data, err := os.ReadFile(filepath.Join(home, "audit.jsonl"))
+			if err != nil || strings.Contains(string(data), "CANARY") || !strings.Contains(string(data), `"operation":"calendar_invite"`) {
+				t.Fatalf("audit=%s error=%v", data, err)
+			}
+		})
 	}
 }

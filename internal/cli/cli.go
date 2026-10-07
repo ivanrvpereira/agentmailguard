@@ -196,9 +196,9 @@ func optional(c *cobra.Command, p map[string]any, name string, value *string) {
 	}
 }
 
-// negated adds --NAME and --no-NAME; the last option on the command line wins.
+// negated adds --NAME and --no-NAME; the last option on the command line wins. *target is the default.
 func negated(c *cobra.Command, name, short string, target *bool) {
-	c.Flags().BoolVar(target, name, false, short)
+	c.Flags().BoolVar(target, name, *target, short)
 	c.Flags().Var(negatedValue{target}, "no-"+name, "turn off --"+name)
 	c.Flags().Lookup("no-" + name).NoOptDefVal = "true"
 }

@@ -249,6 +249,8 @@ func TestCalendarUpdateSelectedFields(t *testing.T) {
 		{"clear-location", model.EventChange{Location: &location}, map[string]any{"location": map[string]any{"displayName": ""}}},
 		{"resolved-time", model.EventChange{Start: &start, End: &end}, map[string]any{"start": map[string]any{"dateTime": "2026-10-09T08:00:00", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T08:30:00", "timeZone": "UTC"}}},
 		{"end-only", model.EventChange{End: &end}, map[string]any{"end": map[string]any{"dateTime": "2026-10-09T08:30:00", "timeZone": "UTC"}}},
+		// Graph keeps omitted fields, so the body with its join blob, times, and attendees stay as they are.
+		{"teams-only", model.EventChange{Teams: true}, map[string]any{"isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"}},
 		{"fractional-time", model.EventChange{Start: &fracStart, End: &fracEnd}, map[string]any{"start": map[string]any{"dateTime": "2026-10-09T08:00:00.1234567", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T08:30:00.0000001", "timeZone": "UTC"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -286,7 +288,7 @@ func TestCalendarInvitePayload(t *testing.T) {
 				t.Error(err)
 			}
 			expected := map[string]any{
-				"subject": "Planning", "body": map[string]any{"contentType": "text", "content": "Agenda"},
+				"subject": "Planning", "body": map[string]any{"contentType": "text", "content": "Agenda"}, "isOnlineMeeting": false,
 				"location":  map[string]any{"displayName": "Room"},
 				"start":     map[string]any{"dateTime": "2026-10-09T08:00:00", "timeZone": "UTC"},
 				"end":       map[string]any{"dateTime": "2026-10-09T08:30:00", "timeZone": "UTC"},

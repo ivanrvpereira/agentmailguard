@@ -177,6 +177,7 @@ type EventChange struct {
 	Start, End                    *time.Time
 	Duration                      *time.Duration
 	AddAttendees, RemoveAttendees []string
+	Teams                         bool // true adds a Teams meeting; false leaves the online meeting unchanged
 }
 
 type EventResponse struct {

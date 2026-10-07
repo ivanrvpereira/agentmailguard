@@ -33,6 +33,11 @@ func (c *calendar) Update(ctx context.Context, id model.EventID, change model.Ev
 	if change.End != nil {
 		body["end"] = calendarTime(*change.End)
 	}
+	// Enable only. The body is never sent, so the online-meeting details in it stay intact.
+	if change.Teams {
+		body["isOnlineMeeting"] = true
+		body["onlineMeetingProvider"] = "teamsForBusiness"
+	}
 	if len(change.AddAttendees) > 0 || len(change.RemoveAttendees) > 0 {
 		d, err := c.c.get(ctx, c.c.endpoint("/me/events/"+escapeID(id), url.Values{"$select": {"attendees"}}), true)
 		if err != nil {
@@ -121,9 +126,9 @@ func (c *calendar) Invite(ctx context.Context, event model.NewEvent) (model.Even
 		"subject": event.Subject, "body": map[string]string{"contentType": "text", "content": event.Body},
 		"location": map[string]string{"displayName": event.Location},
 		"start":    calendarTime(event.Start), "end": calendarTime(event.End), "attendees": attendees,
+		"isOnlineMeeting": event.Teams,
 	}
 	if event.Teams {
-		body["isOnlineMeeting"] = true
 		body["onlineMeetingProvider"] = "teamsForBusiness"
 	}
 	d, err := c.c.request(ctx, http.MethodPost, c.c.endpoint("/me/events", nil), body, true)

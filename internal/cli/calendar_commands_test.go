@@ -53,12 +53,21 @@ func TestCalendarWriteCommandsSendExactRequests(t *testing.T) {
 		params string
 	}{
 		{"invite duration across spring DST", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--start", "2026-03-08 01:30", "--duration", "1h"}, "calendar.invite",
-			`{"to":["a@example.test"],"subject":"Plan","body":"","start":"2026-03-08T01:30:00-05:00","end":"2026-03-08T03:30:00-04:00"}`},
+			`{"to":["a@example.test"],"subject":"Plan","body":"","teams":true,"start":"2026-03-08T01:30:00-05:00","end":"2026-03-08T03:30:00-04:00"}`},
 		{"invite end with every option", []string{"calendar", "invite", "--to", "a@example.test", "--to", "b@example.test", "--subject", "", "--body", "Agenda", "--location", "Room 1", "--teams", "--start", "2026-10-09 09:00", "--end", "2026-10-09 10:15"}, "calendar.invite",
 			`{"to":["a@example.test","b@example.test"],"subject":"","body":"Agenda","location":"Room 1","teams":true,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T10:15:00-04:00"}`},
 		{"invite explicit empty location without Teams", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--location", "", "--teams=false", "--start", "2026-11-01 00:30", "--end", "2026-11-01 03:00"}, "calendar.invite",
-			`{"to":["a@example.test"],"subject":"Plan","body":"","location":"","start":"2026-11-01T00:30:00-04:00","end":"2026-11-01T03:00:00-05:00"}`},
+			`{"to":["a@example.test"],"subject":"Plan","body":"","location":"","teams":false,"start":"2026-11-01T00:30:00-04:00","end":"2026-11-01T03:00:00-05:00"}`},
+		{"invite opts out of Teams", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--no-teams", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar.invite",
+			`{"to":["a@example.test"],"subject":"Plan","body":"","teams":false,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T09:30:00-04:00"}`},
+		{"invite last Teams option wins", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--teams", "--no-teams", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar.invite",
+			`{"to":["a@example.test"],"subject":"Plan","body":"","teams":false,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T09:30:00-04:00"}`},
+		{"invite Teams after opt-out", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--no-teams", "--teams", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar.invite",
+			`{"to":["a@example.test"],"subject":"Plan","body":"","teams":true,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T09:30:00-04:00"}`},
+		{"invite negated opt-out", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--no-teams=false", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar.invite",
+			`{"to":["a@example.test"],"subject":"Plan","body":"","teams":true,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T09:30:00-04:00"}`},
 		{"update subject only", []string{"calendar", "update", "e1", "--subject", "New"}, "calendar.update", `{"id":"e1","subject":"New"}`},
+		{"update adds Teams", []string{"calendar", "update", "e1", "--teams"}, "calendar.update", `{"id":"e1","teams":true}`},
 		{"update explicit empty subject and location", []string{"calendar", "update", "e1", "--subject", "", "--location", ""}, "calendar.update", `{"id":"e1","subject":"","location":""}`},
 		{"update start only keeps server duration", []string{"calendar", "update", "e1", "--start", "2026-03-08 03:00"}, "calendar.update", `{"id":"e1","start":"2026-03-08T03:00:00-04:00"}`},
 		{"update duration only", []string{"calendar", "update", "e1", "--duration", "1h30m"}, "calendar.update", `{"id":"e1","duration":"1h30m0s"}`},
@@ -119,7 +128,9 @@ func TestCalendarWriteUsageErrorsNeedNoServerOrState(t *testing.T) {
 		{"calendar", "update", "e1", "e2", "--subject", "New"},
 		{"calendar", "update", "e1"},
 		{"calendar", "update", "e1", "--body", "New body"},
-		{"calendar", "update", "e1", "--teams"},
+		{"calendar", "update", "e1", "--teams=false"},
+		{"calendar", "update", "e1", "--subject", "New", "--teams=false"},
+		{"calendar", "update", "e1", "--no-teams"},
 		{"calendar", "update", "e1", "--subject", "New", "--body", ""},
 		{"calendar", "update", "e1", "--to", "a@example.test"},
 		{"calendar", "update", "e1", "--end", "2026-10-09 10:00", "--duration", "1h"},
@@ -160,6 +171,10 @@ func TestHelpStatesThatCalendarWritesSendNotifications(t *testing.T) {
 		if code != 0 || errout != "" || !strings.Contains(out, want) {
 			t.Fatalf("calendar help is missing %q: exit=%d stdout=%q stderr=%q", want, code, out, errout)
 		}
+	}
+	code, out, errout = runOffline(t, "calendar", "invite", "--help")
+	if code != 0 || errout != "" || !strings.Contains(out, "--no-teams") || !strings.Contains(out, "(default true)") {
+		t.Fatalf("invite help must show the Teams default and its opt-out: exit=%d stdout=%q stderr=%q", code, out, errout)
 	}
 }
 
