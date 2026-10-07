@@ -2,6 +2,7 @@ package m365
 
 import (
 	"context"
+	"encoding/json"
 	"net/url"
 	"strings"
 	"time"
@@ -64,10 +65,13 @@ func eventTime(d object) (time.Time, error) {
 	return stamp.UTC(), nil
 }
 func toEvent(d object) (model.Event, error) {
-	ev := model.Event{ID: text(d, "id"), Subject: text(d, "subject"), IsAllDay: boolean(d, "isAllDay"), Location: text(obj(d, "location"), "displayName"), Organizer: address(obj(d, "organizer")), IsOrganizer: boolean(d, "isOrganizer"), Attendees: []model.Attendee{}, Attachments: names(d), IsPrivate: text(d, "sensitivity") == "private", Categories: stringsAt(d, "categories"), ShowAs: text(d, "showAs"), IsCancelled: boolean(d, "isCancelled")}
-	if ev.ID == "" {
+	ev := model.Event{ID: text(d, "id"), Subject: text(d, "subject"), IsAllDay: boolean(d, "isAllDay"), Location: text(obj(d, "location"), "displayName"), Organizer: address(obj(d, "organizer")), Attendees: []model.Attendee{}, Attachments: names(d), IsPrivate: text(d, "sensitivity") == "private", Categories: stringsAt(d, "categories"), ShowAs: text(d, "showAs"), IsCancelled: boolean(d, "isCancelled")}
+	// Write authority comes from this field, so absent, null, or non-boolean values fail closed.
+	var organizer *bool
+	if ev.ID == "" || json.Unmarshal(d["isOrganizer"], &organizer) != nil || organizer == nil {
 		return ev, invalidMetadata
 	}
+	ev.IsOrganizer = *organizer
 	var err error
 	ev.Start, err = eventTime(obj(d, "start"))
 	if err != nil {

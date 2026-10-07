@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
@@ -44,6 +45,11 @@ func publicError(e error) (string, bool) {
 	}
 	if e, ok := e.(guard.GuardError); ok {
 		switch string(e) {
+		case "calendar writes are not supported for this account", "missing_scopes", "invalid request",
+			"calendar write refused: recurring events are not supported", "calendar write refused: event is cancelled",
+			"calendar write refused: only the organizer can update or cancel", "calendar response refused: organizer cannot respond",
+			"calendar update needs at least one change":
+			return string(e), true
 		case "move refused: the destination must be a folder ID from `folders`", "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
 			"link refused: message is red, not green", "link refused: message is yellow, not green", "link refused: message is sealed, not green", "link refused: message is error, not green",
 			"search needs at least one of text, from, subject, after, before":
@@ -225,7 +231,15 @@ type rulesDTO struct {
 // Dispatch first validates a complete typed operation. Account and provider access occur only afterwards.
 func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	var call func(*account) (any, error)
+	calendarWrite := false
 	switch r.Operation {
+	case "calendar.invite", "calendar.update", "calendar.cancel", "calendar.respond":
+		calendarWrite = true
+		var e error
+		call, e = calendarWriteCall(ctx, r.Operation, r.Params)
+		if e != nil {
+			return nil, e
+		}
 	case "mail.get", "calendar.get":
 		var p idParam
 		if params(r.Params, &p) != nil || !idValid(p.ID) {
@@ -400,9 +414,21 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	if r.Operation == "rules.list" {
 		return s.ruleList(ctx, a)
 	}
+	if calendarWrite && a.Provider != "m365" {
+		return nil, guard.GuardError("calendar writes are not supported for this account")
+	}
 	instance, e := s.instance(a)
 	if e != nil {
 		return nil, e
+	}
+	if calendarWrite {
+		_, scopes, e := instance.provider.Status(ctx)
+		if e != nil {
+			return nil, e
+		}
+		if !slices.ContainsFunc(scopes, func(scope string) bool { return strings.EqualFold(scope, "Calendars.ReadWrite") }) {
+			return nil, guard.GuardError("missing_scopes")
+		}
 	}
 	return call(instance)
 }

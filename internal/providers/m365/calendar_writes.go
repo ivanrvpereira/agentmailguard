@@ -12,7 +12,8 @@ import (
 )
 
 func (c *calendar) Update(ctx context.Context, id model.EventID, change model.EventChange) error {
-	if change.Duration != nil {
+	// Guard resolves duration and start-only moves; end-only changes are complete as sent.
+	if change.Duration != nil || change.Start != nil && change.End == nil {
 		return invalidMetadata
 	}
 	if !c.c.lockMutation(ctx) {
@@ -104,7 +105,7 @@ func (c *calendar) Respond(ctx context.Context, id model.EventID, response model
 }
 
 func calendarTime(t time.Time) map[string]string {
-	return map[string]string{"dateTime": t.UTC().Format("2006-01-02T15:04:05.999999999"), "timeZone": "UTC"}
+	return map[string]string{"dateTime": t.UTC().Format("2006-01-02T15:04:05.9999999"), "timeZone": "UTC"}
 }
 
 func (c *calendar) Invite(ctx context.Context, event model.NewEvent) (model.EventID, error) {

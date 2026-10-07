@@ -222,12 +222,16 @@ func TestCalendarUpdateAttendeeDeltaPreservesExistingProperties(t *testing.T) {
 	}
 }
 
-func TestCalendarUpdateRejectsUnresolvedDuration(t *testing.T) {
-	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) { t.Error("unresolved duration reached Graph") })
-	writer := c.Calendar().(model.CalendarWriter)
+func TestCalendarUpdateRejectsUnresolvedTimes(t *testing.T) {
 	duration := 30 * time.Minute
-	if err := writer.Update(context.Background(), "e", model.EventChange{Duration: &duration}); err == nil || err.Error() != "Graph error InvalidMetadata" {
-		t.Fatalf("unresolved duration = %v", err)
+	for name, change := range map[string]model.EventChange{"duration": {Duration: &duration}, "start without end": {Start: &now}} {
+		t.Run(name, func(t *testing.T) {
+			c := graphClient(t, func(w http.ResponseWriter, r *http.Request) { t.Error("unresolved time reached Graph") })
+			writer := c.Calendar().(model.CalendarWriter)
+			if err := writer.Update(context.Background(), "e", change); err == nil || err.Error() != "Graph error InvalidMetadata" {
+				t.Fatalf("unresolved time = %v", err)
+			}
+		})
 	}
 }
 
@@ -235,6 +239,7 @@ func TestCalendarUpdateSelectedFields(t *testing.T) {
 	start := time.Date(2026, 10, 9, 9, 0, 0, 0, time.FixedZone("WEST", 3600))
 	end := start.Add(30 * time.Minute)
 	subject, location := "Changed", ""
+	fracStart, fracEnd := start.Add(123456789*time.Nanosecond), end.Add(100*time.Nanosecond)
 	for _, tc := range []struct {
 		name   string
 		change model.EventChange
@@ -243,6 +248,8 @@ func TestCalendarUpdateSelectedFields(t *testing.T) {
 		{"subject", model.EventChange{Subject: &subject}, map[string]any{"subject": "Changed"}},
 		{"clear-location", model.EventChange{Location: &location}, map[string]any{"location": map[string]any{"displayName": ""}}},
 		{"resolved-time", model.EventChange{Start: &start, End: &end}, map[string]any{"start": map[string]any{"dateTime": "2026-10-09T08:00:00", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T08:30:00", "timeZone": "UTC"}}},
+		{"end-only", model.EventChange{End: &end}, map[string]any{"end": map[string]any{"dateTime": "2026-10-09T08:30:00", "timeZone": "UTC"}}},
+		{"fractional-time", model.EventChange{Start: &fracStart, End: &fracEnd}, map[string]any{"start": map[string]any{"dateTime": "2026-10-09T08:00:00.1234567", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T08:30:00.0000001", "timeZone": "UTC"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			requests := 0

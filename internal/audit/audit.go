@@ -16,17 +16,21 @@ import (
 type Operation string
 
 const (
-	Archive      Operation = "archive"
-	Trash        Operation = "trash"
-	Move         Operation = "move"
-	Read         Operation = "read"
-	Unread       Operation = "unread"
-	Flag         Operation = "flag"
-	Categorize   Operation = "categorize"
-	DraftNew     Operation = "draft_new"
-	DraftReply   Operation = "draft_reply"
-	DraftForward Operation = "draft_forward"
-	DraftUpdate  Operation = "draft_update"
+	Archive         Operation = "archive"
+	Trash           Operation = "trash"
+	Move            Operation = "move"
+	Read            Operation = "read"
+	Unread          Operation = "unread"
+	Flag            Operation = "flag"
+	Categorize      Operation = "categorize"
+	DraftNew        Operation = "draft_new"
+	DraftReply      Operation = "draft_reply"
+	DraftForward    Operation = "draft_forward"
+	DraftUpdate     Operation = "draft_update"
+	CalendarInvite  Operation = "calendar_invite"
+	CalendarUpdate  Operation = "calendar_update"
+	CalendarCancel  Operation = "calendar_cancel"
+	CalendarRespond Operation = "calendar_respond"
 )
 
 // Options contains only operation settings. Folder, category, and draft IDs must
@@ -69,6 +73,10 @@ func (l *Log) Record(ctx context.Context, account string, operation Operation, r
 	}
 	switch operation {
 	case Archive, Trash, Move, Read, Unread, Flag, Categorize, DraftNew, DraftReply, DraftForward, DraftUpdate:
+	case CalendarInvite, CalendarUpdate, CalendarCancel, CalendarRespond:
+		if options.Folder != nil || options.Flag != nil || options.Add != nil || options.Remove != nil || options.DraftID != nil || options.Rule != nil {
+			return errors.New("invalid calendar audit options")
+		}
 	default:
 		return errors.New("invalid audit operation")
 	}

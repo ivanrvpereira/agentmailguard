@@ -111,7 +111,7 @@ func (a *nativeAPI) graph(w http.ResponseWriter, r *http.Request) {
 		}
 		response(w, map[string]any{"value": v})
 	case "/me/calendarView", "/me/events/e":
-		e := map[string]any{"id": "e", "subject": "private-subject-event", "start": map[string]string{"dateTime": "2026-03-31T10:00:00", "timeZone": "UTC"}, "end": map[string]string{"dateTime": "2026-03-31T11:00:00", "timeZone": "UTC"}, "body": map[string]string{"contentType": "text", "content": "private-body-event"}, "categories": []string{}}
+		e := map[string]any{"id": "e", "subject": "private-subject-event", "start": map[string]string{"dateTime": "2026-03-31T10:00:00", "timeZone": "UTC"}, "end": map[string]string{"dateTime": "2026-03-31T11:00:00", "timeZone": "UTC"}, "isOrganizer": false, "body": map[string]string{"contentType": "text", "content": "private-body-event"}, "categories": []string{}}
 		if r.URL.Path == "/me/calendarView" {
 			response(w, map[string]any{"value": []any{e}})
 		} else {

@@ -99,7 +99,11 @@ func (c *Client) Call(ctx context.Context, operation, account string, params any
 			switch v.Error {
 			case "invalid request", "operation failed", "configuration unavailable", "rules unavailable", "account configuration changed; restart required", "server unavailable", "server busy", "browser requests refused", "move refused: the destination must be a folder ID from `folders`", "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
 				"link refused: message is red, not green", "link refused: message is yellow, not green", "link refused: message is sealed, not green", "link refused: message is error, not green",
-				"search needs at least one of text, from, subject, after, before":
+				"search needs at least one of text, from, subject, after, before",
+				"calendar writes are not supported for this account", "missing_scopes",
+				"calendar write refused: recurring events are not supported", "calendar write refused: event is cancelled",
+				"calendar write refused: only the organizer can update or cancel", "calendar response refused: organizer cannot respond",
+				"calendar update needs at least one change":
 				message = v.Error
 			}
 		}
