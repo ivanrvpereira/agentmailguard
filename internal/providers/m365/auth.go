@@ -111,7 +111,7 @@ func ExtraScopes(scopes []string) []string {
 	var extra []string
 	for _, s := range scopes {
 		switch strings.ToLower(s) {
-		case "user.read", "mail.readwrite", "calendars.read", "mailboxsettings.read", "offline_access", "openid", "profile", "email":
+		case "user.read", "mail.readwrite", "calendars.read", "calendars.readwrite", "mailboxsettings.read", "offline_access", "openid", "profile", "email":
 		default:
 			extra = append(extra, s)
 		}
@@ -174,7 +174,7 @@ func (c *Client) Status(ctx context.Context) (string, []string, error) {
 	return v.Username, append([]string(nil), v.Scopes...), nil
 }
 
-const requestedScopes = "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/MailboxSettings.Read offline_access openid profile"
+const requestedScopes = "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/MailboxSettings.Read offline_access openid profile"
 
 type tokenResponse struct {
 	AccessToken     string `json:"access_token"`

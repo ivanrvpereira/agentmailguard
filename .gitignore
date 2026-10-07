@@ -16,5 +16,8 @@ audit.jsonl
 internal/credentials/*
 !internal/credentials/*.go
 .backup/
+# Local plan and progress handoff files. Never commit them; Linux checkouts are case-sensitive.
 /PLAN.md
+/plan.md
 /PROGRESS.md
+/progress.md

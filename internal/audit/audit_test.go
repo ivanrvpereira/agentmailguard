@@ -74,6 +74,50 @@ func TestAuditAppendsOnlyFixedFieldsWithExplicitNullRule(t *testing.T) {
 	}
 }
 
+func TestCalendarAuditRecordsHaveOnlyStandardFields(t *testing.T) {
+	for _, op := range []audit.Operation{audit.CalendarInvite, audit.CalendarUpdate, audit.CalendarCancel, audit.CalendarRespond} {
+		t.Run(string(op), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "audit.jsonl")
+			if err := audit.New(path).Record(context.Background(), "work", op, []model.MutationResult{{ID: "e1", OK: true}}, audit.Options{}); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var record map[string]any
+			if err := json.Unmarshal(data, &record); err != nil {
+				t.Fatal(err)
+			}
+			if len(record) != 6 || record["operation"] != string(op) || record["account"] != "work" || record["rule"] != nil || !reflect.DeepEqual(record["ids"], []any{"e1"}) || !reflect.DeepEqual(record["results"], []any{map[string]any{"id": "e1", "ok": true, "error": nil}}) {
+				t.Fatalf("unexpected record: %v", record)
+			}
+			if _, err := time.Parse(time.RFC3339, record["time"].(string)); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCalendarAuditRefusesContentBearingOptions(t *testing.T) {
+	text := "CANARY@example.test"
+	flag := model.Flagged
+	rule := "finance"
+	for _, op := range []audit.Operation{audit.CalendarInvite, audit.CalendarUpdate, audit.CalendarCancel, audit.CalendarRespond} {
+		for name, opts := range map[string]audit.Options{"add": {Add: []string{text}}, "remove": {Remove: []string{text}}, "folder": {Folder: &text}, "draft": {DraftID: &text}, "flag": {Flag: &flag}, "rule": {Rule: &rule}} {
+			t.Run(string(op)+"/"+name, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "audit.jsonl")
+				if err := audit.New(path).Record(context.Background(), "work", op, []model.MutationResult{{ID: "e1", OK: true}}, opts); err == nil {
+					t.Error("accepted non-calendar metadata")
+				}
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Error("rejected metadata created an audit file")
+				}
+			})
+		}
+	}
+}
+
 func TestAuditPreservesNormalizedOrganizerFailure(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	failure, rule := "failed", "finance"

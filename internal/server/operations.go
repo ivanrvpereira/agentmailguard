@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
@@ -43,7 +44,10 @@ func publicError(e error) (string, bool) {
 		}
 	}
 	if e, ok := e.(guard.GuardError); ok {
-		switch string(e) {
+		switch e {
+		case guard.CalendarWriteUnsupported, guard.CalendarAvailabilityUnsupported, "missing_scopes", "invalid request",
+			guard.CalendarRecurring, guard.CalendarCancelled, guard.CalendarOrganizerOnly, guard.CalendarOrganizerCannotRespond:
+			return string(e), true
 		case "move refused: the destination must be a folder ID from `folders`", "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
 			"link refused: message is red, not green", "link refused: message is yellow, not green", "link refused: message is sealed, not green", "link refused: message is error, not green",
 			"search needs at least one of text, from, subject, after, before":
@@ -162,6 +166,23 @@ type calendarParam struct {
 	Start string `json:"start"`
 	End   string `json:"end"`
 }
+type availabilityParam struct {
+	To    []string `json:"to"`
+	Start string   `json:"start"`
+	End   string   `json:"end"`
+}
+
+// Slot i covers start+i*interval_minutes; the last slot ends at end.
+type availabilityDTO struct {
+	Start     string        `json:"start"`
+	End       string        `json:"end"`
+	Interval  int           `json:"interval_minutes"`
+	Schedules []scheduleDTO `json:"schedules"`
+}
+type scheduleDTO struct {
+	Address string                     `json:"address"`
+	Slots   []model.AvailabilityStatus `json:"slots"`
+}
 type newParam struct {
 	To      []string `json:"to"`
 	Subject *string  `json:"subject"`
@@ -225,7 +246,16 @@ type rulesDTO struct {
 // Dispatch first validates a complete typed operation. Account and provider access occur only afterwards.
 func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	var call func(*account) (any, error)
+	// M365-only calendar operations name their Gmail refusal and the grants that allow them.
+	unsupported, grants := guard.GuardError(""), []string(nil)
 	switch r.Operation {
+	case "calendar.invite", "calendar.update", "calendar.cancel", "calendar.respond":
+		unsupported, grants = guard.CalendarWriteUnsupported, []string{"Calendars.ReadWrite"}
+		var e error
+		call, e = calendarWriteCall(ctx, r.Operation, r.Params)
+		if e != nil {
+			return nil, e
+		}
 	case "mail.get", "calendar.get":
 		var p idParam
 		if params(r.Params, &p) != nil || !idValid(p.ID) {
@@ -362,6 +392,28 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 			return nil, invalid
 		}
 		call = func(a *account) (any, error) { return a.guard.CalendarList(ctx, first, last) }
+	case "calendar.availability":
+		var p availabilityParam
+		if params(r.Params, &p) != nil || !listValid(p.To, 1, model.MaxAvailabilityAddresses) {
+			return nil, invalid
+		}
+		first, e := time.Parse(time.RFC3339, p.Start)
+		last, e2 := time.Parse(time.RFC3339, p.End)
+		if e != nil || e2 != nil || !model.ValidAvailabilityRequest(p.To, first, last) {
+			return nil, invalid
+		}
+		unsupported, grants = guard.CalendarAvailabilityUnsupported, []string{"Calendars.ReadBasic", "Calendars.Read", "Calendars.ReadWrite"}
+		call = func(a *account) (any, error) {
+			v, e := a.guard.CalendarAvailability(ctx, p.To, first, last)
+			if e != nil {
+				return nil, e
+			}
+			out := availabilityDTO{first.Format(time.RFC3339Nano), last.Format(time.RFC3339Nano), int(model.AvailabilityInterval / time.Minute), make([]scheduleDTO, 0, len(v))}
+			for _, schedule := range v {
+				out.Schedules = append(out.Schedules, scheduleDTO{schedule.Address, schedule.Slots})
+			}
+			return out, nil
+		}
 	case "draft.new":
 		var p newParam
 		if params(r.Params, &p) != nil || !listValid(p.To, 1, 100) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) {
@@ -400,9 +452,23 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	if r.Operation == "rules.list" {
 		return s.ruleList(ctx, a)
 	}
+	if unsupported != "" && a.Provider != "m365" {
+		return nil, unsupported
+	}
 	instance, e := s.instance(a)
 	if e != nil {
 		return nil, e
+	}
+	if grants != nil {
+		_, scopes, e := instance.provider.Status(ctx)
+		if e != nil {
+			return nil, e
+		}
+		if !slices.ContainsFunc(scopes, func(scope string) bool {
+			return slices.ContainsFunc(grants, func(grant string) bool { return strings.EqualFold(scope, grant) })
+		}) {
+			return nil, guard.GuardError("missing_scopes")
+		}
 	}
 	return call(instance)
 }

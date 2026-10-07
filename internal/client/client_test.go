@@ -2,6 +2,7 @@ package client_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -62,6 +63,40 @@ func TestClientCancellationAndRequestReplayDisabled(t *testing.T) {
 	_, e = c.Call(context.Background(), "mail.trash", "", map[string]any{"ids": []string{"x"}})
 	if e == nil || strings.Contains(e.Error(), "canary") {
 		t.Fatal("unsafe error")
+	}
+}
+
+func TestCalendarClientDisplaysOnlyExactFixedRefusals(t *testing.T) {
+	for _, fixed := range []string{
+		"calendar writes are not supported for this account",
+		"calendar availability is not supported for this account",
+		"calendar write refused: recurring events are not supported",
+		"calendar write refused: event is cancelled",
+		"calendar write refused: only the organizer can update or cancel",
+		"calendar response refused: organizer cannot respond",
+		"missing_scopes",
+	} {
+		for _, suffix := range []string{"", " CANARY private"} {
+			t.Run(fixed+suffix, func(t *testing.T) {
+				h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(500)
+					json.NewEncoder(w).Encode(map[string]string{"error": fixed + suffix})
+				}))
+				defer h.Close()
+				c, err := client.New(h.URL, client.Options{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = c.Call(context.Background(), "calendar.update", "work", map[string]any{"id": "e1", "subject": ""})
+				want := fixed
+				if suffix != "" {
+					want = "server request failed"
+				}
+				if err == nil || err.Error() != want {
+					t.Fatalf("error=%v want=%q", err, want)
+				}
+			})
+		}
 	}
 }
 

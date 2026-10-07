@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -96,6 +98,7 @@ type Event struct {
 	Recurrence  *string
 	Location    string
 	Organizer   Address
+	IsOrganizer bool
 	Attendees   []Attendee
 	JoinURL     *string
 	Attachments []string
@@ -162,6 +165,127 @@ type Mailbox interface {
 type Calendar interface {
 	List(ctx context.Context, start, end time.Time) ([]Event, error)
 	Get(ctx context.Context, id EventID) (Event, error)
+}
+
+type NewEvent struct {
+	Subject, Body, Location string
+	Start, End              time.Time
+	Attendees               []string
+	Teams                   bool
+}
+
+// CalendarTimeValid reports whether t has a year from 1 to 9999 in its own zone and in UTC.
+func CalendarTimeValid(t time.Time) bool {
+	return t.Year() >= 1 && t.Year() <= 9999 && t.UTC().Year() >= 1 && t.UTC().Year() <= 9999
+}
+
+type EventChange struct {
+	Subject, Location             *string
+	Start, End                    *time.Time
+	AddAttendees, RemoveAttendees []string
+	Teams                         bool // true adds a Teams meeting; false leaves the online meeting unchanged
+}
+
+// Empty reports a change with no field set. A duration given beside it is a change too.
+func (c EventChange) Empty() bool {
+	return c.Subject == nil && c.Location == nil && c.Start == nil && c.End == nil && len(c.AddAttendees)+len(c.RemoveAttendees) == 0 && !c.Teams
+}
+
+// AttendeeConflict reports an address that is both added and removed, ignoring case.
+func (c EventChange) AttendeeConflict() bool {
+	for _, add := range c.AddAttendees {
+		if slices.ContainsFunc(c.RemoveAttendees, func(remove string) bool { return strings.EqualFold(add, remove) }) {
+			return true
+		}
+	}
+	return false
+}
+
+type MeetingResponse string
+
+const (
+	ResponseAccept    MeetingResponse = "accept"
+	ResponseTentative MeetingResponse = "tentative"
+	ResponseDecline   MeetingResponse = "decline"
+)
+
+func (r MeetingResponse) Valid() bool {
+	return r == ResponseAccept || r == ResponseTentative || r == ResponseDecline
+}
+
+type EventResponse struct {
+	Response MeetingResponse
+	Comment  string
+}
+
+// CalendarWriter is optional; read-only calendar providers need not implement it.
+// Callers must resolve start-only changes into explicit Start and End.
+type CalendarWriter interface {
+	Invite(ctx context.Context, event NewEvent) (EventID, error)
+	Update(ctx context.Context, id EventID, change EventChange) error
+	Cancel(ctx context.Context, id EventID, comment string) error
+	Respond(ctx context.Context, id EventID, response EventResponse) error
+}
+
+// AvailabilityInterval is fixed: slot i covers start+i*interval until the next slot or the requested end.
+const AvailabilityInterval = 30 * time.Minute
+
+type AvailabilityStatus string
+
+const (
+	SlotFree        AvailabilityStatus = "free"
+	SlotTentative   AvailabilityStatus = "tentative"
+	SlotBusy        AvailabilityStatus = "busy"
+	SlotOutOfOffice AvailabilityStatus = "out_of_office"
+	SlotUnknown     AvailabilityStatus = "unknown"
+)
+
+// Schedule is free/busy metadata for one requested address. It never carries event text.
+type Schedule struct {
+	Address string
+	Slots   []AvailabilityStatus
+}
+
+// AvailabilitySlots counts slots from start to end; a partial final slot counts as one.
+func AvailabilitySlots(start, end time.Time) int {
+	if !end.After(start) {
+		return 0
+	}
+	d := end.Sub(start)
+	n := int(d / AvailabilityInterval)
+	if d%AvailabilityInterval != 0 {
+		n++
+	}
+	return n
+}
+
+// Availability requests name 1 to MaxAvailabilityAddresses addresses for a range shorter than MaxAvailabilityRange.
+const (
+	MaxAvailabilityAddresses = 20
+	MaxAvailabilityRange     = 62 * 24 * time.Hour
+)
+
+// ValidAvailabilityRequest refuses blank or duplicate (ignoring case) addresses, too many addresses,
+// invalid times, an end not after the start, and a range of MaxAvailabilityRange or more.
+func ValidAvailabilityRequest(addresses []string, start, end time.Time) bool {
+	if len(addresses) == 0 || len(addresses) > MaxAvailabilityAddresses || !CalendarTimeValid(start) || !CalendarTimeValid(end) || !end.After(start) || end.Sub(start) >= MaxAvailabilityRange {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, address := range addresses {
+		key := strings.ToLower(address)
+		if strings.TrimSpace(address) == "" || seen[key] {
+			return false
+		}
+		seen[key] = true
+	}
+	return true
+}
+
+// CalendarAvailability is optional and read-only. It returns one schedule per requested address, in
+// request order, labeled with the requested address. Missing or failed participant data is unknown.
+type CalendarAvailability interface {
+	Availability(ctx context.Context, addresses []string, start, end time.Time) ([]Schedule, error)
 }
 
 type Verdict string

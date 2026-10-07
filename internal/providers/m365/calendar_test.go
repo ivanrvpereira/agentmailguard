@@ -12,7 +12,7 @@ import (
 )
 
 func event() map[string]any {
-	return map[string]any{"id": "event", "subject": "Planning", "start": map[string]string{"dateTime": "2026-09-26T09:00:00.0000000", "timeZone": "UTC"}, "end": map[string]string{"dateTime": "2026-09-26T09:30:00.0000000", "timeZone": "UTC"}, "isAllDay": true, "type": "occurrence", "location": map[string]string{"displayName": "Room 1"}, "organizer": map[string]any{"emailAddress": map[string]string{"name": "Olga", "address": "olga@example.test"}}, "attendees": []any{map[string]any{"emailAddress": map[string]string{"address": "bob@example.test"}, "status": map[string]string{"response": "accepted"}}, map[string]any{"emailAddress": map[string]string{"address": "carol@example.test"}}}, "onlineMeeting": map[string]string{"joinUrl": "https://teams.example.test/join"}, "sensitivity": "private", "categories": []string{"Work"}, "showAs": "busy", "isCancelled": true, "body": map[string]string{"contentType": "html", "content": "<p>agenda</p>"}, "attachments": []any{map[string]string{"name": "agenda.pdf"}}}
+	return map[string]any{"id": "event", "subject": "Planning", "start": map[string]string{"dateTime": "2026-09-26T09:00:00.0000000", "timeZone": "UTC"}, "end": map[string]string{"dateTime": "2026-09-26T09:30:00.0000000", "timeZone": "UTC"}, "isAllDay": true, "type": "occurrence", "location": map[string]string{"displayName": "Room 1"}, "organizer": map[string]any{"emailAddress": map[string]string{"name": "Olga", "address": "olga@example.test"}}, "isOrganizer": false, "attendees": []any{map[string]any{"emailAddress": map[string]string{"address": "bob@example.test"}, "status": map[string]string{"response": "accepted"}}, map[string]any{"emailAddress": map[string]string{"address": "carol@example.test"}}}, "onlineMeeting": map[string]string{"joinUrl": "https://teams.example.test/join"}, "sensitivity": "private", "categories": []string{"Work"}, "showAs": "busy", "isCancelled": true, "body": map[string]string{"contentType": "html", "content": "<p>agenda</p>"}, "attachments": []any{map[string]string{"name": "agenda.pdf"}}}
 }
 func TestCalendarMapsAllFieldsAndPagesInUTC(t *testing.T) {
 	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -56,6 +56,48 @@ func TestCalendarMapsAllFieldsAndPagesInUTC(t *testing.T) {
 		t.Fatalf("event mapping %+v", ev)
 	}
 }
+func TestCalendarOrganizerMetadata(t *testing.T) {
+	for _, organizer := range []bool{true, false} {
+		c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if !strings.Contains(r.URL.Query().Get("$select"), ",isOrganizer,") {
+				t.Error("organizer authority not selected")
+			}
+			e := event()
+			e["isOrganizer"] = organizer
+			jsonResponse(w, e)
+		})
+		e, err := c.Calendar().Get(context.Background(), "event")
+		if err != nil || e.IsOrganizer != organizer {
+			t.Fatalf("organizer = %v, error = %v", e.IsOrganizer, err)
+		}
+	}
+}
+
+func TestCalendarRejectsMissingOrMalformedOrganizerMetadata(t *testing.T) {
+	for name, value := range map[string]any{"missing": nil, "null": nil, "string": "false", "number": 0} {
+		t.Run(name, func(t *testing.T) {
+			c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+				e := event()
+				e["isOrganizer"] = value
+				if name == "missing" {
+					delete(e, "isOrganizer")
+				}
+				if strings.Contains(r.URL.Path, "/events/") {
+					jsonResponse(w, e)
+					return
+				}
+				jsonResponse(w, map[string]any{"value": []any{e}})
+			})
+			if _, err := c.Calendar().Get(context.Background(), "event"); err == nil || err.Error() != "Graph error InvalidMetadata" {
+				t.Fatalf("get accepted unproven organizer role: %v", err)
+			}
+			if _, err := c.Calendar().List(context.Background(), now, now.Add(time.Hour)); err == nil || err.Error() != "Graph error InvalidMetadata" {
+				t.Fatalf("list accepted unproven organizer role: %v", err)
+			}
+		})
+	}
+}
+
 func TestCalendarRejectsNonUTCorInvalidDates(t *testing.T) {
 	for _, start := range []any{nil, map[string]string{"dateTime": "2026-09-21T10:00:00", "timeZone": "W. Europe Standard Time"}, map[string]string{"dateTime": "SECRET", "timeZone": "UTC"}, map[string]string{"dateTime": "2026-09-21T10:00:00+01:00", "timeZone": "UTC"}} {
 		c := graphClient(t, func(w http.ResponseWriter, r *http.Request) { e := event(); e["start"] = start; jsonResponse(w, e) })

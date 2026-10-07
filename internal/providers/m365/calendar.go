@@ -2,6 +2,7 @@ package m365
 
 import (
 	"context"
+	"encoding/json"
 	"net/url"
 	"strings"
 	"time"
@@ -13,7 +14,7 @@ type calendar struct{ c *Client }
 
 func (c *Client) Calendar() model.Calendar { return &calendar{c} }
 func calendarQuery() url.Values {
-	return url.Values{"$select": {"id,subject,start,end,isAllDay,type,recurrence,location,organizer,attendees,onlineMeeting,sensitivity,categories,showAs,isCancelled,body"}, "$expand": {attachments}}
+	return url.Values{"$select": {"id,subject,start,end,isAllDay,type,recurrence,location,organizer,isOrganizer,attendees,onlineMeeting,sensitivity,categories,showAs,isCancelled,body"}, "$expand": {attachments}}
 }
 func (c *calendar) List(ctx context.Context, start, end time.Time) ([]model.Event, error) {
 	if !end.After(start) {
@@ -65,9 +66,12 @@ func eventTime(d object) (time.Time, error) {
 }
 func toEvent(d object) (model.Event, error) {
 	ev := model.Event{ID: text(d, "id"), Subject: text(d, "subject"), IsAllDay: boolean(d, "isAllDay"), Location: text(obj(d, "location"), "displayName"), Organizer: address(obj(d, "organizer")), Attendees: []model.Attendee{}, Attachments: names(d), IsPrivate: text(d, "sensitivity") == "private", Categories: stringsAt(d, "categories"), ShowAs: text(d, "showAs"), IsCancelled: boolean(d, "isCancelled")}
-	if ev.ID == "" {
+	// Write authority comes from this field, so absent, null, or non-boolean values fail closed.
+	var organizer *bool
+	if ev.ID == "" || json.Unmarshal(d["isOrganizer"], &organizer) != nil || organizer == nil {
 		return ev, invalidMetadata
 	}
+	ev.IsOrganizer = *organizer
 	var err error
 	ev.Start, err = eventTime(obj(d, "start"))
 	if err != nil {

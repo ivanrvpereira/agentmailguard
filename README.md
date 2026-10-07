@@ -5,7 +5,7 @@ The guard limits what an agent sees in mail and calendar events.
 It does not protect a human from fraud.
 
 **Exposure warning:** the client/server connection has no authentication and no built-in TLS.
-Anyone who can reach the listener can read guarded mailbox data, change mail, create drafts, and clear cached verdicts.
+Anyone who can reach the listener can read guarded mailbox data, change mail, create drafts, clear cached verdicts, and send Microsoft 365 meeting invitations, updates, cancellations, and responses.
 The default listener is `127.0.0.1:8787`.
 A non-loopback listener requires an explicit `--listen` option and prints a warning.
 Browser requests with an `Origin` header are refused, and the server does not enable CORS.
@@ -288,17 +288,105 @@ Required text flags distinguish an omitted value from an explicit empty value, i
 | Mail reads | `mail list`, `mail get ID [--pretty]`, `mail search`, `mail link ID L1 L2` or `mail link ID --all`, `mail folders`, `mail categories` |
 | Mail changes | `mail archive IDS...`, `mail trash IDS...`, `mail move FOLDER_ID IDS...`, `mail read IDS...`, `mail unread IDS...`, `mail flag IDS... --state flagged|complete|none`, `mail categorize IDS... --add NAME --remove NAME` |
 | Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID` |
+| Availability (Microsoft 365, read-only) | `calendar availability --to ADDRESS [--to ADDRESS] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'` |
+| Meetings (Microsoft 365, send notifications) | `calendar invite --to ADDRESS --subject TEXT --start 'YYYY-MM-DD HH:MM' --duration 30m\|--end 'YYYY-MM-DD HH:MM' [--body TEXT] [--location TEXT] [--no-teams]`, `calendar update ID [--subject TEXT] [--location TEXT] [--start TIME] [--duration D\|--end TIME] [--add-attendee ADDRESS] [--remove-attendee ADDRESS] [--teams]`, `calendar cancel ID [--comment TEXT]`, `calendar respond ID --response accept\|tentative\|decline [--comment TEXT]` |
 | Drafts only | `draft new --to ADDRESS --subject TEXT --body TEXT`, `draft reply ID --body TEXT`, `draft forward ID --to ADDRESS`, `draft update ID --body TEXT` |
 
 Successful commands print the original operation's JSON result, not an RPC envelope.
 `mail get --pretty` formats only the guarded view.
 Draft update returns the resulting draft ID, which can change on Gmail.
-There is no send, permanent-delete, folder creation, category creation, calendar write, or arbitrary provider request command.
+`calendar invite` returns the new event ID. The other meeting commands return the event ID and `"ok": true`.
+There is no mail send, permanent-delete, folder creation, category creation, Gmail calendar write, or arbitrary provider request command.
 
 Exit code `0` means the call ran, including a mutation with failed per-ID results.
 Exit code `1` means the whole call failed or was refused, or `auth status` reports an unusable login.
 Exit code `2` means invalid CLI usage.
 Errors use fixed text or approved safe codes, never raw network errors or provider response bodies.
+
+## Microsoft 365 meetings
+
+**Caution:** `calendar invite`, `calendar update`, `calendar cancel`, and `calendar respond` send real meeting notifications at once.
+No policy layer, approval step, or outbound screening checks the subject, body, location, comment, or attendees.
+An agent must run these commands only after the user authorizes that specific action.
+
+These commands work only for Microsoft 365 accounts.
+Gmail accounts get the fixed error `calendar writes are not supported for this account`, before any credential or provider access.
+
+Microsoft 365 login requests the `Calendars.ReadWrite` scope, and token refreshes request it too.
+Without this grant, meeting commands fail with `missing_scopes` before any Graph calendar request. A token refresh can occur before this check.
+If an account logged in before this scope was added, a refresh can need new consent.
+In that case, run `auth login` again on the server host and restart the server.
+
+Times use the format `YYYY-MM-DD HH:MM` in the local timezone of the client.
+The client converts them to RFC 3339 with the local offset before it sends the request.
+The client refuses other formats, times that do not exist because of a DST change, and years outside 1–9999.
+The client does not refuse a time that occurs two times when clocks go back. It uses one of the two offsets, so do not use such a time.
+Go parses `--duration`, for example `30m` or `1h30m`. The duration must be more than zero.
+An invite needs exactly one of `--end` and `--duration`. An update can use one of them, but not both.
+
+An invite needs one or more `--to` addresses and an explicit `--subject`, which can be empty.
+The body is empty if you omit `--body`.
+`--body` is plain text.
+The invite sends it as escaped HTML and keeps the line breaks.
+For a Teams meeting, Microsoft adds the Teams join block to the body.
+Every invite is a Microsoft Teams meeting by default. Use `--no-teams` to create a meeting without an online meeting. `--teams` is accepted, and the last of `--teams` and `--no-teams` wins.
+All invite attendees are required attendees.
+
+An update needs at least one change and sends only the options that you supply.
+An explicit empty `--subject ''` or `--location ''` clears that field.
+If an update changes only `--start`, the server keeps the current duration.
+`--duration` alone or `--end` alone keeps the current start.
+Attendee changes keep the type of existing attendees. Added attendees are required attendees.
+`calendar update ID --teams` adds a Teams meeting to the same event and sends an update notification to the attendees. It does not create a new event.
+With `--teams` alone, the update sends only online-meeting settings.
+It does not replace the body or change the times or attendees. Microsoft Graph can add Teams join details to the body.
+An update without `--teams` leaves the online meeting unchanged. Updates cannot remove a Teams meeting, change the online-meeting provider, or change the body, so an existing Teams link stays in the body.
+`--teams=false` on an update is invalid usage.
+
+Only the organizer can update or cancel an event.
+Only an attendee can respond, and the response always goes to the organizer.
+There is no silent response and no proposal of a new time.
+The server refuses recurring events and cancelled events. It does not write in these cases.
+
+Invites accept 1–100 attendee addresses, and each update attendee list accepts at most 100 addresses.
+There is no limit of 20 attendees or 8 hours, and there is no distribution-list detection.
+
+The client does not retry a meeting request, and the server sends no transaction ID.
+A meeting command can return `operation failed` after the notification was sent, for example if the audit write fails.
+A timeout, transport error, or `operation failed` does not prove that the meeting action failed.
+Before you retry such a command, use `calendar list` or `calendar get` to verify the outcome.
+A second invite can send duplicate invitations.
+
+## Microsoft 365 availability
+
+`calendar availability` shows the free/busy status of participants in 30-minute slots.
+It is read-only. It sends no notification, reserves no slot, and writes no audit record.
+It works only for Microsoft 365 accounts. Gmail accounts get the fixed error `calendar availability is not supported for this account`, before any credential or provider access.
+The `Calendars.ReadBasic`, `Calendars.Read`, or `Calendars.ReadWrite` grant is sufficient. Without one of these grants, the command fails with `missing_scopes` before any Graph request.
+
+```sh
+agentmailguard --account work calendar availability --to me@example.com --to ana@example.com --start '2026-10-09 09:00' --end '2026-10-09 18:00'
+```
+
+The command needs 1–20 distinct `--to` addresses, a `--start`, and an `--end`.
+The window must be less than 62 days. These are Microsoft Graph limits for one query.
+Times use the same local format as the meeting commands. The interval is always 30 minutes.
+
+The result has `start`, `end`, `interval_minutes`, and one entry in `schedules` for each requested address, in the request order.
+Each entry has the requested `address` and a `slots` list.
+Slot `i` starts at `start` plus `30 * i` minutes. The last slot ends at `end`, so it can be shorter than 30 minutes.
+Each slot is `free`, `tentative`, `busy`, `out_of_office`, or `unknown`.
+Microsoft Graph reports "working elsewhere" as `free`.
+The result never contains event subjects, locations, or provider error text.
+
+`unknown` means that no usable data came back for that participant.
+Sharing permissions in the Microsoft 365 organization can cause this result. A missing, duplicate, failed, or malformed entry also gives `unknown`.
+`unknown` never means free.
+A slot is free for a meeting only if every requested participant has `free` in that slot.
+
+The result is a snapshot. Calendars can change after the query.
+Before you send an invite, run the query again for the selected slot.
+`calendar list` shows only the visible events of the selected account. It does not show that other participants are free.
 
 ## Rules and guarded behavior
 
@@ -361,7 +449,8 @@ The only data endpoint is `POST /v1/call` with `Content-Type: application/json`:
 {"operation":"mail.list","account":"work","params":{"folder":"inbox","count":25,"skip":0}}
 ```
 
-Operation names match CLI groups, such as `mail.get`, `draft.update`, and `cache.clear`.
+Operation names match CLI groups, such as `mail.get`, `draft.update`, `calendar.invite`, and `cache.clear`.
+Meeting times on the HTTP interface are RFC 3339 timestamps. `calendar.update` also accepts a Go `duration` string.
 The `account` field is optional, and `params` must be an object.
 Unknown operations or fields, duplicate keys, malformed JSON, trailing JSON, null fields, invalid types, and oversized requests are refused.
 There is no HTTP login, token, key, raw-message, classification, or rules-mutation endpoint.
@@ -386,6 +475,8 @@ There is no scheduler and no automatic mailbox work.
 Offline tests use actual loopback HTTP, temporary SQLite/audit files, synthetic provider/Jev endpoints, and injected credential and clock adapters.
 The native workflow test builds the real client binary and runs remote commands against a long-lived in-process server with injected external adapters.
 It covers cached hidden reads, error retry, classification, preview/apply, concurrent completion, security tags, manual mutations, drafts, calendar, stats, rules, and separate accounts.
+A second native workflow sends meeting invites, updates, cancellations, and responses to a fake Graph endpoint, and reads the changed events back.
+It also covers the Gmail, missing-scope, recurring, cancelled, and wrong-role refusals.
 Native file-backend tests also cover server startup, password refusal, terminal password changes, and SIGTERM shutdown.
 A separate combined native acceptance run used the file backend, temporary HOME, synthetic credentials, and a non-forwarding loopback HTTPS proxy.
 It passed device-code login, native server startup, an external key update while serving, token refresh, terminal password change, and restart.
@@ -401,6 +492,7 @@ A subsequent authorized Microsoft 365 organize preview succeeded with screening 
 These earlier read-only checks do not verify the credential-backend changes. This workflow adds no new live provider verification.
 Device-code login can still fail under Microsoft organization policies.
 Real device-code login and provider acceptance of generated drafts remain unverified here.
+No live Microsoft 365 meeting write has been verified. Graph acceptance of invites, updates, cancellations, and responses remains unverified.
 Native Keychain migration and the user's real credential migration also remain unverified.
 Migration tests use a fake Keychain Platform at the constructor and CLI seams, not the production Security APIs.
 Production-binary Keychain migration remains deferred; the migration evidence for this change comes from these fake-Platform tests.

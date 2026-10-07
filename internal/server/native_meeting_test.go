@@ -1,0 +1,304 @@
+package server_test
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+)
+
+// meetingNativeStore grants the M365 write scope to "work" only, so "other" proves the missing-scope refusal.
+type meetingNativeStore struct{ nativeStore }
+
+func (s *meetingNativeStore) LoadOAuth(ctx context.Context, p, a string) (credentials.OAuth, error) {
+	if p != "m365" {
+		return s.nativeStore.LoadOAuth(ctx, p, a)
+	}
+	scopes := "User.Read Mail.ReadWrite Calendars.Read Calendars.ReadWrite MailboxSettings.Read"
+	if a == "other" {
+		scopes = "User.Read Mail.ReadWrite Calendars.Read MailboxSettings.Read"
+	}
+	return credentials.OAuth{AccessToken: statusJWT(scopes), ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Username: "work@example.test"}, nil
+}
+
+// meetingGraph is a stateful fake of the Graph event endpoints. Created events keep every posted field.
+type meetingGraph struct {
+	mu        sync.Mutex
+	events    map[string]map[string]any
+	writes    []externalWrite
+	schedules []map[string]any
+	created   int
+}
+
+func (g *meetingGraph) handle(w http.ResponseWriter, r *http.Request) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	id, action, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/me/events/"), "/")
+	// getSchedule is a read, so it is recorded apart from the writes below.
+	if r.Method == "POST" && r.URL.Path == "/me/calendar/getSchedule" {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		g.schedules = append(g.schedules, body)
+		response(w, map[string]any{"value": []any{
+			map[string]any{"scheduleId": "work@example.test", "availabilityView": "2002", "scheduleItems": []any{map[string]any{"subject": "private-busy-subject", "location": "private-busy-room"}}},
+			map[string]any{"scheduleId": "FIRST@example.test", "availabilityView": "1003"},
+			map[string]any{"scheduleId": "second@example.test", "availabilityView": "0202"},
+			map[string]any{"scheduleId": "hidden@example.test", "error": map[string]any{"message": "private-error-text", "responseCode": "ErrorAccessDenied"}},
+			map[string]any{"scheduleId": "private-stranger@example.test", "availabilityView": "0000"},
+		}})
+		return
+	}
+	if r.Method == "GET" {
+		if r.URL.Path == "/me/outlook/masterCategories" {
+			response(w, map[string]any{"value": []any{}})
+			return
+		}
+		if e, ok := g.events[id]; ok && strings.HasPrefix(r.URL.Path, "/me/events/") && action == "" {
+			response(w, e)
+			return
+		}
+		w.WriteHeader(404)
+		return
+	}
+	var body map[string]any
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	g.writes = append(g.writes, externalWrite{r.URL.Path, r.Method, body})
+	switch {
+	case r.Method == "POST" && r.URL.Path == "/me/events":
+		g.created++
+		id = "created-" + strconv.Itoa(g.created)
+		e := map[string]any{"id": id, "isOrganizer": true, "organizer": map[string]any{"emailAddress": map[string]any{"address": "work@example.test"}}}
+		for k, v := range body {
+			e[k] = v
+		}
+		if body["isOnlineMeeting"] == true {
+			e["onlineMeeting"] = map[string]any{"joinUrl": "https://teams.example.test/join/" + id}
+		}
+		g.events[id] = e
+		response(w, map[string]any{"id": id})
+	case r.Method == "PATCH" && g.events[id] != nil && action == "":
+		for k, v := range body {
+			g.events[id][k] = v
+		}
+		if body["isOnlineMeeting"] == true {
+			g.events[id]["onlineMeeting"] = map[string]any{"joinUrl": "https://teams.example.test/join/" + id}
+		}
+		response(w, g.events[id])
+	case r.Method == "POST" && action == "cancel" && g.events[id] != nil:
+		g.events[id]["isCancelled"] = true
+		w.WriteHeader(202)
+	case r.Method == "POST" && g.events[id] != nil:
+		w.WriteHeader(202)
+	default:
+		w.WriteHeader(404)
+	}
+}
+
+func syntheticEvent(id string, organizer bool, extra map[string]any) map[string]any {
+	e := map[string]any{"id": id, "subject": "private-subject-" + id, "isOrganizer": organizer, "organizer": map[string]any{"emailAddress": map[string]any{"address": "organizer@example.test"}},
+		"start": map[string]string{"dateTime": "2026-10-12T09:00:00", "timeZone": "UTC"}, "end": map[string]string{"dateTime": "2026-10-12T10:00:00", "timeZone": "UTC"},
+		"body": map[string]string{"contentType": "text", "content": "private-body-" + id}, "attendees": []any{map[string]any{"emailAddress": map[string]any{"address": "work@example.test"}, "type": "required"}}}
+	for k, v := range extra {
+		e[k] = v
+	}
+	return e
+}
+
+// The compiled client only knows the server URL and its own time zone; it never sees configuration or credentials.
+func TestNativeBinaryMeetingWorkflow(t *testing.T) {
+	g := &meetingGraph{events: map[string]map[string]any{"recurring-1": syntheticEvent("recurring-1", true, map[string]any{"type": "occurrence"})}}
+	for _, r := range []string{"accept", "tentative", "decline"} {
+		g.events["attendee-"+r] = syntheticEvent("attendee-"+r, false, nil)
+	}
+	var googleRequests atomic.Int32
+	api := newNativeAPI()
+	// Lisbon leaves summer time on 2026-10-25, between the invite and the update below.
+	_, home, run := startNative(t, buildNative(t), nativeFakes{
+		creds: &meetingNativeStore{}, graph: g.handle, jev: api.jev,
+		google: func(w http.ResponseWriter, r *http.Request) { googleRequests.Add(1); w.WriteHeader(500) },
+		now:    time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC), clientEnv: []string{"TZ=Europe/Lisbon"},
+	})
+	// write runs one successful command and returns its stdout and the Graph writes it caused.
+	write := func(args ...string) (string, []externalWrite) {
+		t.Helper()
+		g.mu.Lock()
+		before := len(g.writes)
+		g.mu.Unlock()
+		out, errout, code := run(args...)
+		if code != 0 || errout != "" {
+			t.Fatalf("command %v code %d stderr %s", args, code, errout)
+		}
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		return out, append([]externalWrite{}, g.writes[before:]...)
+	}
+	exact := func(args []string, writes []externalWrite, method, path string, body map[string]any) {
+		t.Helper()
+		if len(writes) != 1 || writes[0].method != method || writes[0].path != path || !reflect.DeepEqual(writes[0].body, body) {
+			t.Fatalf("command %v: Graph writes %#v, want one %s %s %#v", args, writes, method, path, body)
+		}
+	}
+	view := func(id string) map[string]any {
+		t.Helper()
+		out, _ := write("--account", "work", "calendar", "get", id)
+		var v map[string]any
+		if json.Unmarshal([]byte(out), &v) != nil || v["verdict"] != "green" {
+			t.Fatalf("calendar get %s: %s", id, out)
+		}
+		return v
+	}
+	utc := func(stamp string) map[string]any { return map[string]any{"dateTime": stamp, "timeZone": "UTC"} }
+	attendee := func(address, kind string) map[string]any {
+		return map[string]any{"emailAddress": map[string]any{"address": address}, "type": kind}
+	}
+
+	// Availability is a read. The only slot that every participant shows as free is 09:00 Lisbon time.
+	// The hidden participant has no data and stays unknown, never free.
+	out, writes := write("--account", "work", "calendar", "availability", "--to", "work@example.test", "--to", "first@example.test", "--to", "second@example.test", "--to", "hidden@example.test", "--start", "2026-10-09 08:00", "--end", "2026-10-09 10:00")
+	var free struct {
+		Start, End string
+		Interval   int `json:"interval_minutes"`
+		Schedules  []struct {
+			Address string
+			Slots   []string
+		}
+	}
+	if len(writes) != 0 || strings.Contains(out, "private-") || json.Unmarshal([]byte(out), &free) != nil || free.Start != "2026-10-09T08:00:00+01:00" || free.End != "2026-10-09T10:00:00+01:00" || free.Interval != 30 || len(free.Schedules) != 4 {
+		t.Fatalf("availability output %q, Graph writes %d", out, len(writes))
+	}
+	slots := map[string][]string{}
+	for _, schedule := range free.Schedules {
+		slots[schedule.Address] = schedule.Slots
+	}
+	if !reflect.DeepEqual(slots, map[string][]string{"work@example.test": {"busy", "free", "free", "busy"}, "first@example.test": {"tentative", "free", "free", "out_of_office"}, "second@example.test": {"free", "busy", "free", "busy"}, "hidden@example.test": {"unknown", "unknown", "unknown", "unknown"}}) {
+		t.Fatalf("availability slots %v", slots)
+	}
+	if !reflect.DeepEqual(g.schedules, []map[string]any{{"schedules": []any{"work@example.test", "first@example.test", "second@example.test", "hidden@example.test"}, "startTime": utc("2026-10-09T07:00:00"), "endTime": utc("2026-10-09T09:00:00"), "availabilityViewInterval": float64(30)}}) || len(api.jevCalls) != 0 {
+		t.Fatalf("getSchedule requests %v, Jev calls %v", g.schedules, api.jevCalls)
+	}
+
+	args := []string{"--account", "work", "calendar", "invite", "--to", "first@example.test", "--to", "second@example.test", "--subject", "private-meeting-subject", "--body", "private-meeting-body\n<b>agenda</b> & notes", "--location", "private-room", "--start", "2026-10-09 09:00", "--duration", "30m"}
+	out, writes = write(args...)
+	exact(args, writes, "POST", "/me/events", map[string]any{"subject": "private-meeting-subject", "body": map[string]any{"contentType": "html", "content": "private-meeting-body<br>&lt;b&gt;agenda&lt;/b&gt; &amp; notes"}, "location": map[string]any{"displayName": "private-room"},
+		"start": utc("2026-10-09T08:00:00"), "end": utc("2026-10-09T08:30:00"), "attendees": []any{attendee("first@example.test", "required"), attendee("second@example.test", "required")}, "isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"})
+	if strings.TrimSpace(out) != "{\n  \"id\": \"created-1\"\n}" {
+		t.Fatalf("invite output %q", out)
+	}
+	args = []string{"--account", "work", "calendar", "invite", "--to", "first@example.test", "--subject", "private-plain-subject", "--body", "private-plain-body", "--start", "2026-10-09 11:00", "--end", "2026-10-09 11:15", "--no-teams"}
+	_, writes = write(args...)
+	exact(args, writes, "POST", "/me/events", map[string]any{"subject": "private-plain-subject", "body": map[string]any{"contentType": "html", "content": "private-plain-body"}, "location": map[string]any{"displayName": ""},
+		"start": utc("2026-10-09T10:00:00"), "end": utc("2026-10-09T10:15:00"), "attendees": []any{attendee("first@example.test", "required")}, "isOnlineMeeting": false})
+	if v := view("created-2"); v["join_url"] != nil {
+		t.Fatalf("opted-out invite has a meeting link: %v", v)
+	}
+
+	// Adding Teams later keeps the same event and sends only the online meeting fields, so Graph keeps the body, times, and attendees.
+	args = []string{"--account", "work", "calendar", "update", "created-2", "--teams"}
+	_, writes = write(args...)
+	exact(args, writes, "PATCH", "/me/events/created-2", map[string]any{"isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"})
+	v := view("created-2")
+	if v["id"] != "created-2" || v["subject"] != "private-plain-subject" || v["start"] != "2026-10-09T10:00:00+00:00" || v["end"] != "2026-10-09T10:15:00+00:00" || v["join_url"] != "https://teams.example.test/join/created-2" || !strings.Contains(v["body"].(string), "private-plain-body") || len(v["attendees"].([]any)) != 1 || v["attendees"].([]any)[0].(map[string]any)["address"] != "first@example.test" {
+		t.Fatalf("event after adding Teams %v", v)
+	}
+
+	v = view("created-1")
+	if v["subject"] != "private-meeting-subject" || v["start"] != "2026-10-09T08:00:00+00:00" || v["end"] != "2026-10-09T08:30:00+00:00" || v["join_url"] != "https://teams.example.test/join/created-1" || !strings.Contains(v["body"].(string), "private-meeting-body") {
+		t.Fatalf("created event view %v", v)
+	}
+
+	// The organizer marks one attendee optional in Outlook; the update must keep that type.
+	g.mu.Lock()
+	g.events["created-1"]["attendees"] = []any{attendee("first@example.test", "required"), attendee("second@example.test", "optional")}
+	g.mu.Unlock()
+	args = []string{"--account", "work", "calendar", "update", "created-1", "--subject", "private-new-subject", "--start", "2026-10-30 10:00", "--add-attendee", "third@example.test", "--remove-attendee", "first@example.test"}
+	out, writes = write(args...)
+	exact(args, writes, "PATCH", "/me/events/created-1", map[string]any{"subject": "private-new-subject", "start": utc("2026-10-30T10:00:00"), "end": utc("2026-10-30T10:30:00"),
+		"attendees": []any{attendee("second@example.test", "optional"), attendee("third@example.test", "required")}})
+	if strings.TrimSpace(out) != "{\n  \"id\": \"created-1\",\n  \"ok\": true\n}" {
+		t.Fatalf("update output %q", out)
+	}
+	v = view("created-1")
+	var addresses []string
+	for _, a := range v["attendees"].([]any) {
+		addresses = append(addresses, a.(map[string]any)["address"].(string))
+	}
+	if v["subject"] != "private-new-subject" || v["start"] != "2026-10-30T10:00:00+00:00" || v["end"] != "2026-10-30T10:30:00+00:00" || v["join_url"] != "https://teams.example.test/join/created-1" || !strings.Contains(v["body"].(string), "private-meeting-body") || !reflect.DeepEqual(addresses, []string{"second@example.test", "third@example.test"}) {
+		t.Fatalf("updated event view %v", v)
+	}
+
+	// Refusals reach no Graph or Gmail write and keep the fixed client messages.
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--account", "gmail", "calendar", "invite", "--to", "first@example.test", "--subject", "private-gmail-subject", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar writes are not supported for this account"},
+		{[]string{"--account", "gmail", "calendar", "respond", "attendee-accept", "--response", "accept"}, "calendar writes are not supported for this account"},
+		{[]string{"--account", "gmail", "calendar", "availability", "--to", "first@example.test", "--start", "2026-10-09 09:00", "--end", "2026-10-09 18:00"}, "calendar availability is not supported for this account"},
+		{[]string{"--account", "other", "calendar", "cancel", "created-1"}, "missing_scopes"},
+		{[]string{"--account", "other", "calendar", "respond", "attendee-accept", "--response", "accept"}, "missing_scopes"},
+		{[]string{"--account", "work", "calendar", "update", "recurring-1", "--subject", "private-recurring-subject"}, "calendar write refused: recurring events are not supported"},
+		{[]string{"--account", "work", "calendar", "cancel", "recurring-1"}, "calendar write refused: recurring events are not supported"},
+		{[]string{"--account", "work", "calendar", "update", "attendee-accept", "--subject", "private-attendee-subject"}, "calendar write refused: only the organizer can update or cancel"},
+		{[]string{"--account", "work", "calendar", "cancel", "attendee-accept"}, "calendar write refused: only the organizer can update or cancel"},
+		{[]string{"--account", "work", "calendar", "respond", "created-1", "--response", "decline"}, "calendar response refused: organizer cannot respond"},
+	} {
+		g.mu.Lock()
+		before := len(g.writes)
+		g.mu.Unlock()
+		out, errout, code := run(tc.args...)
+		g.mu.Lock()
+		after := len(g.writes)
+		g.mu.Unlock()
+		if code != 1 || out != "" || errout != "error: "+tc.want+"\n" || after != before {
+			t.Fatalf("command %v: exit=%d stdout=%q stderr=%q Graph writes=%d", tc.args, code, out, errout, after-before)
+		}
+	}
+	if googleRequests.Load() != 0 {
+		t.Fatal("Gmail refusal reached the provider")
+	}
+
+	args = []string{"--account", "work", "calendar", "cancel", "created-1", "--comment", "private-cancel-comment"}
+	_, writes = write(args...)
+	exact(args, writes, "POST", "/me/events/created-1/cancel", map[string]any{"comment": "private-cancel-comment"})
+	out, errout, code := run("--account", "work", "calendar", "cancel", "created-1")
+	if code != 1 || out != "" || errout != "error: calendar write refused: event is cancelled\n" {
+		t.Fatalf("second cancel: exit=%d stdout=%q stderr=%q", code, out, errout)
+	}
+	for response, endpoint := range map[string]string{"accept": "accept", "tentative": "tentativelyAccept", "decline": "decline"} {
+		args = []string{"--account", "work", "calendar", "respond", "attendee-" + response, "--response", response, "--comment", "private-rsvp-comment"}
+		_, writes = write(args...)
+		exact(args, writes, "POST", "/me/events/attendee-"+response+"/"+endpoint, map[string]any{"comment": "private-rsvp-comment", "sendResponse": true})
+	}
+	g.mu.Lock()
+	total := len(g.writes)
+	g.mu.Unlock()
+	if total != 8 {
+		t.Fatalf("Graph writes=%d, want 2 invites, 2 updates, 1 cancel, 3 responses", total)
+	}
+
+	log, err := os.ReadFile(filepath.Join(home, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for operation, count := range map[string]int{"calendar_invite": 2, "calendar_update": 2, "calendar_cancel": 1, "calendar_respond": 3} {
+		if n := bytes.Count(log, []byte(`"operation":"`+operation+`"`)); n != count {
+			t.Errorf("audit has %d %s records, want %d", n, operation, count)
+		}
+	}
+	for _, canary := range []string{"private-", "example.test", "synthetic-key", "availability"} {
+		if bytes.Contains(log, []byte(canary)) {
+			t.Fatalf("audit contains %s", canary)
+		}
+	}
+}

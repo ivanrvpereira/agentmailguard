@@ -111,7 +111,7 @@ func (a *nativeAPI) graph(w http.ResponseWriter, r *http.Request) {
 		}
 		response(w, map[string]any{"value": v})
 	case "/me/calendarView", "/me/events/e":
-		e := map[string]any{"id": "e", "subject": "private-subject-event", "start": map[string]string{"dateTime": "2026-03-31T10:00:00", "timeZone": "UTC"}, "end": map[string]string{"dateTime": "2026-03-31T11:00:00", "timeZone": "UTC"}, "body": map[string]string{"contentType": "text", "content": "private-body-event"}, "categories": []string{}}
+		e := map[string]any{"id": "e", "subject": "private-subject-event", "start": map[string]string{"dateTime": "2026-03-31T10:00:00", "timeZone": "UTC"}, "end": map[string]string{"dateTime": "2026-03-31T11:00:00", "timeZone": "UTC"}, "isOrganizer": false, "body": map[string]string{"contentType": "text", "content": "private-body-event"}, "categories": []string{}}
 		if r.URL.Path == "/me/calendarView" {
 			response(w, map[string]any{"value": []any{e}})
 		} else {
@@ -201,7 +201,8 @@ func (a *nativeAPI) gmail(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(404)
 	}
 }
-func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
+func buildNative(t *testing.T) string {
+	t.Helper()
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
@@ -212,58 +213,81 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 	if b, e := build.CombinedOutput(); e != nil {
 		t.Fatalf("build: %v %s", e, b)
 	}
-	verifyNativeRefusal(t, binary)
-	verifyNativeFileServe(t, binary)
+	return binary
+}
+
+// nativeFakes are the external services and client settings behind startNative.
+type nativeFakes struct {
+	creds              credentials.Store
+	graph, google, jev http.HandlerFunc
+	now                time.Time
+	clientEnv          []string
+}
+
+// startNative serves a real server for the work, other, and gmail accounts against fakes. It returns the server,
+// its home, and a runner for the compiled client. The client home must stay empty until the test ends.
+func startNative(t *testing.T, binary string, f nativeFakes) (*server.Server, string, func(args ...string) (string, string, int)) {
+	t.Helper()
 	home := t.TempDir()
 	configFile(t, home)
-	f, e := os.OpenFile(filepath.Join(home, "config.toml"), os.O_APPEND|os.O_WRONLY, 0600)
-	if e != nil {
-		t.Fatal(e)
+	config, err := os.OpenFile(filepath.Join(home, "config.toml"), os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
 	}
-	_, e = f.WriteString("[accounts.gmail]\nprovider='gmail'\nclient_id='synthetic'\nclient_secret='private-config-canary'\n")
-	f.Close()
-	if e != nil {
-		t.Fatal(e)
+	_, err = config.WriteString("[accounts.gmail]\nprovider='gmail'\nclient_id='synthetic'\nclient_secret='private-config-canary'\n")
+	config.Close()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if e := os.WriteFile(filepath.Join(home, "rules.toml"), []byte("[accounts.work.archive]\nfolder='archive'\ninstructions='private-rule-canary'\n[accounts.work.work]\ncategory='Work'\ninstructions='private-rule-canary'\n"), 0600); e != nil {
-		t.Fatal(e)
+	graph := httptest.NewServer(f.graph)
+	t.Cleanup(graph.Close)
+	google := httptest.NewServer(f.google)
+	t.Cleanup(google.Close)
+	jev := httptest.NewServer(f.jev)
+	t.Cleanup(jev.Close)
+	screen := screening.New(screening.Options{Endpoint: jev.URL, Credentials: f.creds, LookupEnv: func(string) string { return "synthetic-key" }})
+	s, err := server.New(context.Background(), home, server.Options{Credentials: f.creds, Screener: screen, M365: m365.Options{BaseURL: graph.URL}, Gmail: gmail.Options{GmailURL: google.URL + "/gmail", ProfileURL: google.URL + "/gmail/profile", CalendarURL: google.URL + "/calendar"}, Now: func() time.Time { return f.now }})
+	if err != nil {
+		t.Fatal(err)
 	}
-	api := newNativeAPI()
-	graph := httptest.NewServer(http.HandlerFunc(api.graph))
-	defer graph.Close()
-	google := httptest.NewServer(http.HandlerFunc(api.gmail))
-	defer google.Close()
-	jev := httptest.NewServer(http.HandlerFunc(api.jev))
-	defer jev.Close()
-	creds := &nativeStore{}
-	screen := screening.New(screening.Options{Endpoint: jev.URL, Credentials: creds, LookupEnv: func(string) string { return "synthetic-key" }})
-	s, e := server.New(context.Background(), home, server.Options{Credentials: creds, Screener: screen, M365: m365.Options{BaseURL: graph.URL}, Gmail: gmail.Options{GmailURL: google.URL + "/gmail", ProfileURL: google.URL + "/gmail/profile", CalendarURL: google.URL + "/calendar"}, Now: func() time.Time { return time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC) }})
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 	h := httptest.NewServer(s)
-	defer h.Close()
+	t.Cleanup(h.Close)
 	// Child clients receive only a remote URL and an empty temporary home. They cannot see the server's configuration or credentials.
 	clientHome := t.TempDir()
+	t.Cleanup(func() {
+		if entries, err := os.ReadDir(clientHome); err != nil || len(entries) != 0 {
+			t.Error("remote client created local state")
+		}
+	})
+	env := append([]string{"HOME=" + clientHome, "AGENTMAILGUARD_HOME=" + filepath.Join(clientHome, "does-not-exist")}, f.clientEnv...)
 	run := func(args ...string) (string, string, int) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, binary, append([]string{"--server", h.URL}, args...)...)
-		cmd.Env = []string{"HOME=" + clientHome, "AGENTMAILGUARD_HOME=" + filepath.Join(clientHome, "does-not-exist")}
+		cmd.Env = env
 		var out, errout bytes.Buffer
-		cmd.Stdout = &out
-		cmd.Stderr = &errout
-		e := cmd.Run()
+		cmd.Stdout, cmd.Stderr = &out, &errout
 		code := 0
-		if e != nil {
+		if e := cmd.Run(); e != nil {
+			code = -1
 			if ex, ok := e.(*exec.ExitError); ok {
 				code = ex.ExitCode()
-			} else {
-				code = -1
 			}
 		}
 		return out.String(), errout.String(), code
+	}
+	return s, home, run
+}
+
+func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
+	binary := buildNative(t)
+	verifyNativeRefusal(t, binary)
+	verifyNativeFileServe(t, binary)
+	api := newNativeAPI()
+	s, home, run := startNative(t, binary, nativeFakes{creds: &nativeStore{}, graph: api.graph, google: api.gmail, jev: api.jev, now: time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC)})
+	if e := os.WriteFile(filepath.Join(home, "rules.toml"), []byte("[accounts.work.archive]\nfolder='archive'\ninstructions='private-rule-canary'\n[accounts.work.work]\ncategory='Work'\ninstructions='private-rule-canary'\n"), 0600); e != nil {
+		t.Fatal(e)
 	}
 	ok := func(args ...string) string {
 		t.Helper()
@@ -467,10 +491,6 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 	}
 	if strings.TrimSpace(ok("stats")) != "{}" {
 		t.Fatal("cache did not clear")
-	}
-	entries, e := os.ReadDir(clientHome)
-	if e != nil || len(entries) != 0 {
-		t.Fatal("remote client created local state")
 	}
 }
 
