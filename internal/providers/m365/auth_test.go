@@ -188,7 +188,7 @@ func TestStatusRefreshesRefreshOnlyCredential(t *testing.T) {
 				if r.Method != "POST" || r.URL.Path != "/token" || r.Form.Get("grant_type") != "refresh_token" || r.Form.Get("client_id") != "client" || r.Form.Get("refresh_token") != "refresh" {
 					t.Error("bad refresh request")
 				}
-				if r.Form.Get("scope") != "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/MailboxSettings.Read offline_access openid profile" {
+				if r.Form.Get("scope") != "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/MailboxSettings.Read offline_access openid profile" {
 					t.Error("refresh did not request restricted scopes")
 				}
 				jsonResponse(w, map[string]any{"access_token": fresh, "expires_in": 3600, "refresh_token": "rotated"})
@@ -229,7 +229,7 @@ func TestExpiredUnsafeCredentialUsesOnlyValidatedRefresh(t *testing.T) {
 					if r.URL.Path == "/token" {
 						exchanges.Add(1)
 						_ = r.ParseForm()
-						if r.Method != "POST" || r.Form.Get("refresh_token") != "refresh" || r.Form.Get("scope") != "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/MailboxSettings.Read offline_access openid profile" {
+						if r.Method != "POST" || r.Form.Get("refresh_token") != "refresh" || r.Form.Get("scope") != "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/MailboxSettings.Read offline_access openid profile" {
 							t.Error("bad restricted refresh request")
 						}
 						jsonResponse(w, map[string]any{"access_token": result.token, "expires_in": 3600, "refresh_token": "rotated", "error": result.oauthError})
@@ -297,6 +297,19 @@ func TestFreshOverbroadCredentialIsUsedWithoutRefresh(t *testing.T) {
 	}
 	if refreshes.Load() != 0 || graphCalls.Load() != 1 || s.saves != 0 {
 		t.Fatalf("fresh overbroad token not used as saved: refreshes=%d Graph=%d saves=%d", refreshes.Load(), graphCalls.Load(), s.saves)
+	}
+}
+
+func TestCalendarWriteScopeRecognized(t *testing.T) {
+	s := validStore()
+	s.token.AccessToken = jwt(map[string]any{"scp": "Calendars.ReadWrite calendars.readwrite Mail.Send"})
+	c := m365.New(account(), s, m365.Options{Now: func() time.Time { return now }})
+	_, scopes, err := c.Status(context.Background())
+	if err != nil || !reflect.DeepEqual(scopes, []string{"Calendars.ReadWrite", "calendars.readwrite", "Mail.Send"}) {
+		t.Fatalf("write scope status = %v, %v", scopes, err)
+	}
+	if extra := m365.ExtraScopes(scopes); !reflect.DeepEqual(extra, []string{"Mail.Send"}) {
+		t.Fatalf("write scope reported as extra = %v", extra)
 	}
 }
 

@@ -13,7 +13,7 @@ type calendar struct{ c *Client }
 
 func (c *Client) Calendar() model.Calendar { return &calendar{c} }
 func calendarQuery() url.Values {
-	return url.Values{"$select": {"id,subject,start,end,isAllDay,type,recurrence,location,organizer,attendees,onlineMeeting,sensitivity,categories,showAs,isCancelled,body"}, "$expand": {attachments}}
+	return url.Values{"$select": {"id,subject,start,end,isAllDay,type,recurrence,location,organizer,isOrganizer,attendees,onlineMeeting,sensitivity,categories,showAs,isCancelled,body"}, "$expand": {attachments}}
 }
 func (c *calendar) List(ctx context.Context, start, end time.Time) ([]model.Event, error) {
 	if !end.After(start) {
@@ -64,7 +64,7 @@ func eventTime(d object) (time.Time, error) {
 	return stamp.UTC(), nil
 }
 func toEvent(d object) (model.Event, error) {
-	ev := model.Event{ID: text(d, "id"), Subject: text(d, "subject"), IsAllDay: boolean(d, "isAllDay"), Location: text(obj(d, "location"), "displayName"), Organizer: address(obj(d, "organizer")), Attendees: []model.Attendee{}, Attachments: names(d), IsPrivate: text(d, "sensitivity") == "private", Categories: stringsAt(d, "categories"), ShowAs: text(d, "showAs"), IsCancelled: boolean(d, "isCancelled")}
+	ev := model.Event{ID: text(d, "id"), Subject: text(d, "subject"), IsAllDay: boolean(d, "isAllDay"), Location: text(obj(d, "location"), "displayName"), Organizer: address(obj(d, "organizer")), IsOrganizer: boolean(d, "isOrganizer"), Attendees: []model.Attendee{}, Attachments: names(d), IsPrivate: text(d, "sensitivity") == "private", Categories: stringsAt(d, "categories"), ShowAs: text(d, "showAs"), IsCancelled: boolean(d, "isCancelled")}
 	if ev.ID == "" {
 		return ev, invalidMetadata
 	}

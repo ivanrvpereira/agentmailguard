@@ -56,6 +56,23 @@ func TestCalendarMapsAllFieldsAndPagesInUTC(t *testing.T) {
 		t.Fatalf("event mapping %+v", ev)
 	}
 }
+func TestCalendarOrganizerMetadata(t *testing.T) {
+	for _, organizer := range []bool{true, false} {
+		c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if !strings.Contains(r.URL.Query().Get("$select"), ",isOrganizer,") {
+				t.Error("organizer authority not selected")
+			}
+			e := event()
+			e["isOrganizer"] = organizer
+			jsonResponse(w, e)
+		})
+		e, err := c.Calendar().Get(context.Background(), "event")
+		if err != nil || e.IsOrganizer != organizer {
+			t.Fatalf("organizer = %v, error = %v", e.IsOrganizer, err)
+		}
+	}
+}
+
 func TestCalendarRejectsNonUTCorInvalidDates(t *testing.T) {
 	for _, start := range []any{nil, map[string]string{"dateTime": "2026-09-21T10:00:00", "timeZone": "W. Europe Standard Time"}, map[string]string{"dateTime": "SECRET", "timeZone": "UTC"}, map[string]string{"dateTime": "2026-09-21T10:00:00+01:00", "timeZone": "UTC"}} {
 		c := graphClient(t, func(w http.ResponseWriter, r *http.Request) { e := event(); e["start"] = start; jsonResponse(w, e) })

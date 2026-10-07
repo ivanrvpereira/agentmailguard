@@ -96,6 +96,7 @@ type Event struct {
 	Recurrence  *string
 	Location    string
 	Organizer   Address
+	IsOrganizer bool
 	Attendees   []Attendee
 	JoinURL     *string
 	Attachments []string
@@ -162,6 +163,34 @@ type Mailbox interface {
 type Calendar interface {
 	List(ctx context.Context, start, end time.Time) ([]Event, error)
 	Get(ctx context.Context, id EventID) (Event, error)
+}
+
+type NewEvent struct {
+	Subject, Body, Location string
+	Start, End              time.Time
+	Attendees               []string
+	Teams                   bool
+}
+
+type EventChange struct {
+	Subject, Location             *string
+	Start, End                    *time.Time
+	Duration                      *time.Duration
+	AddAttendees, RemoveAttendees []string
+}
+
+type EventResponse struct {
+	Response string // accept, tentative, or decline
+	Comment  string
+}
+
+// CalendarWriter is optional; read-only calendar providers need not implement it.
+// Callers must resolve duration and start-only changes into explicit Start and End.
+type CalendarWriter interface {
+	Invite(ctx context.Context, event NewEvent) (EventID, error)
+	Update(ctx context.Context, id EventID, change EventChange) error
+	Cancel(ctx context.Context, id EventID, comment string) error
+	Respond(ctx context.Context, id EventID, response EventResponse) error
 }
 
 type Verdict string
