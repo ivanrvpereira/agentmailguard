@@ -451,7 +451,7 @@ func TestCalendarHTTPInviteWritesExactPayloadAndOnlyReturnsID(t *testing.T) {
 				t.Fatalf("provider requests=%d", len(requests))
 			}
 			got := <-requests
-			want := map[string]any{"subject": "CANARY subject", "body": map[string]any{"contentType": "text", "content": "CANARY body"}, "location": map[string]any{"displayName": "CANARY room"}, "start": map[string]any{"dateTime": "2026-10-09T09:00:00", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T18:00:00", "timeZone": "UTC"}, "attendees": []any{map[string]any{"emailAddress": map[string]any{"address": "CANARY@example.test"}, "type": "required"}}}
+			want := map[string]any{"subject": "CANARY subject", "body": map[string]any{"contentType": "html", "content": "CANARY body"}, "location": map[string]any{"displayName": "CANARY room"}, "start": map[string]any{"dateTime": "2026-10-09T09:00:00", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T18:00:00", "timeZone": "UTC"}, "attendees": []any{map[string]any{"emailAddress": map[string]any{"address": "CANARY@example.test"}, "type": "required"}}}
 			for k, v := range tc.online {
 				want[k] = v
 			}

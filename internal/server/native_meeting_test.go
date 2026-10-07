@@ -246,16 +246,16 @@ func TestNativeBinaryMeetingWorkflow(t *testing.T) {
 		t.Fatalf("shared free slots %v, getSchedule requests %v, Jev calls %v", shared, g.schedules, api.jevCalls)
 	}
 
-	args := []string{"--account", "work", "calendar", "invite", "--to", "first@example.test", "--to", "second@example.test", "--subject", "private-meeting-subject", "--body", "private-meeting-body", "--location", "private-room", "--start", "2026-10-09 09:00", "--duration", "30m"}
+	args := []string{"--account", "work", "calendar", "invite", "--to", "first@example.test", "--to", "second@example.test", "--subject", "private-meeting-subject", "--body", "private-meeting-body\n<b>agenda</b> & notes", "--location", "private-room", "--start", "2026-10-09 09:00", "--duration", "30m"}
 	out, writes = write(args...)
-	exact(args, writes, "POST", "/me/events", map[string]any{"subject": "private-meeting-subject", "body": map[string]any{"contentType": "text", "content": "private-meeting-body"}, "location": map[string]any{"displayName": "private-room"},
+	exact(args, writes, "POST", "/me/events", map[string]any{"subject": "private-meeting-subject", "body": map[string]any{"contentType": "html", "content": "private-meeting-body<br>&lt;b&gt;agenda&lt;/b&gt; &amp; notes"}, "location": map[string]any{"displayName": "private-room"},
 		"start": utc("2026-10-09T08:00:00"), "end": utc("2026-10-09T08:30:00"), "attendees": []any{attendee("first@example.test", "required"), attendee("second@example.test", "required")}, "isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"})
 	if strings.TrimSpace(out) != "{\n  \"id\": \"created-1\"\n}" {
 		t.Fatalf("invite output %q", out)
 	}
 	args = []string{"--account", "work", "calendar", "invite", "--to", "first@example.test", "--subject", "private-plain-subject", "--body", "private-plain-body", "--start", "2026-10-09 11:00", "--end", "2026-10-09 11:15", "--no-teams"}
 	_, writes = write(args...)
-	exact(args, writes, "POST", "/me/events", map[string]any{"subject": "private-plain-subject", "body": map[string]any{"contentType": "text", "content": "private-plain-body"}, "location": map[string]any{"displayName": ""},
+	exact(args, writes, "POST", "/me/events", map[string]any{"subject": "private-plain-subject", "body": map[string]any{"contentType": "html", "content": "private-plain-body"}, "location": map[string]any{"displayName": ""},
 		"start": utc("2026-10-09T10:00:00"), "end": utc("2026-10-09T10:15:00"), "attendees": []any{attendee("first@example.test", "required")}, "isOnlineMeeting": false})
 	if v := view("created-2"); v["join_url"] != nil {
 		t.Fatalf("opted-out invite has a meeting link: %v", v)

@@ -3,6 +3,7 @@ package m365
 import (
 	"context"
 	"encoding/json"
+	"html"
 	"net/http"
 	"net/url"
 	"strings"
@@ -109,6 +110,9 @@ func calendarTime(t time.Time) map[string]string {
 	return map[string]string{"dateTime": t.UTC().Format("2006-01-02T15:04:05.9999999"), "timeZone": "UTC"}
 }
 
+// \r\n comes first so it gives one <br>.
+var htmlLineBreaks = strings.NewReplacer("\r\n", "<br>", "\r", "<br>", "\n", "<br>")
+
 func (c *calendar) Invite(ctx context.Context, event model.NewEvent) (model.EventID, error) {
 	if !c.c.lockMutation(ctx) {
 		return "", requestFailed
@@ -118,8 +122,9 @@ func (c *calendar) Invite(ctx context.Context, event model.NewEvent) (model.Even
 	for _, attendee := range attendees {
 		attendee["type"] = "required"
 	}
+	// The plain-text body goes as escaped HTML, so Outlook shows the Teams block that Graph adds as formatted HTML.
 	body := map[string]any{
-		"subject": event.Subject, "body": map[string]string{"contentType": "text", "content": event.Body},
+		"subject": event.Subject, "body": map[string]string{"contentType": "html", "content": htmlLineBreaks.Replace(html.EscapeString(event.Body))},
 		"location": map[string]string{"displayName": event.Location},
 		"start":    calendarTime(event.Start), "end": calendarTime(event.End), "attendees": attendees,
 		"isOnlineMeeting": event.Teams,

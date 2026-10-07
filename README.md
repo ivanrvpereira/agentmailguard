@@ -326,6 +326,9 @@ An invite needs exactly one of `--end` and `--duration`. An update can use one o
 
 An invite needs one or more `--to` addresses and an explicit `--subject`, which can be empty.
 The body is empty if you omit `--body`.
+`--body` is plain text.
+The invite sends it as escaped HTML and keeps the line breaks.
+For a Teams meeting, Microsoft adds the Teams join block to the body.
 Every invite is a Microsoft Teams meeting by default. Use `--no-teams` to create a meeting without an online meeting. `--teams` is accepted, and the last of `--teams` and `--no-teams` wins.
 All invite attendees are required attendees.
 

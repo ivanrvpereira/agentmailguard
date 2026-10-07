@@ -286,7 +286,7 @@ func TestCalendarInvitePayload(t *testing.T) {
 				t.Error(err)
 			}
 			expected := map[string]any{
-				"subject": "Planning", "body": map[string]any{"contentType": "text", "content": "Agenda"}, "isOnlineMeeting": false,
+				"subject": "Planning", "body": map[string]any{"contentType": "html", "content": "&lt;b&gt;Agenda&lt;/b&gt; &amp; &#34;q&#34; &#39;a&#39;<br>one<br>two<br>three"}, "isOnlineMeeting": false,
 				"location":  map[string]any{"displayName": "Room"},
 				"start":     map[string]any{"dateTime": "2026-10-09T08:00:00", "timeZone": "UTC"},
 				"end":       map[string]any{"dateTime": "2026-10-09T08:30:00", "timeZone": "UTC"},
@@ -307,7 +307,7 @@ func TestCalendarInvitePayload(t *testing.T) {
 			t.Fatal("calendar cannot invite")
 		}
 		start := time.Date(2026, 10, 9, 9, 0, 0, 0, time.FixedZone("WEST", 3600))
-		id, err := writer.Invite(context.Background(), model.NewEvent{Subject: "Planning", Body: "Agenda", Location: "Room", Start: start, End: start.Add(30 * time.Minute), Attendees: []string{"a@example.test"}, Teams: teams})
+		id, err := writer.Invite(context.Background(), model.NewEvent{Subject: "Planning", Body: "<b>Agenda</b> & \"q\" 'a'\none\r\ntwo\rthree", Location: "Room", Start: start, End: start.Add(30 * time.Minute), Attendees: []string{"a@example.test"}, Teams: teams})
 		if err != nil || id != "immutable-event" {
 			t.Fatalf("invite = %q, %v", id, err)
 		}

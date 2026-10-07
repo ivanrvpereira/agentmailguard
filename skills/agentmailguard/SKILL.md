@@ -130,6 +130,7 @@ Before you run one, show the user the account, the event ID or the new meeting, 
 
 - Times use the format `YYYY-MM-DD HH:MM` in the local timezone of the client. Use exactly one of `--duration` and `--end` for an invite. Do not use a time that occurs two times when clocks go back; the client picks one of the two offsets.
 - Every invite is a Teams meeting by default. Use `--no-teams` only when the user asks for a meeting without Teams. The body is empty without `--body`.
+- `--body` is plain text. The invite sends it as escaped HTML and keeps the line breaks. For a Teams meeting, Microsoft adds the Teams join block. Do not write HTML or Teams join details in `--body`.
 - `update` sends only the options you supply. `--start` alone keeps the current duration. `update` cannot change the body.
 - `update ID --teams` adds a Teams meeting to the same event and sends an update notification. With `--teams` alone, it keeps the event, times, and attendees and sends no body replacement. Microsoft Graph can add Teams join details to the body. An update without `--teams` leaves the online meeting unchanged. No command removes a Teams meeting or changes the online-meeting provider.
 - Only the organizer can `update` or `cancel`. Only an attendee can `respond`. Recurring and cancelled events are refused.
