@@ -26,7 +26,7 @@ func TestDeviceLoginPendingSlowDownAndConsentFailure(t *testing.T) {
 				switch r.URL.Path {
 				case "/devicecode":
 					_ = r.ParseForm()
-					if r.Form.Get("client_id") != "client" || r.Form.Get("scope") != "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/MailboxSettings.Read offline_access openid profile" {
+					if r.Form.Get("client_id") != "client" || r.Form.Get("scope") != requestedScopes {
 						t.Error("bad device request")
 					}
 					jsonResponse(w, map[string]any{"device_code": "DEVICE-SECRET", "user_code": "USER-CODE", "verification_uri": "https://login.example.test/device", "expires_in": 600, "interval": 1})
@@ -164,7 +164,7 @@ func TestBrowserLoginPKCEStateAndCheckedCredentialPersistence(t *testing.T) {
 		challenge = q.Get("code_challenge")
 		redirect = q.Get("redirect_uri")
 		state = q.Get("state")
-		if q.Get("response_type") != "code" || q.Get("code_challenge_method") != "S256" || len(state) < 32 || len(challenge) < 32 || q.Get("scope") != "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/MailboxSettings.Read offline_access openid profile" {
+		if q.Get("response_type") != "code" || q.Get("code_challenge_method") != "S256" || len(state) < 32 || len(challenge) < 32 || q.Get("scope") != requestedScopes {
 			t.Error("unsafe authorize request")
 		}
 		cb, err := url.Parse(redirect)

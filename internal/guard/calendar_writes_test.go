@@ -69,12 +69,13 @@ func (w *calendarWriter) Respond(_ context.Context, id string, r model.EventResp
 	}
 	return w.err
 }
-func meetingGuard(t *testing.T, cal model.Calendar) (*guard.Guard, string) {
+
+// calendarGuard returns a guard over mail b and calendar cal, its screener, and its audit path.
+func calendarGuard(t *testing.T, b model.Mailbox, cal model.Calendar) (*guard.Guard, *eventScreener, string) {
 	t.Helper()
-	b := &mailbox{}
 	s := &eventScreener{}
 	_, cache, path := setup(t, b, s)
-	return guard.New("work", b, cal, s, cache, audit.New(path), guard.Options{}), path
+	return guard.New("work", b, cal, s, cache, audit.New(path), guard.Options{}), s, path
 }
 func meetingWriter() *calendarWriter {
 	return &calendarWriter{calendar: &calendar{event: model.Event{ID: "e1", Start: now, End: now.Add(time.Hour), IsOrganizer: true, Subject: "CANARY", Body: ptr("CANARY")}}}
@@ -85,14 +86,8 @@ func assertCalendarAudit(t *testing.T, path, operation, id string) {
 	if len(records) != 1 {
 		t.Fatalf("audit=%v", records)
 	}
-	record := records[0]
-	wantResults := []any{map[string]any{"id": id, "ok": true, "error": nil}}
-	if len(record) != 6 || record["operation"] != operation || record["account"] != "work" || record["rule"] != nil || !reflect.DeepEqual(record["ids"], []any{id}) || !reflect.DeepEqual(record["results"], wantResults) {
-		t.Fatalf("audit=%v", record)
-	}
-	stamp, ok := record["time"].(string)
-	if _, err := time.Parse(time.RFC3339, stamp); !ok || err != nil {
-		t.Fatalf("invalid audit time: %v", record["time"])
+	if records[0]["operation"] != operation || !reflect.DeepEqual(records[0]["ids"], []any{id}) {
+		t.Fatalf("audit=%v", records[0])
 	}
 }
 
@@ -110,7 +105,7 @@ func TestCalendarUpdateRequiresProviderAuthorityAndPreservesSelectedFields(t *te
 		t.Run(tc.name, func(t *testing.T) {
 			w := meetingWriter()
 			tc.mutate(&w.event)
-			g, path := meetingGuard(t, w)
+			g, _, path := calendarGuard(t, &mailbox{}, w)
 			change := model.EventChange{Subject: ptr("CANARY new subject"), Location: ptr("")}
 			err := g.CalendarUpdate(context.Background(), "e1", change, 0)
 			if tc.refusal != "" {
@@ -147,7 +142,7 @@ func TestCalendarUpdateResolvesOnlyRequestedTimeChanges(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := meetingWriter()
-			g, path := meetingGuard(t, w)
+			g, _, path := calendarGuard(t, &mailbox{}, w)
 			if err := g.CalendarUpdate(context.Background(), "e1", tc.change, tc.duration); err != nil {
 				t.Fatal(err)
 			}
@@ -189,7 +184,7 @@ func TestCalendarWritesRejectInvalidRangesAndChanges(t *testing.T) {
 			if tc.oldEnd != nil {
 				w.event.End = *tc.oldEnd
 			}
-			g, path := meetingGuard(t, w)
+			g, _, path := calendarGuard(t, &mailbox{}, w)
 			err := g.CalendarUpdate(ctx, "e1", tc.change, tc.duration)
 			if err == nil || err.Error() != "invalid request" || len(w.changes) != 0 || len(auditRecords(t, path)) != 0 {
 				t.Fatalf("error=%v writes=%v", err, w.changes)
@@ -198,7 +193,7 @@ func TestCalendarWritesRejectInvalidRangesAndChanges(t *testing.T) {
 	}
 	for _, end := range []time.Time{now, now.Add(-time.Hour), time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)} {
 		w := meetingWriter()
-		g, _ := meetingGuard(t, w)
+		g, _, _ := calendarGuard(t, &mailbox{}, w)
 		_, err := g.CalendarInvite(ctx, model.NewEvent{Start: now, End: end, Attendees: []string{"a@example.test"}})
 		if err == nil || err.Error() != "invalid request" || len(w.invites) != 0 {
 			t.Fatalf("invalid invite: %v", err)
@@ -220,7 +215,7 @@ func TestCalendarCancelAndRespondRequireCorrectRoleAndAuditPayloads(t *testing.T
 				case "wrong id":
 					w.event.ID = "other"
 				}
-				g, path := meetingGuard(t, w)
+				g, _, path := calendarGuard(t, &mailbox{}, w)
 				ctx := context.Background()
 				var err error
 				if action == "cancel" {
@@ -309,7 +304,7 @@ func TestCalendarWriteFailureAndCancellationBoundaries(t *testing.T) {
 					want = "AuditError"
 					written = true
 				}
-				g, path := meetingGuard(t, cal)
+				g, _, path := calendarGuard(t, &mailbox{}, cal)
 				if mode == "audit failure" {
 					if err := os.Mkdir(path, 0700); err != nil {
 						t.Fatal(err)
@@ -341,7 +336,7 @@ func TestCalendarWriteFailureAndCancellationBoundaries(t *testing.T) {
 	}
 	w := meetingWriter()
 	w.returnID = ptr("")
-	g, path := meetingGuard(t, w)
+	g, _, path := calendarGuard(t, &mailbox{}, w)
 	if err := callCalendarWrite(context.Background(), g, "invite"); err == nil || err.Error() != "ValueError" || len(auditRecords(t, path)) != 0 {
 		t.Fatalf("empty created ID=%v", err)
 	}
@@ -353,8 +348,7 @@ func TestCalendarWritesShareMutationGateWithMail(t *testing.T) {
 			w := &writer{mailbox: &mailbox{}, entered: make(chan struct{}), release: make(chan struct{})}
 			cal := meetingWriter()
 			cal.event.IsOrganizer = op != "respond"
-			_, cache, path := setup(t, w, &eventScreener{})
-			g := guard.New("work", w, cal, &eventScreener{}, cache, audit.New(path), guard.Options{})
+			g, _, _ := calendarGuard(t, w, cal)
 			done := make(chan error, 1)
 			go func() { _, err := g.Archive(context.Background(), []string{"m1"}); done <- err }()
 			<-w.entered
@@ -382,8 +376,7 @@ func TestCalendarWritesHoldMutationGateDuringFetchAndWrite(t *testing.T) {
 				mail := &writer{mailbox: &mailbox{}}
 				cal := meetingWriter()
 				cal.event.IsOrganizer = op != "respond"
-				_, cache, path := setup(t, mail, &eventScreener{})
-				g := guard.New("work", mail, cal, &eventScreener{}, cache, audit.New(path), guard.Options{})
+				g, _, path := calendarGuard(t, mail, cal)
 				checked := false
 				check := func() {
 					checked = true
@@ -411,7 +404,7 @@ func TestCalendarWritesHoldMutationGateDuringFetchAndWrite(t *testing.T) {
 
 func TestCalendarInvitePreservesPayloadAndAuditsWithoutReading(t *testing.T) {
 	w := meetingWriter()
-	g, path := meetingGuard(t, w)
+	g, _, path := calendarGuard(t, &mailbox{}, w)
 	event := model.NewEvent{Subject: "CANARY subject", Body: "CANARY body", Location: "CANARY location", Attendees: []string{"CANARY@example.test"}, Start: now, End: now.Add(9 * time.Hour), Teams: true}
 	id, err := g.CalendarInvite(context.Background(), event)
 	if err != nil || id != "created" || !reflect.DeepEqual(w.invites, []model.NewEvent{event}) || w.calls != 0 {

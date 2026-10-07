@@ -1,7 +1,6 @@
 package server_test
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -15,27 +14,17 @@ import (
 const availabilityParams = `{"to":["Me@example.test","colleague@example.test"],"start":"2026-10-09T09:00:00+01:00","end":"2026-10-09T10:00:00+01:00"}`
 
 func TestCalendarHTTPAvailabilityReturnsOnlyRequestedSlotMetadata(t *testing.T) {
-	requests := make(chan meetingRequest, 4)
-	s, _, home := calendarServer(t, "User.Read Calendars.ReadBasic", func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Error(err)
-		}
-		requests <- meetingRequest{r.Method, r.URL.Path, body}
-		io.WriteString(w, `{"value":[
-			{"scheduleId":"me@example.test","availabilityView":"02","scheduleItems":[{"subject":"CANARY subject","location":"CANARY room","status":"busy"}],"workingHours":{"timeZone":{"name":"CANARY zone"}}},
-			{"scheduleId":"colleague@example.test","availabilityView":"00","error":{"message":"CANARY error","responseCode":"ErrorAccessDenied"}},
-			{"scheduleId":"CANARY@example.test","availabilityView":"00"}]}`)
-	})
+	handler, request := recordingGraph(t, "", `{"value":[
+		{"scheduleId":"me@example.test","availabilityView":"02","scheduleItems":[{"subject":"CANARY subject","location":"CANARY room","status":"busy"}],"workingHours":{"timeZone":{"name":"CANARY zone"}}},
+		{"scheduleId":"colleague@example.test","availabilityView":"00","error":{"message":"CANARY error","responseCode":"ErrorAccessDenied"}},
+		{"scheduleId":"CANARY@example.test","availabilityView":"00"}]}`)
+	s, _, home := calendarServer(t, "User.Read Calendars.ReadBasic", handler)
 	status, body := meetingRPC(t, s, "calendar.availability", availabilityParams)
 	want := `{"start":"2026-10-09T09:00:00+01:00","end":"2026-10-09T10:00:00+01:00","interval_minutes":30,"schedules":[{"address":"Me@example.test","slots":["free","busy"]},{"address":"colleague@example.test","slots":["unknown","unknown"]}]}`
 	if status != 200 || body != want {
 		t.Fatalf("response=%d %s", status, body)
 	}
-	if len(requests) != 1 {
-		t.Fatalf("provider requests=%d", len(requests))
-	}
-	got := <-requests
+	got := request()
 	wantBody := map[string]any{"schedules": []any{"Me@example.test", "colleague@example.test"}, "startTime": map[string]any{"dateTime": "2026-10-09T08:00:00", "timeZone": "UTC"}, "endTime": map[string]any{"dateTime": "2026-10-09T09:00:00", "timeZone": "UTC"}, "availabilityViewInterval": float64(30)}
 	if got.Method != "POST" || got.Path != "/me/calendar/getSchedule" || !reflect.DeepEqual(got.Body, wantBody) {
 		t.Fatalf("provider request=%+v", got)
@@ -60,9 +49,7 @@ func TestCalendarHTTPAvailabilityNeedsAnM365CalendarReadGrant(t *testing.T) {
 				io.WriteString(w, `{"value":[{"scheduleId":"me@example.test","availabilityView":"00"},{"scheduleId":"colleague@example.test","availabilityView":"00"}]}`)
 			})
 			if tc.provider == "gmail" {
-				if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[accounts.work]\nprovider='gmail'\nclient_id='synthetic'\nclient_secret='synthetic'\n"), 0600); err != nil {
-					t.Fatal(err)
-				}
+				useGmail(t, home)
 			}
 			status, body := meetingRPC(t, s, "calendar.availability", availabilityParams)
 			if tc.want == "" {

@@ -104,14 +104,16 @@ func TestCalendarAuditRefusesContentBearingOptions(t *testing.T) {
 	flag := model.Flagged
 	rule := "finance"
 	for _, op := range []audit.Operation{audit.CalendarInvite, audit.CalendarUpdate, audit.CalendarCancel, audit.CalendarRespond} {
-		for _, opts := range []audit.Options{{Add: []string{text}}, {Remove: []string{text}}, {Folder: &text}, {DraftID: &text}, {Flag: &flag}, {Rule: &rule}} {
-			path := filepath.Join(t.TempDir(), "audit.jsonl")
-			if err := audit.New(path).Record(context.Background(), "work", op, []model.MutationResult{{ID: "e1", OK: true}}, opts); err == nil {
-				t.Errorf("%s accepted non-calendar metadata", op)
-			}
-			if _, err := os.Stat(path); !os.IsNotExist(err) {
-				t.Error("rejected metadata created an audit file")
-			}
+		for name, opts := range map[string]audit.Options{"add": {Add: []string{text}}, "remove": {Remove: []string{text}}, "folder": {Folder: &text}, "draft": {DraftID: &text}, "flag": {Flag: &flag}, "rule": {Rule: &rule}} {
+			t.Run(string(op)+"/"+name, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "audit.jsonl")
+				if err := audit.New(path).Record(context.Background(), "work", op, []model.MutationResult{{ID: "e1", OK: true}}, opts); err == nil {
+					t.Error("accepted non-calendar metadata")
+				}
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Error("rejected metadata created an audit file")
+				}
+			})
 		}
 	}
 }

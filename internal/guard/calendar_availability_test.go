@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard/internal/audit"
-	"github.com/ivanrvpereira/agentmailguard/internal/guard"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
@@ -23,14 +21,6 @@ type availabilityCalendar struct {
 func (c *availabilityCalendar) Availability(_ context.Context, addresses []string, _, _ time.Time) ([]model.Schedule, error) {
 	c.queries = append(c.queries, addresses)
 	return c.schedules, c.err
-}
-
-func availabilityGuard(t *testing.T, cal model.Calendar) (*guard.Guard, *eventScreener, string) {
-	t.Helper()
-	b := &mailbox{}
-	s := &eventScreener{}
-	_, cache, path := setup(t, b, s)
-	return guard.New("work", b, cal, s, cache, audit.New(path), guard.Options{}), s, path
 }
 
 func slots(values ...model.AvailabilityStatus) []model.AvailabilityStatus { return values }
@@ -48,7 +38,7 @@ func TestCalendarAvailabilityReturnsOnlyRequestedParticipantsWithProvenStatuses(
 		{Address: "text@example.test", Slots: slots("free", "CANARY")},
 		{Address: "unknown@example.test", Slots: slots("free", "unknown")},
 	}}
-	g, screener, path := availabilityGuard(t, cal)
+	g, screener, path := calendarGuard(t, &mailbox{}, cal)
 	requested := []string{"a@example.test", "B@example.test", "mislabeled@example.test", "case@example.test", "first@example.test", "second@example.test", "short@example.test", "text@example.test", "unknown@example.test"}
 	got, err := g.CalendarAvailability(context.Background(), requested, now, now.Add(time.Hour))
 	unknown := slots("unknown", "unknown")
@@ -81,7 +71,7 @@ func TestCalendarAvailabilityWrongScheduleCountMakesEveryoneUnknown(t *testing.T
 		"missing entry": {{Address: "a@example.test", Slots: slots("free", "free")}},
 		"no entries":    nil,
 	} {
-		g, _, _ := availabilityGuard(t, &availabilityCalendar{schedules: found})
+		g, _, _ := calendarGuard(t, &mailbox{}, &availabilityCalendar{schedules: found})
 		got, err := g.CalendarAvailability(context.Background(), requested, now, now.Add(time.Hour))
 		want := []model.Schedule{{Address: "a@example.test", Slots: slots("unknown", "unknown")}, {Address: "b@example.test", Slots: slots("unknown", "unknown")}}
 		if err != nil || !reflect.DeepEqual(got, want) {
@@ -91,12 +81,12 @@ func TestCalendarAvailabilityWrongScheduleCountMakesEveryoneUnknown(t *testing.T
 }
 
 func TestCalendarAvailabilityRefusesBeforeProviderAccess(t *testing.T) {
-	g, _, _ := availabilityGuard(t, &calendar{})
+	g, _, _ := calendarGuard(t, &mailbox{}, &calendar{})
 	if got, err := g.CalendarAvailability(context.Background(), []string{"a@example.test"}, now, now.Add(time.Hour)); got != nil || err == nil || err.Error() != "calendar availability is not supported for this account" {
 		t.Fatalf("read-only calendar: availability=%v err=%v", got, err)
 	}
 	cal := &availabilityCalendar{}
-	g, _, _ = availabilityGuard(t, cal)
+	g, _, _ = calendarGuard(t, &mailbox{}, cal)
 	many := make([]string, 21)
 	for i := range many {
 		many[i] = strings.Repeat("a", i+1) + "@example.test"
@@ -134,7 +124,7 @@ func TestCalendarAvailabilityRefusesBeforeProviderAccess(t *testing.T) {
 
 func TestCalendarAvailabilityProviderFailuresStaySafe(t *testing.T) {
 	cal := &availabilityCalendar{err: model.MailboxError("CANARY raw provider text")}
-	g, _, _ := availabilityGuard(t, cal)
+	g, _, _ := calendarGuard(t, &mailbox{}, cal)
 	if got, err := g.CalendarAvailability(context.Background(), []string{"a@example.test"}, now, now.Add(time.Hour)); got != nil || err == nil || strings.Contains(err.Error(), "CANARY") {
 		t.Fatalf("availability=%v err=%v", got, err)
 	}

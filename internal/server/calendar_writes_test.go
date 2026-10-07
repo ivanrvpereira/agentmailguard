@@ -2,7 +2,6 @@ package server_test
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -27,13 +26,60 @@ type meetingStore struct {
 
 func (s *meetingStore) LoadOAuth(context.Context, string, string) (credentials.OAuth, error) {
 	s.loads.Add(1)
-	claims, _ := json.Marshal(map[string]string{"scp": s.scopes})
-	return credentials.OAuth{AccessToken: "x." + base64.RawURLEncoding.EncodeToString(claims) + ".x", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Username: "synthetic@example.test"}, nil
+	return credentials.OAuth{AccessToken: statusJWT(s.scopes), ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Username: "synthetic@example.test"}, nil
 }
 
 type meetingRequest struct {
 	Method, Path string
 	Body         map[string]any
+}
+
+// recordingGraph serves event to every GET and records each other request, answering with reply (204 when empty).
+// The returned function gives the only recorded request.
+func recordingGraph(t *testing.T, event, reply string) (http.HandlerFunc, func() meetingRequest) {
+	t.Helper()
+	requests := make(chan meetingRequest, 4)
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			io.WriteString(w, event)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		requests <- meetingRequest{r.Method, r.URL.Path, body}
+		if reply == "" {
+			w.WriteHeader(204)
+			return
+		}
+		io.WriteString(w, reply)
+	}
+	only := func() meetingRequest {
+		t.Helper()
+		if len(requests) != 1 {
+			t.Fatalf("provider requests=%d", len(requests))
+		}
+		return <-requests
+	}
+	return handler, only
+}
+
+// useGmail replaces the configured account with a Gmail account of the same name.
+func useGmail(t *testing.T, home string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[accounts.work]\nprovider='gmail'\nclient_id='synthetic'\nclient_secret='synthetic'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// assertAudited checks that home's audit log has the operation and none of the request content.
+func assertAudited(t *testing.T, home, operation string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(home, "audit.jsonl"))
+	if err != nil || strings.Contains(string(data), "CANARY") || strings.Contains(string(data), "example.test") || !strings.Contains(string(data), `"operation":"`+operation+`"`) {
+		t.Fatalf("audit=%s error=%v", data, err)
+	}
 }
 
 func calendarServer(t *testing.T, scopes string, handler http.HandlerFunc) (*server.Server, *meetingStore, string) {
@@ -61,77 +107,53 @@ func meetingRPC(t *testing.T, s *server.Server, op, params string) (int, string)
 
 const organizerEvent = `{"id":"e1","subject":"CANARY raw","body":{"contentType":"text","content":"CANARY raw body"},"isOrganizer":true,"organizer":{"emailAddress":{"address":"synthetic@example.test"}},"start":{"dateTime":"2026-10-09T09:00:00","timeZone":"UTC"},"end":{"dateTime":"2026-10-09T10:00:00","timeZone":"UTC"},"attendees":[{"emailAddress":{"address":"keep@example.test"},"type":"optional"},{"emailAddress":{"address":"remove@example.test"},"type":"required"}]}`
 
-func TestCalendarHTTPUpdateWritesExactSelectedFields(t *testing.T) {
-	writes := make(chan meetingRequest, 4)
-	s, _, _ := calendarServer(t, "Calendars.ReadWrite", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "GET" {
-			io.WriteString(w, organizerEvent)
-			return
-		}
-		var body map[string]any
-		json.NewDecoder(r.Body).Decode(&body)
-		writes <- meetingRequest{r.Method, r.URL.Path, body}
-		w.WriteHeader(204)
-	})
-	status, body := meetingRPC(t, s, "calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","start":"2026-10-09T12:00:00+01:00","duration":"30m","add":["new@example.test"],"remove":["remove@example.test"]}`)
+var attendeeEvent = strings.Replace(organizerEvent, `"isOrganizer":true`, `"isOrganizer":false`, 1)
+
+// Graph request bodies are owned by the provider tests; this one request proves that every update parameter reaches it.
+func TestCalendarHTTPUpdateMapsParamsToSelectedFields(t *testing.T) {
+	handler, request := recordingGraph(t, organizerEvent, "")
+	s, _, home := calendarServer(t, "Calendars.ReadWrite", handler)
+	status, body := meetingRPC(t, s, "calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","start":"2026-10-09T12:00:00+01:00","duration":"30m","add":["new@example.test"],"remove":["remove@example.test"],"teams":true}`)
 	if status != 200 || body != `{"id":"e1","ok":true}` {
 		t.Fatalf("response=%d %s", status, body)
 	}
-	if len(writes) != 1 {
-		t.Fatalf("writes=%d", len(writes))
-	}
-	got := <-writes
-	want := map[string]any{"subject": "CANARY replacement", "location": map[string]any{"displayName": ""}, "start": map[string]any{"dateTime": "2026-10-09T11:00:00", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T11:30:00", "timeZone": "UTC"}, "attendees": []any{map[string]any{"emailAddress": map[string]any{"address": "keep@example.test"}, "type": "optional"}, map[string]any{"emailAddress": map[string]any{"address": "new@example.test"}, "type": "required"}}}
+	got := request()
+	want := map[string]any{"subject": "CANARY replacement", "location": map[string]any{"displayName": ""}, "start": map[string]any{"dateTime": "2026-10-09T11:00:00", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T11:30:00", "timeZone": "UTC"}, "attendees": []any{map[string]any{"emailAddress": map[string]any{"address": "keep@example.test"}, "type": "optional"}, map[string]any{"emailAddress": map[string]any{"address": "new@example.test"}, "type": "required"}}, "isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"}
 	if got.Method != "PATCH" || got.Path != "/me/events/e1" || !reflect.DeepEqual(got.Body, want) {
+		t.Fatalf("provider request=%+v", got)
+	}
+	assertAudited(t, home, "calendar_update")
+}
+
+// end cannot be sent with duration, so it needs its own request.
+func TestCalendarHTTPUpdateMapsEndParam(t *testing.T) {
+	handler, request := recordingGraph(t, organizerEvent, "")
+	s, _, _ := calendarServer(t, "Calendars.ReadWrite", handler)
+	status, body := meetingRPC(t, s, "calendar.update", `{"id":"e1","end":"2026-10-09T11:30:00+01:00"}`)
+	if status != 200 || body != `{"id":"e1","ok":true}` {
+		t.Fatalf("response=%d %s", status, body)
+	}
+	if got := request(); !reflect.DeepEqual(got.Body["end"], map[string]any{"dateTime": "2026-10-09T10:30:00", "timeZone": "UTC"}) {
 		t.Fatalf("provider request=%+v", got)
 	}
 }
 
-func TestCalendarHTTPCancelAndResponsesWriteExactActions(t *testing.T) {
-	for _, action := range []string{"cancel", "accept", "tentative", "decline"} {
-		t.Run(action, func(t *testing.T) {
-			writes := make(chan meetingRequest, 4)
-			s, _, home := calendarServer(t, "Calendars.ReadWrite", func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == "GET" {
-					event := organizerEvent
-					if action != "cancel" {
-						event = strings.Replace(event, `"isOrganizer":true`, `"isOrganizer":false`, 1)
-					}
-					io.WriteString(w, event)
-					return
-				}
-				var body map[string]any
-				json.NewDecoder(r.Body).Decode(&body)
-				writes <- meetingRequest{r.Method, r.URL.Path, body}
-				w.WriteHeader(202)
-			})
-			op := "calendar.respond"
-			params := `{"id":"e1","response":"` + action + `","comment":"CANARY comment"}`
-			want := map[string]any{"comment": "CANARY comment", "sendResponse": true}
-			endpoint := action
-			if action == "cancel" {
-				op = "calendar.cancel"
-				params = `{"id":"e1","comment":"CANARY comment"}`
-				delete(want, "sendResponse")
-			}
-			if action == "tentative" {
-				endpoint = "tentativelyAccept"
-			}
-			status, body := meetingRPC(t, s, op, params)
+func TestCalendarHTTPCancelAndRespondMapParams(t *testing.T) {
+	for _, tc := range []struct{ op, event, params, path, audit string }{
+		{"calendar.cancel", organizerEvent, `{"id":"e1","comment":"CANARY comment"}`, "/me/events/e1/cancel", "calendar_cancel"},
+		{"calendar.respond", attendeeEvent, `{"id":"e1","response":"tentative","comment":"CANARY comment"}`, "/me/events/e1/tentativelyAccept", "calendar_respond"},
+	} {
+		t.Run(tc.op, func(t *testing.T) {
+			handler, request := recordingGraph(t, tc.event, "")
+			s, _, home := calendarServer(t, "Calendars.ReadWrite", handler)
+			status, body := meetingRPC(t, s, tc.op, tc.params)
 			if status != 200 || body != `{"id":"e1","ok":true}` {
 				t.Fatalf("response=%d %s", status, body)
 			}
-			if len(writes) != 1 {
-				t.Fatalf("writes=%d", len(writes))
+			if got := request(); got.Method != "POST" || got.Path != tc.path || got.Body["comment"] != "CANARY comment" {
+				t.Fatalf("provider request=%+v, want POST %s with the comment", got, tc.path)
 			}
-			got := <-writes
-			if got.Method != "POST" || got.Path != "/me/events/e1/"+endpoint || !reflect.DeepEqual(got.Body, want) {
-				t.Fatalf("provider request=%+v", got)
-			}
-			data, err := os.ReadFile(filepath.Join(home, "audit.jsonl"))
-			if err != nil || strings.Contains(string(data), "CANARY") || !strings.Contains(string(data), strings.Replace(op, ".", "_", 1)) {
-				t.Fatalf("audit=%s error=%v", data, err)
-			}
+			assertAudited(t, home, tc.audit)
 		})
 	}
 }
@@ -181,9 +203,7 @@ func TestCalendarHTTPRequiresWriteGrantAndRefusesGmailBeforeCredentials(t *testi
 				s, creds, home := calendarServer(t, "User.Read Mail.ReadWrite Calendars.Read role:Calendars.ReadWrite", func(w http.ResponseWriter, r *http.Request) { requests.Add(1); io.WriteString(w, organizerEvent) })
 				want := `{"error":"missing_scopes"}`
 				if provider == "gmail" {
-					if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[accounts.work]\nprovider='gmail'\nclient_id='synthetic'\nclient_secret='synthetic'\n"), 0600); err != nil {
-						t.Fatal(err)
-					}
+					useGmail(t, home)
 					want = `{"error":"calendar writes are not supported for this account"}`
 				}
 				status, body := meetingRPC(t, s, op, params)
@@ -285,7 +305,7 @@ func TestCalendarHTTPRefusalsNeverWriteOrExposeRawEvents(t *testing.T) {
 				var writes atomic.Int32
 				event := organizerEvent
 				if op == "calendar.respond" {
-					event = strings.Replace(event, `"isOrganizer":true`, `"isOrganizer":false`, 1)
+					event = attendeeEvent
 				}
 				want := "operation failed"
 				switch state {
@@ -300,7 +320,7 @@ func TestCalendarHTTPRefusalsNeverWriteOrExposeRawEvents(t *testing.T) {
 						event = organizerEvent
 						want = "calendar response refused: organizer cannot respond"
 					} else {
-						event = strings.Replace(event, `"isOrganizer":true`, `"isOrganizer":false`, 1)
+						event = attendeeEvent
 						want = "calendar write refused: only the organizer can update or cancel"
 					}
 				case "wrong id":
@@ -350,7 +370,7 @@ func TestCalendarHTTPWriteAndAuditFailuresStaySafe(t *testing.T) {
 					if r.Method == "GET" {
 						event := organizerEvent
 						if op == "calendar.respond" {
-							event = strings.Replace(event, `"isOrganizer":true`, `"isOrganizer":false`, 1)
+							event = attendeeEvent
 						}
 						io.WriteString(w, event)
 						return
@@ -381,87 +401,30 @@ func TestCalendarHTTPWriteAndAuditFailuresStaySafe(t *testing.T) {
 	}
 }
 
-func TestCalendarHTTPPartialUpdatesLeaveUnselectedFieldsAlone(t *testing.T) {
-	for _, tc := range []struct {
-		name, params string
-		want         map[string]any
-	}{
-		{"subject only", `{"id":"e1","subject":""}`, map[string]any{"subject": ""}},
-		{"start only", `{"id":"e1","start":"2026-10-09T12:00:00Z"}`, map[string]any{"start": map[string]any{"dateTime": "2026-10-09T12:00:00", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T13:00:00", "timeZone": "UTC"}}},
-		{"duration only", `{"id":"e1","duration":"30m"}`, map[string]any{"end": map[string]any{"dateTime": "2026-10-09T09:30:00", "timeZone": "UTC"}}},
-		{"end only", `{"id":"e1","end":"2026-10-09T11:30:00+01:00"}`, map[string]any{"end": map[string]any{"dateTime": "2026-10-09T10:30:00", "timeZone": "UTC"}}},
-		{"remove only", `{"id":"e1","remove":["remove@example.test"]}`, map[string]any{"attendees": []any{map[string]any{"emailAddress": map[string]any{"address": "keep@example.test"}, "type": "optional"}}}},
-		{"teams only", `{"id":"e1","teams":true}`, map[string]any{"isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			writes := make(chan meetingRequest, 4)
-			s, _, home := calendarServer(t, "Calendars.ReadWrite", func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == "GET" {
-					io.WriteString(w, organizerEvent)
-					return
-				}
-				var body map[string]any
-				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-					t.Error(err)
-				}
-				writes <- meetingRequest{r.Method, r.URL.Path, body}
-				w.WriteHeader(204)
-			})
-			status, body := meetingRPC(t, s, "calendar.update", tc.params)
-			if status != 200 || body != `{"id":"e1","ok":true}` || len(writes) != 1 {
-				t.Fatalf("response=%d %s writes=%d", status, body, len(writes))
-			}
-			got := <-writes
-			if got.Method != "PATCH" || got.Path != "/me/events/e1" || !reflect.DeepEqual(got.Body, tc.want) {
-				t.Fatalf("provider request=%+v", got)
-			}
-			data, err := os.ReadFile(filepath.Join(home, "audit.jsonl"))
-			if err != nil || strings.Contains(string(data), "example.test") || !strings.Contains(string(data), `"operation":"calendar_update"`) {
-				t.Fatalf("audit=%s error=%v", data, err)
-			}
-		})
+func TestCalendarHTTPInviteMapsParamsAndOnlyReturnsID(t *testing.T) {
+	handler, request := recordingGraph(t, "", `{"id":"new-event","subject":"CANARY raw"}`)
+	s, _, home := calendarServer(t, "User.Read cAlEnDaRs.ReAdWrItE", handler)
+	status, body := meetingRPC(t, s, "calendar.invite", `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body","location":"CANARY room","start":"2026-10-09T10:00:00+01:00","end":"2026-10-09T19:00:00+01:00"}`)
+	if status != 200 || body != `{"id":"new-event"}` {
+		t.Fatalf("response=%d %s", status, body)
 	}
+	got := request()
+	// Teams is the default.
+	want := map[string]any{"subject": "CANARY subject", "body": map[string]any{"contentType": "html", "content": "CANARY body"}, "location": map[string]any{"displayName": "CANARY room"}, "start": map[string]any{"dateTime": "2026-10-09T09:00:00", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T18:00:00", "timeZone": "UTC"}, "attendees": []any{map[string]any{"emailAddress": map[string]any{"address": "CANARY@example.test"}, "type": "required"}}, "isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"}
+	if got.Method != "POST" || got.Path != "/me/events" || !reflect.DeepEqual(got.Body, want) {
+		t.Fatalf("provider request=%+v", got)
+	}
+	assertAudited(t, home, "calendar_invite")
 }
 
-func TestCalendarHTTPInviteWritesExactPayloadAndOnlyReturnsID(t *testing.T) {
-	// Teams is the default; only an explicit false opts out.
-	for _, tc := range []struct {
-		name, teams string
-		online      map[string]any
-	}{
-		{"default Teams", "", map[string]any{"isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"}},
-		{"explicit Teams", `,"teams":true`, map[string]any{"isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"}},
-		{"no Teams", `,"teams":false`, map[string]any{"isOnlineMeeting": false}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			requests := make(chan meetingRequest, 4)
-			s, _, home := calendarServer(t, "User.Read cAlEnDaRs.ReAdWrItE", func(w http.ResponseWriter, r *http.Request) {
-				var body map[string]any
-				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-					t.Error(err)
-				}
-				requests <- meetingRequest{r.Method, r.URL.Path, body}
-				io.WriteString(w, `{"id":"new-event","subject":"CANARY raw"}`)
-			})
-			status, body := meetingRPC(t, s, "calendar.invite", `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body","location":"CANARY room","start":"2026-10-09T10:00:00+01:00","end":"2026-10-09T19:00:00+01:00"`+tc.teams+`}`)
-			if status != 200 || body != `{"id":"new-event"}` {
-				t.Fatalf("response=%d %s", status, body)
-			}
-			if len(requests) != 1 {
-				t.Fatalf("provider requests=%d", len(requests))
-			}
-			got := <-requests
-			want := map[string]any{"subject": "CANARY subject", "body": map[string]any{"contentType": "html", "content": "CANARY body"}, "location": map[string]any{"displayName": "CANARY room"}, "start": map[string]any{"dateTime": "2026-10-09T09:00:00", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T18:00:00", "timeZone": "UTC"}, "attendees": []any{map[string]any{"emailAddress": map[string]any{"address": "CANARY@example.test"}, "type": "required"}}}
-			for k, v := range tc.online {
-				want[k] = v
-			}
-			if got.Method != "POST" || got.Path != "/me/events" || !reflect.DeepEqual(got.Body, want) {
-				t.Fatalf("provider request=%+v", got)
-			}
-			data, err := os.ReadFile(filepath.Join(home, "audit.jsonl"))
-			if err != nil || strings.Contains(string(data), "CANARY") || !strings.Contains(string(data), `"operation":"calendar_invite"`) {
-				t.Fatalf("audit=%s error=%v", data, err)
-			}
-		})
+func TestCalendarHTTPInviteExplicitFalseOptsOutOfTeams(t *testing.T) {
+	handler, request := recordingGraph(t, "", `{"id":"new-event"}`)
+	s, _, _ := calendarServer(t, "Calendars.ReadWrite", handler)
+	status, body := meetingRPC(t, s, "calendar.invite", strings.TrimSuffix(validCalendarParams["calendar.invite"], "}")+`,"teams":false}`)
+	if status != 200 || body != `{"id":"new-event"}` {
+		t.Fatalf("response=%d %s", status, body)
+	}
+	if got := request(); got.Body["isOnlineMeeting"] != false || got.Body["onlineMeetingProvider"] != nil {
+		t.Fatalf("provider request=%+v, want isOnlineMeeting false and no provider", got)
 	}
 }

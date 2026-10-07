@@ -21,6 +21,9 @@ import (
 
 var now = time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC)
 
+// requestedScopes is the exact scope string that every login and refresh request must ask for.
+const requestedScopes = "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/MailboxSettings.Read offline_access openid profile"
+
 func jwt(claims any) string {
 	b, _ := json.Marshal(claims)
 	return "e30." + base64.RawURLEncoding.EncodeToString(b) + ".signature"
@@ -188,7 +191,7 @@ func TestStatusRefreshesRefreshOnlyCredential(t *testing.T) {
 				if r.Method != "POST" || r.URL.Path != "/token" || r.Form.Get("grant_type") != "refresh_token" || r.Form.Get("client_id") != "client" || r.Form.Get("refresh_token") != "refresh" {
 					t.Error("bad refresh request")
 				}
-				if r.Form.Get("scope") != "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/MailboxSettings.Read offline_access openid profile" {
+				if r.Form.Get("scope") != requestedScopes {
 					t.Error("refresh did not request restricted scopes")
 				}
 				jsonResponse(w, map[string]any{"access_token": fresh, "expires_in": 3600, "refresh_token": "rotated"})
@@ -229,7 +232,7 @@ func TestExpiredUnsafeCredentialUsesOnlyValidatedRefresh(t *testing.T) {
 					if r.URL.Path == "/token" {
 						exchanges.Add(1)
 						_ = r.ParseForm()
-						if r.Method != "POST" || r.Form.Get("refresh_token") != "refresh" || r.Form.Get("scope") != "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/MailboxSettings.Read offline_access openid profile" {
+						if r.Method != "POST" || r.Form.Get("refresh_token") != "refresh" || r.Form.Get("scope") != requestedScopes {
 							t.Error("bad restricted refresh request")
 						}
 						jsonResponse(w, map[string]any{"access_token": result.token, "expires_in": 3600, "refresh_token": "rotated", "error": result.oauthError})

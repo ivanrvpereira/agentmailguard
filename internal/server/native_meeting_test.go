@@ -3,12 +3,9 @@ package server_test
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -19,10 +16,6 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
-	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
-	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
-	"github.com/ivanrvpereira/agentmailguard/internal/screening"
-	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
 
 // meetingNativeStore grants the M365 write scope to "work" only, so "other" proves the missing-scope refusal.
@@ -36,8 +29,7 @@ func (s *meetingNativeStore) LoadOAuth(ctx context.Context, p, a string) (creden
 	if a == "other" {
 		scopes = "User.Read Mail.ReadWrite Calendars.Read MailboxSettings.Read"
 	}
-	claims, _ := json.Marshal(map[string]string{"scp": scopes})
-	return credentials.OAuth{AccessToken: "x." + base64.RawURLEncoding.EncodeToString(claims) + ".x", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Username: "work@example.test"}, nil
+	return credentials.OAuth{AccessToken: statusJWT(scopes), ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Username: "work@example.test"}, nil
 }
 
 // meetingGraph is a stateful fake of the Graph event endpoints. Created events keep every posted field.
@@ -125,57 +117,18 @@ func syntheticEvent(id string, organizer bool, extra map[string]any) map[string]
 
 // The compiled client only knows the server URL and its own time zone; it never sees configuration or credentials.
 func TestNativeBinaryMeetingWorkflow(t *testing.T) {
-	binary := buildNative(t)
-	home := t.TempDir()
-	configFile(t, home)
-	f, err := os.OpenFile(filepath.Join(home, "config.toml"), os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = f.WriteString("[accounts.gmail]\nprovider='gmail'\nclient_id='synthetic'\nclient_secret='private-config-canary'\n")
-	f.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
 	g := &meetingGraph{events: map[string]map[string]any{"recurring-1": syntheticEvent("recurring-1", true, map[string]any{"type": "occurrence"})}}
 	for _, r := range []string{"accept", "tentative", "decline"} {
 		g.events["attendee-"+r] = syntheticEvent("attendee-"+r, false, nil)
 	}
-	graph := httptest.NewServer(http.HandlerFunc(g.handle))
-	defer graph.Close()
 	var googleRequests atomic.Int32
-	google := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { googleRequests.Add(1); w.WriteHeader(500) }))
-	defer google.Close()
 	api := newNativeAPI()
-	jev := httptest.NewServer(http.HandlerFunc(api.jev))
-	defer jev.Close()
-	creds := &meetingNativeStore{}
-	screen := screening.New(screening.Options{Endpoint: jev.URL, Credentials: creds, LookupEnv: func(string) string { return "synthetic-key" }})
-	s, err := server.New(context.Background(), home, server.Options{Credentials: creds, Screener: screen, M365: m365.Options{BaseURL: graph.URL}, Gmail: gmail.Options{GmailURL: google.URL + "/gmail", ProfileURL: google.URL + "/gmail/profile", CalendarURL: google.URL + "/calendar"}, Now: func() time.Time { return time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC) }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	h := httptest.NewServer(s)
-	defer h.Close()
-	clientHome := t.TempDir()
-	run := func(args ...string) (string, string, int) {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, binary, append([]string{"--server", h.URL}, args...)...)
-		// Lisbon leaves summer time on 2026-10-25, between the invite and the update below.
-		cmd.Env = []string{"HOME=" + clientHome, "AGENTMAILGUARD_HOME=" + filepath.Join(clientHome, "does-not-exist"), "TZ=Europe/Lisbon"}
-		var out, errout bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &out, &errout
-		code := 0
-		if e := cmd.Run(); e != nil {
-			code = -1
-			if ex, ok := e.(*exec.ExitError); ok {
-				code = ex.ExitCode()
-			}
-		}
-		return out.String(), errout.String(), code
-	}
+	// Lisbon leaves summer time on 2026-10-25, between the invite and the update below.
+	_, home, run := startNative(t, buildNative(t), nativeFakes{
+		creds: &meetingNativeStore{}, graph: g.handle, jev: api.jev,
+		google: func(w http.ResponseWriter, r *http.Request) { googleRequests.Add(1); w.WriteHeader(500) },
+		now:    time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC), clientEnv: []string{"TZ=Europe/Lisbon"},
+	})
 	// write runs one successful command and returns its stdout and the Graph writes it caused.
 	write := func(args ...string) (string, []externalWrite) {
 		t.Helper()
@@ -231,19 +184,8 @@ func TestNativeBinaryMeetingWorkflow(t *testing.T) {
 	if !reflect.DeepEqual(slots, map[string][]string{"work@example.test": {"busy", "free", "free", "busy"}, "first@example.test": {"tentative", "free", "free", "out_of_office"}, "second@example.test": {"free", "busy", "free", "busy"}, "hidden@example.test": {"unknown", "unknown", "unknown", "unknown"}}) {
 		t.Fatalf("availability slots %v", slots)
 	}
-	invited := map[string]bool{"work@example.test": true, "first@example.test": true, "second@example.test": true}
-	var shared []int
-	for i := range 4 {
-		all := true
-		for address, statuses := range slots {
-			all = all && (!invited[address] || statuses[i] == "free")
-		}
-		if all {
-			shared = append(shared, i)
-		}
-	}
-	if !reflect.DeepEqual(shared, []int{2}) || !reflect.DeepEqual(g.schedules, []map[string]any{{"schedules": []any{"work@example.test", "first@example.test", "second@example.test", "hidden@example.test"}, "startTime": utc("2026-10-09T07:00:00"), "endTime": utc("2026-10-09T09:00:00"), "availabilityViewInterval": float64(30)}}) || len(api.jevCalls) != 0 {
-		t.Fatalf("shared free slots %v, getSchedule requests %v, Jev calls %v", shared, g.schedules, api.jevCalls)
+	if !reflect.DeepEqual(g.schedules, []map[string]any{{"schedules": []any{"work@example.test", "first@example.test", "second@example.test", "hidden@example.test"}, "startTime": utc("2026-10-09T07:00:00"), "endTime": utc("2026-10-09T09:00:00"), "availabilityViewInterval": float64(30)}}) || len(api.jevCalls) != 0 {
+		t.Fatalf("getSchedule requests %v, Jev calls %v", g.schedules, api.jevCalls)
 	}
 
 	args := []string{"--account", "work", "calendar", "invite", "--to", "first@example.test", "--to", "second@example.test", "--subject", "private-meeting-subject", "--body", "private-meeting-body\n<b>agenda</b> & notes", "--location", "private-room", "--start", "2026-10-09 09:00", "--duration", "30m"}
@@ -358,8 +300,5 @@ func TestNativeBinaryMeetingWorkflow(t *testing.T) {
 		if bytes.Contains(log, []byte(canary)) {
 			t.Fatalf("audit contains %s", canary)
 		}
-	}
-	if entries, err := os.ReadDir(clientHome); err != nil || len(entries) != 0 {
-		t.Fatal("remote client created local state")
 	}
 }
