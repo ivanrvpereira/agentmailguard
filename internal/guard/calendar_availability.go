@@ -2,7 +2,7 @@ package guard
 
 import (
 	"context"
-	"strings"
+	"slices"
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
@@ -13,18 +13,10 @@ import (
 func (g *Guard) CalendarAvailability(ctx context.Context, addresses []string, start, end time.Time) ([]model.Schedule, error) {
 	reader, ok := g.calendar.(model.CalendarAvailability)
 	if !ok {
-		return nil, GuardError("calendar availability is not supported for this account")
+		return nil, CalendarAvailabilityUnsupported
 	}
-	if len(addresses) == 0 || len(addresses) > 20 || !calendarRangeValid(start, end) || end.Sub(start) >= 62*24*time.Hour {
+	if !model.ValidAvailabilityRequest(addresses, start, end) {
 		return nil, GuardError("invalid request")
-	}
-	seen := map[string]bool{}
-	for _, address := range addresses {
-		key := strings.ToLower(address)
-		if strings.TrimSpace(address) == "" || seen[key] {
-			return nil, GuardError("invalid request")
-		}
-		seen[key] = true
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -33,33 +25,21 @@ func (g *Guard) CalendarAvailability(ctx context.Context, addresses []string, st
 	if err != nil {
 		return nil, safeErr(ctx, err)
 	}
+	// The provider contract is positional: entry i is labeled addresses[i]. A wrong entry count makes every
+	// participant unknown; a mislabeled entry, wrong slot count, or unproven status makes that participant unknown.
 	slots := model.AvailabilitySlots(start, end)
-	byAddress, entries := map[string][]model.AvailabilityStatus{}, map[string]int{}
-	for _, s := range found {
-		key := strings.ToLower(s.Address)
-		byAddress[key] = s.Slots
-		entries[key]++
-	}
+	counted := len(found) == len(addresses)
 	out := make([]model.Schedule, len(addresses))
 	for i, address := range addresses {
-		key := strings.ToLower(address)
-		got := byAddress[key]
-		statuses := make([]model.AvailabilityStatus, slots)
-		known := entries[key] == 1 && len(got) == slots
-		for j := 0; known && j < slots; j++ {
-			switch got[j] {
-			case model.SlotFree, model.SlotTentative, model.SlotBusy, model.SlotOutOfOffice:
-				statuses[j] = got[j]
-			default:
-				known = false
-			}
+		out[i] = model.Schedule{Address: address, Slots: slices.Repeat([]model.AvailabilityStatus{model.SlotUnknown}, slots)}
+		if counted && found[i].Address == address && len(found[i].Slots) == slots && !slices.ContainsFunc(found[i].Slots, unproven) {
+			out[i].Slots = slices.Clone(found[i].Slots)
 		}
-		if !known {
-			for j := range statuses {
-				statuses[j] = model.SlotUnknown
-			}
-		}
-		out[i] = model.Schedule{Address: address, Slots: statuses}
 	}
 	return out, nil
+}
+
+// unproven reports a status other than the four a provider can establish.
+func unproven(s model.AvailabilityStatus) bool {
+	return s != model.SlotFree && s != model.SlotTentative && s != model.SlotBusy && s != model.SlotOutOfOffice
 }

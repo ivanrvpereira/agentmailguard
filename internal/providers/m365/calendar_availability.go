@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,11 +17,11 @@ var graphAvailability = map[byte]model.AvailabilityStatus{'0': model.SlotFree, '
 // Availability reads free/busy metadata only. Results are labeled with the requested addresses and
 // never carry schedule items, working hours, returned IDs, or provider error text.
 func (c *calendar) Availability(ctx context.Context, addresses []string, start, end time.Time) ([]model.Schedule, error) {
-	slots := model.AvailabilitySlots(start, end)
-	// Graph limits: at most 20 queried entities and a range shorter than 62 days.
-	if slots == 0 || end.Sub(start) >= 62*24*time.Hour || len(addresses) == 0 || len(addresses) > 20 {
+	// The model limits match Graph's: at most 20 queried entities and a range shorter than 62 days.
+	if !model.ValidAvailabilityRequest(addresses, start, end) {
 		return nil, invalidMetadata
 	}
+	slots := model.AvailabilitySlots(start, end)
 	body := map[string]any{"schedules": addresses, "startTime": calendarTime(start), "endTime": calendarTime(end), "availabilityViewInterval": int(model.AvailabilityInterval / time.Minute)}
 	d, err := c.c.request(ctx, http.MethodPost, c.c.endpoint("/me/calendar/getSchedule", nil), body, true)
 	if err != nil {
@@ -50,9 +51,7 @@ func (c *calendar) Availability(ctx context.Context, addresses []string, start, 
 			statuses[j], known = graphAvailability[view[j]]
 		}
 		if !known {
-			for j := range statuses {
-				statuses[j] = model.SlotUnknown
-			}
+			statuses = slices.Repeat([]model.AvailabilityStatus{model.SlotUnknown}, slots)
 		}
 		out[i] = model.Schedule{Address: address, Slots: statuses}
 	}

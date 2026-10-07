@@ -569,10 +569,7 @@ func mailOrganizeCmd(r *runner) *cobra.Command {
 func calendarCmd(r *runner) *cobra.Command {
 	from, to := "today", "+7d"
 	list := r.leaf("list", "List calendar events in a range", 0, 0, func(c *cobra.Command, _ []string) error {
-		if r.opts.Now == nil {
-			r.opts.Now = time.Now
-		}
-		now := r.opts.Now()
+		now := r.now()
 		start, e := parseDay(from, now, now)
 		if e != nil {
 			return errUsage

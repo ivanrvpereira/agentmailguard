@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -172,21 +174,52 @@ type NewEvent struct {
 	Teams                   bool
 }
 
+// CalendarTimeValid reports whether t has a year from 1 to 9999 in its own zone and in UTC.
+func CalendarTimeValid(t time.Time) bool {
+	return t.Year() >= 1 && t.Year() <= 9999 && t.UTC().Year() >= 1 && t.UTC().Year() <= 9999
+}
+
 type EventChange struct {
 	Subject, Location             *string
 	Start, End                    *time.Time
-	Duration                      *time.Duration
 	AddAttendees, RemoveAttendees []string
 	Teams                         bool // true adds a Teams meeting; false leaves the online meeting unchanged
 }
 
+// Empty reports a change with no field set. A duration given beside it is a change too.
+func (c EventChange) Empty() bool {
+	return c.Subject == nil && c.Location == nil && c.Start == nil && c.End == nil && len(c.AddAttendees)+len(c.RemoveAttendees) == 0 && !c.Teams
+}
+
+// AttendeeConflict reports an address that is both added and removed, ignoring case.
+func (c EventChange) AttendeeConflict() bool {
+	for _, add := range c.AddAttendees {
+		if slices.ContainsFunc(c.RemoveAttendees, func(remove string) bool { return strings.EqualFold(add, remove) }) {
+			return true
+		}
+	}
+	return false
+}
+
+type MeetingResponse string
+
+const (
+	ResponseAccept    MeetingResponse = "accept"
+	ResponseTentative MeetingResponse = "tentative"
+	ResponseDecline   MeetingResponse = "decline"
+)
+
+func (r MeetingResponse) Valid() bool {
+	return r == ResponseAccept || r == ResponseTentative || r == ResponseDecline
+}
+
 type EventResponse struct {
-	Response string // accept, tentative, or decline
+	Response MeetingResponse
 	Comment  string
 }
 
 // CalendarWriter is optional; read-only calendar providers need not implement it.
-// Callers must resolve duration and start-only changes into explicit Start and End.
+// Callers must resolve start-only changes into explicit Start and End.
 type CalendarWriter interface {
 	Invite(ctx context.Context, event NewEvent) (EventID, error)
 	Update(ctx context.Context, id EventID, change EventChange) error
@@ -224,6 +257,29 @@ func AvailabilitySlots(start, end time.Time) int {
 		n++
 	}
 	return n
+}
+
+// Availability requests name 1 to MaxAvailabilityAddresses addresses for a range shorter than MaxAvailabilityRange.
+const (
+	MaxAvailabilityAddresses = 20
+	MaxAvailabilityRange     = 62 * 24 * time.Hour
+)
+
+// ValidAvailabilityRequest refuses blank or duplicate (ignoring case) addresses, too many addresses,
+// invalid times, an end not after the start, and a range of MaxAvailabilityRange or more.
+func ValidAvailabilityRequest(addresses []string, start, end time.Time) bool {
+	if len(addresses) == 0 || len(addresses) > MaxAvailabilityAddresses || !CalendarTimeValid(start) || !CalendarTimeValid(end) || !end.After(start) || end.Sub(start) >= MaxAvailabilityRange {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, address := range addresses {
+		key := strings.ToLower(address)
+		if strings.TrimSpace(address) == "" || seen[key] {
+			return false
+		}
+		seen[key] = true
+	}
+	return true
 }
 
 // CalendarAvailability is optional and read-only. It returns one schedule per requested address, in

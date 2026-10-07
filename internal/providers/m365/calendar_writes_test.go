@@ -120,10 +120,13 @@ func TestCalendarWritesShareMailboxMutationGate(t *testing.T) {
 }
 
 func TestCalendarRespondAlwaysSendsSelectedResponse(t *testing.T) {
-	for _, tc := range []struct{ response, action string }{
+	for _, tc := range []struct {
+		response model.MeetingResponse
+		action   string
+	}{
 		{"accept", "accept"}, {"tentative", "tentativelyAccept"}, {"decline", "decline"}, {"", ""}, {"ACCEPT", ""}, {"SECRET", ""},
 	} {
-		t.Run(tc.response, func(t *testing.T) {
+		t.Run(string(tc.response), func(t *testing.T) {
 			requests := 0
 			c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
 				requests++
@@ -223,15 +226,10 @@ func TestCalendarUpdateAttendeeDeltaPreservesExistingProperties(t *testing.T) {
 }
 
 func TestCalendarUpdateRejectsUnresolvedTimes(t *testing.T) {
-	duration := 30 * time.Minute
-	for name, change := range map[string]model.EventChange{"duration": {Duration: &duration}, "start without end": {Start: &now}} {
-		t.Run(name, func(t *testing.T) {
-			c := graphClient(t, func(w http.ResponseWriter, r *http.Request) { t.Error("unresolved time reached Graph") })
-			writer := c.Calendar().(model.CalendarWriter)
-			if err := writer.Update(context.Background(), "e", change); err == nil || err.Error() != "Graph error InvalidMetadata" {
-				t.Fatalf("unresolved time = %v", err)
-			}
-		})
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) { t.Error("unresolved time reached Graph") })
+	writer := c.Calendar().(model.CalendarWriter)
+	if err := writer.Update(context.Background(), "e", model.EventChange{Start: &now}); err == nil || err.Error() != "Graph error InvalidMetadata" {
+		t.Fatalf("start without end = %v", err)
 	}
 }
 

@@ -44,11 +44,9 @@ func publicError(e error) (string, bool) {
 		}
 	}
 	if e, ok := e.(guard.GuardError); ok {
-		switch string(e) {
-		case "calendar writes are not supported for this account", "calendar availability is not supported for this account", "missing_scopes", "invalid request",
-			"calendar write refused: recurring events are not supported", "calendar write refused: event is cancelled",
-			"calendar write refused: only the organizer can update or cancel", "calendar response refused: organizer cannot respond",
-			"calendar update needs at least one change":
+		switch e {
+		case guard.CalendarWriteUnsupported, guard.CalendarAvailabilityUnsupported, "missing_scopes", "invalid request",
+			guard.CalendarRecurring, guard.CalendarCancelled, guard.CalendarOrganizerOnly, guard.CalendarOrganizerCannotRespond:
 			return string(e), true
 		case "move refused: the destination must be a folder ID from `folders`", "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
 			"link refused: message is red, not green", "link refused: message is yellow, not green", "link refused: message is sealed, not green", "link refused: message is error, not green",
@@ -182,8 +180,8 @@ type availabilityDTO struct {
 	Schedules []scheduleDTO `json:"schedules"`
 }
 type scheduleDTO struct {
-	Address string   `json:"address"`
-	Slots   []string `json:"slots"`
+	Address string                     `json:"address"`
+	Slots   []model.AvailabilityStatus `json:"slots"`
 }
 type newParam struct {
 	To      []string `json:"to"`
@@ -249,10 +247,10 @@ type rulesDTO struct {
 func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	var call func(*account) (any, error)
 	// M365-only calendar operations name their Gmail refusal and the grants that allow them.
-	unsupported, grants := "", []string(nil)
+	unsupported, grants := guard.GuardError(""), []string(nil)
 	switch r.Operation {
 	case "calendar.invite", "calendar.update", "calendar.cancel", "calendar.respond":
-		unsupported, grants = "calendar writes are not supported for this account", []string{"Calendars.ReadWrite"}
+		unsupported, grants = guard.CalendarWriteUnsupported, []string{"Calendars.ReadWrite"}
 		var e error
 		call, e = calendarWriteCall(ctx, r.Operation, r.Params)
 		if e != nil {
@@ -396,22 +394,15 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		call = func(a *account) (any, error) { return a.guard.CalendarList(ctx, first, last) }
 	case "calendar.availability":
 		var p availabilityParam
-		if params(r.Params, &p) != nil || !listValid(p.To, 1, 20) {
+		if params(r.Params, &p) != nil || !listValid(p.To, 1, model.MaxAvailabilityAddresses) {
 			return nil, invalid
-		}
-		seen := map[string]bool{}
-		for _, address := range p.To {
-			if strings.TrimSpace(address) == "" || seen[strings.ToLower(address)] {
-				return nil, invalid
-			}
-			seen[strings.ToLower(address)] = true
 		}
 		first, e := time.Parse(time.RFC3339, p.Start)
 		last, e2 := time.Parse(time.RFC3339, p.End)
-		if e != nil || e2 != nil || !calendarTimeValid(first) || !calendarTimeValid(last) || !last.After(first) || last.Sub(first) >= 62*24*time.Hour {
+		if e != nil || e2 != nil || !model.ValidAvailabilityRequest(p.To, first, last) {
 			return nil, invalid
 		}
-		unsupported, grants = "calendar availability is not supported for this account", []string{"Calendars.ReadBasic", "Calendars.Read", "Calendars.ReadWrite"}
+		unsupported, grants = guard.CalendarAvailabilityUnsupported, []string{"Calendars.ReadBasic", "Calendars.Read", "Calendars.ReadWrite"}
 		call = func(a *account) (any, error) {
 			v, e := a.guard.CalendarAvailability(ctx, p.To, first, last)
 			if e != nil {
@@ -419,11 +410,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 			}
 			out := availabilityDTO{first.Format(time.RFC3339Nano), last.Format(time.RFC3339Nano), int(model.AvailabilityInterval / time.Minute), make([]scheduleDTO, 0, len(v))}
 			for _, schedule := range v {
-				slots := make([]string, 0, len(schedule.Slots))
-				for _, slot := range schedule.Slots {
-					slots = append(slots, string(slot))
-				}
-				out.Schedules = append(out.Schedules, scheduleDTO{schedule.Address, slots})
+				out.Schedules = append(out.Schedules, scheduleDTO{schedule.Address, schedule.Slots})
 			}
 			return out, nil
 		}
@@ -466,7 +453,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		return s.ruleList(ctx, a)
 	}
 	if unsupported != "" && a.Provider != "m365" {
-		return nil, guard.GuardError(unsupported)
+		return nil, unsupported
 	}
 	instance, e := s.instance(a)
 	if e != nil {

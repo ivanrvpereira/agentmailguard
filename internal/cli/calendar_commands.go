@@ -1,32 +1,27 @@
 package cli
 
 import (
-	"strings"
 	"time"
 
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"github.com/spf13/cobra"
 )
 
 const wallClock = "2006-01-02 15:04"
 
-// location is the client time zone; calendar list and the write commands share it.
-func (r *runner) location() *time.Location {
+// now is the client clock; its location is the client time zone for every calendar command.
+func (r *runner) now() time.Time {
 	if r.opts.Now == nil {
-		r.opts.Now = time.Now
+		return time.Now()
 	}
-	return r.opts.Now().Location()
+	return r.opts.Now()
 }
 
 // localStamp parses a local wall-clock time. The round trip refuses input that Go would normalize,
 // such as a time inside a DST gap or a single-digit hour.
 func localStamp(v string, loc *time.Location) (time.Time, bool) {
 	t, e := time.ParseInLocation(wallClock, v, loc)
-	return t, e == nil && t.Format(wallClock) == v && inRange(t)
-}
-
-// inRange matches the years the server accepts, in local time and in UTC.
-func inRange(t time.Time) bool {
-	return t.Year() >= 1 && t.Year() <= 9999 && t.UTC().Year() >= 1 && t.UTC().Year() <= 9999
+	return t, e == nil && t.Format(wallClock) == v && model.CalendarTimeValid(t)
 }
 
 // meetingEnd resolves exactly one of --end and --duration against start.
@@ -34,7 +29,7 @@ func meetingEnd(c *cobra.Command, start time.Time, end string, duration time.Dur
 	if c.Flags().Changed("end") == c.Flags().Changed("duration") {
 		return time.Time{}, false
 	}
-	until, ok := start.Add(duration), duration > 0 && inRange(start.Add(duration))
+	until, ok := start.Add(duration), duration > 0 && model.CalendarTimeValid(start.Add(duration))
 	if c.Flags().Changed("end") {
 		until, ok = localStamp(end, loc)
 	}
@@ -46,20 +41,10 @@ func calendarAvailabilityCmd(r *runner) *cobra.Command {
 	var to []string
 	var start, end string
 	c := r.leaf("availability", "Show 30-minute M365 free/busy slots; read-only, sends nothing", 0, 0, func(c *cobra.Command, _ []string) error {
-		if len(to) == 0 || len(to) > 20 {
-			return errUsage
-		}
-		seen := map[string]bool{}
-		for _, address := range to {
-			if strings.TrimSpace(address) == "" || seen[strings.ToLower(address)] {
-				return errUsage
-			}
-			seen[strings.ToLower(address)] = true
-		}
-		loc := r.location()
+		loc := r.now().Location()
 		from, ok := localStamp(start, loc)
 		until, ok2 := localStamp(end, loc)
-		if !ok || !ok2 || !until.After(from) || until.Sub(from) >= 62*24*time.Hour {
+		if !ok || !ok2 || !model.ValidAvailabilityRequest(to, from, until) {
 			return errUsage
 		}
 		return r.call(c, "calendar.availability", map[string]any{"to": to, "start": from.Format(time.RFC3339), "end": until.Format(time.RFC3339)}, false)
@@ -90,7 +75,7 @@ func calendarCancelCmd(r *runner) *cobra.Command {
 func calendarRespondCmd(r *runner) *cobra.Command {
 	response, comment := "", ""
 	c := r.leaf("respond ID", "Send your response to a meeting invitation now", 1, 1, func(c *cobra.Command, args []string) error {
-		if response != "accept" && response != "tentative" && response != "decline" {
+		if !model.MeetingResponse(response).Valid() {
 			return errUsage
 		}
 		p := map[string]any{"id": args[0], "response": response}
@@ -111,30 +96,28 @@ func calendarUpdateCmd(r *runner) *cobra.Command {
 		p := map[string]any{"id": args[0]}
 		optional(c, p, "subject", &subject)
 		optional(c, p, "location", &location)
-		loc, endSet, durationSet := r.location(), c.Flags().Changed("end"), c.Flags().Changed("duration")
+		loc, startSet, endSet, durationSet := r.now().Location(), c.Flags().Changed("start"), c.Flags().Changed("end"), c.Flags().Changed("duration")
 		if endSet && durationSet {
 			return errUsage
 		}
-		if c.Flags().Changed("start") {
-			from, ok := localStamp(start, loc)
-			// With neither --end nor --duration, the server keeps the current duration.
-			if ok && (endSet || durationSet) {
-				_, ok = meetingEnd(c, from, end, duration, loc)
-			}
-			if !ok {
+		// With neither --end nor --duration, the server keeps the current duration.
+		var from time.Time
+		if startSet {
+			var ok bool
+			if from, ok = localStamp(start, loc); !ok {
 				return errUsage
 			}
 			p["start"] = from.Format(time.RFC3339)
 		}
 		if endSet {
 			until, ok := localStamp(end, loc)
-			if !ok {
+			if !ok || startSet && !until.After(from) {
 				return errUsage
 			}
 			p["end"] = until.Format(time.RFC3339)
 		}
 		if durationSet {
-			if duration <= 0 {
+			if duration <= 0 || startSet && !model.CalendarTimeValid(from.Add(duration)) {
 				return errUsage
 			}
 			p["duration"] = duration.String()
@@ -177,7 +160,7 @@ func calendarInviteCmd(r *runner) *cobra.Command {
 		if len(to) == 0 || !c.Flags().Changed("subject") || !c.Flags().Changed("start") {
 			return errUsage
 		}
-		loc := r.location()
+		loc := r.now().Location()
 		from, ok := localStamp(start, loc)
 		if !ok {
 			return errUsage

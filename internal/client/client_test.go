@@ -74,7 +74,6 @@ func TestCalendarClientDisplaysOnlyExactFixedRefusals(t *testing.T) {
 		"calendar write refused: event is cancelled",
 		"calendar write refused: only the organizer can update or cancel",
 		"calendar response refused: organizer cannot respond",
-		"calendar update needs at least one change",
 		"missing_scopes",
 	} {
 		for _, suffix := range []string{"", " CANARY private"} {

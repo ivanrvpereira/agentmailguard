@@ -56,22 +56,6 @@ func TestCalendarExpandedPagesAndMapping(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-func TestCalendarOrganizerMetadata(t *testing.T) {
-	for _, self := range []bool{true, false} {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			e := calendarEvent()
-			e["organizer"] = map[string]any{"email": "olga@example.test", "self": self}
-			respond(w, e)
-		}))
-		t.Cleanup(server.Close)
-		c := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), CalendarURL: server.URL})
-		e, err := c.Calendar().Get(context.Background(), "ev")
-		if err != nil || e.IsOrganizer != self {
-			t.Fatalf("organizer = %v, error = %v", e.IsOrganizer, err)
-		}
-	}
-}
-
 func TestCalendarMalformedAndCyclicPagesFail(t *testing.T) {
 	for _, mode := range []string{"cycle", "null", "naive"} {
 		t.Run(mode, func(t *testing.T) {

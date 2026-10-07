@@ -12,8 +12,8 @@ import (
 )
 
 func (c *calendar) Update(ctx context.Context, id model.EventID, change model.EventChange) error {
-	// Guard resolves duration and start-only moves; end-only changes are complete as sent.
-	if change.Duration != nil || change.Start != nil && change.End == nil {
+	// Guard resolves start-only moves; end-only changes are complete as sent.
+	if change.Start != nil && change.End == nil {
 		return invalidMetadata
 	}
 	if !c.c.lockMutation(ctx) {
@@ -68,11 +68,9 @@ func (c *calendar) Update(ctx context.Context, id model.EventID, change model.Ev
 				seen[key] = true
 			}
 		}
-		for _, attendee := range recipients(change.AddAttendees) {
-			key := strings.ToLower(attendee["emailAddress"].(map[string]string)["address"])
-			if !seen[key] {
-				attendee["type"] = "required"
-				attendees = append(attendees, attendee)
+		for _, address := range change.AddAttendees {
+			if key := strings.ToLower(address); !seen[key] {
+				attendees = append(attendees, map[string]any{"emailAddress": map[string]string{"address": address}, "type": "required"})
 				seen[key] = true
 			}
 		}
@@ -92,14 +90,12 @@ func (c *calendar) Cancel(ctx context.Context, id model.EventID, comment string)
 }
 
 func (c *calendar) Respond(ctx context.Context, id model.EventID, response model.EventResponse) error {
-	var action string
-	switch response.Response {
-	case "accept", "decline":
-		action = response.Response
-	case "tentative":
-		action = "tentativelyAccept"
-	default:
+	if !response.Response.Valid() {
 		return invalidMetadata
+	}
+	action := string(response.Response)
+	if response.Response == model.ResponseTentative {
+		action = "tentativelyAccept"
 	}
 	if !c.c.lockMutation(ctx) {
 		return requestFailed

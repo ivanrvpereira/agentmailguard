@@ -35,27 +35,33 @@ func availabilityGuard(t *testing.T, cal model.Calendar) (*guard.Guard, *eventSc
 
 func slots(values ...model.AvailabilityStatus) []model.AvailabilityStatus { return values }
 
+// The provider contract is positional: entry i must be labeled with requested address i.
 func TestCalendarAvailabilityReturnsOnlyRequestedParticipantsWithProvenStatuses(t *testing.T) {
 	cal := &availabilityCalendar{schedules: []model.Schedule{
+		{Address: "a@example.test", Slots: slots("free", "out_of_office")},
+		{Address: "B@example.test", Slots: slots("busy", "tentative")},
 		{Address: "stranger@example.test", Slots: slots("free", "free")},
-		{Address: "b@example.test", Slots: slots("busy", "tentative")},
-		{Address: "A@EXAMPLE.TEST", Slots: slots("free", "out_of_office")},
+		{Address: "CASE@example.test", Slots: slots("free", "free")},
+		{Address: "second@example.test", Slots: slots("busy", "busy")},
+		{Address: "first@example.test", Slots: slots("free", "free")},
 		{Address: "short@example.test", Slots: slots("free")},
 		{Address: "text@example.test", Slots: slots("free", "CANARY")},
-		{Address: "twice@example.test", Slots: slots("free", "free")},
-		{Address: "twice@example.test", Slots: slots("free", "free")},
+		{Address: "unknown@example.test", Slots: slots("free", "unknown")},
 	}}
 	g, screener, path := availabilityGuard(t, cal)
-	requested := []string{"a@example.test", "B@example.test", "missing@example.test", "short@example.test", "text@example.test", "twice@example.test"}
+	requested := []string{"a@example.test", "B@example.test", "mislabeled@example.test", "case@example.test", "first@example.test", "second@example.test", "short@example.test", "text@example.test", "unknown@example.test"}
 	got, err := g.CalendarAvailability(context.Background(), requested, now, now.Add(time.Hour))
 	unknown := slots("unknown", "unknown")
 	want := []model.Schedule{
 		{Address: "a@example.test", Slots: slots("free", "out_of_office")},
 		{Address: "B@example.test", Slots: slots("busy", "tentative")},
-		{Address: "missing@example.test", Slots: unknown},
+		{Address: "mislabeled@example.test", Slots: unknown},
+		{Address: "case@example.test", Slots: unknown},
+		{Address: "first@example.test", Slots: unknown},
+		{Address: "second@example.test", Slots: unknown},
 		{Address: "short@example.test", Slots: unknown},
 		{Address: "text@example.test", Slots: unknown},
-		{Address: "twice@example.test", Slots: unknown},
+		{Address: "unknown@example.test", Slots: unknown},
 	}
 	if err != nil || !reflect.DeepEqual(got, want) || !reflect.DeepEqual(cal.queries, [][]string{requested}) {
 		t.Fatalf("availability=%v err=%v queries=%v", got, err, cal.queries)
@@ -65,6 +71,22 @@ func TestCalendarAvailabilityReturnsOnlyRequestedParticipantsWithProvenStatuses(
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("availability wrote audit")
+	}
+}
+
+func TestCalendarAvailabilityWrongScheduleCountMakesEveryoneUnknown(t *testing.T) {
+	requested := []string{"a@example.test", "b@example.test"}
+	for name, found := range map[string][]model.Schedule{
+		"extra entry":   {{Address: "a@example.test", Slots: slots("free", "free")}, {Address: "b@example.test", Slots: slots("busy", "busy")}, {Address: "stranger@example.test", Slots: slots("free", "free")}},
+		"missing entry": {{Address: "a@example.test", Slots: slots("free", "free")}},
+		"no entries":    nil,
+	} {
+		g, _, _ := availabilityGuard(t, &availabilityCalendar{schedules: found})
+		got, err := g.CalendarAvailability(context.Background(), requested, now, now.Add(time.Hour))
+		want := []model.Schedule{{Address: "a@example.test", Slots: slots("unknown", "unknown")}, {Address: "b@example.test", Slots: slots("unknown", "unknown")}}
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: availability=%v err=%v", name, got, err)
+		}
 	}
 }
 

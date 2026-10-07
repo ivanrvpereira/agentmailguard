@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
@@ -36,9 +35,9 @@ type eventCancelParam struct {
 	Comment string `json:"comment"`
 }
 type eventRespondParam struct {
-	ID       string `json:"id"`
-	Response string `json:"response"`
-	Comment  string `json:"comment"`
+	ID       string                `json:"id"`
+	Response model.MeetingResponse `json:"response"`
+	Comment  string                `json:"comment"`
 }
 
 func calendarWriteCall(ctx context.Context, operation string, raw json.RawMessage) (func(*account) (any, error), error) {
@@ -53,7 +52,7 @@ func calendarWriteCall(ctx context.Context, operation string, raw json.RawMessag
 		}, nil
 	case "calendar.respond":
 		var p eventRespondParam
-		if params(raw, &p) != nil || !idValid(p.ID) || !validString(p.Comment, MaxRequestBytes, true) || p.Response != "accept" && p.Response != "tentative" && p.Response != "decline" {
+		if params(raw, &p) != nil || !idValid(p.ID) || !validString(p.Comment, MaxRequestBytes, true) || !p.Response.Valid() {
 			return nil, invalid
 		}
 		return func(a *account) (any, error) {
@@ -64,52 +63,35 @@ func calendarWriteCall(ctx context.Context, operation string, raw json.RawMessag
 		if params(raw, &p) != nil || !idValid(p.ID) || p.Teams != nil && !*p.Teams || !listValid(p.Add, 0, 100) || !listValid(p.Remove, 0, 100) || p.Subject != nil && !validString(*p.Subject, 65536, true) || p.Location != nil && !validString(*p.Location, 4096, true) {
 			return nil, invalid
 		}
-		change := model.EventChange{Subject: p.Subject, Location: p.Location, AddAttendees: p.Add, RemoveAttendees: p.Remove, Teams: p.Teams != nil}
-		for _, v := range []struct {
-			in  *string
-			out **time.Time
-		}{{p.Start, &change.Start}, {p.End, &change.End}} {
-			if v.in != nil {
-				stamp, e := time.Parse(time.RFC3339, *v.in)
-				if e != nil || !calendarTimeValid(stamp) {
-					return nil, invalid
-				}
-				*v.out = &stamp
-			}
+		start, ok := optionalCalendarTime(p.Start)
+		end, ok2 := optionalCalendarTime(p.End)
+		change := model.EventChange{Subject: p.Subject, Location: p.Location, Start: start, End: end, AddAttendees: p.Add, RemoveAttendees: p.Remove, Teams: p.Teams != nil}
+		if !ok || !ok2 || start != nil && end != nil && !end.After(*start) {
+			return nil, invalid
 		}
+		var duration time.Duration // 0: not given
 		if p.Duration != nil {
 			d, e := time.ParseDuration(*p.Duration)
-			if e != nil || d <= 0 || p.End != nil {
+			if e != nil || d <= 0 || end != nil || start != nil && !model.CalendarTimeValid(start.Add(d)) {
 				return nil, invalid
 			}
-			change.Duration = &d
+			duration = d
 		}
-		if change.Start != nil && change.End != nil && !change.End.After(*change.Start) {
+		if change.AttendeeConflict() || change.Empty() && duration == 0 {
 			return nil, invalid
 		}
-		if change.Start != nil && change.Duration != nil && !calendarTimeValid(change.Start.Add(*change.Duration)) {
-			return nil, invalid
-		}
-		for _, add := range p.Add {
-			for _, remove := range p.Remove {
-				if strings.EqualFold(add, remove) {
-					return nil, invalid
-				}
-			}
-		}
-		if p.Subject == nil && p.Location == nil && p.Start == nil && p.End == nil && p.Duration == nil && len(p.Add)+len(p.Remove) == 0 && p.Teams == nil {
-			return nil, invalid
-		}
-		return func(a *account) (any, error) { return updateDTO{p.ID, true}, a.guard.CalendarUpdate(ctx, p.ID, change) }, nil
+		return func(a *account) (any, error) {
+			return updateDTO{p.ID, true}, a.guard.CalendarUpdate(ctx, p.ID, change, duration)
+		}, nil
 	case "calendar.invite":
 		// Teams is on unless the caller sends an explicit false.
 		p := inviteParam{Teams: true}
 		if params(raw, &p) != nil || !listValid(p.To, 1, 100) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) || !validString(p.Location, 4096, true) {
 			return nil, invalid
 		}
-		start, e := time.Parse(time.RFC3339, p.Start)
-		end, e2 := time.Parse(time.RFC3339, p.End)
-		if e != nil || e2 != nil || !calendarTimeValid(start) || !calendarTimeValid(end) || !end.After(start) {
+		start, ok := calendarTime(p.Start)
+		end, ok2 := calendarTime(p.End)
+		if !ok || !ok2 || !end.After(start) {
 			return nil, invalid
 		}
 		return func(a *account) (any, error) {
@@ -120,6 +102,17 @@ func calendarWriteCall(ctx context.Context, operation string, raw json.RawMessag
 	return nil, invalid
 }
 
-func calendarTimeValid(t time.Time) bool {
-	return t.Year() >= 1 && t.Year() <= 9999 && t.UTC().Year() >= 1 && t.UTC().Year() <= 9999
+// calendarTime parses an RFC 3339 time with a year the providers accept.
+func calendarTime(v string) (time.Time, bool) {
+	t, e := time.Parse(time.RFC3339, v)
+	return t, e == nil && model.CalendarTimeValid(t)
+}
+
+// optionalCalendarTime is calendarTime for an optional field; nil stays nil.
+func optionalCalendarTime(v *string) (*time.Time, bool) {
+	if v == nil {
+		return nil, true
+	}
+	t, ok := calendarTime(*v)
+	return &t, ok
 }
