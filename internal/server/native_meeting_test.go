@@ -42,16 +42,31 @@ func (s *meetingNativeStore) LoadOAuth(ctx context.Context, p, a string) (creden
 
 // meetingGraph is a stateful fake of the Graph event endpoints. Created events keep every posted field.
 type meetingGraph struct {
-	mu      sync.Mutex
-	events  map[string]map[string]any
-	writes  []externalWrite
-	created int
+	mu        sync.Mutex
+	events    map[string]map[string]any
+	writes    []externalWrite
+	schedules []map[string]any
+	created   int
 }
 
 func (g *meetingGraph) handle(w http.ResponseWriter, r *http.Request) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	id, action, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/me/events/"), "/")
+	// getSchedule is a read, so it is recorded apart from the writes below.
+	if r.Method == "POST" && r.URL.Path == "/me/calendar/getSchedule" {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		g.schedules = append(g.schedules, body)
+		response(w, map[string]any{"value": []any{
+			map[string]any{"scheduleId": "work@example.test", "availabilityView": "2002", "scheduleItems": []any{map[string]any{"subject": "private-busy-subject", "location": "private-busy-room"}}},
+			map[string]any{"scheduleId": "FIRST@example.test", "availabilityView": "1003"},
+			map[string]any{"scheduleId": "second@example.test", "availabilityView": "0202"},
+			map[string]any{"scheduleId": "hidden@example.test", "error": map[string]any{"message": "private-error-text", "responseCode": "ErrorAccessDenied"}},
+			map[string]any{"scheduleId": "private-stranger@example.test", "availabilityView": "0000"},
+		}})
+		return
+	}
 	if r.Method == "GET" {
 		if r.URL.Path == "/me/outlook/masterCategories" {
 			response(w, map[string]any{"value": []any{}})
@@ -192,8 +207,44 @@ func TestNativeBinaryMeetingWorkflow(t *testing.T) {
 		return map[string]any{"emailAddress": map[string]any{"address": address}, "type": kind}
 	}
 
+	// Availability is a read. The only slot that every participant shows as free is 09:00 Lisbon time.
+	// The hidden participant has no data and stays unknown, never free.
+	out, writes := write("--account", "work", "calendar", "availability", "--to", "work@example.test", "--to", "first@example.test", "--to", "second@example.test", "--to", "hidden@example.test", "--start", "2026-10-09 08:00", "--end", "2026-10-09 10:00")
+	var free struct {
+		Start, End string
+		Interval   int `json:"interval_minutes"`
+		Schedules  []struct {
+			Address string
+			Slots   []string
+		}
+	}
+	if len(writes) != 0 || strings.Contains(out, "private-") || json.Unmarshal([]byte(out), &free) != nil || free.Start != "2026-10-09T08:00:00+01:00" || free.End != "2026-10-09T10:00:00+01:00" || free.Interval != 30 || len(free.Schedules) != 4 {
+		t.Fatalf("availability output %q, Graph writes %d", out, len(writes))
+	}
+	slots := map[string][]string{}
+	for _, schedule := range free.Schedules {
+		slots[schedule.Address] = schedule.Slots
+	}
+	if !reflect.DeepEqual(slots, map[string][]string{"work@example.test": {"busy", "free", "free", "busy"}, "first@example.test": {"tentative", "free", "free", "out_of_office"}, "second@example.test": {"free", "busy", "free", "busy"}, "hidden@example.test": {"unknown", "unknown", "unknown", "unknown"}}) {
+		t.Fatalf("availability slots %v", slots)
+	}
+	invited := map[string]bool{"work@example.test": true, "first@example.test": true, "second@example.test": true}
+	var shared []int
+	for i := range 4 {
+		all := true
+		for address, statuses := range slots {
+			all = all && (!invited[address] || statuses[i] == "free")
+		}
+		if all {
+			shared = append(shared, i)
+		}
+	}
+	if !reflect.DeepEqual(shared, []int{2}) || !reflect.DeepEqual(g.schedules, []map[string]any{{"schedules": []any{"work@example.test", "first@example.test", "second@example.test", "hidden@example.test"}, "startTime": utc("2026-10-09T07:00:00"), "endTime": utc("2026-10-09T09:00:00"), "availabilityViewInterval": float64(30)}}) || len(api.jevCalls) != 0 {
+		t.Fatalf("shared free slots %v, getSchedule requests %v, Jev calls %v", shared, g.schedules, api.jevCalls)
+	}
+
 	args := []string{"--account", "work", "calendar", "invite", "--to", "first@example.test", "--to", "second@example.test", "--subject", "private-meeting-subject", "--body", "private-meeting-body", "--location", "private-room", "--start", "2026-10-09 09:00", "--duration", "30m", "--teams"}
-	out, writes := write(args...)
+	out, writes = write(args...)
 	exact(args, writes, "POST", "/me/events", map[string]any{"subject": "private-meeting-subject", "body": map[string]any{"contentType": "text", "content": "private-meeting-body"}, "location": map[string]any{"displayName": "private-room"},
 		"start": utc("2026-10-09T08:00:00"), "end": utc("2026-10-09T08:30:00"), "attendees": []any{attendee("first@example.test", "required"), attendee("second@example.test", "required")}, "isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"})
 	if strings.TrimSpace(out) != "{\n  \"id\": \"created-1\"\n}" {
@@ -236,6 +287,7 @@ func TestNativeBinaryMeetingWorkflow(t *testing.T) {
 	}{
 		{[]string{"--account", "gmail", "calendar", "invite", "--to", "first@example.test", "--subject", "private-gmail-subject", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar writes are not supported for this account"},
 		{[]string{"--account", "gmail", "calendar", "respond", "attendee-accept", "--response", "accept"}, "calendar writes are not supported for this account"},
+		{[]string{"--account", "gmail", "calendar", "availability", "--to", "first@example.test", "--start", "2026-10-09 09:00", "--end", "2026-10-09 18:00"}, "calendar availability is not supported for this account"},
 		{[]string{"--account", "other", "calendar", "cancel", "created-1"}, "missing_scopes"},
 		{[]string{"--account", "other", "calendar", "respond", "attendee-accept", "--response", "accept"}, "missing_scopes"},
 		{[]string{"--account", "work", "calendar", "update", "recurring-1", "--subject", "private-recurring-subject"}, "calendar write refused: recurring events are not supported"},
@@ -287,7 +339,7 @@ func TestNativeBinaryMeetingWorkflow(t *testing.T) {
 			t.Errorf("audit has %d %s records, want %d", n, operation, count)
 		}
 	}
-	for _, canary := range []string{"private-", "example.test", "synthetic-key"} {
+	for _, canary := range []string{"private-", "example.test", "synthetic-key", "availability"} {
 		if bytes.Contains(log, []byte(canary)) {
 			t.Fatalf("audit contains %s", canary)
 		}

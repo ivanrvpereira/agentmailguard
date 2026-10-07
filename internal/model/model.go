@@ -193,6 +193,44 @@ type CalendarWriter interface {
 	Respond(ctx context.Context, id EventID, response EventResponse) error
 }
 
+// AvailabilityInterval is fixed: slot i covers start+i*interval until the next slot or the requested end.
+const AvailabilityInterval = 30 * time.Minute
+
+type AvailabilityStatus string
+
+const (
+	SlotFree        AvailabilityStatus = "free"
+	SlotTentative   AvailabilityStatus = "tentative"
+	SlotBusy        AvailabilityStatus = "busy"
+	SlotOutOfOffice AvailabilityStatus = "out_of_office"
+	SlotUnknown     AvailabilityStatus = "unknown"
+)
+
+// Schedule is free/busy metadata for one requested address. It never carries event text.
+type Schedule struct {
+	Address string
+	Slots   []AvailabilityStatus
+}
+
+// AvailabilitySlots counts slots from start to end; a partial final slot counts as one.
+func AvailabilitySlots(start, end time.Time) int {
+	if !end.After(start) {
+		return 0
+	}
+	d := end.Sub(start)
+	n := int(d / AvailabilityInterval)
+	if d%AvailabilityInterval != 0 {
+		n++
+	}
+	return n
+}
+
+// CalendarAvailability is optional and read-only. It returns one schedule per requested address, in
+// request order, labeled with the requested address. Missing or failed participant data is unknown.
+type CalendarAvailability interface {
+	Availability(ctx context.Context, addresses []string, start, end time.Time) ([]Schedule, error)
+}
+
 type Verdict string
 
 const (

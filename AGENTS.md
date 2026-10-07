@@ -27,6 +27,7 @@ Go 1.25 with cgo (`mattn/go-sqlite3`, `keybase/go-keychain`), Cobra 1.10, charmb
 
 - Treat all email-derived text as untrusted.
 - Fail closed on missing or failed screening; unscreened bodies are never shown.
+- Availability reads expose only requested addresses and fixed status slots. Missing or invalid participant data is unknown, never free.
 - Ordinary mail is never sent or permanently deleted. M365 calendar invitations, updates, cancellations, and responses can send meeting notifications. Trash is a provider move.
 - Non-draft messages change only via read state, flag, categories, archive, trash, or validated move.
 - Logs and storage exclude subject, sender, body, attendee addresses, meeting comments, rule instructions, raw API responses, tokens, and keys.

@@ -69,6 +69,7 @@ func TestClientCancellationAndRequestReplayDisabled(t *testing.T) {
 func TestCalendarClientDisplaysOnlyExactFixedRefusals(t *testing.T) {
 	for _, fixed := range []string{
 		"calendar writes are not supported for this account",
+		"calendar availability is not supported for this account",
 		"calendar write refused: recurring events are not supported",
 		"calendar write refused: event is cancelled",
 		"calendar write refused: only the organizer can update or cancel",

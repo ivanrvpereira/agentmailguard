@@ -162,3 +162,79 @@ func TestHelpStatesThatCalendarWritesSendNotifications(t *testing.T) {
 		}
 	}
 }
+
+func TestCalendarAvailabilityCommandSendsLocalWindow(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		args   []string
+		params string
+	}{
+		{"two participants", []string{"calendar", "availability", "--to", "me@example.test", "--to", "colleague@example.test", "--start", "2026-10-09 09:00", "--end", "2026-10-09 18:00"},
+			`{"to":["me@example.test","colleague@example.test"],"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T18:00:00-04:00"}`},
+		{"across fall DST", []string{"calendar", "availability", "--end", "2026-11-01 03:00", "--to", "a@example.test", "--start", "2026-10-31 23:00"},
+			`{"to":["a@example.test"],"start":"2026-10-31T23:00:00-04:00","end":"2026-11-01T03:00:00-05:00"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, out, errout, requests := meetingClient(t, tc.args...)
+			if code != 0 || errout != "" || len(requests) != 1 || !strings.Contains(out, "returned-event-id") {
+				t.Fatalf("exit=%d stdout=%q stderr=%q requests=%d", code, out, errout, len(requests))
+			}
+			var want map[string]any
+			if err := json.Unmarshal([]byte(tc.params), &want); err != nil {
+				t.Fatal(err)
+			}
+			if got := requests[0]; got["operation"] != "calendar.availability" || got["account"] != "work" || !reflect.DeepEqual(got["params"], want) {
+				t.Fatalf("request=%v", got)
+			}
+		})
+	}
+}
+
+func TestCalendarAvailabilityUsageErrorsNeedNoServer(t *testing.T) {
+	window := []string{"--start", "2026-10-09 09:00", "--end", "2026-10-09 18:00"}
+	query := func(extra ...string) []string {
+		return append(append([]string{"calendar", "availability", "--to", "a@example.test"}, window...), extra...)
+	}
+	many := []string{"calendar", "availability", "--start", "2026-10-09 09:00", "--end", "2026-10-09 18:00"}
+	for i := range 21 {
+		many = append(many, "--to", strings.Repeat("a", i+1)+"@example.test")
+	}
+	for _, args := range [][]string{
+		append([]string{"calendar", "availability"}, window...),
+		{"calendar", "availability", "--to", "a@example.test", "--start", "2026-10-09 09:00"},
+		{"calendar", "availability", "--to", "a@example.test", "--end", "2026-10-09 18:00"},
+		many,
+		query("--to", ""),
+		query("--to", " "),
+		query("--to", "A@Example.test"),
+		query("extra"),
+		query("--duration", "30m"),
+		query("--interval", "15"),
+		query("--subject", "Plan"),
+		{"calendar", "availability", "--to", "a@example.test", "--start", "2026-10-09 09:00", "--end", "2026-10-09 09:00"},
+		{"calendar", "availability", "--to", "a@example.test", "--start", "2026-10-09 09:00", "--end", "2026-10-09 08:30"},
+		{"calendar", "availability", "--to", "a@example.test", "--start", "2026-10-09 09:00", "--end", "2026-12-10 09:00"},
+		{"calendar", "availability", "--to", "a@example.test", "--start", "2026-03-08 02:30", "--end", "2026-03-08 04:00"},
+		{"calendar", "availability", "--to", "a@example.test", "--start", "2026-10-09T09:00", "--end", "2026-10-09 18:00"},
+		{"calendar", "availability", "--to", "a@example.test", "--start", "2026-10-09 09:00", "--end", "2026-10-09"},
+		{"calendar", "availability", "--to", "a@example.test", "--start", "0000-12-31 23:00", "--end", "0001-01-01 01:00"},
+	} {
+		code, out, errout, requests := meetingClient(t, args...)
+		if code != 2 || out != "" || errout != "error: invalid command usage; use --help\n" || len(requests) != 0 {
+			t.Errorf("%v: exit=%d stdout=%q stderr=%q requests=%d", args[1:], code, out, errout, len(requests))
+		}
+	}
+}
+
+func TestHelpSeparatesReadOnlyAvailabilityFromNotifications(t *testing.T) {
+	code, out, errout := runOffline(t, "calendar", "--help")
+	if code != 0 || errout != "" || !strings.Contains(out, "availability") || !strings.Contains(out, "read-only, sends nothing") {
+		t.Fatalf("calendar help: exit=%d stdout=%q stderr=%q", code, out, errout)
+	}
+	code, out, errout = runOffline(t, "calendar", "availability", "--help")
+	for _, want := range []string{"--to", "--start", "--end", "30-minute", "read-only"} {
+		if code != 0 || errout != "" || !strings.Contains(out, want) {
+			t.Fatalf("availability help is missing %q: exit=%d stdout=%q stderr=%q", want, code, out, errout)
+		}
+	}
+}

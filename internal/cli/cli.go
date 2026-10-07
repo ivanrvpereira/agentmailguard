@@ -588,8 +588,8 @@ func calendarCmd(r *runner) *cobra.Command {
 	get := r.leaf("get ID", "Show one calendar event", 1, 1, func(c *cobra.Command, args []string) error {
 		return r.call(c, "calendar.get", map[string]any{"id": args[0]}, false)
 	})
-	c := group(r, "calendar", "Read calendar events and send M365 meeting notifications")
-	c.AddCommand(list, get, calendarInviteCmd(r), calendarUpdateCmd(r), calendarCancelCmd(r), calendarRespondCmd(r))
+	c := group(r, "calendar", "Read calendar events and availability, and send M365 meeting notifications")
+	c.AddCommand(list, get, calendarAvailabilityCmd(r), calendarInviteCmd(r), calendarUpdateCmd(r), calendarCancelCmd(r), calendarRespondCmd(r))
 	return c
 }
 

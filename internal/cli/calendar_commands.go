@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -38,6 +39,41 @@ func meetingEnd(c *cobra.Command, start time.Time, end string, duration time.Dur
 		until, ok = localStamp(end, loc)
 	}
 	return until, ok && until.After(start)
+}
+
+// calendarAvailabilityCmd mirrors the server limits: 1-20 distinct addresses and a window shorter than 62 days.
+func calendarAvailabilityCmd(r *runner) *cobra.Command {
+	var to []string
+	var start, end string
+	c := r.leaf("availability", "Show 30-minute M365 free/busy slots; read-only, sends nothing", 0, 0, func(c *cobra.Command, _ []string) error {
+		if len(to) == 0 || len(to) > 20 {
+			return errUsage
+		}
+		seen := map[string]bool{}
+		for _, address := range to {
+			if strings.TrimSpace(address) == "" || seen[strings.ToLower(address)] {
+				return errUsage
+			}
+			seen[strings.ToLower(address)] = true
+		}
+		loc := r.location()
+		from, ok := localStamp(start, loc)
+		until, ok2 := localStamp(end, loc)
+		if !ok || !ok2 || !until.After(from) || until.Sub(from) >= 62*24*time.Hour {
+			return errUsage
+		}
+		return r.call(c, "calendar.availability", map[string]any{"to": to, "start": from.Format(time.RFC3339), "end": until.Format(time.RFC3339)}, false)
+	})
+	c.Long = `Show the free/busy status of each address in 30-minute slots from --start to --end.
+This command is read-only: it sends nothing and reserves nothing.
+Slot i starts at start + 30*i minutes. The last slot ends at end.
+Statuses: free, tentative, busy, out_of_office, unknown. M365 reports working elsewhere as free.
+unknown means that no data was available, for example because of sharing permissions.
+A slot is free for the meeting only when every address is free.`
+	c.Flags().StringArrayVar(&to, "to", nil, "participant address; repeatable, at most 20")
+	c.Flags().StringVar(&start, "start", "", "local start as 'YYYY-MM-DD HH:MM'")
+	c.Flags().StringVar(&end, "end", "", "local end as 'YYYY-MM-DD HH:MM'; less than 62 days after the start")
+	return c
 }
 
 func calendarCancelCmd(r *runner) *cobra.Command {

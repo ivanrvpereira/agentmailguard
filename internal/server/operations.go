@@ -45,7 +45,7 @@ func publicError(e error) (string, bool) {
 	}
 	if e, ok := e.(guard.GuardError); ok {
 		switch string(e) {
-		case "calendar writes are not supported for this account", "missing_scopes", "invalid request",
+		case "calendar writes are not supported for this account", "calendar availability is not supported for this account", "missing_scopes", "invalid request",
 			"calendar write refused: recurring events are not supported", "calendar write refused: event is cancelled",
 			"calendar write refused: only the organizer can update or cancel", "calendar response refused: organizer cannot respond",
 			"calendar update needs at least one change":
@@ -168,6 +168,23 @@ type calendarParam struct {
 	Start string `json:"start"`
 	End   string `json:"end"`
 }
+type availabilityParam struct {
+	To    []string `json:"to"`
+	Start string   `json:"start"`
+	End   string   `json:"end"`
+}
+
+// Slot i covers start+i*interval_minutes; the last slot ends at end.
+type availabilityDTO struct {
+	Start     string        `json:"start"`
+	End       string        `json:"end"`
+	Interval  int           `json:"interval_minutes"`
+	Schedules []scheduleDTO `json:"schedules"`
+}
+type scheduleDTO struct {
+	Address string   `json:"address"`
+	Slots   []string `json:"slots"`
+}
 type newParam struct {
 	To      []string `json:"to"`
 	Subject *string  `json:"subject"`
@@ -231,10 +248,11 @@ type rulesDTO struct {
 // Dispatch first validates a complete typed operation. Account and provider access occur only afterwards.
 func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	var call func(*account) (any, error)
-	calendarWrite := false
+	// M365-only calendar operations name their Gmail refusal and the grants that allow them.
+	unsupported, grants := "", []string(nil)
 	switch r.Operation {
 	case "calendar.invite", "calendar.update", "calendar.cancel", "calendar.respond":
-		calendarWrite = true
+		unsupported, grants = "calendar writes are not supported for this account", []string{"Calendars.ReadWrite"}
 		var e error
 		call, e = calendarWriteCall(ctx, r.Operation, r.Params)
 		if e != nil {
@@ -376,6 +394,39 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 			return nil, invalid
 		}
 		call = func(a *account) (any, error) { return a.guard.CalendarList(ctx, first, last) }
+	case "calendar.availability":
+		var p availabilityParam
+		if params(r.Params, &p) != nil || !listValid(p.To, 1, 20) {
+			return nil, invalid
+		}
+		seen := map[string]bool{}
+		for _, address := range p.To {
+			if strings.TrimSpace(address) == "" || seen[strings.ToLower(address)] {
+				return nil, invalid
+			}
+			seen[strings.ToLower(address)] = true
+		}
+		first, e := time.Parse(time.RFC3339, p.Start)
+		last, e2 := time.Parse(time.RFC3339, p.End)
+		if e != nil || e2 != nil || !calendarTimeValid(first) || !calendarTimeValid(last) || !last.After(first) || last.Sub(first) >= 62*24*time.Hour {
+			return nil, invalid
+		}
+		unsupported, grants = "calendar availability is not supported for this account", []string{"Calendars.ReadBasic", "Calendars.Read", "Calendars.ReadWrite"}
+		call = func(a *account) (any, error) {
+			v, e := a.guard.CalendarAvailability(ctx, p.To, first, last)
+			if e != nil {
+				return nil, e
+			}
+			out := availabilityDTO{first.Format(time.RFC3339Nano), last.Format(time.RFC3339Nano), int(model.AvailabilityInterval / time.Minute), make([]scheduleDTO, 0, len(v))}
+			for _, schedule := range v {
+				slots := make([]string, 0, len(schedule.Slots))
+				for _, slot := range schedule.Slots {
+					slots = append(slots, string(slot))
+				}
+				out.Schedules = append(out.Schedules, scheduleDTO{schedule.Address, slots})
+			}
+			return out, nil
+		}
 	case "draft.new":
 		var p newParam
 		if params(r.Params, &p) != nil || !listValid(p.To, 1, 100) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) {
@@ -414,19 +465,21 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	if r.Operation == "rules.list" {
 		return s.ruleList(ctx, a)
 	}
-	if calendarWrite && a.Provider != "m365" {
-		return nil, guard.GuardError("calendar writes are not supported for this account")
+	if unsupported != "" && a.Provider != "m365" {
+		return nil, guard.GuardError(unsupported)
 	}
 	instance, e := s.instance(a)
 	if e != nil {
 		return nil, e
 	}
-	if calendarWrite {
+	if grants != nil {
 		_, scopes, e := instance.provider.Status(ctx)
 		if e != nil {
 			return nil, e
 		}
-		if !slices.ContainsFunc(scopes, func(scope string) bool { return strings.EqualFold(scope, "Calendars.ReadWrite") }) {
+		if !slices.ContainsFunc(scopes, func(scope string) bool {
+			return slices.ContainsFunc(grants, func(grant string) bool { return strings.EqualFold(scope, grant) })
+		}) {
 			return nil, guard.GuardError("missing_scopes")
 		}
 	}

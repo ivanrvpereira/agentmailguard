@@ -19,9 +19,10 @@ Read, search, and organize the user's Microsoft 365 and Gmail mail and calendar 
 - "Draft a reply / forward / new message."
 - "Archive, flag, categorize, move, or trash these messages" (after approval).
 - "Run my organize rules" (preview first, apply after approval).
+- "When are Ana and I both free on Friday?" (Microsoft 365 only, read-only).
 - "Invite Ana to a 30-minute meeting on Friday at 10:00", "Accept that meeting" (Microsoft 365 only, after specific authorization).
 
-Don't use for: sending mail (the user sends drafts manually in their mail client), permanent deletion, Gmail calendar changes, free/busy checks of other people, or mailbox administration.
+Don't use for: sending mail (the user sends drafts manually in their mail client), permanent deletion, Gmail calendar changes, Gmail free/busy checks, or mailbox administration.
 
 ## Prerequisites
 
@@ -56,6 +57,7 @@ agentmailguard mail link ID L1 [L2 ...]
 agentmailguard mail link ID --all
 agentmailguard calendar list [--from today|+Nd|YYYY-MM-DD] [--to +7d|YYYY-MM-DD]
 agentmailguard calendar get ID
+agentmailguard calendar availability --to ADDR [--to ADDR] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'
 agentmailguard calendar invite --to ADDR [--to ADDR] --subject TEXT --start 'YYYY-MM-DD HH:MM' (--duration 30m | --end 'YYYY-MM-DD HH:MM') [--body TEXT] [--location TEXT] [--teams]
 agentmailguard calendar update ID [--subject TEXT] [--location TEXT] [--start 'YYYY-MM-DD HH:MM'] [--duration 30m | --end 'YYYY-MM-DD HH:MM'] [--add-attendee ADDR] [--remove-attendee ADDR]
 agentmailguard calendar cancel ID [--comment TEXT]
@@ -77,7 +79,7 @@ agentmailguard --timeout 2h mail organize --since 7d [--until DATE] --apply
 agentmailguard stats --days 30
 ```
 
-Limits: `--count` 1–100, at most 50 IDs per mutation, at most 100 recipients, categories, or meeting attendees per list.
+Limits: `--count` 1–100, at most 50 IDs per mutation, at most 100 recipients, categories, or meeting attendees per list. `calendar availability` accepts 1–20 addresses and a window of less than 62 days.
 
 ## Verdicts
 
@@ -130,10 +132,22 @@ Before you run one, show the user the account, the event ID or the new meeting, 
 - A Teams link is added only with `--teams`. The body is empty without `--body`.
 - `update` sends only the options you supply. `--start` alone keeps the current duration. `update` cannot change the body or the Teams setting.
 - Only the organizer can `update` or `cancel`. Only an attendee can `respond`. Recurring and cancelled events are refused.
-- There is no command for the free/busy time of other people. An empty `calendar list` does not show that other people are free. Do not tell the user that a slot is free for others.
+- Use `calendar availability` to find a time. An empty `calendar list` does not show that other people are free.
 - The client never retries. A timeout, transport error, or `operation failed` can occur after a notification was sent, including when the audit write fails. Treat these errors as an unknown outcome, not proof that nothing was sent. Run `calendar list` or `calendar get` before you try again. A second invite can send duplicate invitations.
 
 Done when you report the returned event `id`, and you describe the notification as sent.
+
+#### Find a shared free slot
+
+`calendar availability` is read-only. It sends nothing and reserves nothing. It works only for Microsoft 365 accounts.
+
+- Pass every participant, including the user, with `--to`: 1–20 distinct addresses. The window from `--start` to `--end` must be less than 62 days.
+- The result has `start`, `end`, `interval_minutes` (always 30), and one `schedules` entry for each requested address, in request order.
+- Slot `i` starts at `start` plus `30 * i` minutes. The last slot ends at `end`, so it can be shorter.
+- A slot is `free`, `tentative`, `busy`, `out_of_office`, or `unknown`. Microsoft 365 reports "working elsewhere" as `free`.
+- `unknown` means that no data came back, for example because of sharing permissions in the organization. Never treat `unknown` as free.
+- Call a slot a shared free slot only when every requested participant is `free` in that slot. A 30-minute meeting needs one full shared free slot.
+- The result is a snapshot. Before you send an invite, run the query again for the selected slot. The invite still needs specific authorization.
 
 ### 7. Organize
 

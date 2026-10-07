@@ -288,6 +288,7 @@ Required text flags distinguish an omitted value from an explicit empty value, i
 | Mail reads | `mail list`, `mail get ID [--pretty]`, `mail search`, `mail link ID L1 L2` or `mail link ID --all`, `mail folders`, `mail categories` |
 | Mail changes | `mail archive IDS...`, `mail trash IDS...`, `mail move FOLDER_ID IDS...`, `mail read IDS...`, `mail unread IDS...`, `mail flag IDS... --state flagged|complete|none`, `mail categorize IDS... --add NAME --remove NAME` |
 | Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID` |
+| Availability (Microsoft 365, read-only) | `calendar availability --to ADDRESS [--to ADDRESS] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'` |
 | Meetings (Microsoft 365, send notifications) | `calendar invite --to ADDRESS --subject TEXT --start 'YYYY-MM-DD HH:MM' --duration 30m\|--end 'YYYY-MM-DD HH:MM' [--body TEXT] [--location TEXT] [--teams]`, `calendar update ID [--subject TEXT] [--location TEXT] [--start TIME] [--duration D\|--end TIME] [--add-attendee ADDRESS] [--remove-attendee ADDRESS]`, `calendar cancel ID [--comment TEXT]`, `calendar respond ID --response accept\|tentative\|decline [--comment TEXT]` |
 | Drafts only | `draft new --to ADDRESS --subject TEXT --body TEXT`, `draft reply ID --body TEXT`, `draft forward ID --to ADDRESS`, `draft update ID --body TEXT` |
 
@@ -348,9 +349,36 @@ A timeout, transport error, or `operation failed` does not prove that the meetin
 Before you retry such a command, use `calendar list` or `calendar get` to verify the outcome.
 A second invite can send duplicate invitations.
 
-There is no command that shows the free or busy time of other participants.
-An empty result from `calendar list` shows only the visible events of the selected account.
-It does not show that other participants are free.
+## Microsoft 365 availability
+
+`calendar availability` shows the free/busy status of participants in 30-minute slots.
+It is read-only. It sends no notification, reserves no slot, and writes no audit record.
+It works only for Microsoft 365 accounts. Gmail accounts get the fixed error `calendar availability is not supported for this account`, before any credential or provider access.
+The `Calendars.ReadBasic`, `Calendars.Read`, or `Calendars.ReadWrite` grant is sufficient. Without one of these grants, the command fails with `missing_scopes` before any Graph request.
+
+```sh
+agentmailguard --account work calendar availability --to me@example.com --to ana@example.com --start '2026-10-09 09:00' --end '2026-10-09 18:00'
+```
+
+The command needs 1–20 distinct `--to` addresses, a `--start`, and an `--end`.
+The window must be less than 62 days. These are Microsoft Graph limits for one query.
+Times use the same local format as the meeting commands. The interval is always 30 minutes.
+
+The result has `start`, `end`, `interval_minutes`, and one entry in `schedules` for each requested address, in the request order.
+Each entry has the requested `address` and a `slots` list.
+Slot `i` starts at `start` plus `30 * i` minutes. The last slot ends at `end`, so it can be shorter than 30 minutes.
+Each slot is `free`, `tentative`, `busy`, `out_of_office`, or `unknown`.
+Microsoft Graph reports "working elsewhere" as `free`.
+The result never contains event subjects, locations, or provider error text.
+
+`unknown` means that no usable data came back for that participant.
+Sharing permissions in the Microsoft 365 organization can cause this result. A missing, duplicate, failed, or malformed entry also gives `unknown`.
+`unknown` never means free.
+A slot is free for a meeting only if every requested participant has `free` in that slot.
+
+The result is a snapshot. Calendars can change after the query.
+Before you send an invite, run the query again for the selected slot.
+`calendar list` shows only the visible events of the selected account. It does not show that other participants are free.
 
 ## Rules and guarded behavior
 
