@@ -33,10 +33,11 @@ type Options struct {
 
 func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "CLIOptions{redacted}") }
 
-const notes = `All data commands use the server. No automatic server start. No send or permanent delete.
+const notes = `All data commands use the server. No automatic server start. No mail send or permanent delete.
+M365 calendar invite, update, cancel, and respond send meeting notifications at once, with no policy or outbound screening.
 serve loads all credentials at start. Accounts without login start disabled; other failures refuse the start.
 Login runs locally on the server host. Restart the server after login or account changes.
-Client/server authentication and built-in TLS are absent. Protect remote access with a tunnel.`
+Client/server authentication and built-in TLS are absent. Anyone who reaches the server can send meeting notifications. Protect remote access with a tunnel.`
 
 // errUsage reports a rejected command line; errDone reports a finished command that already set its code.
 var errUsage = errors.New("invalid command usage")
@@ -587,8 +588,8 @@ func calendarCmd(r *runner) *cobra.Command {
 	get := r.leaf("get ID", "Show one calendar event", 1, 1, func(c *cobra.Command, args []string) error {
 		return r.call(c, "calendar.get", map[string]any{"id": args[0]}, false)
 	})
-	c := group(r, "calendar", "Read calendar events")
-	c.AddCommand(list, get)
+	c := group(r, "calendar", "Read calendar events and send M365 meeting notifications")
+	c.AddCommand(list, get, calendarInviteCmd(r), calendarUpdateCmd(r), calendarCancelCmd(r), calendarRespondCmd(r))
 	return c
 }
 

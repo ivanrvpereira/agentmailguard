@@ -201,7 +201,8 @@ func (a *nativeAPI) gmail(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(404)
 	}
 }
-func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
+func buildNative(t *testing.T) string {
+	t.Helper()
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
@@ -212,6 +213,11 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 	if b, e := build.CombinedOutput(); e != nil {
 		t.Fatalf("build: %v %s", e, b)
 	}
+	return binary
+}
+
+func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
+	binary := buildNative(t)
 	verifyNativeRefusal(t, binary)
 	verifyNativeFileServe(t, binary)
 	home := t.TempDir()
