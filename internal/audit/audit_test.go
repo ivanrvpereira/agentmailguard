@@ -244,6 +244,17 @@ func TestAuditAcceptsOnlyExactPolicyResultCodes(t *testing.T) {
 	}
 }
 
+func TestPolicyRecordsAcceptJevReasons(t *testing.T) {
+	id := "0123456789abcdef0123456789abcdef"
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	for _, reasons := range [][]string{{"policy", "jev_flag"}, {"policy", "sealed", "jev_error"}} {
+		d := audit.Decision{Operation: "draft.forward", Key: "mail_draft", Decision: "approve", Reasons: reasons, ApprovalID: &id}
+		if err := audit.New(path).Policy(context.Background(), "work", d); err != nil {
+			t.Fatalf("%v: %v", reasons, err)
+		}
+	}
+}
+
 func TestPolicyRecordsRefuseUnknownValues(t *testing.T) {
 	id := "0123456789abcdef0123456789abcdef"
 	valid := audit.Decision{Operation: "mail.trash", Key: "mail_trash", Decision: "approve", Reasons: []string{"policy", "sealed"}, ApprovalID: &id}

@@ -30,6 +30,11 @@ func (s *eventScreener) Screen(_ context.Context, state map[string]any) (model.S
 	s.states = append(s.states, state)
 	return model.Screening{Verdict: model.Green, Score: ptr(0.0)}, nil
 }
+
+// CheckAction never flags, so writes behave as before the Jev action check.
+func (s *eventScreener) CheckAction(context.Context, string, string, map[string]any) (model.ActionCheck, error) {
+	return model.ActionScore(0), nil
+}
 func TestEventMissingBodyFailsClosedAndDoesNotBecomeCached(t *testing.T) {
 	b := &mailbox{}
 	s := &eventScreener{}

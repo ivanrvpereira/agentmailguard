@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/cache"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"github.com/ivanrvpereira/agentmailguard/internal/views"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -235,9 +236,10 @@ type field struct {
 }
 
 type itemPage struct {
-	ID, Account, Op, Created, Updated, Result, Code, Notice string
-	State                                                   cache.PendingState
-	Args                                                    []field
+	// Jev is the result of the Jev action check, empty when no check ran.
+	ID, Account, Op, Created, Updated, Result, Code, Notice, Jev string
+	State                                                        cache.PendingState
+	Args                                                         []field
 	// Ref is the referenced message or event, RefKind names it, RefMissing is true when the read failed.
 	RefKind    string
 	Ref        []field
@@ -268,6 +270,7 @@ func (c *console) item(ctx context.Context, w http.ResponseWriter, id string, st
 			page.Code = *item.Result
 		}
 	}
+	page.Jev = jevText(item.Jev)
 	args := storedFields(item.Args)
 	for _, key := range slices.Sorted(maps.Keys(args)) {
 		page.Args = append(page.Args, field{key, texts(args[key])})
@@ -330,6 +333,21 @@ func (c *console) reference(ctx context.Context, item cache.Pending, args map[st
 		return kind, nil, true
 	}
 	return kind, out, false
+}
+
+// jevText describes the Jev action check of an item, or is empty when no check ran.
+func jevText(c *model.ActionCheck) string {
+	switch {
+	case c == nil:
+		return ""
+	case c.Error != nil:
+		return "Jev: check failed (" + *c.Error + ")"
+	case c.Score == nil:
+		return "Jev: check failed"
+	case c.Flag:
+		return fmt.Sprintf("Jev: flagged (score %.2f)", *c.Score)
+	}
+	return fmt.Sprintf("Jev: not flagged (score %.2f)", *c.Score)
 }
 
 func ptr(s string) *string { return &s }
@@ -466,6 +484,7 @@ button{font-size:1.1rem;padding:.8rem 1.6rem;border-radius:.4rem;border:1px soli
 {{if .Code}}<dt>Error</dt><dd><pre>{{.Code}}</pre></dd>{{end}}
 {{if .Result}}<dt>Result</dt><dd><pre>{{.Result}}</pre></dd>{{end}}
 </dl>
+{{if .Jev}}<p>{{.Jev}}</p>{{end}}
 <h2>Request</h2>
 {{template "fields" .Args}}
 {{if .RefKind}}<h2>{{.RefKind}}</h2>

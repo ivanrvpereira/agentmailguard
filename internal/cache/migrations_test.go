@@ -91,7 +91,7 @@ func TestAllMigrationsPreserveRowsAndMarkers(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(got["m1"], want) {
 				t.Fatalf("reopen changed state: %+v %v", got, err)
 			}
-			id, err := c.AddPending(ctx, "work", "mail.trash", []byte(`{}`), received)
+			id, err := c.AddPending(ctx, "work", "mail.trash", []byte(`{}`), nil, received)
 			if err != nil {
 				t.Fatalf("migrated cache cannot store pending actions: %v", err)
 			}

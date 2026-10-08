@@ -7,6 +7,7 @@ import (
 
 	"github.com/ivanrvpereira/agentmailguard/internal/audit"
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
+	"github.com/ivanrvpereira/agentmailguard/internal/content"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
@@ -87,9 +88,104 @@ func (g *Guard) sealedDecision(key string) config.Decision {
 }
 
 // decision is the final policy decision for one action. sealed is true when the sealed decision made it stricter.
+// jev is the Jev action check, nil when no check ran.
 type decision struct {
 	value  config.Decision
 	sealed bool
+	jev    *model.ActionCheck
+}
+
+// actionEffects describes, by policy key, what an action does. Jev gets it beside the API operation name.
+var actionEffects = map[string]string{
+	"mail_send":                   "sends an email to the listed recipients",
+	keyDraft:                      "creates a draft that the user may send later",
+	string(audit.CalendarInvite):  "sends meeting invitations to the attendees",
+	string(audit.CalendarUpdate):  "changes a meeting and notifies the attendees",
+	string(audit.CalendarRespond): "sends a response to the meeting organizer",
+	string(audit.CalendarCancel):  "cancels a meeting and notifies the attendees",
+}
+
+// checkAction asks Jev about the agent fields of args, for an action that the policy does not deny. A forward
+// also gives Jev the text of the forwarded message; if that text is unavailable, the check fails. A flag or
+// a failed check changes allow to approve; approve stays approve. An approved run is never checked again.
+func (g *Guard) checkAction(ctx context.Context, op audit.Operation, key string, d decision, args any) (decision, error) {
+	if approved(ctx) || d.value == config.Deny {
+		return d, nil
+	}
+	state, err := actionFields(args)
+	if forward, ok := args.(forwardArgs); ok && err == nil {
+		state["forwarded_message"], err = g.forwardedText(ctx, forward.ID)
+	}
+	if ctx.Err() != nil {
+		return d, ctx.Err()
+	}
+	var check model.ActionCheck
+	switch {
+	case err != nil:
+		check = model.ActionFailure(safeCode(err))
+	case state == nil:
+		return d, nil
+	default:
+		check, err = g.screener.CheckAction(ctx, apiOperations[op], actionEffects[key], state)
+		if ctx.Err() != nil {
+			return d, ctx.Err()
+		}
+		if err != nil {
+			check = model.ActionFailure(safeCode(err))
+		} else {
+			check = validCheck(check)
+		}
+	}
+	d.jev = &check
+	if check.Flag && d.value == config.Allow {
+		d.value = config.Approve
+	}
+	return d, nil
+}
+
+// validCheck keeps a safe error code or a score from 0 to 1, and sets the flag from the score.
+func validCheck(c model.ActionCheck) model.ActionCheck {
+	if c.Error != nil {
+		return model.ActionFailure(*safeText(c.Error))
+	}
+	if c.Score == nil {
+		return model.ActionFailure("ValidationError")
+	}
+	return model.ActionScore(*c.Score)
+}
+
+// actionFields gives the agent fields of the stored args without the referenced ID. A response or a
+// cancellation without a comment carries no agent text and gives nil.
+func actionFields(args any) (map[string]any, error) {
+	data, err := json.Marshal(args)
+	if err != nil {
+		return nil, GuardError("ValueError")
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil || fields == nil {
+		return nil, GuardError("ValueError")
+	}
+	delete(fields, "id")
+	if comment, ok := fields["comment"]; ok && comment == "" {
+		return nil, nil
+	}
+	return fields, nil
+}
+
+// sourceUnavailable is the failed-check code when the text of a forwarded message cannot be read.
+const sourceUnavailable = GuardError("SourceUnavailableError")
+
+// forwardedText reads the subject and rendered body of the message to forward through the screened read
+// path. A failed read or a message whose body is not shown makes the text unavailable.
+func (g *Guard) forwardedText(ctx context.Context, id string) (map[string]any, error) {
+	m, _, r, err := g.read(ctx, id)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err != nil || r == nil {
+		return nil, sourceUnavailable
+	}
+	return map[string]any{"subject": content.CleanSubject(m.Subject), "body": r.Markdown}, nil
 }
 
 // decide returns the decision of key for each message ID. It looks up or screens a message only when the
@@ -151,6 +247,11 @@ func (g *Guard) recordDecision(ctx context.Context, op audit.Operation, key stri
 	if d.sealed {
 		reasons = append(reasons, "sealed")
 	}
+	if d.jev != nil && d.jev.Failed() {
+		reasons = append(reasons, "jev_error")
+	} else if d.jev != nil && d.jev.Flag {
+		reasons = append(reasons, "jev_flag")
+	}
 	if err := g.log.Policy(context.WithoutCancel(ctx), g.account, audit.Decision{Operation: apiOperations[op], Key: key, Decision: string(d.value), Reasons: reasons, ID: id, ApprovalID: approval, Rule: rule}); err != nil {
 		return GuardError("AuditError")
 	}
@@ -164,7 +265,7 @@ func (g *Guard) hold(ctx context.Context, op audit.Operation, key string, d deci
 	if err != nil {
 		return "", GuardError("ValueError")
 	}
-	approval, err := g.store.AddPending(ctx, g.account, apiOperations[op], data, g.now())
+	approval, err := g.store.AddPending(ctx, g.account, apiOperations[op], data, d.jev, g.now())
 	if err != nil {
 		return "", safeErr(ctx, err)
 	}

@@ -43,7 +43,14 @@ func policyServer(t *testing.T, policy string) (*server.Server, string, *atomic.
 }
 
 // graphServer serves the work and other M365 accounts with the given policy tables and graph as the Graph API.
+// Its Jev is a fake that does not flag actions.
 func graphServer(t *testing.T, policy string, graph http.Handler) (*server.Server, string) {
+	t.Helper()
+	return graphJevServer(t, policy, graph, newNativeAPI())
+}
+
+// graphJevServer is a graphServer whose Jev is the fake Jev of jev.
+func graphJevServer(t *testing.T, policy string, graph http.Handler, jev *nativeAPI) (*server.Server, string) {
 	t.Helper()
 	home := t.TempDir()
 	text := "[accounts.work]\nprovider='m365'\nclient_id='synthetic'\ntenant_id='synthetic'\n[accounts.other]\nprovider='m365'\nclient_id='other'\ntenant_id='synthetic'\n" + policy
@@ -52,7 +59,7 @@ func graphServer(t *testing.T, policy string, graph http.Handler) (*server.Serve
 	}
 	api := httptest.NewServer(graph)
 	t.Cleanup(api.Close)
-	s, err := server.New(context.Background(), home, server.Options{Credentials: &meetingStore{scopes: "Mail.ReadWrite Calendars.ReadWrite"}, M365: m365.Options{BaseURL: api.URL, AuthorityURL: api.URL}, Now: func() time.Time { return time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC) }})
+	s, err := server.New(context.Background(), home, server.Options{Credentials: &meetingStore{scopes: "Mail.ReadWrite Calendars.ReadWrite"}, Screener: jev.screener(t), M365: m365.Options{BaseURL: api.URL, AuthorityURL: api.URL}, Now: func() time.Time { return time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC) }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,8 +169,8 @@ func TestPolicyApproveReturnsPendingAndStoresTheRequest(t *testing.T) {
 	if writes.Load() != 0 {
 		t.Fatalf("approve wrote to the provider %d times", writes.Load())
 	}
-	if reads.Load() != 4 {
-		t.Fatalf("event checks=%d; want one per update, cancel, and respond", reads.Load())
+	if reads.Load() != 5 {
+		t.Fatalf("reads=%d; want one event check per update, cancel, and respond, and one read of the forwarded message for the Jev check", reads.Load())
 	}
 }
 

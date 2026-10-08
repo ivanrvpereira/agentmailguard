@@ -396,8 +396,36 @@ type OrganizationQuestions struct {
 	Categories map[string]string
 }
 
+// ActionFlagThreshold is the Jev action score at or above which a write action counts as suspicious.
+// The value is provisional and will be tuned.
+const ActionFlagThreshold = 0.5
+
+// ActionCheck is the result of Jev's check of one write action. It never carries action text.
+// A check that failed has Error set, no Score, and Flag true.
+type ActionCheck struct {
+	Flag  bool     `json:"flag"`
+	Score *float64 `json:"score,omitempty"`
+	Error *string  `json:"error,omitempty"`
+}
+
+// Failed reports a check without a valid score.
+func (c ActionCheck) Failed() bool { return c.Error != nil }
+
+// ActionScore is the check result for score. A score outside 0..1 is a failed check.
+func ActionScore(score float64) ActionCheck {
+	if !unit(score) {
+		return ActionFailure("ValidationError")
+	}
+	return ActionCheck{Flag: score >= ActionFlagThreshold, Score: &score}
+}
+
+// ActionFailure is a failed check with the safe code.
+func ActionFailure(code string) ActionCheck { return ActionCheck{Flag: true, Error: &code} }
+
 // Screener must return an Error verdict for missing/failed screening, with safe error text only. The Go error return is for cancellation; callers must never treat a zero result as green.
+// CheckAction returns a failed check, never a clean one, when the check cannot complete.
 type Screener interface {
 	Screen(ctx context.Context, state map[string]any) (Screening, error)
 	Classify(ctx context.Context, state map[string]any, security bool, organization *OrganizationQuestions) (Classification, error)
+	CheckAction(ctx context.Context, operation, effect string, state map[string]any) (ActionCheck, error)
 }

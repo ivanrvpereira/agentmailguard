@@ -72,6 +72,11 @@ func (s safeScreener) Classify(ctx context.Context, state map[string]any, securi
 	return s.screen.Classify(ctx, state, security, q)
 }
 
+func (s safeScreener) CheckAction(ctx context.Context, operation, effect string, state map[string]any) (v model.ActionCheck, err error) {
+	defer recoverAdapter(&err)
+	return s.screen.CheckAction(ctx, operation, effect, state)
+}
+
 type safeTransport struct{ transport http.RoundTripper }
 
 func (s safeTransport) RoundTrip(r *http.Request) (v *http.Response, err error) {

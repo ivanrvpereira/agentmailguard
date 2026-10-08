@@ -95,6 +95,11 @@ func (s *subjectScreener) Screen(_ context.Context, state map[string]any) (model
 		return model.Screening{Verdict: v, Score: ptr(0.0)}, nil
 	}
 }
+
+// CheckAction never flags, so writes behave as before the Jev action check.
+func (s *subjectScreener) CheckAction(context.Context, string, string, map[string]any) (model.ActionCheck, error) {
+	return model.ActionScore(0), nil
+}
 func (s *subjectScreener) count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

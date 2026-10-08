@@ -268,8 +268,9 @@ func (g *Guard) Categorize(ctx context.Context, ids, add, remove []string) ([]mo
 	return g.manual(ctx, audit.Categorize, ids, audit.Options{Add: append([]string{}, add...), Remove: append([]string{}, remove...)})
 }
 
-// draft applies the mail_draft decision, then runs call. Reply and forward reference an existing message,
-// so the sealed decision applies to their source; update acts on a draft and has no sealed check.
+// draft applies the mail_draft decision and the Jev action check, then runs call. Reply and forward reference
+// an existing message, so the sealed decision applies to their source; update acts on a draft and has no
+// sealed check. Jev sees the agent fields, and for a forward also the text of the forwarded message.
 func (g *Guard) draft(ctx context.Context, op audit.Operation, source string, args any, call func() (string, error)) (string, error) {
 	if err := g.acquire(ctx); err != nil {
 		return "", err
@@ -282,6 +283,10 @@ func (g *Guard) draft(ctx context.Context, op audit.Operation, source string, ar
 			return "", err
 		}
 		d = decisions[source]
+	}
+	d, err := g.checkAction(ctx, op, keyDraft, d, args)
+	if err != nil {
+		return "", err
 	}
 	var ref *string
 	if op != audit.DraftNew {

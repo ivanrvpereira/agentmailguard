@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/cache"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
 var queued = time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
@@ -25,7 +26,7 @@ func TestPendingIDsAreDistinct32CharLowercaseHex(t *testing.T) {
 	format := regexp.MustCompile(`^[0-9a-f]{32}$`)
 	seen := map[string]bool{}
 	for range 50 {
-		id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(`{}`), queued)
+		id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(`{}`), nil, queued)
 		if err != nil || !format.MatchString(id) || seen[id] {
 			t.Fatalf("bad or repeated ID %q: %v", id, err)
 		}
@@ -36,7 +37,7 @@ func TestPendingIDsAreDistinct32CharLowercaseHex(t *testing.T) {
 func TestInvalidJSONArgsAreRefused(t *testing.T) {
 	c, path := open(t)
 	for _, args := range []string{``, `{`, `{"body":"RAW CONTENT CANARY"`, `RAW CONTENT CANARY`, `{} {}`} {
-		if id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(args), queued); err == nil {
+		if id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(args), nil, queued); err == nil {
 			t.Errorf("invalid args %q stored as %s", args, id)
 		} else if strings.Contains(err.Error(), "CANARY") {
 			t.Errorf("error echoes args: %v", err)
@@ -50,7 +51,7 @@ func TestInvalidJSONArgsAreRefused(t *testing.T) {
 
 func TestAddedPendingActionReadsBackAfterReopen(t *testing.T) {
 	c, path := open(t)
-	id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(trashArgs), queued)
+	id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(trashArgs), nil, queued)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,9 +71,28 @@ func TestAddedPendingActionReadsBackAfterReopen(t *testing.T) {
 	}
 }
 
+func TestPendingActionKeepsItsJevCheck(t *testing.T) {
+	c, _ := open(t)
+	score, code := 0.62, "TimeoutError"
+	for _, check := range []*model.ActionCheck{nil, {Flag: true, Score: &score}, {Flag: true, Error: &code}} {
+		id, err := c.AddPending(ctx, "work", "draft.new", json.RawMessage(`{}`), check, queued)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := c.GetPending(ctx, id)
+		if err != nil || !reflect.DeepEqual(got.Jev, check) {
+			t.Fatalf("jev=%+v want %+v: %v", got.Jev, check, err)
+		}
+		listed, err := c.ListPending(ctx, 0)
+		if err != nil || !reflect.DeepEqual(listed[0].Jev, check) {
+			t.Fatalf("listed=%+v want %+v: %v", listed, check, err)
+		}
+	}
+}
+
 func TestClaimMovesPendingToRunningOnce(t *testing.T) {
 	c, _ := open(t)
-	id, err := c.AddPending(ctx, "work", "draft.reply", json.RawMessage(trashArgs), queued)
+	id, err := c.AddPending(ctx, "work", "draft.reply", json.RawMessage(trashArgs), nil, queued)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +125,7 @@ func TestConcurrentClaimsHaveExactlyOneWinner(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer second.Close()
-	id, err := first.AddPending(ctx, "work", "mail.trash", json.RawMessage(trashArgs), queued)
+	id, err := first.AddPending(ctx, "work", "mail.trash", json.RawMessage(trashArgs), nil, queued)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,11 +152,11 @@ func TestConcurrentClaimsHaveExactlyOneWinner(t *testing.T) {
 
 func TestDenyOnlyFromPending(t *testing.T) {
 	c, _ := open(t)
-	waiting, err := c.AddPending(ctx, "work", "calendar.update", json.RawMessage(trashArgs), queued)
+	waiting, err := c.AddPending(ctx, "work", "calendar.update", json.RawMessage(trashArgs), nil, queued)
 	if err != nil {
 		t.Fatal(err)
 	}
-	running, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(`{}`), queued)
+	running, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(`{}`), nil, queued)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +191,7 @@ func TestFinishOnlyFromRunningToDoneOrFailed(t *testing.T) {
 	c, _ := open(t)
 	add := func(claim bool) string {
 		t.Helper()
-		id, err := c.AddPending(ctx, "work", "draft.reply", json.RawMessage(trashArgs), queued)
+		id, err := c.AddPending(ctx, "work", "draft.reply", json.RawMessage(trashArgs), nil, queued)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -227,7 +247,7 @@ func TestCacheClearKeepsPendingActions(t *testing.T) {
 	if err := c.Put(ctx, "work", row("m1")); err != nil {
 		t.Fatal(err)
 	}
-	id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(trashArgs), queued)
+	id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(trashArgs), nil, queued)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +264,7 @@ func TestListPendingShowsWaitingActionsFirstThenRecentlyResolved(t *testing.T) {
 	c, _ := open(t)
 	add := func(at time.Time) string {
 		t.Helper()
-		id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(`{"ids":["m1"]}`), at)
+		id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(`{"ids":["m1"]}`), nil, at)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -289,7 +309,7 @@ func TestListPendingShowsWaitingActionsFirstThenRecentlyResolved(t *testing.T) {
 // Callers tell cancellation apart from storage failures, which get fixed text.
 func TestCancelledPendingIOReturnsCancellation(t *testing.T) {
 	c, _ := open(t)
-	id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(trashArgs), queued)
+	id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(trashArgs), nil, queued)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +317,7 @@ func TestCancelledPendingIOReturnsCancellation(t *testing.T) {
 	cancel()
 	for _, operation := range []func() error{
 		func() error {
-			_, err := c.AddPending(cancelled, "work", "mail.trash", json.RawMessage(`{}`), queued)
+			_, err := c.AddPending(cancelled, "work", "mail.trash", json.RawMessage(`{}`), nil, queued)
 			return err
 		},
 		func() error { _, err := c.GetPending(cancelled, id); return err },

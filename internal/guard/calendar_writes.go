@@ -21,7 +21,8 @@ const (
 
 // calendarWrite holds the mutation gate from check through write and audit. A denied action stops before
 // any provider access. Otherwise check validates input, fetches the writable event, and may resolve what
-// write sends; an action that the policy approves is stored with args only after check passes.
+// write sends; then Jev checks the agent fields of args. An action that the policy approves, or that the
+// Jev check holds back, is stored with args only after check passes.
 // write returns the event ID to audit; provider errors become safe codes. ref is the event the action changes.
 func (g *Guard) calendarWrite(ctx context.Context, op audit.Operation, ref *string, args any, check func() error, write func(model.CalendarWriter) (model.EventID, error)) (model.EventID, error) {
 	if err := g.acquire(ctx); err != nil {
@@ -39,6 +40,10 @@ func (g *Guard) calendarWrite(ctx context.Context, op audit.Operation, ref *stri
 			return "", err
 		}
 		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		var err error
+		if d, err = g.checkAction(ctx, op, key, d, args); err != nil {
 			return "", err
 		}
 	}

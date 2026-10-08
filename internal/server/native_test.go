@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 	"github.com/ivanrvpereira/agentmailguard/internal/screening"
@@ -47,10 +48,29 @@ type nativeAPI struct {
 	bodyReads, jevCalls map[string]int
 	categories          map[string][]string
 	writes              []externalWrite
+	// actionScore answers each Jev action check; a value outside 0..1 makes the check fail.
+	actionScore float64
+	// actionChecks records the request body of each Jev action check.
+	actionChecks []map[string]any
 }
 
 func newNativeAPI() *nativeAPI {
-	return &nativeAPI{bodyReads: map[string]int{}, jevCalls: map[string]int{}, categories: map[string][]string{}}
+	return &nativeAPI{bodyReads: map[string]int{}, jevCalls: map[string]int{}, categories: map[string][]string{}, actionScore: .1}
+}
+
+// checks returns the recorded Jev action check requests.
+func (a *nativeAPI) checks() []map[string]any {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]map[string]any{}, a.actionChecks...)
+}
+
+// screener is a Jev client for the fake Jev of a.
+func (a *nativeAPI) screener(t *testing.T) model.Screener {
+	t.Helper()
+	jev := httptest.NewServer(http.HandlerFunc(a.jev))
+	t.Cleanup(jev.Close)
+	return screening.New(screening.Options{Endpoint: jev.URL, LookupEnv: func(string) string { return "synthetic-key" }})
 }
 func response(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -145,8 +165,19 @@ func (a *nativeAPI) jev(w http.ResponseWriter, r *http.Request) {
 		State     map[string]any
 		Questions map[string]json.RawMessage
 	}
-	if json.NewDecoder(r.Body).Decode(&req) != nil {
+	data, err := io.ReadAll(r.Body)
+	if err != nil || json.Unmarshal(data, &req) != nil {
 		w.WriteHeader(400)
+		return
+	}
+	if _, ok := req.Questions["suspicious"]; ok {
+		var body map[string]any
+		_ = json.Unmarshal(data, &body)
+		a.mu.Lock()
+		a.actionChecks = append(a.actionChecks, body)
+		score := a.actionScore
+		a.mu.Unlock()
+		response(w, map[string]any{"model": "jev", "usage": map[string]any{}, "answers": map[string]any{"suspicious": map[string]any{"type": "noul", "noul": score}}})
 		return
 	}
 	subject, _ := req.State["subject"].(string)
@@ -419,7 +450,8 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 	}
 	ok("draft", "new", "--to", "first@example.test", "--to", "second@example.test", "--subject", "private-draft-subject", "--body", "private-draft-body")
 	ok("draft", "reply", "r", "--body", "private-reply-body")
-	ok("draft", "forward", "r", "--to", "first@example.test", "--to", "second@example.test")
+	// The Jev action check reads the forwarded text, so the source must be green; a red source would wait for approval.
+	ok("draft", "forward", "g", "--to", "first@example.test", "--to", "second@example.test")
 	assertPatches([]string{"draft", "update", "draft-1", "--body", "private-replacement-body"}, map[string]map[string]any{
 		"/me/messages/draft-1": {"body": map[string]any{"contentType": "text", "content": "private-replacement-body"}},
 	})
@@ -442,7 +474,7 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 			foundReply = w.path == "/me/messages/r/createReply" && w.body["comment"] == "private-reply-body"
 		}
 		if strings.HasSuffix(w.path, "/createForward") {
-			foundForward = w.path == "/me/messages/r/createForward" && reflect.DeepEqual(w.body["message"].(map[string]any)["toRecipients"], []any{map[string]any{"emailAddress": map[string]any{"address": "first@example.test"}}, map[string]any{"emailAddress": map[string]any{"address": "second@example.test"}}})
+			foundForward = w.path == "/me/messages/g/createForward" && reflect.DeepEqual(w.body["message"].(map[string]any)["toRecipients"], []any{map[string]any{"emailAddress": map[string]any{"address": "first@example.test"}}, map[string]any{"emailAddress": map[string]any{"address": "second@example.test"}}})
 		}
 	}
 	if !foundNew || !foundReply || !foundForward || len(flags) != 3 {

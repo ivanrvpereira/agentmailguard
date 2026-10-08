@@ -130,12 +130,23 @@ func TestApproveTrashMovesOnlyThatMessageAndStoresTheResult(t *testing.T) {
 	}
 }
 
+// greenMessage is the Graph JSON of message id with a body, which the fake Jev of nativeAPI screens green.
+func greenMessage(t *testing.T, id string) string {
+	t.Helper()
+	data, err := json.Marshal(messageJSON(id, true, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
 // The same call under an allow policy gives the expected provider write and result.
 func TestApprovedActionMakesTheSameWriteAsTheAllowedCall(t *testing.T) {
 	for _, tc := range []struct{ name, op, params, event string }{
 		{"draft.new", "draft.new", `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body"}`, organizerEvent},
 		{"draft.reply", "draft.reply", `{"id":"m1","body":"CANARY reply"}`, organizerEvent},
-		{"draft.forward", "draft.forward", `{"id":"m1","to":["a@example.test","b@example.test"]}`, organizerEvent},
+		// The allowed forward runs only when Jev can read the forwarded text, so the Graph API serves a green message.
+		{"draft.forward", "draft.forward", `{"id":"m1","to":["a@example.test","b@example.test"]}`, greenMessage(t, "m1")},
 		{"calendar.invite", "calendar.invite", `{"to":["a@example.test"],"subject":"CANARY","body":"CANARY body","start":"2026-10-09T09:00:00Z","end":"2026-10-09T10:00:00Z","location":"Room","teams":false}`, organizerEvent},
 		{"calendar.update duration and attendees", "calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","start":"2026-10-09T12:00:00+01:00","duration":"30m","add":["new@example.test"],"remove":["remove@example.test"],"teams":true}`, organizerEvent},
 		{"calendar.update start keeps duration", "calendar.update", `{"id":"e1","start":"2026-10-09T12:00:00+01:00"}`, organizerEvent},

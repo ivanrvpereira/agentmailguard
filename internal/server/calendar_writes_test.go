@@ -103,7 +103,7 @@ func calendarServer(t *testing.T, scopes string, handler http.HandlerFunc) (*ser
 	api := httptest.NewServer(handler)
 	t.Cleanup(api.Close)
 	creds := &meetingStore{scopes: scopes}
-	s, err := server.New(context.Background(), home, server.Options{Credentials: creds, M365: m365.Options{BaseURL: api.URL, AuthorityURL: api.URL}, Now: func() time.Time { return time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC) }})
+	s, err := server.New(context.Background(), home, server.Options{Credentials: creds, Screener: newNativeAPI().screener(t), M365: m365.Options{BaseURL: api.URL, AuthorityURL: api.URL}, Now: func() time.Time { return time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC) }})
 	if err != nil {
 		t.Fatal(err)
 	}

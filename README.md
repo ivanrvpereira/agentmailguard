@@ -410,6 +410,26 @@ If the message has no cached verdict, the server screens it first. A message tha
 For `green`, `yellow`, and `red` messages, only the base decision applies.
 `draft new` and `draft update` do not reference a received message, so only the base decision applies.
 
+### Jev action check
+
+Before an action runs, Jev checks the text that the agent wrote for it. The agent can be under prompt injection from mail it read, so the server does not trust this text.
+
+- Checked actions: `draft new`, `draft reply`, `draft update`, `draft forward`, `calendar invite`, and `calendar update`. `calendar respond` and `calendar cancel` are checked only when they have a comment.
+- Not checked: `mail trash`, rule moves, and the commands without a policy key.
+- Jev sees the operation name, a fixed description of what the action does, and the action fields that the agent gave: recipients, subject, body, comment, response, and event fields. It never sees a message or event ID.
+- For `draft forward`, Jev also sees the subject and body of the forwarded message, read through the screened read path. If the server cannot read this text, for example because the message is not `green`, the check fails.
+
+The check comes after the policy decision:
+
+- `deny` refuses the action. Jev does not see it.
+- If Jev flags the action, or the check fails, `allow` becomes `approve`, and the action waits in the [approval console](#approval-console). `approve` stays `approve`.
+- A missing Jev key or a Jev outage makes every check fail, so every checked action waits for approval.
+- When a person approves an item, the server runs it without a second check.
+
+Jev gives a score from 0 to 1. A score of 0.5 or more is a flag. This threshold is provisional and will change after tuning.
+The agent never sees the score or the flag. It gets the normal result or the normal `pending` result.
+The item page of the approval console shows the result, for example `Jev: flagged (score 0.62)`, `Jev: not flagged (score 0.08)`, or `Jev: check failed (TimeoutError)`.
+
 ### Results
 
 - `allow`: the command gives its normal result.
@@ -485,6 +505,7 @@ The browser asks for a username and the password. The console ignores the userna
 - The list page `/` shows all pending items, newest first, and then the 50 most recently changed other items. Each row shows the account, the operation, the recipients, the subject, the state, and the age.
 - The item page `/a/ID` shows the account, the operation, the state, the times, and every stored request field as plain text. Links in the text are never links on the page.
 - For an action on an existing message, the item page also shows the sender, subject, received date, and verdict of the message. For an action on an event, it shows the subject, start, end, and organizer. The server reads these through the screened read path and never shows a body. If the read fails, the page shows `not available`, and you can still decide.
+- The item page also shows the result of the [Jev action check](#jev-action-check), if a check ran.
 - A pending item has **Approve** and **Deny** buttons.
 
 **Approve** runs the stored action once, with no second policy check. A `done` item shows its result. If the run fails, the item shows `failed` and a safe error code. A failed item never runs again.
@@ -512,11 +533,12 @@ Known limits:
 
 Pending items are in the `pending` table of `cache.db`. They do not expire.
 A pending item stores the account, the operation, and the request arguments: recipients, subject, body, comment, event fields, and the message or event ID.
+It also stores the result of the Jev check, if a check ran: the flag and the score, or the safe error code.
 `cache clear` does not delete pending items.
 
 The audit log gets content-free records for the policy. Their `operation` is the API operation name, for example `mail.trash`.
 
-- `"event": "policy"` records each decision, also `allow`. It has `time`, `account`, `operation`, `key`, `decision`, and `reasons` (`policy`, and `sealed` if the sealed decision made it stricter). It can also have `id`, `rule`, and `approval_id`.
+- `"event": "policy"` records each decision, also `allow`. It has `time`, `account`, `operation`, `key`, `decision`, and `reasons`: `policy`; `sealed` if the sealed decision made it stricter; `jev_flag` if Jev flagged the action; `jev_error` if the Jev check failed. It can also have `id`, `rule`, and `approval_id`. It never has the Jev score.
 - `"event": "approval"` records each step of a pending item. It has `time`, `account`, `operation`, `state` (`created`, `approved`, `denied`, `done`, or `failed`), and `approval_id`.
 - `"event": "console_signin"` records each wrong approval console password. It has only `time` and `result` (`failed`). It never has the username, the password, the host name, or the address of the browser.
 
@@ -527,6 +549,7 @@ The audit log gets content-free records for the policy. Their `operation` is the
 3. The cache database gets the `pending` table (schema version 5). After the upgrade, `serve` of an older binary fails with `server state unavailable`.
 4. Pending items store request text in `cache.db`. Earlier versions kept no subject, recipient, or body text in storage.
 5. After you set an approval password, older builds refuse the credential record. Records without an approval password keep the old format.
+6. The Jev action check can make an allowed draft or meeting action wait for approval. Without an approval password, such an item stays pending. A missing Jev key or a Jev outage makes every checked action wait.
 
 ### Known limits
 
@@ -537,7 +560,7 @@ Anyone who can reach the listener gets the same decisions as the agent.
 ## Microsoft 365 meetings
 
 **Caution:** If the write policy allows them, `calendar invite`, `calendar update`, `calendar cancel`, and `calendar respond` send real meeting notifications at once.
-No outbound screening checks the subject, body, location, comment, or attendees.
+The [Jev action check](#jev-action-check) can hold a command for approval, but it is a statistical check: it can miss harmful text.
 An agent must run these commands only after the user authorizes that specific action.
 
 The [write policy](#write-policy) denies these commands by default.
@@ -716,7 +739,7 @@ The native workflow test builds the real client binary and runs remote commands 
 It covers cached hidden reads, error retry, classification, preview/apply, concurrent completion, security tags, manual mutations, drafts, calendar, stats, rules, and separate accounts.
 A second native workflow sends meeting invites, updates, cancellations, and responses to a fake Graph endpoint, and reads the changed events back.
 It also covers the Gmail, missing-scope, recurring, cancelled, and wrong-role refusals.
-Offline tests also cover the write policy: validation, defaults, sealed decisions, per-ID trash decisions, rule trash, pending items, and the Deleted Items refusal.
+Offline tests also cover the write policy: validation, defaults, sealed decisions, per-ID trash decisions, rule trash, pending items, the Jev action check, and the Deleted Items refusal.
 Native file-backend tests also cover server startup, password refusal, terminal password changes, and SIGTERM shutdown.
 A separate combined native acceptance run used the file backend, temporary HOME, synthetic credentials, and a non-forwarding loopback HTTPS proxy.
 It passed device-code login, native server startup, an external key update while serving, token refresh, terminal password change, and restart.

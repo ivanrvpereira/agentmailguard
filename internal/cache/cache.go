@@ -147,7 +147,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	for _, query := range []string{
 		"SELECT account, " + columns + " FROM mail_cache LIMIT 0",
 		"EXPLAIN INSERT INTO mail_cache (account, message_id) VALUES (NULL, NULL) ON CONFLICT (account, message_id) DO NOTHING",
-		"SELECT jev, " + pendingColumns + " FROM pending LIMIT 0",
+		"SELECT " + pendingColumns + " FROM pending LIMIT 0",
 	} {
 		rows, err := tx.QueryContext(ctx, query)
 		if err != nil {

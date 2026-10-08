@@ -314,6 +314,34 @@ func TestConsoleItemShowsStoredArgumentsAsTextAndTheMessageSummary(t *testing.T)
 	onlyConsoleLinks(t, page)
 }
 
+// The item page shows the Jev action check result; an action without a check shows none. The list does not show it.
+func TestConsoleItemShowsTheJevCheck(t *testing.T) {
+	f := consoleServer(t, draftApprove, true)
+	for _, tc := range []struct {
+		score float64
+		want  string
+	}{
+		{0.62, "Jev: flagged (score 0.62)"},
+		{0.08, "Jev: not flagged (score 0.08)"},
+		{2, "Jev: check failed (ValidationError)"},
+	} {
+		f.api.mu.Lock()
+		f.api.actionScore = tc.score
+		f.api.mu.Unlock()
+		id := pend(t, f.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
+		if page := f.get(t, "/a/"+id, nil).Body.String(); !strings.Contains(page, tc.want) {
+			t.Errorf("item page misses %q: %s", tc.want, page)
+		}
+	}
+	id := pend(t, f.s, "mail.trash", `{"ids":["g"]}`)[0]
+	if page := f.get(t, "/a/"+id, nil).Body.String(); strings.Contains(page, "Jev") {
+		t.Errorf("unchecked action shows a Jev result: %s", page)
+	}
+	if page := f.get(t, "/", nil).Body.String(); strings.Contains(page, "Jev") {
+		t.Errorf("list shows a Jev result: %s", page)
+	}
+}
+
 func TestConsoleItemShowsTheReferencedEvent(t *testing.T) {
 	f := consoleServer(t, draftApprove, true)
 	id := pend(t, f.s, "calendar.respond", `{"id":"e","response":"tentative","comment":"CANARY comment"}`)[0]

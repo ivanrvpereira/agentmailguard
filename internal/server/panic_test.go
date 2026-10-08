@@ -23,8 +23,11 @@ func (panicScreener) Screen(context.Context, map[string]any) (model.Screening, e
 func (panicScreener) Classify(context.Context, map[string]any, bool, *model.OrganizationQuestions) (model.Classification, error) {
 	panic("private-adapter-panic-canary")
 }
+func (panicScreener) CheckAction(context.Context, string, string, map[string]any) (model.ActionCheck, error) {
+	panic("private-adapter-panic-canary")
+}
 func TestExternalAdapterPanicsDoNotEscapeHTTP(t *testing.T) {
-	for _, mode := range []string{"credential", "screening", "transport"} {
+	for _, mode := range []string{"credential", "screening", "transport", "action check"} {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestExternalPanicChild$")
 		cmd.Env = append(os.Environ(), "AGENTMAILGUARD_PANIC_CHILD="+mode)
 		b, e := cmd.CombinedOutput()
@@ -58,11 +61,17 @@ func TestExternalPanicChild(t *testing.T) {
 	h := httptest.NewServer(s)
 	defer h.Close()
 	body := `{"operation":"mail.list","params":{}}`
-	if mode != "screening" {
+	switch mode {
+	case "action check":
+		// A failed action check holds the draft for approval.
+		body = `{"operation":"draft.new","params":{"to":["a@example.test"],"subject":"private-subject","body":"private-body"}}`
+	case "credential", "transport":
 		body = `{"operation":"mail.get","params":{"id":"g"}}`
 	}
 	status, b := rpc(t, h.URL, body)
-	if status != 500 && !(status == 200 && strings.Contains(b, `"verdict":"error"`)) {
+	held := status == 200 && strings.Contains(b, `"status":"pending"`)
+	failedClosed := status == 500 || status == 200 && strings.Contains(b, `"verdict":"error"`)
+	if mode == "action check" && !held || mode != "action check" && !failedClosed {
 		t.Fatal("panic did not fail closed")
 	}
 	if strings.Contains(b, "private-") {

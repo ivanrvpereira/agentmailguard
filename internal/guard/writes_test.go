@@ -177,10 +177,14 @@ func TestMutationGateCancellationDoesNotAttemptQueuedDraft(t *testing.T) {
 }
 
 func TestEveryManualRouteAndDraftHasContentFreeAudit(t *testing.T) {
-	w := &writer{mailbox: &mailbox{}}
-	s := &screener{verdict: model.Error}
+	w := &writer{mailbox: &mailbox{messages: messages("m1")}}
+	s := &screener{verdict: model.Green}
 	g, _, path := setup(t, w, s)
 	ctx := context.Background()
+	// The forward's Jev check reads its source; a cached green verdict needs no new screening.
+	if _, err := g.Get(ctx, "m1"); err != nil {
+		t.Fatal(err)
+	}
 	ids := []string{"m1"}
 	calls := []func() error{
 		func() error { _, e := g.Trash(ctx, ids); return e }, func() error { _, e := g.Move(ctx, ids, "f1"); return e }, func() error { _, e := g.MarkRead(ctx, ids, true); return e }, func() error { _, e := g.MarkRead(ctx, ids, false); return e }, func() error { _, e := g.Flag(ctx, ids, model.Complete); return e }, func() error { _, e := g.Categorize(ctx, ids, []string{"Work"}, nil); return e },
@@ -216,7 +220,7 @@ func TestEveryManualRouteAndDraftHasContentFreeAudit(t *testing.T) {
 	if records[9]["draft_id"] != "d4" || !reflect.DeepEqual(records[9]["ids"], []any{"d1"}) {
 		t.Fatal("draft update lost source/result IDs")
 	}
-	if s.calls != 0 {
+	if s.calls != 1 {
 		t.Fatal("writes screened content")
 	}
 	before := len(w.calls)
