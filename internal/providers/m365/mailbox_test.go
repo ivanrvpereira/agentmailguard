@@ -39,6 +39,8 @@ func TestReadCollectionsSearchAndCurrentNestedFolders(t *testing.T) {
 			t.Error("read wrote")
 		}
 		switch r.URL.Path {
+		case "/v1.0/me/mailFolders/deleteditems":
+			jsonResponse(w, map[string]any{"id": "deleted"})
 		case "/v1.0/me/mailFolders":
 			if r.URL.Query().Get("page") == "2" {
 				jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "f2", "displayName": "Sent"}}})
@@ -89,6 +91,64 @@ func TestReadCollectionsSearchAndCurrentNestedFolders(t *testing.T) {
 	search, err := b.Search(ctx, model.SearchQuery{Sender: &sender, Subject: &subject, Text: &term, After: &now, Before: &now}, 10, true)
 	if err != nil || len(search) != 1 || search[0].ID != "searched" || search[0].Body != nil {
 		t.Fatalf("search %v %v", search, err)
+	}
+}
+func TestFoldersMarkDeletedItemsAndEveryFolderBelowIt(t *testing.T) {
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1.0/me/mailFolders/deleteditems":
+			jsonResponse(w, map[string]any{"id": "del"})
+		case "/v1.0/me/mailFolders":
+			jsonResponse(w, map[string]any{"value": []any{
+				map[string]any{"id": "inbox", "displayName": "Inbox", "childFolderCount": 1},
+				map[string]any{"id": "del", "displayName": "Deleted Items", "childFolderCount": 1},
+				map[string]any{"id": "arch", "displayName": "Archive"},
+			}})
+		case "/v1.0/me/mailFolders/inbox/childFolders":
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "receipts", "displayName": "Receipts"}}})
+		case "/v1.0/me/mailFolders/del/childFolders":
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "old", "displayName": "Old", "childFolderCount": 1}}})
+		case "/v1.0/me/mailFolders/old/childFolders":
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "older", "displayName": "Older"}}})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			w.WriteHeader(404)
+		}
+	})
+	folders, err := c.Mailbox().Folders(context.Background())
+	want := []model.Folder{
+		{ID: "inbox", Name: "Inbox"},
+		{ID: "del", Name: "Deleted Items", Trash: true},
+		{ID: "arch", Name: "Archive"},
+		{ID: "receipts", Name: "Receipts"},
+		{ID: "old", Name: "Old", Trash: true},
+		{ID: "older", Name: "Older", Trash: true},
+	}
+	if err != nil || !reflect.DeepEqual(folders, want) {
+		t.Fatalf("folders = %+v, %v; want %+v", folders, err, want)
+	}
+}
+func TestFoldersFailWhenDeletedItemsLookupFails(t *testing.T) {
+	for name, lookup := range map[string]http.HandlerFunc{
+		"graph error": func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) },
+		"missing id":  func(w http.ResponseWriter, _ *http.Request) { jsonResponse(w, map[string]any{}) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/v1.0/me/mailFolders/deleteditems":
+					lookup(w, r)
+				case "/v1.0/me/mailFolders":
+					jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "del", "displayName": "Deleted Items"}}})
+				default:
+					w.WriteHeader(404)
+				}
+			})
+			folders, err := c.Mailbox().Folders(context.Background())
+			if err == nil || folders != nil {
+				t.Fatalf("folders = %+v, %v; want failure", folders, err)
+			}
+		})
 	}
 }
 func TestMalformedBodyIsNeverPresentedAsFetchedEmpty(t *testing.T) {

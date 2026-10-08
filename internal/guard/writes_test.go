@@ -66,7 +66,7 @@ func (w *writer) Categorize(_ context.Context, ids, _, _ []string) ([]model.Muta
 	return w.write("categorize", ids)
 }
 func (w *writer) Folders(context.Context) ([]model.Folder, error) {
-	return []model.Folder{{ID: "f1", Name: "Finance"}}, nil
+	return []model.Folder{{ID: "f1", Name: "Finance"}, {ID: "del", Name: "Deleted Items", Trash: true}}, nil
 }
 func (w *writer) DraftNew(context.Context, model.NewDraft) (string, error) {
 	_, err := w.write("draft_new", nil)
@@ -237,6 +237,7 @@ func TestManualRefusalsKeepFixedReasonsWithoutWriting(t *testing.T) {
 		call       func() error
 	}{
 		{"move", "move refused: the destination must be a folder ID from `folders`", func() error { _, err := g.Move(ctx, ids, "CANARY destination"); return err }},
+		{"trash folder", "move refused: use mail.trash", func() error { _, err := g.Move(ctx, ids, "del"); return err }},
 		{"flag", "flag state must be one of flagged, complete, none", func() error { _, err := g.Flag(ctx, ids, "CANARY flag"); return err }},
 		{"empty categories", "categorize needs at least one category to add or remove", func() error { _, err := g.Categorize(ctx, ids, nil, nil); return err }},
 		{"unknown category", "categorize refused: not in the category list", func() error { _, err := g.Categorize(ctx, ids, []string{"CANARY category"}, nil); return err }},

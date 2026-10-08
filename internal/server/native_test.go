@@ -96,6 +96,8 @@ func (a *nativeAPI) graph(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/me":
 		response(w, map[string]string{"userPrincipalName": "work@example.test"})
+	case "/me/mailFolders/deleteditems":
+		response(w, map[string]any{"id": "deleted"})
 	case "/me/mailFolders":
 		response(w, map[string]any{"value": []any{map[string]any{"id": "f1", "displayName": "Folder", "childFolderCount": 0}}})
 	case "/me/outlook/masterCategories":

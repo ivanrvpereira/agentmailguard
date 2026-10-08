@@ -85,6 +85,8 @@ type Message struct {
 type Folder struct {
 	ID   FolderID
 	Name string
+	// Trash marks the provider's deleted-items folder and every folder below it. Moves there must use trash instead.
+	Trash bool
 }
 type Attendee struct {
 	Address  Address

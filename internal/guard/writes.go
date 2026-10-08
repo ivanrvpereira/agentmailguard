@@ -75,6 +75,7 @@ func (g *Guard) audited(ctx context.Context, op audit.Operation, ids []string, o
 		if opts.Rule == nil && ctx.Err() == nil {
 			switch err {
 			case GuardError("move refused: the destination must be a folder ID from `folders`"),
+				GuardError("move refused: use mail.trash"),
 				GuardError("flag state must be one of flagged, complete, none"),
 				GuardError("categorize needs at least one category to add or remove"),
 				GuardError("categorize refused: not in the category list"):
@@ -109,12 +110,13 @@ func (g *Guard) mutationCall(ctx context.Context, op audit.Operation, ids []stri
 			if err != nil {
 				return nil, err
 			}
-			found := false
-			for _, f := range folders {
-				found = found || f.ID == *opts.Folder
-			}
-			if !found {
+			i := slices.IndexFunc(folders, func(f model.Folder) bool { return f.ID == *opts.Folder })
+			if i < 0 {
 				return nil, GuardError("move refused: the destination must be a folder ID from `folders`")
+			}
+			// A move into deleted items would bypass the trash operation.
+			if folders[i].Trash {
+				return nil, GuardError("move refused: use mail.trash")
 			}
 			if err := ctx.Err(); err != nil {
 				return nil, err

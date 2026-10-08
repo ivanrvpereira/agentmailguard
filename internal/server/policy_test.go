@@ -31,6 +31,10 @@ func TestRunningServerRequiresRestartAfterPolicyEdit(t *testing.T) {
 			write(account)
 			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/me/mailFolders/deleteditems" {
+					io.WriteString(w, `{"id":"deleted"}`)
+					return
+				}
 				io.WriteString(w, `{"value":[{"id":"f1","displayName":"Inbox","childFolderCount":0}]}`)
 			}))
 			defer api.Close()
