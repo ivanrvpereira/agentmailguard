@@ -5,7 +5,8 @@ The guard limits what an agent sees in mail and calendar events.
 It does not protect a human from fraud.
 
 **Exposure warning:** the client/server connection has no authentication and no built-in TLS.
-Anyone who can reach the listener can read guarded mailbox data, change mail, create drafts, clear cached verdicts, and send Microsoft 365 meeting invitations, updates, cancellations, and responses.
+Anyone who can reach the listener can read guarded mailbox data, change mail, and clear cached verdicts.
+They can also do every action that the [write policy](#write-policy) allows, for example create drafts and send Microsoft 365 meeting invitations, updates, cancellations, and responses.
 The default listener is `127.0.0.1:8787`.
 A non-loopback listener requires an explicit `--listen` option and prints a warning.
 Browser requests with an `Origin` header are refused, and the server does not enable CORS.
@@ -93,6 +94,7 @@ Use `--account NAME` to select another account.
 The CLI refuses an explicitly empty or whitespace-only account name before any server request or local login.
 The server resolves nonempty names, not the client.
 Keep `config.toml` private because the Gmail application secret belongs on the server host.
+The optional `[policy]` tables in `config.toml` set the [write policy](#write-policy).
 
 ## Credential storage
 
@@ -331,19 +333,139 @@ Successful commands print the original operation's JSON result, not an RPC envel
 `mail get --pretty` formats only the guarded view.
 Draft update returns the resulting draft ID, which can change on Gmail.
 `calendar invite` returns the new event ID. The other meeting commands return the event ID and `"ok": true`.
+The [write policy](#write-policy) can refuse trash, draft, and meeting commands, or store them as pending items. See [Results](#results) for these results.
 There is no mail send, permanent-delete, folder creation, category creation, Gmail calendar write, or arbitrary provider request command.
 
-Exit code `0` means the call ran, including a mutation with failed per-ID results.
+Exit code `0` means the call ran, including a mutation with failed per-ID results and a `pending` result.
 Exit code `1` means the whole call failed or was refused, or `auth status` reports an unusable login.
 Exit code `2` means invalid CLI usage.
 Errors use fixed text or approved safe codes, never raw network errors or provider response bodies.
 
+## Write policy
+
+The write policy in `config.toml` sets, for each account, what the server does with each write action.
+Each policy key has one of three decisions:
+
+- `allow`: the server runs the action now.
+- `approve`: the server stores the action as a pending item. The action does not run.
+- `deny`: the server refuses the action.
+
+**Caution:** Do not set `approve` if you need the action to run.
+This version has no console, CLI command, or API operation to approve or deny a pending item, so a pending item stays pending.
+
+Example:
+
+```toml
+[policy]
+calendar_invite = "allow"
+calendar_respond = "allow"
+
+[policy.sealed]
+mail_trash = "allow"
+
+[accounts.work.policy]
+calendar_update = "allow"
+calendar_cancel = "allow"
+
+[accounts.personal.policy]
+mail_draft = "deny"
+
+[accounts.personal.policy.sealed]
+mail_trash = "deny"
+```
+
+| Key | Commands | Default |
+| --- | --- | --- |
+| `mail_trash` | `mail trash`, and rule moves to `trash` | `allow` |
+| `mail_draft` | `draft new`, `draft reply`, `draft forward`, `draft update` | `allow` |
+| `mail_send` | None. There is no send command. | `deny` |
+| `calendar_invite` | `calendar invite` | `deny` |
+| `calendar_update` | `calendar update` | `deny` |
+| `calendar_cancel` | `calendar cancel` | `deny` |
+| `calendar_respond` | `calendar respond` | `deny` |
+
+For each key, the server uses the first value in this order: `[accounts.NAME.policy]`, `[policy]`, the default.
+These commands have no key, and the policy always allows them: `mail read`, `mail unread`, `mail flag`, `mail categorize`, `mail archive`, and `mail move`.
+In `mail organize --apply`, only a rule move to `trash` has a key.
+
+The server reads the policy at start.
+After a policy change, requests for each changed account fail with `account configuration changed; restart required` until you restart the server.
+If the changed policy is invalid, requests fail with `configuration unavailable`.
+An invalid policy stops `serve`, `auth login`, `auth set-jev-key`, `auth migrate`, and `auth change-password` with `invalid policy: KEY_PATH`.
+For example: `invalid policy: accounts.personal.policy.sealed.calendar_invite`. The error never shows the value.
+A policy is invalid if it has an unknown key or table, a value other than `allow`, `approve`, or `deny`, or a calendar key in a sealed table.
+
+### Sealed messages
+
+The sealed tables apply to actions on an existing message: `mail trash`, `draft reply`, and `draft forward`.
+A sealed table accepts only `mail_trash`, `mail_draft`, and `mail_send`.
+For each key, the sealed decision is the first value in this order: `[accounts.NAME.policy.sealed]`, `[policy.sealed]`, `deny`.
+
+If the referenced message is `sealed` or `error`, the server uses the stricter of the base decision and the sealed decision.
+The order is `allow`, then `approve`, then `deny`.
+The server looks up the verdict only when the sealed decision is stricter than the base decision.
+If the message has no cached verdict, the server screens it first. A message that the server cannot screen counts as `sealed`.
+For `green`, `yellow`, and `red` messages, only the base decision applies.
+`draft new` and `draft update` do not reference a received message, so only the base decision applies.
+
+### Results
+
+- `allow`: the command gives its normal result.
+- `deny`: a draft or meeting command fails with `refused by policy: KEY`, for example `refused by policy: calendar_invite`, with exit code `1`. The action does not run.
+- `approve`: a draft or meeting command returns `{"status":"pending","approval_id":"..."}` with exit code `0`. The action does not run.
+
+The server validates a meeting action before it stores it.
+Thus an invalid time, a wrong role, or a recurring or cancelled event fails with the usual error, not `pending`.
+
+`mail trash` decides each message ID on its own.
+The server trashes the allowed IDs.
+A denied ID gets `"ok": false` and `"error": "refused by policy: mail_trash"`.
+An ID that needs approval gets `"ok": false`, `"error": "pending"`, and an `approval_id`. Each such ID is its own pending item.
+
+Rules act only on green messages.
+A rule with `folder = "trash"` follows `mail_trash` for each message.
+In the `mail organize --apply` report, the `move.result` of such a message is `pending` or `refused by policy: mail_trash`.
+The report does not show the approval ID, and the stats count the message as `failed`.
+The message stays incomplete, so each later `--apply` run makes a new pending item for it.
+
+On Microsoft 365, `mail move` to Deleted Items or to a folder below it fails with `move refused: use mail.trash`.
+Use `mail trash` instead.
+A rule move to such a folder also fails, and the report shows `GuardError`. Use `folder = "trash"` in the rule.
+On Microsoft 365, `mail folders`, `mail move`, `mail organize`, and `rules list` now also look up Deleted Items. If this lookup fails, the command fails.
+Gmail moves do not change.
+
+### Storage and audit
+
+Pending items are in the `pending` table of `cache.db`. They do not expire.
+A pending item stores the account, the operation, and the request arguments: recipients, subject, body, comment, event fields, and the message or event ID.
+`cache clear` does not delete pending items.
+
+The audit log gets content-free records for the policy. Their `operation` is the API operation name, for example `mail.trash`.
+
+- `"event": "policy"` records each decision, also `allow`. It has `time`, `account`, `operation`, `key`, `decision`, and `reasons` (`policy`, and `sealed` if the sealed decision made it stricter). It can also have `id`, `rule`, and `approval_id`.
+- `"event": "approval"` records a new pending item. It has `time`, `account`, `operation`, `state` (`created`), and `approval_id`.
+
+### Upgrade notes
+
+1. Meeting commands are now denied by default. To use them, set the calendar keys to `allow`, then restart the server.
+2. `mail trash`, `draft reply`, and `draft forward` on `sealed` or `error` messages are now denied by default. To change this, set `[policy.sealed]`.
+3. The cache database gets the `pending` table (schema version 5). After the upgrade, `serve` of an older binary fails with `server state unavailable`.
+4. Pending items store request text in `cache.db`. Earlier versions kept no subject, recipient, or body text in storage.
+
+### Known limits
+
+The policy is effective only when the agent can use only agentmailguard commands.
+An agent with a shell as the same OS user can edit `config.toml`, change pending items in `cache.db`, or restart the server.
+Anyone who can reach the listener gets the same decisions as the agent.
+
 ## Microsoft 365 meetings
 
-**Caution:** `calendar invite`, `calendar update`, `calendar cancel`, and `calendar respond` send real meeting notifications at once.
-No policy layer, approval step, or outbound screening checks the subject, body, location, comment, or attendees.
+**Caution:** If the write policy allows them, `calendar invite`, `calendar update`, `calendar cancel`, and `calendar respond` send real meeting notifications at once.
+No outbound screening checks the subject, body, location, comment, or attendees.
 An agent must run these commands only after the user authorizes that specific action.
 
+The [write policy](#write-policy) denies these commands by default.
+To use them, set `calendar_invite`, `calendar_update`, `calendar_cancel`, and `calendar_respond` to `allow` in `config.toml`, then restart the server.
 These commands work only for Microsoft 365 accounts.
 Gmail accounts get the fixed error `calendar writes are not supported for this account`, before any credential or provider access.
 
@@ -439,12 +561,15 @@ instructions = "Messages about invoices or receipts."
 ```
 
 A folder target is a mailbox folder ID, `archive`, or `trash`.
+A `trash` target follows the `mail_trash` key of the [write policy](#write-policy).
+On Microsoft 365, a folder ID of Deleted Items or of a folder below it fails. Use `trash`.
 A category target must already exist in the mailbox.
 `rules list` shows resolved names and missing-target warnings, never instructions or confidence scores.
 Missing rules produce an empty organizer report without provider or Jev access.
 Invalid rules fail before provider access.
 `stats` and `cache clear` need neither account configuration nor provider authentication.
 Cache clear removes all accounts' verdicts, saved organization answers, and completion markers.
+It does not delete pending items.
 
 Organizer dates use the server clock and UTC midnight.
 `Nd`, `Nw`, and `Nm` require `N >= 1`.
@@ -463,7 +588,7 @@ The calendar interval must increase and cannot exceed 90 days plus one hour for 
 | error | Date and safe error code, without sender, subject, or body |
 
 Every verdict also includes the message ID, verdict, authentication results, read state, flag, and mailbox-listed categories.
-Manual mutations work at every verdict.
+Manual mutations work at every verdict, but the [write policy](#write-policy) can refuse or hold `mail trash`, also by verdict.
 Automatic business actions remain green-only.
 `mail organize --apply` can add existing `Yellow`, `Red`, or `Sealed` security tags to matching hidden mail.
 The program never creates tags or changes their colors.
@@ -488,7 +613,9 @@ Operation names match CLI groups, such as `mail.get`, `draft.update`, `calendar.
 Meeting times on the HTTP interface are RFC 3339 timestamps. `calendar.update` also accepts a Go `duration` string.
 The `account` field is optional, and `params` must be an object.
 Unknown operations or fields, duplicate keys, malformed JSON, trailing JSON, null fields, invalid types, and oversized requests are refused.
-There is no HTTP login, token, key, raw-message, classification, or rules-mutation endpoint.
+There is no HTTP login, token, key, raw-message, classification, rules-mutation, or approval endpoint.
+A pending action returns HTTP 200 with `{"status":"pending","approval_id":"..."}`.
+A policy refusal returns HTTP 500 with `{"error":"refused by policy: KEY"}`.
 
 Requests are limited to 1 MiB and 16 JSON nesting levels.
 The client bounds responses at 64 MiB and never follows redirects or retries requests, including stale-connection write replay.
@@ -512,6 +639,7 @@ The native workflow test builds the real client binary and runs remote commands 
 It covers cached hidden reads, error retry, classification, preview/apply, concurrent completion, security tags, manual mutations, drafts, calendar, stats, rules, and separate accounts.
 A second native workflow sends meeting invites, updates, cancellations, and responses to a fake Graph endpoint, and reads the changed events back.
 It also covers the Gmail, missing-scope, recurring, cancelled, and wrong-role refusals.
+Offline tests also cover the write policy: validation, defaults, sealed decisions, per-ID trash decisions, rule trash, pending items, and the Deleted Items refusal.
 Native file-backend tests also cover server startup, password refusal, terminal password changes, and SIGTERM shutdown.
 A separate combined native acceptance run used the file backend, temporary HOME, synthetic credentials, and a non-forwarding loopback HTTPS proxy.
 It passed device-code login, native server startup, an external key update while serving, token refresh, terminal password change, and restart.

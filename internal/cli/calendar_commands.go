@@ -63,7 +63,7 @@ A slot is free for the meeting only when every address is free.`
 
 func calendarCancelCmd(r *runner) *cobra.Command {
 	comment := ""
-	c := r.leaf("cancel ID", "Cancel your own meeting and notify the attendees now", 1, 1, func(c *cobra.Command, args []string) error {
+	c := r.leaf("cancel ID", "Cancel your own meeting and notify the attendees (write policy applies)", 1, 1, func(c *cobra.Command, args []string) error {
 		p := map[string]any{"id": args[0]}
 		optional(c, p, "comment", &comment)
 		return r.call(c, "calendar.cancel", p, false)
@@ -74,7 +74,7 @@ func calendarCancelCmd(r *runner) *cobra.Command {
 
 func calendarRespondCmd(r *runner) *cobra.Command {
 	response, comment := "", ""
-	c := r.leaf("respond ID", "Send your response to a meeting invitation now", 1, 1, func(c *cobra.Command, args []string) error {
+	c := r.leaf("respond ID", "Send your response to a meeting invitation (write policy applies)", 1, 1, func(c *cobra.Command, args []string) error {
 		if !model.MeetingResponse(response).Valid() {
 			return errUsage
 		}
@@ -92,7 +92,7 @@ func calendarUpdateCmd(r *runner) *cobra.Command {
 	var subject, location, start, end string
 	var duration time.Duration
 	teams := false
-	c := r.leaf("update ID", "Change your own meeting and send the update now", 1, 1, func(c *cobra.Command, args []string) error {
+	c := r.leaf("update ID", "Change your own meeting and send the update (write policy applies)", 1, 1, func(c *cobra.Command, args []string) error {
 		p := map[string]any{"id": args[0]}
 		optional(c, p, "subject", &subject)
 		optional(c, p, "location", &location)
@@ -156,7 +156,7 @@ func calendarInviteCmd(r *runner) *cobra.Command {
 	var subject, body, location, start, end string
 	var duration time.Duration
 	teams := true
-	c := r.leaf("invite", "Create a meeting, with Teams by default, and send the invitation now", 0, 0, func(c *cobra.Command, _ []string) error {
+	c := r.leaf("invite", "Create a meeting, with Teams by default, and send the invitation (write policy applies)", 0, 0, func(c *cobra.Command, _ []string) error {
 		if len(to) == 0 || !c.Flags().Changed("subject") || !c.Flags().Changed("start") {
 			return errUsage
 		}
