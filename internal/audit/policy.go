@@ -68,7 +68,22 @@ type approvalRecord struct {
 	ApprovalID string `json:"approval_id"`
 }
 
+type signinRecord struct {
+	Time   string `json:"time"`
+	Event  string `json:"event"`
+	Result string `json:"result"`
+}
+
 var approvalID = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// ConsoleSigninFailed appends one failed approval console sign-in. The record never holds the username,
+// the password, the Host, or the client address.
+func (l *Log) ConsoleSigninFailed(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return l.append(ctx, signinRecord{now(), "console_signin", "failed"})
+}
 
 // Policy appends one policy decision record.
 func (l *Log) Policy(ctx context.Context, account string, d Decision) error {

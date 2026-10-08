@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -58,25 +59,61 @@ func serve(ctx context.Context, home, listen string, stdin io.Reader, stderr io.
 		_ = s.Close()
 		return code
 	}
-	h := &http.Server{Handler: s, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, ErrorLog: log.New(io.Discard, "", 0)}
-	done := make(chan error, 1)
-	go func() { done <- h.Serve(listener) }()
+	var servers []*http.Server
+	done := make(chan error, 2)
+	start := func(handler http.Handler, l net.Listener) {
+		h := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, ErrorLog: log.New(io.Discard, "", 0)}
+		servers = append(servers, h)
+		go func() { done <- h.Serve(l) }()
+	}
+	// The approval console runs only with an approval password; the preload lines already say when it is off.
+	if console, ok := s.Console(); ok {
+		address := s.ConsoleAddress()
+		consoleListener, e := net.Listen("tcp", address)
+		if e != nil {
+			_ = s.Close()
+			return failure(stderr, "approval console listener unavailable")
+		}
+		defer consoleListener.Close()
+		if host, _, e := net.SplitHostPort(address); e != nil || !loopback(host) {
+			fmt.Fprintln(stderr, "WARNING: the approval console listens beyond loopback. Use an HTTPS tunnel such as tailscale serve.")
+		}
+		start(console, consoleListener)
+		fmt.Fprintln(stderr, "approval console listening")
+	}
+	start(s, listener)
 	fmt.Fprintln(stderr, "server listening")
 	select {
 	case <-ctx.Done():
 		drain, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = h.Shutdown(drain)
+		for _, h := range servers {
+			_ = h.Shutdown(drain)
+		}
 		cancel()
 		e = s.Close()
-		_ = h.Close()
+		for _, h := range servers {
+			_ = h.Close()
+		}
 		if e != nil {
 			return failure(stderr, "server shutdown failed")
 		}
 		return 0
 	case <-done:
+		for _, h := range servers {
+			_ = h.Close()
+		}
 		_ = s.Close()
 		return failure(stderr, "server stopped")
 	}
+}
+
+// loopback reports whether host is localhost or a loopback IP address.
+func loopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // preload asks the credential backend for everything before the server accepts requests,

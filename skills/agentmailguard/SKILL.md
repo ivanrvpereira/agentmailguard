@@ -100,9 +100,9 @@ Hidden content is hidden on purpose. Do not try to recover it through search ter
 The user sets a write policy on the server for `mail trash`, all `draft` commands, and the four meeting commands. You cannot see or change it. By default, it refuses the meeting commands, and it refuses `trash`, `draft reply`, and `draft forward` on `sealed` or `error` messages.
 
 - **Refused:** the command fails with `refused by policy: KEY` (exit code `1`), or a `mail trash` entry has `"error": "refused by policy: mail_trash"`. The action did not run. Tell the user the action and the key. Do not retry. Do not get the same effect another way, for example with `mail move` to Deleted Items, another account, or another command.
-- **Pending:** the command returns `{"status":"pending","approval_id":"...","url":"..."}` (exit code `0`), or a `mail trash` entry has `"ok": false`, `"error": "pending"`, and an `approval_id`. The server stored the action. It did not run. Tell the user the operation, the `approval_id`, and the `url` if there is one, then stop. Do not run the command again: each run stores a new pending item. Never describe a pending action as done.
+- **Pending:** the command returns `{"status":"pending","approval_id":"...","url":"..."}` (exit code `0`), or a `mail trash` entry has `"ok": false`, `"error": "pending"`, and an `approval_id`. The server stored the action. It did not run. Tell the user the operation, the `approval_id`, and the `url` if there is one, then stop. The user approves or denies the action in the approval console at that `url`. Do not run the command again: each run stores a new pending item. Never describe a pending action as done.
 - `approvals status APPROVAL_ID` shows the state of a pending item: `pending`, `running`, `done`, `denied`, or `failed`. A `done` item also has the command's `result`. Run it only when the user asks. An unknown ID fails with `approval not found`.
-- No command approves or denies pending items. Do not look for one.
+- No command approves or denies pending items. Do not look for one. Never open, fetch, or use the approval console or its `url` yourself, and never ask for its password.
 
 ## Procedure
 

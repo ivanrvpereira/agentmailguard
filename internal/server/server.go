@@ -56,7 +56,8 @@ type Server struct {
 	accounts  map[string]*account
 	creds     *memoryStore
 	preloaded bool
-	// approvalBase is the approval console URL from [approvals].listen, read once at start.
+	// approvals is the [approvals] table, read once at start. approvalBase is the console item URL prefix.
+	approvals    config.Approvals
 	approvalBase string
 	// approvalHash is the bcrypt hash of the approval console password, read once by Preload.
 	// Empty means not set. A change takes effect only after a restart.
@@ -117,7 +118,7 @@ func New(ctx context.Context, home string, opts Options) (*Server, error) {
 	opts.M365.HTTPClient = safeHTTP(opts.M365.HTTPClient)
 	opts.Gmail.HTTPClient = safeHTTP(opts.Gmail.HTTPClient)
 	ctx, cancel := context.WithCancel(ctx)
-	return &Server{home: home, options: opts, cache: c, audit: audit.New(filepath.Join(home, "audit.jsonl")), ctx: ctx, cancel: cancel, slots: make(chan struct{}, 64), accounts: make(map[string]*account), creds: creds, mu: new(sync.Mutex), work: new(sync.WaitGroup), closeOnce: new(sync.Once), approvalBase: "http://" + approvals.Listen + "/a/"}, nil
+	return &Server{home: home, options: opts, cache: c, audit: audit.New(filepath.Join(home, "audit.jsonl")), ctx: ctx, cancel: cancel, slots: make(chan struct{}, 64), accounts: make(map[string]*account), creds: creds, mu: new(sync.Mutex), work: new(sync.WaitGroup), closeOnce: new(sync.Once), approvals: approvals, approvalBase: "http://" + approvals.Listen + "/a/"}, nil
 }
 
 // Close stops admission, cancels active calls, and waits at most ShutdownTimeout.

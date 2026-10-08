@@ -310,6 +310,7 @@ ssh -N -L 18787:127.0.0.1:8787 <server-host>
 An explicit remote listener is available with `serve --listen ADDRESS:PORT`.
 Do not expose it to an untrusted network.
 The tunnel protects the connection, not against other users who can already access either local listener.
+Forward only the API port (8787). Do not forward the [approval console](#approval-console) port through a tunnel that the agent can use.
 
 ## Commands and output
 
@@ -350,9 +351,9 @@ Each policy key has one of three decisions:
 - `approve`: the server stores the action as a pending item. The action does not run.
 - `deny`: the server refuses the action.
 
-**Caution:** Do not set `approve` if you need the action to run.
-This version has no CLI command or API operation to approve or deny a pending item, so a pending item stays pending.
-`approvals status ID` shows the state of a pending item. See [Results](#results).
+**Caution:** Do not set `approve` unless the [approval password](#approval-password) is set.
+Only a person in the [approval console](#approval-console) can approve or deny a pending item. Without the password, the console is off and a pending item stays pending.
+The CLI and the API cannot approve or deny. `approvals status ID` shows the state of a pending item. See [Results](#results).
 
 Example:
 
@@ -413,7 +414,7 @@ For `green`, `yellow`, and `red` messages, only the base decision applies.
 
 - `allow`: the command gives its normal result.
 - `deny`: a draft or meeting command fails with `refused by policy: KEY`, for example `refused by policy: calendar_invite`, with exit code `1`. The action does not run.
-- `approve`: a draft or meeting command returns `{"status":"pending","approval_id":"...","url":"http://localhost:8788/a/..."}` with exit code `0`. The action does not run. The `url` is the page of this item in the approval console. It uses `[approvals].listen` (see [Approvals configuration](#approvals-configuration)). This version does not serve the console yet, so the `url` does not open.
+- `approve`: a draft or meeting command returns `{"status":"pending","approval_id":"...","url":"http://localhost:8788/a/..."}` with exit code `0`. The action does not run. The `url` is the page of this item in the approval console. It uses `[approvals].listen` (see [Approvals configuration](#approvals-configuration)).
 
 The server validates a meeting action before it stores it.
 Thus an invalid time, a wrong role, or a recurring or cancelled event fails with the usual error, not `pending`.
@@ -442,7 +443,7 @@ Gmail moves do not change.
 
 ### Approvals configuration
 
-The optional `[approvals]` table in `config.toml` sets the address of the approval console. This version does not serve the console yet; it uses `listen` only for the pending `url`.
+The optional `[approvals]` table in `config.toml` sets the address of the [approval console](#approval-console).
 
 ```toml
 [approvals]
@@ -450,15 +451,15 @@ listen = "localhost:8788"
 hosts = ["my-mac.example.ts.net"]
 ```
 
-- `listen`: `HOST:PORT`. The default is `localhost:8788`. The pending `url` uses this address.
-- `hosts`: extra host names for the console, for example a Tailscale name. This version only validates them. Each entry is a host name or IP address with an optional `:PORT`. Put an IPv6 address in brackets. The default is none.
+- `listen`: `HOST:PORT`. The default is `localhost:8788`. The console listens on this address, and the pending `url` uses it.
+- `hosts`: extra host names that the console accepts, for example a Tailscale name. Each entry is a host name or IP address with an optional `:PORT`. An entry without a port matches a request without a port. Put an IPv6 address in brackets. The default is none.
 
 The server reads `[approvals]` at start. Restart the server after a change.
 An invalid table stops `serve`, `auth login`, `auth set-jev-key`, `auth set-approval-password`, `auth migrate`, and `auth change-password` with `invalid approvals: KEY_PATH`, for example `invalid approvals: approvals.listen`. The error never shows the value.
 
 ### Approval password
 
-The approval password will protect the approval console. This version does not serve the console yet.
+The approval password protects the [approval console](#approval-console). Without it, the console is off.
 
 Run `agentmailguard auth set-approval-password --home /private/path/agentmailguard` locally on the server host to set or change it.
 If a password is already set, the command first asks for the current password. A wrong current password fails with `approval password is wrong`, and nothing changes.
@@ -471,6 +472,42 @@ It refuses `--server`, `AGENTMAILGUARD_SERVER`, and `--account`.
 The server reads the hash at start and shows `credential check: approval password: ok` or `not set`. A missing password does not stop the start.
 Restart the server after you set or change the password.
 
+### Approval console
+
+The approval console is a small web page where you approve or deny pending items.
+To turn it on, set the [approval password](#approval-password) and restart the server.
+At start, the server then shows `approval console listening`.
+The console listens on `[approvals].listen`, by default `http://localhost:8788`. The pending `url` opens the page of its item.
+If the console address is taken, the server does not start and shows `approval console listener unavailable`.
+
+The browser asks for a username and the password. The console ignores the username.
+
+- The list page `/` shows all pending items, newest first, and then the 50 most recently changed other items. Each row shows the account, the operation, the recipients, the subject, the state, and the age.
+- The item page `/a/ID` shows the account, the operation, the state, the times, and every stored request field as plain text. Links in the text are never links on the page.
+- For an action on an existing message, the item page also shows the sender, subject, received date, and verdict of the message. For an action on an event, it shows the subject, start, end, and organizer. The server reads these through the screened read path and never shows a body. If the read fails, the page shows `not available`, and you can still decide.
+- A pending item has **Approve** and **Deny** buttons.
+
+**Approve** runs the stored action once, with no second policy check. A `done` item shows its result. If the run fails, the item shows `failed` and a safe error code. A failed item never runs again.
+**Deny** stops the item for good. Nothing runs.
+An item that is already handled shows `already handled`, and nothing runs again.
+
+To use the console from a phone, put it behind an HTTPS tunnel, for example `tailscale serve`, and add the tunnel host name to `[approvals].hosts`, for example `hosts = ["my-mac.example.ts.net"]`.
+Keep `listen` on loopback. If `listen` is not `localhost` or a loopback address, the server shows a warning at start.
+
+Protections:
+
+- Every page needs the password (HTTP Basic authentication). The console has no TLS of its own.
+- The console refuses a request whose `Host` is not `listen` or an entry of `hosts`. This blocks DNS rebinding.
+- Approve and Deny need an `Origin` of the console itself. This blocks form posts from other sites.
+- After 5 wrong passwords in one minute, the console refuses every request with HTTP 429 until the oldest failure is more than one minute old.
+- Each wrong password adds a `console_signin` record to the audit log.
+- Pages have no scripts and no remote resources, and browsers must not cache or frame them.
+
+Known limits:
+
+- Do not forward the console port through an SSH tunnel that the agent can use. Then the agent could reach the console, and only the password would stop it.
+- An agent with a shell as the same OS user can go around the console, for example by changing `cache.db` or `config.toml`.
+
 ### Storage and audit
 
 Pending items are in the `pending` table of `cache.db`. They do not expire.
@@ -480,7 +517,8 @@ A pending item stores the account, the operation, and the request arguments: rec
 The audit log gets content-free records for the policy. Their `operation` is the API operation name, for example `mail.trash`.
 
 - `"event": "policy"` records each decision, also `allow`. It has `time`, `account`, `operation`, `key`, `decision`, and `reasons` (`policy`, and `sealed` if the sealed decision made it stricter). It can also have `id`, `rule`, and `approval_id`.
-- `"event": "approval"` records a new pending item. It has `time`, `account`, `operation`, `state` (`created`), and `approval_id`.
+- `"event": "approval"` records each step of a pending item. It has `time`, `account`, `operation`, `state` (`created`, `approved`, `denied`, `done`, or `failed`), and `approval_id`.
+- `"event": "console_signin"` records each wrong approval console password. It has only `time` and `result` (`failed`). It never has the username, the password, the host name, or the address of the browser.
 
 ### Upgrade notes
 
@@ -651,7 +689,7 @@ Operation names match CLI groups, such as `mail.get`, `draft.update`, `calendar.
 Meeting times on the HTTP interface are RFC 3339 timestamps. `calendar.update` also accepts a Go `duration` string.
 The `account` field is optional, and `params` must be an object.
 Unknown operations or fields, duplicate keys, malformed JSON, trailing JSON, null fields, invalid types, and oversized requests are refused.
-There is no HTTP login, token, key, raw-message, classification, rules-mutation, or approval endpoint.
+There is no HTTP login, token, key, raw-message, classification, rules-mutation, or approval endpoint. Only the [approval console](#approval-console), on its own address, approves or denies pending items.
 A pending action returns HTTP 200 with `{"status":"pending","approval_id":"...","url":"..."}`.
 `approvals.status` takes `{"id":"APPROVAL_ID"}` (32 lowercase hex characters) and ignores `account`. An unknown ID returns HTTP 404 with `{"error":"approval not found"}`.
 A policy refusal returns HTTP 500 with `{"error":"refused by policy: KEY"}`.

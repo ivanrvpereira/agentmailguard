@@ -239,6 +239,53 @@ func TestCacheClearKeepsPendingActions(t *testing.T) {
 	}
 }
 
+// The list shows every waiting action newest first, then the most recently updated other actions.
+func TestListPendingShowsWaitingActionsFirstThenRecentlyResolved(t *testing.T) {
+	c, _ := open(t)
+	add := func(at time.Time) string {
+		t.Helper()
+		id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(`{"ids":["m1"]}`), at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	oldWaiting := add(queued)
+	deniedFirst := add(queued.Add(time.Minute))
+	newWaiting := add(queued.Add(2 * time.Minute))
+	deniedLast := add(queued.Add(3 * time.Minute))
+	deniedMiddle := add(queued.Add(4 * time.Minute))
+	sameTime := add(queued.Add(2 * time.Minute))
+	for i, id := range []string{deniedFirst, deniedMiddle, deniedLast} {
+		if _, err := c.DenyPending(ctx, id, queued.Add(time.Duration(10+i)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list := func(limit int) []string {
+		t.Helper()
+		items, err := c.ListPending(ctx, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := []string{}
+		for _, item := range items {
+			ids = append(ids, item.ID)
+		}
+		return ids
+	}
+	want := []string{sameTime, newWaiting, oldWaiting, deniedLast, deniedMiddle, deniedFirst}
+	if got := list(50); !reflect.DeepEqual(got, want) {
+		t.Fatalf("list=%v; want %v", got, want)
+	}
+	if got := list(2); !reflect.DeepEqual(got, want[:5]) {
+		t.Fatalf("limited list=%v; want %v", got, want[:5])
+	}
+	items, err := c.ListPending(ctx, 1)
+	if err != nil || items[0].Account != "work" || items[0].Op != "mail.trash" || string(items[0].Args) != `{"ids":["m1"]}` || items[0].State != cache.StatePending {
+		t.Fatalf("item=%+v error=%v", items, err)
+	}
+}
+
 // Callers tell cancellation apart from storage failures, which get fixed text.
 func TestCancelledPendingIOReturnsCancellation(t *testing.T) {
 	c, _ := open(t)
@@ -257,6 +304,7 @@ func TestCancelledPendingIOReturnsCancellation(t *testing.T) {
 		func() error { _, err := c.ClaimPending(cancelled, id, queued); return err },
 		func() error { _, err := c.DenyPending(cancelled, id, queued); return err },
 		func() error { return c.FinishPending(cancelled, id, cache.StateDone, "x", queued) },
+		func() error { _, err := c.ListPending(cancelled, 50); return err },
 	} {
 		if err := operation(); !errors.Is(err, context.Canceled) {
 			t.Errorf("expected cancellation, got %v", err)

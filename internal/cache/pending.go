@@ -70,7 +70,48 @@ func (c *Cache) GetPending(ctx context.Context, id string) (Pending, error) {
 	return scanPending(c.db.QueryRowContext(ctx, "SELECT "+pendingColumns+" FROM pending WHERE id = ?", id))
 }
 
-func scanPending(row *sql.Row) (Pending, error) {
+// maxListedPending caps the waiting actions that ListPending returns.
+const maxListedPending = 500
+
+// ListPending returns the waiting actions newest first, at most maxListedPending, then the resolvedLimit most
+// recently updated actions in any other state.
+func (c *Cache) ListPending(ctx context.Context, resolvedLimit int) ([]Pending, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	out := []Pending{}
+	for _, query := range []struct {
+		where string
+		limit int
+	}{
+		{"state = 'pending' ORDER BY created DESC, rowid DESC", maxListedPending},
+		{"state <> 'pending' ORDER BY updated DESC, rowid DESC", resolvedLimit},
+	} {
+		rows, err := c.db.QueryContext(ctx, "SELECT "+pendingColumns+" FROM pending WHERE "+query.where+" LIMIT ?", query.limit)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, errors.New("pending action read failed")
+		}
+		for rows.Next() {
+			p, err := scanPending(rows)
+			if err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out = append(out, p)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, errors.New("pending action read failed")
+		}
+	}
+	return out, nil
+}
+
+func scanPending(row interface{ Scan(...any) error }) (Pending, error) {
 	var p Pending
 	var args, created, updated string
 	err := row.Scan(&p.ID, &p.Account, &p.Op, &args, &p.State, &p.Result, &created, &updated)
