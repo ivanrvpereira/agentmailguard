@@ -77,6 +77,10 @@ func (k *keychainBackend) readRecord(ctx context.Context, migrate bool) (Record,
 func (k *keychainBackend) legacyRecord(ctx context.Context) (Record, error) {
 	r := emptyRecord()
 	for _, a := range k.accounts {
+		// Fake accounts have no credentials.
+		if a.Provider == "fake" {
+			continue
+		}
 		namespace, err := service(a.Provider)
 		if err != nil {
 			return Record{}, ErrInvalidRecord

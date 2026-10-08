@@ -99,6 +99,31 @@ The server resolves nonempty names, not the client.
 Keep `config.toml` private because the Gmail application secret belongs on the server host.
 The optional `[policy]` tables in `config.toml` set the [write policy](#write-policy).
 
+## Fake provider
+
+A fake account has a local mailbox in a SQLite file. Use it to run real workflows through the real CLI and server without a provider, a login, or Keychain access.
+
+```toml
+[accounts.demo]
+provider = "fake"
+```
+
+A fake account needs no `client_id`, `tenant_id`, or `client_secret`, and `auth login` refuses it with `fake accounts need no login`. The `[policy]` tables and `rules.toml` work as for other accounts. At start, `serve` shows `account "demo" (fake): no login needed`, and `auth status` shows the account address with no scopes.
+
+All fake accounts share `fake.db` in the server home, for example `~/.agentmailguard/fake.db`. Each row has an `account` column with the account name. The server creates the file with mode 0600 and applies the schema in [`internal/providers/fake/schema.sql`](internal/providers/fake/schema.sql) when it first opens the file. The schema file explains each table and column. Each account gets the folders `inbox`, `drafts`, `sent`, `archive`, and `trash`. The account address is `<account>@fake.test` unless the `identities` table has a row for the account.
+
+The server reads and writes `fake.db` on every call, so you can seed and inspect it with `sqlite3` while the server runs:
+
+```sh
+sqlite3 ~/.agentmailguard/fake.db < internal/providers/fake/schema.sql
+sqlite3 ~/.agentmailguard/fake.db "INSERT INTO messages (account, id, sender_name, sender_address, to_addresses, subject, body, received_at, spf, dkim, dmarc) VALUES ('demo', 'm1', 'Ana', 'ana@example.test', '[\"demo@fake.test\"]', 'Lunch on Friday?', 'Are you free at noon?', '2026-04-01T09:30:00Z', 'pass', 'pass', 'pass');"
+sqlite3 ~/.agentmailguard/fake.db "SELECT id, folder, subject, origin FROM messages WHERE account = 'demo';"
+```
+
+Trash and archive are moves to the `trash` and `archive` folders; nothing is ever deleted. Drafts go to `drafts`. `mail send`, `mail reply`, and `mail forward` store the message in `sent`, with `origin` (`new`, `reply`, or `forward`) and `source_id`. Nothing leaves the machine. The calendar of a fake account is empty and read-only.
+
+Fake mail is untrusted like real mail. Jev screens it, so the server still needs the Jev key.
+
 ## Credential storage
 
 Both backends store all provider OAuth credentials, the Jev (OpenRouter) key, and the [approval password](#approval-password) hash in one versioned record.

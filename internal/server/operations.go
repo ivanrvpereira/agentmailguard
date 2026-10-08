@@ -17,6 +17,7 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 	"github.com/ivanrvpereira/agentmailguard/internal/guard"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/fake"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 	"github.com/ivanrvpereira/agentmailguard/internal/rules"
@@ -93,7 +94,9 @@ func (s *Server) instance(a config.Account) (*account, error) {
 		return nil, restart
 	}
 	var p provider
-	if a.Provider == "gmail" {
+	if a.Provider == "fake" {
+		p = fake.New(a.Name, s.home, s.options.Now)
+	} else if a.Provider == "gmail" {
 		o := s.options.Gmail
 		if o.Now == nil {
 			o.Now = s.options.Now
@@ -528,6 +531,14 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 }
 func (s *Server) status(ctx context.Context, a *account) (any, error) {
 	out := statusDTO{Account: a.config.Name}
+	if a.config.Provider == "fake" {
+		out.LoggedIn = true
+		user, scopes, e := a.provider.Status(ctx)
+		if e == nil {
+			out.OK, out.Username, out.Scopes = true, &user, &scopes
+		}
+		return out, nil
+	}
 	saved, e := s.options.Credentials.LoadOAuth(ctx, a.config.Provider, a.config.Name)
 	if errors.Is(e, credentials.ErrNotFound) {
 		return out, nil

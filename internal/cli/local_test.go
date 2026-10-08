@@ -172,6 +172,24 @@ func TestGmailLoginWithoutBrowserAcceptsPastedRedirect(t *testing.T) {
 		t.Fatalf("closed input: exit=%d stderr=%q", code, closed.String())
 	}
 }
+func TestFakeAccountLoginIsRefusedWithoutCredentialAccess(t *testing.T) {
+	home := t.TempDir()
+	if e := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[accounts.demo]\nprovider='fake'\n"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	// loginStore panics on any credential access other than an M365 work save. Provider seams fail, so a
+	// broken refusal cannot reach a browser or the network.
+	refuse := func(context.Context, string) error { t.Error("login opened a browser"); return errors.New("refused") }
+	closed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("provider request"); w.WriteHeader(400) }))
+	defer closed.Close()
+	opts := cli.Options{LookupEnv: func(string) string { return "" }, Server: server.Options{Credentials: &loginStore{}, M365: m365.Options{AuthorityURL: closed.URL, BaseURL: closed.URL, OpenBrowser: refuse}, Gmail: gmail.Options{TokenURL: closed.URL, AuthURL: closed.URL, ProfileURL: closed.URL, OpenBrowser: refuse}}}
+	for _, flags := range [][]string{nil, {"--no-browser"}, {"--device-code"}} {
+		var out, errout bytes.Buffer
+		if code := cli.Run(context.Background(), append([]string{"--home", home, "auth", "login"}, flags...), &out, &errout, opts); code != 1 || out.Len() != 0 || !strings.HasSuffix(errout.String(), "error: fake accounts need no login\n") {
+			t.Errorf("flags=%v exit=%d stderr=%q", flags, code, errout.String())
+		}
+	}
+}
 func TestDeviceCodeAliasesUseLastOption(t *testing.T) {
 	for _, tc := range []struct {
 		flags  []string

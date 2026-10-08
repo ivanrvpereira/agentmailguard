@@ -167,6 +167,9 @@ func login(ctx context.Context, home, account string, device, noBrowser bool, st
 	if e != nil {
 		return failure(stderr, configUnavailable(e).Error())
 	}
+	if a.Provider == "fake" {
+		return failure(stderr, "fake accounts need no login")
+	}
 	if noBrowser && a.Provider != "gmail" {
 		return failure(stderr, "--no-browser is for Gmail; use --device-code for Microsoft 365")
 	}

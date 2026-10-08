@@ -157,3 +157,21 @@ func TestMigrationFailsClosedWithoutWritingPartialRecord(t *testing.T) {
 		})
 	}
 }
+
+// Fake accounts have no credentials, so migration skips them and still copies the other accounts.
+func TestMigrationSkipsFakeAccounts(t *testing.T) {
+	p := &fakePlatform{values: map[[2]string][]byte{
+		{"agentmailguard-go-m365", "work"}: []byte(`{"refresh_token":"legacy-work"}`),
+	}}
+	store := credentials.New(p, t.TempDir(), []config.Account{{Provider: "fake", Name: "demo"}, {Provider: "m365", Name: "work"}})
+	ctx := context.Background()
+	if err := store.SaveOpenRouterKey(ctx, "new-key"); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := credentials.New(p, t.TempDir(), nil).LoadOAuth(ctx, "m365", "work"); err != nil || v.RefreshToken != "legacy-work" {
+		t.Fatalf("migration lost the m365 account: %v", err)
+	}
+	if err := store.SaveOAuth(ctx, "fake", "demo", credentials.OAuth{RefreshToken: "x"}); err == nil {
+		t.Fatal("fake credential saved")
+	}
+}

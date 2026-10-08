@@ -170,8 +170,11 @@ func loadAccount(path, selected string, value any, policy Policy) (Account, erro
 	if err != nil {
 		return Account{}, err
 	}
+	if provider == "fake" {
+		return Account{Name: selected, Provider: provider, Policy: policy}, nil
+	}
 	if provider != "m365" && provider != "gmail" {
-		return Account{}, fmt.Errorf("account %q: unsupported provider; supported: m365, gmail", selected)
+		return Account{}, fmt.Errorf("account %q: unsupported provider; supported: m365, gmail, fake", selected)
 	}
 	clientID, err := get("client_id")
 	if err != nil {

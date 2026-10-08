@@ -20,6 +20,9 @@ var credentialCheckFailed = errors.New("credential check failed")
 // An account without a login does not block the start. Its commands fail with the provider's auth error.
 const notLoggedIn = "not logged in; commands for this account fail until auth login and a server restart"
 
+// noLogin is the check of a fake account, which reads no credentials.
+const noLogin = "no login needed"
+
 const approvalNotSet = "not set; the approval console stays off until auth set-approval-password and a server restart"
 
 // memoryStore passes through to the backend until Preload succeeds.
@@ -126,11 +129,15 @@ func (s *Server) Preload(ctx context.Context, jevKey func(context.Context) (stri
 	failed := false
 	add := func(item, status string) {
 		checks = append(checks, CredentialCheck{item, status})
-		failed = failed || (status != "ok" && status != "saved" && status != "ok (OPENROUTER_API_KEY)" && status != notLoggedIn && status != approvalNotSet)
+		failed = failed || (status != "ok" && status != "saved" && status != "ok (OPENROUTER_API_KEY)" && status != notLoggedIn && status != noLogin && status != approvalNotSet)
 	}
 	oauth := map[[2]string]credentials.OAuth{}
 	for _, a := range accounts {
 		item := fmt.Sprintf("account %q (%s)", a.Name, a.Provider)
+		if a.Provider == "fake" {
+			add(item, noLogin)
+			continue
+		}
 		var v credentials.OAuth
 		var err error
 		if whole {
