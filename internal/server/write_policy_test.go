@@ -116,7 +116,24 @@ func TestPolicyDenyIsAPublicRefusalBeforeProviderAccess(t *testing.T) {
 	}
 }
 
-var approvalID = regexp.MustCompile(`^\{"status":"pending","approval_id":"([0-9a-f]{32})"\}$`)
+var approvalID = regexp.MustCompile(`^\{"status":"pending","approval_id":"([0-9a-f]{32})","url":"http://localhost:8788/a/[0-9a-f]{32}"\}$`)
+
+// The url names the approval console page of the item: the default listen address, or [approvals].listen.
+func TestPendingResultLinksToTheApprovalConsole(t *testing.T) {
+	for _, tc := range []struct{ name, table, base string }{
+		{"default", "", "http://localhost:8788/a/"},
+		{"configured", "[approvals]\nlisten='100.64.0.1:9000'\n", "http://100.64.0.1:9000/a/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, _, _ := policyServer(t, "[policy]\nmail_draft='approve'\n"+tc.table)
+			status, body := accountRPC(t, s, "draft.new", "work", `{"to":["a@example.test"],"subject":"s","body":"b"}`)
+			var got map[string]string
+			if status != 200 || json.Unmarshal([]byte(body), &got) != nil || len(got) != 3 || got["status"] != "pending" || len(got["approval_id"]) != 32 || got["url"] != tc.base+got["approval_id"] {
+				t.Fatalf("%d %s", status, body)
+			}
+		})
+	}
+}
 
 // The stored args equal the request as JSON, so the strict API parser accepts them and gives the same action.
 func TestPolicyApproveReturnsPendingAndStoresTheRequest(t *testing.T) {
@@ -163,7 +180,7 @@ func TestTrashPolicyResultsKeepOneEntryPerID(t *testing.T) {
 	}
 	for i, id := range []string{"m1", "m2"} {
 		approval, _ := got[i]["approval_id"].(string)
-		if got[i]["id"] != id || got[i]["ok"] != false || got[i]["error"] != "pending" || approval == "" {
+		if got[i]["id"] != id || got[i]["ok"] != false || got[i]["error"] != "pending" || approval == "" || len(got[i]) != 4 {
 			t.Fatalf("result %d=%v", i, got[i])
 		}
 		if item := storedArgs(t, home, approval); item.Account != "other" || item.Op != "mail.trash" || string(item.Args) != `{"ids":["`+id+`"]}` {

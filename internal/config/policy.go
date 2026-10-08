@@ -73,9 +73,9 @@ func (e PolicyError) Error() string { return "invalid policy: " + e.Path }
 
 const bareKey = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
 
-// policyError renders a TOML key path. Other key names are quoted, so file text cannot
-// add lines or terminal escapes to the error.
-func policyError(keys ...string) error {
+// keyPath renders a TOML key path. Other key names are quoted, so file text cannot
+// add lines or terminal escapes to an error.
+func keyPath(keys ...string) string {
 	parts := make([]string, len(keys))
 	for i, key := range keys {
 		parts[i] = key
@@ -83,8 +83,10 @@ func policyError(keys ...string) error {
 			parts[i] = strconv.Quote(key)
 		}
 	}
-	return PolicyError{strings.Join(parts, ".")}
+	return strings.Join(parts, ".")
 }
+
+func policyError(keys ...string) error { return PolicyError{keyPath(keys...)} }
 
 // resolvePolicies resolves every account's policy: defaults, then [policy], then the account table.
 // It validates every table, so an invalid policy fails the load of any account.

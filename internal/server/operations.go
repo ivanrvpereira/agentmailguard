@@ -213,10 +213,12 @@ func mutations(v []model.MutationResult, e error) (any, error) {
 	return out, e
 }
 
-// pendingDTO is the result of a single action that the policy stored for approval.
+// pendingDTO is the result of a single action that the policy stored for approval. URL is the
+// approval console page of the item.
 type pendingDTO struct {
 	Status     string `json:"status"`
 	ApprovalID string `json:"approval_id"`
+	URL        string `json:"url"`
 }
 
 type folderDTO struct {
@@ -482,7 +484,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	v, e := call(instance)
 	var pending guard.PendingError
 	if errors.As(e, &pending) {
-		return pendingDTO{"pending", pending.ApprovalID}, nil
+		return pendingDTO{"pending", pending.ApprovalID, s.approvalBase + pending.ApprovalID}, nil
 	}
 	return v, e
 }

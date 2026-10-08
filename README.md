@@ -321,7 +321,7 @@ Required text flags distinguish an omitted value from an explicit empty value, i
 
 | Group | Commands |
 | --- | --- |
-| State and auth | `stats --days 30`, `cache clear`, `rules list`, `auth status`, local `auth login [--device-code] [--no-browser]`, `auth set-jev-key`, `auth migrate --to file\|keychain`, `auth change-password` |
+| State and auth | `stats --days 30`, `cache clear`, `rules list`, `approvals status ID`, `auth status`, local `auth login [--device-code] [--no-browser]`, `auth set-jev-key`, `auth migrate --to file\|keychain`, `auth change-password` |
 | Mail reads | `mail list`, `mail get ID [--pretty]`, `mail search`, `mail link ID L1 L2` or `mail link ID --all`, `mail folders`, `mail categories` |
 | Mail changes | `mail archive IDS...`, `mail trash IDS...`, `mail move FOLDER_ID IDS...`, `mail read IDS...`, `mail unread IDS...`, `mail flag IDS... --state flagged|complete|none`, `mail categorize IDS... --add NAME --remove NAME` |
 | Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID` |
@@ -351,7 +351,8 @@ Each policy key has one of three decisions:
 - `deny`: the server refuses the action.
 
 **Caution:** Do not set `approve` if you need the action to run.
-This version has no console, CLI command, or API operation to approve or deny a pending item, so a pending item stays pending.
+This version has no CLI command or API operation to approve or deny a pending item, so a pending item stays pending.
+`approvals status ID` shows the state of a pending item. See [Results](#results).
 
 Example:
 
@@ -412,7 +413,7 @@ For `green`, `yellow`, and `red` messages, only the base decision applies.
 
 - `allow`: the command gives its normal result.
 - `deny`: a draft or meeting command fails with `refused by policy: KEY`, for example `refused by policy: calendar_invite`, with exit code `1`. The action does not run.
-- `approve`: a draft or meeting command returns `{"status":"pending","approval_id":"..."}` with exit code `0`. The action does not run.
+- `approve`: a draft or meeting command returns `{"status":"pending","approval_id":"...","url":"http://localhost:8788/a/..."}` with exit code `0`. The action does not run. The `url` is the page of this item in the approval console. It uses `[approvals].listen` (see [Approvals configuration](#approvals-configuration)). This version does not serve the console yet, so the `url` does not open.
 
 The server validates a meeting action before it stores it.
 Thus an invalid time, a wrong role, or a recurring or cancelled event fails with the usual error, not `pending`.
@@ -420,7 +421,12 @@ Thus an invalid time, a wrong role, or a recurring or cancelled event fails with
 `mail trash` decides each message ID on its own.
 The server trashes the allowed IDs.
 A denied ID gets `"ok": false` and `"error": "refused by policy: mail_trash"`.
-An ID that needs approval gets `"ok": false`, `"error": "pending"`, and an `approval_id`. Each such ID is its own pending item.
+An ID that needs approval gets `"ok": false`, `"error": "pending"`, and an `approval_id`, but no `url`. Each such ID is its own pending item.
+
+`approvals status ID` returns `{"state":"..."}` for a pending item. The state is `pending`, `running`, `done`, `denied`, or `failed`.
+A `done` item also has `result`: the normal result of the command.
+The output never shows the stored request arguments.
+An unknown ID fails with `approval not found` and exit code `1`.
 
 Rules act only on green messages.
 A rule with `folder = "trash"` follows `mail_trash` for each message.
@@ -433,6 +439,22 @@ Use `mail trash` instead.
 A rule move to such a folder also fails, and the report shows `GuardError`. Use `folder = "trash"` in the rule.
 On Microsoft 365, `mail folders`, `mail move`, `mail organize`, and `rules list` now also look up Deleted Items. If this lookup fails, the command fails.
 Gmail moves do not change.
+
+### Approvals configuration
+
+The optional `[approvals]` table in `config.toml` sets the address of the approval console. This version does not serve the console yet; it uses `listen` only for the pending `url`.
+
+```toml
+[approvals]
+listen = "localhost:8788"
+hosts = ["my-mac.example.ts.net"]
+```
+
+- `listen`: `HOST:PORT`. The default is `localhost:8788`. The pending `url` uses this address.
+- `hosts`: extra host names for the console, for example a Tailscale name. This version only validates them. Each entry is a host name or IP address with an optional `:PORT`. Put an IPv6 address in brackets. The default is none.
+
+The server reads `[approvals]` at start. Restart the server after a change.
+An invalid table stops `serve`, `auth login`, `auth set-jev-key`, `auth migrate`, and `auth change-password` with `invalid approvals: KEY_PATH`, for example `invalid approvals: approvals.listen`. The error never shows the value.
 
 ### Storage and audit
 
@@ -609,12 +631,13 @@ The only data endpoint is `POST /v1/call` with `Content-Type: application/json`:
 {"operation":"mail.list","account":"work","params":{"folder":"inbox","count":25,"skip":0}}
 ```
 
-Operation names match CLI groups, such as `mail.get`, `draft.update`, `calendar.invite`, and `cache.clear`.
+Operation names match CLI groups, such as `mail.get`, `draft.update`, `calendar.invite`, `cache.clear`, and `approvals.status`.
 Meeting times on the HTTP interface are RFC 3339 timestamps. `calendar.update` also accepts a Go `duration` string.
 The `account` field is optional, and `params` must be an object.
 Unknown operations or fields, duplicate keys, malformed JSON, trailing JSON, null fields, invalid types, and oversized requests are refused.
 There is no HTTP login, token, key, raw-message, classification, rules-mutation, or approval endpoint.
-A pending action returns HTTP 200 with `{"status":"pending","approval_id":"..."}`.
+A pending action returns HTTP 200 with `{"status":"pending","approval_id":"...","url":"..."}`.
+`approvals.status` takes `{"id":"APPROVAL_ID"}` (32 lowercase hex characters) and ignores `account`. An unknown ID returns HTTP 404 with `{"error":"approval not found"}`.
 A policy refusal returns HTTP 500 with `{"error":"refused by policy: KEY"}`.
 
 Requests are limited to 1 MiB and 16 JSON nesting levels.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/cache"
 	"github.com/ivanrvpereira/agentmailguard/internal/guard"
@@ -12,7 +13,7 @@ import (
 
 // Approval errors. Their text is fixed and safe to show.
 var (
-	ErrApprovalNotFound = errors.New("not found")
+	ErrApprovalNotFound = errors.New("approval not found")
 	ErrAlreadyHandled   = errors.New("already handled")
 	ErrUnavailable      = errors.New("server unavailable")
 )
@@ -99,6 +100,34 @@ func (s *Server) Deny(ctx context.Context, id string) error {
 	}
 	// The item is denied; its record must not depend on the caller staying.
 	return s.audit.Approval(context.WithoutCancel(ctx), item.Account, item.Op, "denied", item.ID)
+}
+
+var approvalIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// approvalStatusDTO is the public state of a stored action. It never carries the stored arguments, the
+// account, or a failure code; Result is the stored result of a done action.
+type approvalStatusDTO struct {
+	State  cache.PendingState `json:"state"`
+	Result json.RawMessage    `json:"result,omitempty"`
+}
+
+// approvalStatus reports the state of one stored action. It is not account-scoped.
+func (s *Server) approvalStatus(ctx context.Context, params json.RawMessage) (any, error) {
+	var p struct {
+		ID string `json:"id"`
+	}
+	if strict(params, &p, "id") != nil || !approvalIDPattern.MatchString(p.ID) {
+		return nil, invalid
+	}
+	item, err := s.cache.GetPending(ctx, p.ID)
+	if err != nil {
+		return nil, pendingError(err)
+	}
+	out := approvalStatusDTO{State: item.State}
+	if item.State == cache.StateDone && item.Result != nil {
+		out.Result = json.RawMessage(*item.Result)
+	}
+	return out, nil
 }
 
 // pendingError maps the pending store errors to the approval errors.

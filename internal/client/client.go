@@ -103,7 +103,8 @@ func (c *Client) Call(ctx context.Context, operation, account string, params any
 				"calendar writes are not supported for this account", "calendar availability is not supported for this account", "missing_scopes",
 				"calendar write refused: recurring events are not supported", "calendar write refused: event is cancelled",
 				"calendar write refused: only the organizer can update or cancel", "calendar response refused: organizer cannot respond",
-				"refused by policy: mail_draft", "refused by policy: calendar_invite", "refused by policy: calendar_update", "refused by policy: calendar_cancel", "refused by policy: calendar_respond":
+				"refused by policy: mail_draft", "refused by policy: calendar_invite", "refused by policy: calendar_update", "refused by policy: calendar_cancel", "refused by policy: calendar_respond",
+				"approval not found":
 				message = v.Error
 			}
 		}

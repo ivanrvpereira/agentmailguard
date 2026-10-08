@@ -14,9 +14,9 @@ import (
 // Password acquisition fails before a store exists, but still needs a startup store check.
 type credentialPasswordError struct{ error }
 
-// configUnavailable names the key of an invalid policy; other configuration errors stay generic.
+// configUnavailable names the key of an invalid policy or approvals table; other configuration errors stay generic.
 func configUnavailable(err error) error {
-	if errors.As(err, new(config.PolicyError)) {
+	if errors.As(err, new(config.PolicyError)) || errors.As(err, new(config.ApprovalsError)) {
 		return err
 	}
 	return errors.New("configuration unavailable")
@@ -34,6 +34,9 @@ func localCredentials(ctx context.Context, home string, injected credentials.Sto
 	}
 	accounts, err := config.LoadAccounts(ctx, filepath.Join(home, "config.toml"))
 	if err != nil {
+		return nil, configUnavailable(err)
+	}
+	if _, err := config.LoadApprovals(ctx, filepath.Join(home, "config.toml")); err != nil {
 		return nil, configUnavailable(err)
 	}
 	backend, err := config.CredentialsBackend(ctx, filepath.Join(home, "config.toml"))

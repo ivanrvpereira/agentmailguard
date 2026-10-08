@@ -49,8 +49,8 @@ func serve(ctx context.Context, home, listen string, stdin io.Reader, stderr io.
 	}
 	s, e := server.New(context.WithoutCancel(ctx), home, opts)
 	if e != nil {
-		if e.Error() == "configuration unavailable" {
-			return failure(stderr, "configuration unavailable")
+		if e.Error() == "configuration unavailable" || errors.As(e, new(config.ApprovalsError)) {
+			return failure(stderr, e.Error())
 		}
 		return failure(stderr, "server state unavailable")
 	}

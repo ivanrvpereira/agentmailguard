@@ -32,6 +32,7 @@ func TestGroupWithoutSubcommandPrintsItsOwnHelp(t *testing.T) {
 		{"auth", "set-jev-key", "calendar"},
 		{"cache", "clear", "calendar"},
 		{"rules", "list", "calendar"},
+		{"approvals", "status", "calendar"},
 		{"calendar", "get", "organize"},
 		{"draft", "forward", "organize"},
 	} {

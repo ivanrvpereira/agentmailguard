@@ -384,3 +384,64 @@ func TestApprovalDoesNotRunWithoutItsAuditRecord(t *testing.T) {
 		t.Fatalf("item %+v result=%v", item, item.Result)
 	}
 }
+
+// approvalStatus asks for the state of an item. The call names an account that does not exist: the
+// operation is not account-scoped and ignores it.
+func approvalStatus(t *testing.T, s *server.Server, id string) (int, string) {
+	t.Helper()
+	return accountRPC(t, s, "approvals.status", "nobody", `{"id":"`+id+`"}`)
+}
+
+// The status shows the state of an item and, once done, its stored result. It never shows the stored
+// arguments, the account, or a failure code.
+func TestApprovalStatusFollowsTheItemWithoutItsArguments(t *testing.T) {
+	s, _, graph := approvalServer(t, "[policy]\nmail_draft='approve'\nmail_trash='approve'\n[policy.sealed]\nmail_trash='approve'\n")
+	draft := `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body"}`
+	approved, denied := pend(t, s, "draft.new", draft)[0], pend(t, s, "draft.new", draft)[0]
+	failed := pend(t, s, "mail.trash", `{"ids":["m2"]}`)[0]
+	for _, id := range []string{approved, denied, failed} {
+		if status, body := approvalStatus(t, s, id); status != 200 || body != `{"state":"pending"}` {
+			t.Fatalf("pending %s: %d %s", id, status, body)
+		}
+	}
+	if err := s.Approve(context.Background(), approved); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Deny(context.Background(), denied); err != nil {
+		t.Fatal(err)
+	}
+	graph.failStatus.Store(403)
+	if err := s.Approve(context.Background(), failed); err == nil {
+		t.Fatal("approve of a failing write succeeded")
+	}
+	for _, tc := range []struct{ id, want string }{
+		{approved, `{"state":"done","result":{"id":"w1"}}`},
+		{denied, `{"state":"denied"}`},
+		{failed, `{"state":"failed"}`},
+	} {
+		if status, body := approvalStatus(t, s, tc.id); status != 200 || body != tc.want {
+			t.Errorf("%s: %d %s; want %s", tc.id, status, body, tc.want)
+		}
+	}
+}
+
+func TestApprovalStatusRefusesUnknownAndMalformedIDs(t *testing.T) {
+	s, _, _ := approvalServer(t, trashApprove)
+	if status, body := approvalStatus(t, s, "0123456789abcdef0123456789abcdef"); status != 404 || body != `{"error":"approval not found"}` {
+		t.Fatalf("unknown: %d %s", status, body)
+	}
+	id := pend(t, s, "mail.trash", `{"ids":["m1"]}`)[0]
+	for _, params := range []string{
+		`{"id":"` + strings.ToUpper(id) + `"}`,
+		`{"id":"` + id[1:] + `"}`,
+		`{"id":"` + id + `0"}`,
+		`{"id":"` + id[2:] + `zz"}`,
+		`{"id":1}`,
+		`{}`,
+		`{"id":"` + id + `","account":"work"}`,
+	} {
+		if status, body := meetingRPC(t, s, "approvals.status", params); status != 400 || body != `{"error":"invalid request"}` {
+			t.Errorf("%s: %d %s", params, status, body)
+		}
+	}
+}

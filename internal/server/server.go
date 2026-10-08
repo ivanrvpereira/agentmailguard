@@ -56,6 +56,8 @@ type Server struct {
 	accounts  map[string]*account
 	creds     *memoryStore
 	preloaded bool
+	// approvalBase is the approval console URL from [approvals].listen, read once at start.
+	approvalBase string
 }
 
 func (Server) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "Server{redacted}") }
@@ -64,6 +66,15 @@ func New(ctx context.Context, home string, opts Options) (*Server, error) {
 	home, err := config.Home(home)
 	if err != nil {
 		return nil, errors.New("configuration unavailable")
+	}
+	// An invalid [approvals] table stops the start. Other configuration errors surface at preload or on
+	// the first account call, as before, and leave the default console address.
+	approvals, err := config.LoadApprovals(ctx, filepath.Join(home, "config.toml"))
+	if errors.As(err, new(config.ApprovalsError)) {
+		return nil, err
+	}
+	if err != nil {
+		approvals.Listen = config.DefaultApprovalsListen
 	}
 	if opts.Credentials == nil {
 		accounts, err := config.LoadAccounts(ctx, filepath.Join(home, "config.toml"))
@@ -103,7 +114,7 @@ func New(ctx context.Context, home string, opts Options) (*Server, error) {
 	opts.M365.HTTPClient = safeHTTP(opts.M365.HTTPClient)
 	opts.Gmail.HTTPClient = safeHTTP(opts.Gmail.HTTPClient)
 	ctx, cancel := context.WithCancel(ctx)
-	return &Server{home: home, options: opts, cache: c, audit: audit.New(filepath.Join(home, "audit.jsonl")), ctx: ctx, cancel: cancel, slots: make(chan struct{}, 64), accounts: make(map[string]*account), creds: creds, mu: new(sync.Mutex), work: new(sync.WaitGroup), closeOnce: new(sync.Once)}, nil
+	return &Server{home: home, options: opts, cache: c, audit: audit.New(filepath.Join(home, "audit.jsonl")), ctx: ctx, cancel: cancel, slots: make(chan struct{}, 64), accounts: make(map[string]*account), creds: creds, mu: new(sync.Mutex), work: new(sync.WaitGroup), closeOnce: new(sync.Once), approvalBase: "http://" + approvals.Listen + "/a/"}, nil
 }
 
 // Close stops admission, cancels active calls, and waits at most ShutdownTimeout.
@@ -214,6 +225,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, invalid) {
 			status = 400
 			message = "invalid request"
+		} else if errors.Is(err, ErrApprovalNotFound) {
+			status = 404
+			message = err.Error()
 		} else if text, ok := publicError(err); ok {
 			message = text
 		}
@@ -343,6 +357,8 @@ func (s *Server) call(ctx context.Context, r request) (any, error) {
 		return struct {
 			Deleted int64 `json:"deleted"`
 		}{n}, e
+	case "approvals.status":
+		return s.approvalStatus(ctx, r.Params)
 	default:
 		return s.accountCall(ctx, r)
 	}

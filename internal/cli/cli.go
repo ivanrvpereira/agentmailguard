@@ -146,7 +146,7 @@ func newRoot(r *runner, raw []string) *cobra.Command {
 	f.StringVar(&r.base, "server", "", "server base URL")
 	f.DurationVar(&r.timeout, "timeout", client.DefaultTimeout, "request timeout")
 	f.StringVar(&r.home, "home", "", "configuration directory; serve, auth login, set-jev-key, migrate, and change-password only")
-	root.AddCommand(serveCmd(r), authCmd(r), statsCmd(r), cacheCmd(r), rulesCmd(r), mailCmd(r), calendarCmd(r), draftCmd(r))
+	root.AddCommand(serveCmd(r), authCmd(r), statsCmd(r), cacheCmd(r), rulesCmd(r), approvalsCmd(r), mailCmd(r), calendarCmd(r), draftCmd(r))
 	return root
 }
 
@@ -424,6 +424,14 @@ func cacheCmd(r *runner) *cobra.Command {
 func rulesCmd(r *runner) *cobra.Command {
 	c := group(r, "rules", "Organize rules stored on the server")
 	c.AddCommand(r.leaf("list", "List the configured organize rules", 0, 0, r.none("rules.list")))
+	return c
+}
+
+func approvalsCmd(r *runner) *cobra.Command {
+	c := group(r, "approvals", "Write actions that wait for approval")
+	c.AddCommand(r.leaf("status ID", "Show the state of a pending write action", 1, 1, func(c *cobra.Command, args []string) error {
+		return r.call(c, "approvals.status", map[string]any{"id": args[0]}, false)
+	}))
 	return c
 }
 
