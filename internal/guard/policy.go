@@ -11,10 +11,12 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
-// Policy keys. A key is the API operation name with "." changed to "_"; mail_draft covers all draft operations.
+// Policy keys. A key is the API operation name with "." changed to "_"; mail_draft covers all draft operations,
+// and mail_send covers mail.send, mail.reply, and mail.forward.
 const (
 	keyTrash = "mail_trash"
 	keyDraft = "mail_draft"
+	keySend  = "mail_send"
 )
 
 type approvalKey struct{}
@@ -65,6 +67,8 @@ func (g *Guard) baseDecision(key string) config.Decision {
 		return normal(b.MailTrash)
 	case keyDraft:
 		return normal(b.MailDraft)
+	case keySend:
+		return normal(b.MailSend)
 	case string(audit.CalendarInvite):
 		return normal(b.CalendarInvite)
 	case string(audit.CalendarUpdate):
@@ -83,6 +87,8 @@ func (g *Guard) sealedDecision(key string) config.Decision {
 		return normal(g.policy.Sealed.MailTrash)
 	case keyDraft:
 		return normal(g.policy.Sealed.MailDraft)
+	case keySend:
+		return normal(g.policy.Sealed.MailSend)
 	}
 	return config.Deny
 }
@@ -97,7 +103,7 @@ type decision struct {
 
 // actionEffects describes, by policy key, what an action does. Jev gets it beside the API operation name.
 var actionEffects = map[string]string{
-	"mail_send":                   "sends an email to the listed recipients",
+	keySend:                       "sends an email to the listed recipients",
 	keyDraft:                      "creates a draft that the user may send later",
 	string(audit.CalendarInvite):  "sends meeting invitations to the attendees",
 	string(audit.CalendarUpdate):  "changes a meeting and notifies the attendees",
@@ -234,6 +240,7 @@ func (e PendingError) Error() string { return audit.Pending }
 // apiOperations maps audit operations to the API operation names that pending items and policy records use.
 var apiOperations = map[audit.Operation]string{
 	audit.Trash: "mail.trash", audit.DraftNew: "draft.new", audit.DraftReply: "draft.reply", audit.DraftForward: "draft.forward", audit.DraftUpdate: "draft.update",
+	audit.MailSend: "mail.send", audit.MailReply: "mail.reply", audit.MailForward: "mail.forward",
 	audit.CalendarInvite: "calendar.invite", audit.CalendarUpdate: "calendar.update", audit.CalendarCancel: "calendar.cancel", audit.CalendarRespond: "calendar.respond",
 }
 

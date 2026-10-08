@@ -142,7 +142,7 @@ type InboxScan struct {
 	Failures []ScanFailure
 }
 
-// Mailbox deliberately has neither a send operation nor a permanent-delete operation.
+// Mailbox deliberately has no permanent-delete operation. Its send operations reach real recipients at once.
 // List/Search may return bodies already available even when body is false.
 // ScanInbox reads all pages before returning, metadata only, excluding drafts,
 // with since <= received_at < until (nil until means no upper bound).
@@ -165,6 +165,11 @@ type Mailbox interface {
 	DraftForward(ctx context.Context, id MessageID, to []string) (MessageID, error)
 	// DraftUpdate is restricted to new drafts, and returns the possibly changed message ID.
 	DraftUpdate(ctx context.Context, id MessageID, body string) (MessageID, error)
+	// SendNew, SendReply, and SendForward send mail at once, with the same content as the matching draft
+	// operation. A send request that may have reached the provider is never sent again.
+	SendNew(ctx context.Context, draft NewDraft) error
+	SendReply(ctx context.Context, id MessageID, comment string) error
+	SendForward(ctx context.Context, id MessageID, to []string) error
 }
 type Calendar interface {
 	List(ctx context.Context, start, end time.Time) ([]Event, error)

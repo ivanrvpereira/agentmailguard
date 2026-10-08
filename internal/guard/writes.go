@@ -268,31 +268,39 @@ func (g *Guard) Categorize(ctx context.Context, ids, add, remove []string) ([]mo
 	return g.manual(ctx, audit.Categorize, ids, audit.Options{Add: append([]string{}, add...), Remove: append([]string{}, remove...)})
 }
 
-// draft applies the mail_draft decision and the Jev action check, then runs call. Reply and forward reference
-// an existing message, so the sealed decision applies to their source; update acts on a draft and has no
-// sealed check. Jev sees the agent fields, and for a forward also the text of the forwarded message.
-func (g *Guard) draft(ctx context.Context, op audit.Operation, source string, args any, call func() (string, error)) (string, error) {
+// compose applies the mail_draft decision to a draft operation, or the mail_send decision to a send, and the
+// Jev action check, then runs call. source is the message that the action references; a new message has
+// none. Reply and forward reference a received message, so the sealed decision applies to their source;
+// update acts on a draft and has no sealed check. Jev sees the agent fields, and for a forward also the text
+// of the forwarded message. call gives the draft ID; a send gives none, so its operation record has only the
+// source ID, or no ID for a new message.
+func (g *Guard) compose(ctx context.Context, op audit.Operation, source string, args any, call func() (string, error)) (string, error) {
 	if err := g.acquire(ctx); err != nil {
 		return "", err
 	}
 	defer g.release()
-	d := decision{value: g.base(ctx, keyDraft)}
-	if op == audit.DraftReply || op == audit.DraftForward {
-		decisions, err := g.decide(ctx, keyDraft, []string{source})
+	send := op == audit.MailSend || op == audit.MailReply || op == audit.MailForward
+	key := keyDraft
+	if send {
+		key = keySend
+	}
+	var ref *string
+	if op != audit.DraftNew && op != audit.MailSend {
+		ref = pointer(source)
+	}
+	d := decision{value: g.base(ctx, key)}
+	if ref != nil && op != audit.DraftUpdate {
+		decisions, err := g.decide(ctx, key, []string{source})
 		if err != nil {
 			return "", err
 		}
 		d = decisions[source]
 	}
-	d, err := g.checkAction(ctx, op, keyDraft, d, args)
+	d, err := g.checkAction(ctx, op, key, d, args)
 	if err != nil {
 		return "", err
 	}
-	var ref *string
-	if op != audit.DraftNew {
-		ref = pointer(source)
-	}
-	if err := g.single(ctx, op, keyDraft, d, ref, args); err != nil {
+	if err := g.single(ctx, op, key, d, ref, args); err != nil {
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {
@@ -302,32 +310,52 @@ func (g *Guard) draft(ctx context.Context, op audit.Operation, source string, ar
 	if err != nil {
 		return "", safeErr(ctx, err)
 	}
-	if id == "" {
+	if id == "" && !send {
 		return "", GuardError("ValueError")
 	}
+	var results []model.MutationResult
 	opts := audit.Options{}
-	if op == audit.DraftNew {
-		source = id
-	} else {
-		opts.DraftID = &id
+	switch {
+	case ref != nil:
+		results = []model.MutationResult{{ID: source, OK: true}}
+		if !send {
+			opts.DraftID = &id
+		}
+	case !send:
+		results = []model.MutationResult{{ID: id, OK: true}}
 	}
-	if err := g.recordDecision(ctx, op, keyDraft, d, ref, nil, nil); err != nil {
+	if err := g.recordDecision(ctx, op, key, d, ref, nil, nil); err != nil {
 		return "", err
 	}
-	if err := g.log.Record(context.WithoutCancel(ctx), g.account, op, []model.MutationResult{{ID: source, OK: true}}, opts); err != nil {
+	if err := g.log.Record(context.WithoutCancel(ctx), g.account, op, results, opts); err != nil {
 		return "", GuardError("AuditError")
 	}
 	return id, nil
 }
 func (g *Guard) DraftNew(ctx context.Context, draft model.NewDraft) (string, error) {
-	return g.draft(ctx, audit.DraftNew, "", newDraftArgs{draft.To, draft.Subject, draft.Body}, func() (string, error) { return g.mailbox.DraftNew(ctx, draft) })
+	return g.compose(ctx, audit.DraftNew, "", newDraftArgs{draft.To, draft.Subject, draft.Body}, func() (string, error) { return g.mailbox.DraftNew(ctx, draft) })
 }
 func (g *Guard) DraftReply(ctx context.Context, id, comment string) (string, error) {
-	return g.draft(ctx, audit.DraftReply, id, bodyArgs{id, comment}, func() (string, error) { return g.mailbox.DraftReply(ctx, id, comment) })
+	return g.compose(ctx, audit.DraftReply, id, bodyArgs{id, comment}, func() (string, error) { return g.mailbox.DraftReply(ctx, id, comment) })
 }
 func (g *Guard) DraftForward(ctx context.Context, id string, to []string) (string, error) {
-	return g.draft(ctx, audit.DraftForward, id, forwardArgs{id, to}, func() (string, error) { return g.mailbox.DraftForward(ctx, id, to) })
+	return g.compose(ctx, audit.DraftForward, id, forwardArgs{id, to}, func() (string, error) { return g.mailbox.DraftForward(ctx, id, to) })
 }
 func (g *Guard) DraftUpdate(ctx context.Context, id, body string) (string, error) {
-	return g.draft(ctx, audit.DraftUpdate, id, bodyArgs{id, body}, func() (string, error) { return g.mailbox.DraftUpdate(ctx, id, body) })
+	return g.compose(ctx, audit.DraftUpdate, id, bodyArgs{id, body}, func() (string, error) { return g.mailbox.DraftUpdate(ctx, id, body) })
+}
+
+// SendNew, SendReply, and SendForward send mail at once under the mail_send decision. Their params and
+// stored args are those of the matching draft operation.
+func (g *Guard) SendNew(ctx context.Context, draft model.NewDraft) error {
+	_, err := g.compose(ctx, audit.MailSend, "", newDraftArgs{draft.To, draft.Subject, draft.Body}, func() (string, error) { return "", g.mailbox.SendNew(ctx, draft) })
+	return err
+}
+func (g *Guard) SendReply(ctx context.Context, id, comment string) error {
+	_, err := g.compose(ctx, audit.MailReply, id, bodyArgs{id, comment}, func() (string, error) { return "", g.mailbox.SendReply(ctx, id, comment) })
+	return err
+}
+func (g *Guard) SendForward(ctx context.Context, id string, to []string) error {
+	_, err := g.compose(ctx, audit.MailForward, id, forwardArgs{id, to}, func() (string, error) { return "", g.mailbox.SendForward(ctx, id, to) })
+	return err
 }

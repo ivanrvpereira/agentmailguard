@@ -6,7 +6,7 @@ It does not protect a human from fraud.
 
 **Exposure warning:** the client/server connection has no authentication and no built-in TLS.
 Anyone who can reach the listener can read guarded mailbox data, change mail, and clear cached verdicts.
-They can also do every action that the [write policy](#write-policy) allows, for example create drafts and send Microsoft 365 meeting invitations, updates, cancellations, and responses.
+They can also do every action that the [write policy](#write-policy) allows, for example create drafts, send mail, and send Microsoft 365 meeting invitations, updates, cancellations, and responses.
 The default listener is `127.0.0.1:8787`.
 A non-loopback listener requires an explicit `--listen` option and prints a warning.
 Browser requests with an `Origin` header are refused, and the server does not enable CORS.
@@ -67,6 +67,8 @@ There is no automatic import of configuration, cache, or credentials from the re
 
 Create a private server-home directory and a `config.toml` file there.
 Prefer a restricted provider application that grants only the required scopes.
+Microsoft 365 login requests `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.Read`, `Calendars.ReadWrite`, `MailboxSettings.Read`, `offline_access`, `openid`, and `profile`.
+Gmail login requests `https://www.googleapis.com/auth/gmail.modify` and `https://www.googleapis.com/auth/calendar.events.owned.readonly`.
 Extra grants are the user's choice: a usable token with extra scopes or Microsoft 365 application roles is accepted with a warning. The server never uses the extra grants.
 These examples contain placeholders, not working credentials.
 
@@ -328,14 +330,16 @@ Required text flags distinguish an omitted value from an explicit empty value, i
 | Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID` |
 | Availability (Microsoft 365, read-only) | `calendar availability --to ADDRESS [--to ADDRESS] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'` |
 | Meetings (Microsoft 365, send notifications) | `calendar invite --to ADDRESS --subject TEXT --start 'YYYY-MM-DD HH:MM' --duration 30m\|--end 'YYYY-MM-DD HH:MM' [--body TEXT] [--location TEXT] [--no-teams]`, `calendar update ID [--subject TEXT] [--location TEXT] [--start TIME] [--duration D\|--end TIME] [--add-attendee ADDRESS] [--remove-attendee ADDRESS] [--teams]`, `calendar cancel ID [--comment TEXT]`, `calendar respond ID --response accept\|tentative\|decline [--comment TEXT]` |
-| Drafts only | `draft new --to ADDRESS --subject TEXT --body TEXT`, `draft reply ID --body TEXT`, `draft forward ID --to ADDRESS`, `draft update ID --body TEXT` |
+| Mail send (sends at once) | `mail send --to ADDRESS --subject TEXT --body TEXT`, `mail reply ID --body TEXT`, `mail forward ID --to ADDRESS` |
+| Drafts (no send) | `draft new --to ADDRESS --subject TEXT --body TEXT`, `draft reply ID --body TEXT`, `draft forward ID --to ADDRESS`, `draft update ID --body TEXT` |
 
 Successful commands print the original operation's JSON result, not an RPC envelope.
 `mail get --pretty` formats only the guarded view.
 Draft update returns the resulting draft ID, which can change on Gmail.
+`mail send`, `mail reply`, and `mail forward` return `{"ok": true}`. The providers give no ID for a sent message.
 `calendar invite` returns the new event ID. The other meeting commands return the event ID and `"ok": true`.
-The [write policy](#write-policy) can refuse trash, draft, and meeting commands, or store them as pending items. See [Results](#results) for these results.
-There is no mail send, permanent-delete, folder creation, category creation, Gmail calendar write, or arbitrary provider request command.
+The [write policy](#write-policy) can refuse trash, draft, send, and meeting commands, or store them as pending items. See [Results](#results) for these results.
+There is no permanent-delete, folder creation, category creation, Gmail calendar write, or arbitrary provider request command.
 
 Exit code `0` means the call ran, including a mutation with failed per-ID results and a `pending` result.
 Exit code `1` means the whole call failed or was refused, or `auth status` reports an unusable login.
@@ -380,7 +384,7 @@ mail_trash = "deny"
 | --- | --- | --- |
 | `mail_trash` | `mail trash`, and rule moves to `trash` | `allow` |
 | `mail_draft` | `draft new`, `draft reply`, `draft forward`, `draft update` | `allow` |
-| `mail_send` | None. There is no send command. | `deny` |
+| `mail_send` | `mail send`, `mail reply`, `mail forward` | `deny` |
 | `calendar_invite` | `calendar invite` | `deny` |
 | `calendar_update` | `calendar update` | `deny` |
 | `calendar_cancel` | `calendar cancel` | `deny` |
@@ -399,7 +403,7 @@ A policy is invalid if it has an unknown key or table, a value other than `allow
 
 ### Sealed messages
 
-The sealed tables apply to actions on an existing message: `mail trash`, `draft reply`, and `draft forward`.
+The sealed tables apply to actions on an existing message: `mail trash`, `draft reply`, `draft forward`, `mail reply`, and `mail forward`.
 A sealed table accepts only `mail_trash`, `mail_draft`, and `mail_send`.
 For each key, the sealed decision is the first value in this order: `[accounts.NAME.policy.sealed]`, `[policy.sealed]`, `deny`.
 
@@ -408,16 +412,16 @@ The order is `allow`, then `approve`, then `deny`.
 The server looks up the verdict only when the sealed decision is stricter than the base decision.
 If the message has no cached verdict, the server screens it first. A message that the server cannot screen counts as `sealed`.
 For `green`, `yellow`, and `red` messages, only the base decision applies.
-`draft new` and `draft update` do not reference a received message, so only the base decision applies.
+`draft new`, `draft update`, and `mail send` do not reference a received message, so only the base decision applies.
 
 ### Jev action check
 
 Before an action runs, Jev checks the text that the agent wrote for it. The agent can be under prompt injection from mail it read, so the server does not trust this text.
 
-- Checked actions: `draft new`, `draft reply`, `draft update`, `draft forward`, `calendar invite`, and `calendar update`. `calendar respond` and `calendar cancel` are checked only when they have a comment.
+- Checked actions: `draft new`, `draft reply`, `draft update`, `draft forward`, `mail send`, `mail reply`, `mail forward`, `calendar invite`, and `calendar update`. `calendar respond` and `calendar cancel` are checked only when they have a comment.
 - Not checked: `mail trash`, rule moves, and the commands without a policy key.
 - Jev sees the operation name, a fixed description of what the action does, and the action fields that the agent gave: recipients, subject, body, comment, response, and event fields. It never sees a message or event ID.
-- For `draft forward`, Jev also sees the subject and body of the forwarded message, read through the screened read path. If the server cannot read this text, for example because the message is not `green`, the check fails.
+- For `draft forward` and `mail forward`, Jev also sees the subject and body of the forwarded message, read through the screened read path. If the server cannot read this text, for example because the message is not `green`, the check fails.
 
 The check comes after the policy decision:
 
@@ -433,8 +437,8 @@ The item page of the approval console shows the result, for example `Jev: flagge
 ### Results
 
 - `allow`: the command gives its normal result.
-- `deny`: a draft or meeting command fails with `refused by policy: KEY`, for example `refused by policy: calendar_invite`, with exit code `1`. The action does not run.
-- `approve`: a draft or meeting command returns `{"status":"pending","approval_id":"...","url":"http://localhost:8788/a/..."}` with exit code `0`. The action does not run. The `url` is the page of this item in the approval console. It uses `[approvals].listen` (see [Approvals configuration](#approvals-configuration)).
+- `deny`: a draft, send, or meeting command fails with `refused by policy: KEY`, for example `refused by policy: calendar_invite`, with exit code `1`. The action does not run.
+- `approve`: a draft, send, or meeting command returns `{"status":"pending","approval_id":"...","url":"http://localhost:8788/a/..."}` with exit code `0`. The action does not run. The `url` is the page of this item in the approval console. It uses `[approvals].listen` (see [Approvals configuration](#approvals-configuration)).
 
 The server validates a meeting action before it stores it.
 Thus an invalid time, a wrong role, or a recurring or cancelled event fails with the usual error, not `pending`.
@@ -550,12 +554,48 @@ The audit log gets content-free records for the policy. Their `operation` is the
 4. Pending items store request text in `cache.db`. Earlier versions kept no subject, recipient, or body text in storage.
 5. After you set an approval password, older builds refuse the credential record. Records without an approval password keep the old format.
 6. The Jev action check can make an allowed draft or meeting action wait for approval. Without an approval password, such an item stays pending. A missing Jev key or a Jev outage makes every checked action wait.
+7. The new commands `mail send`, `mail reply`, and `mail forward` send mail. The `mail_send` key denies them by default. Earlier versions could not send mail.
+8. Microsoft 365 login and token refresh now request `Mail.Send`. For an account that logged in before this change, send commands fail with `missing_scopes`, and a refresh can need new consent. To fix this, run `auth login` again on the server host and restart the server.
 
 ### Known limits
 
 The policy is effective only when the agent can use only agentmailguard commands.
 An agent with a shell as the same OS user can edit `config.toml`, change pending items in `cache.db`, or restart the server.
 Anyone who can reach the listener gets the same decisions as the agent.
+On Gmail, only the server code stops a send. The OAuth grant (`gmail.modify`) permits it.
+
+## Mail send
+
+**Caution:** If the write policy allows them, `mail send`, `mail reply`, and `mail forward` send real email at once. A sent message cannot be recalled.
+The [Jev action check](#jev-action-check) can hold a command for approval, but it is a statistical check: it can miss harmful text.
+An agent must run these commands only after the user authorizes that specific send.
+
+The [write policy](#write-policy) key `mail_send` decides all three commands. The default is `deny`.
+To use them, set `mail_send` to `allow` or `approve` in `config.toml`, then restart the server.
+With `approve`, each send waits in the [approval console](#approval-console) and runs only after a person approves it.
+`mail reply` and `mail forward` act on an existing message, so `[policy.sealed] mail_send` applies to them. By default, the server refuses a reply to or a forward of a `sealed` or `error` message.
+
+The commands take the same options as the matching draft commands:
+
+- `mail send --to ADDRESS [--to ADDRESS] --subject TEXT --body TEXT` sends a new plain-text message. `--subject` and `--body` can be empty, but you must give them.
+- `mail reply ID --body TEXT` sends a reply to the sender of the message. On Gmail, the reply goes to the `Reply-To` address if the message has one, and the reply quotes the original text. It does not go to the other recipients.
+- `mail forward ID --to ADDRESS [--to ADDRESS]` forwards the message with no added text. On Gmail, the original message is attached unchanged.
+
+Both providers keep a copy in the sent mail folder. On Gmail, the server refuses a reply to or a forward of a draft.
+A result of `{"ok": true}` means that the provider accepted the message. It does not prove delivery.
+
+Microsoft 365 login requests the `Mail.Send` scope, and token refreshes request it too.
+Without this grant, send commands fail with `missing_scopes` before the policy decision and before any Graph request. A token refresh can occur before this check.
+If an account logged in before this scope was added, a refresh can need new consent.
+In that case, or after `missing_scopes`, run `auth login` again on the server host and restart the server.
+Gmail needs no new grant: `gmail.modify` permits sending.
+
+The server sends each request to the provider once. It does not retry a send, also not after a timeout or a rate limit, because a second send can deliver a duplicate message.
+A send command can return `operation failed` after the message was sent, for example if the audit write fails.
+A timeout, transport error, or `operation failed` does not prove that the send failed.
+Before you retry such a command, ask the user to check the sent mail folder.
+
+The audit record of a send has no content. A `mail send` record has no message ID, because the providers give none. A `mail reply` or `mail forward` record has the ID of the source message.
 
 ## Microsoft 365 meetings
 
@@ -708,7 +748,7 @@ The only data endpoint is `POST /v1/call` with `Content-Type: application/json`:
 {"operation":"mail.list","account":"work","params":{"folder":"inbox","count":25,"skip":0}}
 ```
 
-Operation names match CLI groups, such as `mail.get`, `draft.update`, `calendar.invite`, `cache.clear`, and `approvals.status`.
+Operation names match CLI groups, such as `mail.get`, `mail.send`, `draft.update`, `calendar.invite`, `cache.clear`, and `approvals.status`.
 Meeting times on the HTTP interface are RFC 3339 timestamps. `calendar.update` also accepts a Go `duration` string.
 The `account` field is optional, and `params` must be an object.
 Unknown operations or fields, duplicate keys, malformed JSON, trailing JSON, null fields, invalid types, and oversized requests are refused.
@@ -740,6 +780,7 @@ It covers cached hidden reads, error retry, classification, preview/apply, concu
 A second native workflow sends meeting invites, updates, cancellations, and responses to a fake Graph endpoint, and reads the changed events back.
 It also covers the Gmail, missing-scope, recurring, cancelled, and wrong-role refusals.
 Offline tests also cover the write policy: validation, defaults, sealed decisions, per-ID trash decisions, rule trash, pending items, the Jev action check, and the Deleted Items refusal.
+Offline tests cover mail send against fake Graph and Gmail endpoints: the exact requests, the `missing_scopes` refusal, and no retry after a failed send.
 Native file-backend tests also cover server startup, password refusal, terminal password changes, and SIGTERM shutdown.
 A separate combined native acceptance run used the file backend, temporary HOME, synthetic credentials, and a non-forwarding loopback HTTPS proxy.
 It passed device-code login, native server startup, an external key update while serving, token refresh, terminal password change, and restart.
@@ -755,6 +796,7 @@ A subsequent authorized Microsoft 365 organize preview succeeded with screening 
 These earlier read-only checks do not verify the credential-backend changes. This workflow adds no new live provider verification.
 Device-code login can still fail under Microsoft organization policies.
 Real device-code login and provider acceptance of generated drafts remain unverified here.
+No live mail send has been verified. Graph and Gmail acceptance of sends, replies, and forwards remains unverified.
 No live Microsoft 365 meeting write has been verified. Graph acceptance of invites, updates, cancellations, and responses remains unverified.
 Native Keychain migration and the user's real credential migration also remain unverified.
 Migration tests use a fake Keychain Platform at the constructor and CLI seams, not the production Security APIs.

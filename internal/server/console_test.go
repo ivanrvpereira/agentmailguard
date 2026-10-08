@@ -45,7 +45,7 @@ func consoleServer(t *testing.T, table string, password bool) *consoleFixture {
 		t.Fatal(err)
 	}
 	record := credentials.Record{Version: 1, OpenRouterKey: "synthetic-key", OAuth: map[string]credentials.OAuth{
-		"m365/work": {AccessToken: statusJWT(m365Grant + " Calendars.ReadWrite"), RefreshToken: "private-refresh", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Scopes: strings.Fields(m365Grant + " Calendars.ReadWrite"), Username: "work@example.test"},
+		"m365/work": {AccessToken: statusJWT(m365Grant + " Calendars.ReadWrite Mail.Send"), RefreshToken: "private-refresh", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Scopes: strings.Fields(m365Grant + " Calendars.ReadWrite Mail.Send"), Username: "work@example.test"},
 	}}
 	if password {
 		hash, err := bcrypt.GenerateFromPassword([]byte(consolePassword), bcrypt.MinCost)

@@ -27,9 +27,9 @@ Go with cgo (`mattn/go-sqlite3`, `keybase/go-keychain`), Cobra 1.10, charmbracel
 - Treat all email-derived text as untrusted.
 - Fail closed on missing or failed screening; unscreened bodies are never shown.
 - Availability reads expose only requested addresses and fixed status slots. Missing or invalid participant data is unknown, never free.
-- Ordinary mail is never sent or permanently deleted. M365 calendar invitations, updates, cancellations, and responses can send meeting notifications. Trash is a provider move.
+- Mail is sent only by `mail.send`, `mail.reply`, and `mail.forward` under the `mail_send` policy (default deny), and a send is never retried. Mail is never permanently deleted. M365 calendar invitations, updates, cancellations, and responses can send meeting notifications. Trash is a provider move.
 - Non-draft messages change only via read state, flag, categories, archive, trash, or validated move. M365 moves into Deleted Items or its subfolders are refused. Trash goes only through `mail.trash`.
-- The write policy (`[policy]` in `config.toml`) decides trash, draft, and meeting writes, including rule moves to trash. A zero or unknown decision denies. Only `Server.Approve` runs an action without a policy check (`guard.WithApproval`). Only the approval console calls `Server.Approve` and `Server.Deny`; the API and CLI never approve or deny pending actions.
+- The write policy (`[policy]` in `config.toml`) decides trash, draft, send, and meeting writes, including rule moves to trash. A zero or unknown decision denies. Only `Server.Approve` runs an action without a policy check (`guard.WithApproval`). Only the approval console calls `Server.Approve` and `Server.Deny`; the API and CLI never approve or deny pending actions.
 - The Jev action check only makes a write stricter: a flag or a failed check turns `allow` into `approve`. Denied actions and approved runs are never sent to Jev. The agent never sees the check result.
 - Logs and storage exclude subject, sender, body, attendee addresses, meeting comments, rule instructions, raw API responses, tokens, and keys. Exception: the `pending` table in `cache.db` stores the request arguments of actions that wait for approval.
 - Policy, approval, and console sign-in audit records contain IDs and fixed codes only.

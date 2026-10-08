@@ -18,6 +18,7 @@ var policyKeys = map[string]bool{
 // API operations that the write policy decides.
 var policyOperations = map[string]bool{
 	"mail.trash": true, "draft.new": true, "draft.reply": true, "draft.forward": true, "draft.update": true,
+	"mail.send": true, "mail.reply": true, "mail.forward": true,
 	"calendar.invite": true, "calendar.update": true, "calendar.cancel": true, "calendar.respond": true,
 }
 

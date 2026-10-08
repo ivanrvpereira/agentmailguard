@@ -33,6 +33,9 @@ type account struct {
 	guard    *guard.Guard
 }
 
+// mailSendGrants are the M365 grants that allow mail.send, mail.reply, and mail.forward.
+var mailSendGrants = []string{"Mail.Send"}
+
 var restart = errors.New("account configuration changed; restart required")
 var configError = errors.New("configuration unavailable")
 var rulesError = errors.New("rules unavailable")
@@ -48,7 +51,7 @@ func publicError(e error) (string, bool) {
 		case guard.CalendarWriteUnsupported, guard.CalendarAvailabilityUnsupported, "missing_scopes", "invalid request",
 			guard.CalendarRecurring, guard.CalendarCancelled, guard.CalendarOrganizerOnly, guard.CalendarOrganizerCannotRespond:
 			return string(e), true
-		case "refused by policy: mail_draft", "refused by policy: calendar_invite", "refused by policy: calendar_update", "refused by policy: calendar_cancel", "refused by policy: calendar_respond":
+		case "refused by policy: mail_draft", "refused by policy: mail_send", "refused by policy: calendar_invite", "refused by policy: calendar_update", "refused by policy: calendar_cancel", "refused by policy: calendar_respond":
 			return string(e), true
 		case "move refused: the destination must be a folder ID from `folders`", "move refused: use mail.trash", "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
 			"link refused: message is red, not green", "link refused: message is yellow, not green", "link refused: message is sealed, not green", "link refused: message is error, not green",
@@ -228,6 +231,19 @@ type folderDTO struct {
 type draftDTO struct {
 	ID string `json:"id"`
 }
+
+// okDTO is the result of a send: providers give no ID for a sent message.
+type okDTO struct {
+	OK bool `json:"ok"`
+}
+
+func sent(e error) (any, error) {
+	if e != nil {
+		return nil, e
+	}
+	return okDTO{true}, nil
+}
+
 type updateDTO struct {
 	ID string `json:"id"`
 	OK bool   `json:"ok"`
@@ -257,7 +273,7 @@ type rulesDTO struct {
 // Dispatch first validates a complete typed operation. Account and provider access occur only afterwards.
 func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	var call func(*account) (any, error)
-	// M365-only calendar operations name their Gmail refusal and the grants that allow them.
+	// M365-only calendar operations name their Gmail refusal. grants lists the M365 grants that allow the operation.
 	unsupported, grants := guard.GuardError(""), []string(nil)
 	switch r.Operation {
 	case "calendar.invite", "calendar.update", "calendar.cancel", "calendar.respond":
@@ -425,34 +441,48 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 			}
 			return out, nil
 		}
-	case "draft.new":
+	case "draft.new", "mail.send":
 		var p newParam
 		if params(r.Params, &p) != nil || !listValid(p.To, 1, 100) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) {
 			return nil, invalid
 		}
-		call = func(a *account) (any, error) {
-			id, e := a.guard.DraftNew(ctx, model.NewDraft{To: p.To, Subject: *p.Subject, Body: *p.Body})
-			return draftDTO{id}, e
+		draft := model.NewDraft{To: p.To, Subject: *p.Subject, Body: *p.Body}
+		if r.Operation == "mail.send" {
+			grants = mailSendGrants
+			call = func(a *account) (any, error) { return sent(a.guard.SendNew(ctx, draft)) }
+		} else {
+			call = func(a *account) (any, error) { id, e := a.guard.DraftNew(ctx, draft); return draftDTO{id}, e }
 		}
-	case "draft.reply", "draft.update":
+	case "draft.reply", "draft.update", "mail.reply":
 		var p bodyParam
 		if params(r.Params, &p) != nil || !idValid(p.ID) || p.Body == nil || !validString(*p.Body, MaxRequestBytes, true) {
 			return nil, invalid
 		}
+		if r.Operation == "mail.reply" {
+			grants = mailSendGrants
+		}
 		call = func(a *account) (any, error) {
-			if r.Operation == "draft.reply" {
+			switch r.Operation {
+			case "draft.reply":
 				id, e := a.guard.DraftReply(ctx, p.ID, *p.Body)
 				return draftDTO{id}, e
+			case "mail.reply":
+				return sent(a.guard.SendReply(ctx, p.ID, *p.Body))
 			}
 			id, e := a.guard.DraftUpdate(ctx, p.ID, *p.Body)
 			return updateDTO{id, true}, e
 		}
-	case "draft.forward":
+	case "draft.forward", "mail.forward":
 		var p forwardParam
 		if params(r.Params, &p) != nil || !idValid(p.ID) || !listValid(p.To, 1, 100) {
 			return nil, invalid
 		}
-		call = func(a *account) (any, error) { id, e := a.guard.DraftForward(ctx, p.ID, p.To); return draftDTO{id}, e }
+		if r.Operation == "mail.forward" {
+			grants = mailSendGrants
+			call = func(a *account) (any, error) { return sent(a.guard.SendForward(ctx, p.ID, p.To)) }
+		} else {
+			call = func(a *account) (any, error) { id, e := a.guard.DraftForward(ctx, p.ID, p.To); return draftDTO{id}, e }
+		}
 	default:
 		return nil, invalid
 	}
@@ -470,7 +500,8 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	if e != nil {
 		return nil, e
 	}
-	if grants != nil {
+	// The grant check comes before the policy decision. Gmail sends need no grant beyond gmail.modify.
+	if grants != nil && a.Provider == "m365" {
 		_, scopes, e := instance.provider.Status(ctx)
 		if e != nil {
 			return nil, e

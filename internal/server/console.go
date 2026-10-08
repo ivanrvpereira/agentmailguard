@@ -291,7 +291,7 @@ func (c *console) reference(ctx context.Context, item cache.Pending, args map[st
 		}
 	case "calendar.update", "calendar.cancel", "calendar.respond":
 		op, kind = "calendar.get", "Event"
-	case "draft.reply", "draft.forward", "draft.update":
+	case "draft.reply", "draft.forward", "draft.update", "mail.reply", "mail.forward":
 	default:
 		return "", nil, false
 	}

@@ -59,7 +59,7 @@ func graphJevServer(t *testing.T, policy string, graph http.Handler, jev *native
 	}
 	api := httptest.NewServer(graph)
 	t.Cleanup(api.Close)
-	s, err := server.New(context.Background(), home, server.Options{Credentials: &meetingStore{scopes: "Mail.ReadWrite Calendars.ReadWrite"}, Screener: jev.screener(t), M365: m365.Options{BaseURL: api.URL, AuthorityURL: api.URL}, Now: func() time.Time { return time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC) }})
+	s, err := server.New(context.Background(), home, server.Options{Credentials: &meetingStore{scopes: "Mail.ReadWrite Mail.Send Calendars.ReadWrite"}, Screener: jev.screener(t), M365: m365.Options{BaseURL: api.URL, AuthorityURL: api.URL}, Now: func() time.Time { return time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC) }})
 	if err != nil {
 		t.Fatal(err)
 	}

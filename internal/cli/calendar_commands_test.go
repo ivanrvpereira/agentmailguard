@@ -163,7 +163,7 @@ func TestCalendarWriteUsageErrorsNeedNoServerOrState(t *testing.T) {
 
 func TestHelpStatesThatCalendarWritesSendNotifications(t *testing.T) {
 	code, out, errout := runOffline(t, "--help")
-	if code != 0 || errout != "" || strings.Contains(out, "No send or permanent delete") || !strings.Contains(out, "No mail send or permanent delete.") || !strings.Contains(out, "send meeting notifications at once") {
+	if code != 0 || errout != "" || strings.Contains(out, "No mail send") || !strings.Contains(out, "No permanent delete.") || !strings.Contains(out, "mail send, reply, and forward send email at once") || !strings.Contains(out, "send meeting notifications at once") {
 		t.Fatalf("root help: exit=%d stdout=%q stderr=%q", code, out, errout)
 	}
 	code, out, errout = runOffline(t, "calendar", "--help")

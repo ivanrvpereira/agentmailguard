@@ -56,7 +56,7 @@ func TestAuthStatusSafeDiagnostics(t *testing.T) {
 				t.Run(fmt.Sprintf("%s/refreshed=%t/%s", provider, refreshed, kind), func(t *testing.T) {
 					now := time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC)
 					good := "User.Read Mail.ReadWrite Calendars.Read MailboxSettings.Read"
-					extra := []string{"Mail.Send", "Contacts.Read"}
+					extra := []string{"Mail.Send.Shared", "Contacts.Read"}
 					if provider == "gmail" {
 						good = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.events.owned.readonly"
 						extra = []string{"https://www.googleapis.com/auth/gmail.send", "https://www.googleapis.com/auth/drive"}

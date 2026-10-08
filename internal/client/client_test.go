@@ -77,6 +77,7 @@ func TestClientDisplaysOnlyExactFixedRefusals(t *testing.T) {
 		"calendar response refused: organizer cannot respond",
 		"missing_scopes",
 		"refused by policy: mail_draft",
+		"refused by policy: mail_send",
 		"refused by policy: calendar_invite",
 		"refused by policy: calendar_update",
 		"refused by policy: calendar_cancel",

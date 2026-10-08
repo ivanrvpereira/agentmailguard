@@ -27,6 +27,9 @@ const (
 	DraftReply      Operation = "draft_reply"
 	DraftForward    Operation = "draft_forward"
 	DraftUpdate     Operation = "draft_update"
+	MailSend        Operation = "mail_send"
+	MailReply       Operation = "mail_reply"
+	MailForward     Operation = "mail_forward"
 	CalendarInvite  Operation = "calendar_invite"
 	CalendarUpdate  Operation = "calendar_update"
 	CalendarCancel  Operation = "calendar_cancel"
@@ -73,9 +76,9 @@ func (l *Log) Record(ctx context.Context, account string, operation Operation, r
 	}
 	switch operation {
 	case Archive, Trash, Move, Read, Unread, Flag, Categorize, DraftNew, DraftReply, DraftForward, DraftUpdate:
-	case CalendarInvite, CalendarUpdate, CalendarCancel, CalendarRespond:
+	case CalendarInvite, CalendarUpdate, CalendarCancel, CalendarRespond, MailSend, MailReply, MailForward:
 		if options.Folder != nil || options.Flag != nil || options.Add != nil || options.Remove != nil || options.DraftID != nil || options.Rule != nil {
-			return errors.New("invalid calendar audit options")
+			return errors.New("invalid audit options")
 		}
 	default:
 		return errors.New("invalid audit operation")

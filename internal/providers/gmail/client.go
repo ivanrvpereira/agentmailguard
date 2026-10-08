@@ -1,4 +1,4 @@
-// Package gmail implements Gmail and primary Google Calendar without a send or permanent-delete path.
+// Package gmail implements Gmail and primary Google Calendar without a permanent-delete path.
 package gmail
 
 import (
@@ -26,13 +26,13 @@ const gmailScope = "https://www.googleapis.com/auth/gmail.modify"
 const calendarScope = "https://www.googleapis.com/auth/calendar.events.owned.readonly"
 const responseLimit = 50 << 20
 
-// Options supplies external-system seams (APIs, browser, terminal), not user settings. API URLs include the users/me or calendars/primary prefix; UploadURL is the drafts endpoint.
+// Options supplies external-system seams (APIs, browser, terminal), not user settings. API URLs include the users/me or calendars/primary prefix; UploadURL is the drafts upload endpoint and SendUploadURL the messages.send upload endpoint.
 type Options struct {
-	HTTPClient                                                      *http.Client
-	GmailURL, UploadURL, CalendarURL, TokenURL, AuthURL, ProfileURL string
-	Now                                                             func() time.Time
-	OpenBrowser                                                     func(context.Context, string) error
-	Sleep                                                           func(context.Context, time.Duration) error
+	HTTPClient                                                                     *http.Client
+	GmailURL, UploadURL, SendUploadURL, CalendarURL, TokenURL, AuthURL, ProfileURL string
+	Now                                                                            func() time.Time
+	OpenBrowser                                                                    func(context.Context, string) error
+	Sleep                                                                          func(context.Context, time.Duration) error
 	// ReadRedirect returns the browser's redirected address, pasted on hosts the loopback callback cannot reach.
 	// Login calls it again with retry set after an address that does not belong to this sign-in.
 	ReadRedirect func(ctx context.Context, retry bool) (string, error)
@@ -58,6 +58,7 @@ func New(account config.Account, store credentials.Store, opts Options) *Client 
 	}{
 		{&opts.GmailURL, "https://gmail.googleapis.com/gmail/v1/users/me"},
 		{&opts.UploadURL, "https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts"},
+		{&opts.SendUploadURL, "https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send"},
 		{&opts.CalendarURL, "https://www.googleapis.com/calendar/v3/calendars/primary"},
 		{&opts.TokenURL, "https://oauth2.googleapis.com/token"},
 		{&opts.AuthURL, "https://accounts.google.com/o/oauth2/auth"},
