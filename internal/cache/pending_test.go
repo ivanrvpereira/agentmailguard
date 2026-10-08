@@ -144,15 +144,15 @@ func TestDenyOnlyFromPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	denied := queued.Add(time.Hour)
-	if err := c.DenyPending(ctx, waiting, denied); err != nil {
-		t.Fatal(err)
-	}
 	want := cache.Pending{ID: waiting, Account: "work", Op: "calendar.update", Args: json.RawMessage(trashArgs), State: cache.StateDenied, Created: queued, Updated: denied}
+	if got, err := c.DenyPending(ctx, waiting, denied); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("deny returned=%+v error=%v", got, err)
+	}
 	if got, err := c.GetPending(ctx, waiting); err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("deny got=%+v error=%v", got, err)
 	}
 	for _, id := range []string{waiting, running} {
-		if err := c.DenyPending(ctx, id, denied.Add(time.Hour)); !errors.Is(err, cache.ErrPendingHandled) {
+		if _, err := c.DenyPending(ctx, id, denied.Add(time.Hour)); !errors.Is(err, cache.ErrPendingHandled) {
 			t.Errorf("deny of handled item: %v", err)
 		}
 	}
@@ -162,7 +162,7 @@ func TestDenyOnlyFromPending(t *testing.T) {
 	if got, err := c.GetPending(ctx, running); err != nil || got.State != cache.StateRunning {
 		t.Errorf("deny changed running item: %+v %v", got, err)
 	}
-	if err := c.DenyPending(ctx, "0123456789abcdef0123456789abcdef", denied); !errors.Is(err, cache.ErrPendingNotFound) {
+	if _, err := c.DenyPending(ctx, "0123456789abcdef0123456789abcdef", denied); !errors.Is(err, cache.ErrPendingNotFound) {
 		t.Errorf("deny of missing ID: %v", err)
 	}
 }
@@ -255,7 +255,7 @@ func TestCancelledPendingIOReturnsCancellation(t *testing.T) {
 		},
 		func() error { _, err := c.GetPending(cancelled, id); return err },
 		func() error { _, err := c.ClaimPending(cancelled, id, queued); return err },
-		func() error { return c.DenyPending(cancelled, id, queued) },
+		func() error { _, err := c.DenyPending(cancelled, id, queued); return err },
 		func() error { return c.FinishPending(cancelled, id, cache.StateDone, "x", queued) },
 	} {
 		if err := operation(); !errors.Is(err, context.Canceled) {

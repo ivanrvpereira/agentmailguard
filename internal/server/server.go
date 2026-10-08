@@ -146,6 +146,20 @@ func fail(w http.ResponseWriter, status int, message string) {
 	}{message})
 }
 
+// admit refuses work after Close and registers the work so that Close waits for it. The returned context
+// ends when ctx or the server ends; done must be called when the work ends.
+func (s *Server) admit(ctx context.Context) (context.Context, func(), error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.ctx.Err() != nil {
+		return nil, nil, ErrUnavailable
+	}
+	s.work.Add(1)
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(s.ctx, cancel)
+	return ctx, func() { stop(); cancel(); s.work.Done() }, nil
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if recover() != nil {
@@ -169,15 +183,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, 415, "content type refused")
 		return
 	}
-	s.mu.Lock()
-	if s.closed || s.ctx.Err() != nil {
-		s.mu.Unlock()
-		fail(w, 503, "server unavailable")
+	ctx, done, err := s.admit(r.Context())
+	if err != nil {
+		fail(w, 503, err.Error())
 		return
 	}
-	s.work.Add(1)
-	s.mu.Unlock()
-	defer s.work.Done()
+	defer done()
 	select {
 	case s.slots <- struct{}{}:
 		defer func() { <-s.slots }()
@@ -185,10 +196,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "server busy")
 		return
 	}
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
-	stop := context.AfterFunc(s.ctx, cancel)
-	defer stop()
 	rc := http.NewResponseController(w)
 	_ = rc.SetReadDeadline(time.Now().Add(10 * time.Second))
 	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxRequestBytes))

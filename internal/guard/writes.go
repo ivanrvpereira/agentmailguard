@@ -275,7 +275,7 @@ func (g *Guard) draft(ctx context.Context, op audit.Operation, source string, ar
 		return "", err
 	}
 	defer g.release()
-	d := decision{value: g.baseDecision(keyDraft)}
+	d := decision{value: g.base(ctx, keyDraft)}
 	if op == audit.DraftReply || op == audit.DraftForward {
 		decisions, err := g.decide(ctx, keyDraft, []string{source})
 		if err != nil {

@@ -16,6 +16,20 @@ const (
 	keyDraft = "mail_draft"
 )
 
+type approvalKey struct{}
+
+// WithApproval marks ctx for the run of an action that a person approved. A guard write with this context
+// skips the policy: it makes no decision, no sealed lookup, no policy record, and no pending item, and runs
+// as an allowed action with its normal operation record. Only the approval run may create this context.
+func WithApproval(ctx context.Context) context.Context {
+	return context.WithValue(ctx, approvalKey{}, true)
+}
+
+func approved(ctx context.Context) bool { return ctx.Value(approvalKey{}) != nil }
+
+// SafeCode gives the safe failure code of err, for storage with a failed approval.
+func SafeCode(err error) string { return safeCode(err) }
+
 // refused is the fixed public refusal for a write that the policy denies.
 func refused(key string) GuardError { return GuardError("refused by policy: " + key) }
 
@@ -33,6 +47,14 @@ func rank(d config.Decision) int {
 // normal maps the zero value and unknown values to deny, so a guard without a policy fails closed.
 func normal(d config.Decision) config.Decision {
 	return [...]config.Decision{config.Allow, config.Approve, config.Deny}[rank(d)]
+}
+
+// base is the base decision of key, or allow for an approved run. decide also skips the sealed decision of an approved run.
+func (g *Guard) base(ctx context.Context, key string) config.Decision {
+	if approved(ctx) {
+		return config.Allow
+	}
+	return g.baseDecision(key)
 }
 
 func (g *Guard) baseDecision(key string) config.Decision {
@@ -74,12 +96,12 @@ type decision struct {
 // sealed decision is stricter than the base decision. A sealed or error verdict, or a failed lookup, counts
 // as sealed. The caller holds the mutation gate and not the security gate: screening can take the security gate.
 func (g *Guard) decide(ctx context.Context, key string, ids []string) (map[string]decision, error) {
-	base, sealed := g.baseDecision(key), g.sealedDecision(key)
+	base, sealed := g.base(ctx, key), g.sealedDecision(key)
 	out := make(map[string]decision, len(ids))
 	for _, id := range ids {
 		out[id] = decision{value: base}
 	}
-	if rank(sealed) <= rank(base) {
+	if approved(ctx) || rank(sealed) <= rank(base) {
 		return out, nil
 	}
 	// A zero verdict, from a failed cache read or a failed screening, counts as sealed.
@@ -120,7 +142,11 @@ var apiOperations = map[audit.Operation]string{
 }
 
 // recordDecision writes the policy record of one action. A failed write fails closed.
+// An approved run has no decision, so it writes no record.
 func (g *Guard) recordDecision(ctx context.Context, op audit.Operation, key string, d decision, id, approval, rule *string) error {
+	if approved(ctx) {
+		return nil
+	}
 	reasons := []string{"policy"}
 	if d.sealed {
 		reasons = append(reasons, "sealed")
@@ -147,7 +173,7 @@ func (g *Guard) hold(ctx context.Context, op audit.Operation, key string, d deci
 		err = GuardError("AuditError")
 	}
 	if err != nil {
-		_ = g.store.DenyPending(context.WithoutCancel(ctx), approval, g.now())
+		_, _ = g.store.DenyPending(context.WithoutCancel(ctx), approval, g.now())
 		return "", err
 	}
 	return approval, nil

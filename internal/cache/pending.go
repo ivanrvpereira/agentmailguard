@@ -114,10 +114,9 @@ func (c *Cache) transition(ctx context.Context, id string, from, to PendingState
 	return Pending{}, ErrPendingHandled
 }
 
-// DenyPending atomically moves pending -> denied.
-func (c *Cache) DenyPending(ctx context.Context, id string, now time.Time) error {
-	_, err := c.transition(ctx, id, StatePending, StateDenied, nil, now)
-	return err
+// DenyPending atomically moves pending -> denied and returns the denied action.
+func (c *Cache) DenyPending(ctx context.Context, id string, now time.Time) (Pending, error) {
+	return c.transition(ctx, id, StatePending, StateDenied, nil, now)
 }
 
 // FinishPending atomically moves running -> done or failed and stores the result:

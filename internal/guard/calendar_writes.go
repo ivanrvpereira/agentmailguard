@@ -33,7 +33,7 @@ func (g *Guard) calendarWrite(ctx context.Context, op audit.Operation, ref *stri
 		return "", CalendarWriteUnsupported
 	}
 	key := string(op)
-	d := decision{value: g.baseDecision(key)}
+	d := decision{value: g.base(ctx, key)}
 	if d.value != config.Deny {
 		if err := check(); err != nil {
 			return "", err

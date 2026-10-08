@@ -20,18 +20,12 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
 
-// policyServer serves the work and other M365 accounts with the given policy tables. Every provider
-// request is counted; GET requests return event e2 as an attendee event and any other ID as the
+// policyServer is a graphServer whose provider counts every request; GET requests return event e2 as an attendee event and any other ID as the
 // organizer event e1. Other requests succeed.
 func policyServer(t *testing.T, policy string) (*server.Server, string, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
-	home := t.TempDir()
-	text := "[accounts.work]\nprovider='m365'\nclient_id='synthetic'\ntenant_id='synthetic'\n[accounts.other]\nprovider='m365'\nclient_id='other'\ntenant_id='synthetic'\n" + policy
-	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(text), 0600); err != nil {
-		t.Fatal(err)
-	}
 	var reads, writes atomic.Int32
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	s, home := graphServer(t, policy, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == "GET" {
 			reads.Add(1)
@@ -45,13 +39,25 @@ func policyServer(t *testing.T, policy string) (*server.Server, string, *atomic.
 		writes.Add(1)
 		io.WriteString(w, `{"id":"moved"}`)
 	}))
+	return s, home, &reads, &writes
+}
+
+// graphServer serves the work and other M365 accounts with the given policy tables and graph as the Graph API.
+func graphServer(t *testing.T, policy string, graph http.Handler) (*server.Server, string) {
+	t.Helper()
+	home := t.TempDir()
+	text := "[accounts.work]\nprovider='m365'\nclient_id='synthetic'\ntenant_id='synthetic'\n[accounts.other]\nprovider='m365'\nclient_id='other'\ntenant_id='synthetic'\n" + policy
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	api := httptest.NewServer(graph)
 	t.Cleanup(api.Close)
 	s, err := server.New(context.Background(), home, server.Options{Credentials: &meetingStore{scopes: "Mail.ReadWrite Calendars.ReadWrite"}, M365: m365.Options{BaseURL: api.URL, AuthorityURL: api.URL}, Now: func() time.Time { return time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC) }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
-	return s, home, &reads, &writes
+	return s, home
 }
 
 func accountRPC(t *testing.T, s *server.Server, op, account, params string) (int, string) {
