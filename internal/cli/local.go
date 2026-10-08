@@ -128,7 +128,7 @@ func login(ctx context.Context, home, account string, device, noBrowser bool, st
 	}
 	a, e := config.LoadAccount(ctx, filepath.Join(home, "config.toml"), name)
 	if e != nil {
-		return failure(stderr, "configuration unavailable")
+		return failure(stderr, configUnavailable(e).Error())
 	}
 	if noBrowser && a.Provider != "gmail" {
 		return failure(stderr, "--no-browser is for Gmail; use --device-code for Microsoft 365")

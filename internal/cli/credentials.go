@@ -14,6 +14,14 @@ import (
 // Password acquisition fails before a store exists, but still needs a startup store check.
 type credentialPasswordError struct{ error }
 
+// configUnavailable names the key of an invalid policy; other configuration errors stay generic.
+func configUnavailable(err error) error {
+	if errors.As(err, new(config.PolicyError)) {
+		return err
+	}
+	return errors.New("configuration unavailable")
+}
+
 // All local commands supply the full configured account list before the first store operation.
 func localCredentials(ctx context.Context, home string, injected credentials.Store, stdin io.Reader, stderr io.Writer, lookup func(string) string) (credentials.Store, error) {
 	password, present := credentials.TakePasswordEnv(lookup)
@@ -26,7 +34,7 @@ func localCredentials(ctx context.Context, home string, injected credentials.Sto
 	}
 	accounts, err := config.LoadAccounts(ctx, filepath.Join(home, "config.toml"))
 	if err != nil {
-		return nil, errors.New("configuration unavailable")
+		return nil, configUnavailable(err)
 	}
 	backend, err := config.CredentialsBackend(ctx, filepath.Join(home, "config.toml"))
 	if err != nil {
