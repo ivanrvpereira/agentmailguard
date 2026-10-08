@@ -25,6 +25,8 @@ const legacy = `CREATE TABLE mail_cache (
 const v2 = `ALTER TABLE mail_cache ADD COLUMN organization TEXT; ALTER TABLE mail_cache ADD COLUMN applied_at TEXT;`
 const v3 = `ALTER TABLE mail_cache ADD COLUMN tagged_verdict TEXT CHECK (tagged_verdict IN ('yellow','sealed','red'));`
 const v4 = `ALTER TABLE mail_cache RENAME COLUMN applied_at TO organization_applied_at; ALTER TABLE mail_cache RENAME COLUMN tagged_verdict TO security_applied_verdict;`
+const v5 = `CREATE TABLE pending (id TEXT PRIMARY KEY NOT NULL, account TEXT NOT NULL, op TEXT NOT NULL, args TEXT NOT NULL, jev TEXT,
+ state TEXT NOT NULL CHECK (state IN ('pending','running','done','denied','failed')), result TEXT, created TEXT NOT NULL, updated TEXT NOT NULL);`
 
 func fixture(t *testing.T, version int, schema, after string) string {
 	t.Helper()
@@ -41,8 +43,8 @@ func fixture(t *testing.T, version int, schema, after string) string {
 	}
 	return path
 }
-func TestAllFourMigrationsPreserveRowsAndMarkers(t *testing.T) {
-	for version := 0; version <= 4; version++ {
+func TestAllMigrationsPreserveRowsAndMarkers(t *testing.T) {
+	for version := 0; version <= 5; version++ {
 		t.Run(fmt.Sprint(version), func(t *testing.T) {
 			schema, after := legacy, ""
 			want := row("m1")
@@ -60,6 +62,9 @@ func TestAllFourMigrationsPreserveRowsAndMarkers(t *testing.T) {
 			if version >= 4 {
 				schema += v4
 				after = strings.ReplaceAll(strings.ReplaceAll(after, "applied_at", "organization_applied_at"), "tagged_verdict", "security_applied_verdict")
+			}
+			if version >= 5 {
+				schema += v5
 			}
 			path := fixture(t, version, schema, after)
 			c, err := cache.Open(ctx, path)
@@ -85,6 +90,13 @@ func TestAllFourMigrationsPreserveRowsAndMarkers(t *testing.T) {
 			got, err = c.Get(ctx, "work", []string{"m1"})
 			if err != nil || !reflect.DeepEqual(got["m1"], want) {
 				t.Fatalf("reopen changed state: %+v %v", got, err)
+			}
+			id, err := c.AddPending(ctx, "work", "mail.trash", []byte(`{}`), received)
+			if err != nil {
+				t.Fatalf("migrated cache cannot store pending actions: %v", err)
+			}
+			if p, err := c.GetPending(ctx, id); err != nil || p.State != cache.StatePending {
+				t.Fatalf("migrated cache cannot read pending actions: %+v %v", p, err)
 			}
 		})
 	}
@@ -114,7 +126,8 @@ func TestRejectedMigrationsLeaveDatabaseUnchanged(t *testing.T) {
 		version int
 		schema  string
 	}{
-		{"newer legacy", 5, legacy}, {"newer current", 5, legacy + v2 + v3 + v4},
+		{"newer legacy", 6, legacy}, {"newer current", 6, legacy + v2 + v3 + v4 + v5},
+		{"claimed current missing pending table", 5, legacy + v2 + v3 + v4},
 		{"negative version", -1, legacy},
 		{"second statement fails", 0, legacy + `ALTER TABLE mail_cache ADD COLUMN applied_at TEXT;`},
 		{"claimed current missing columns", 4, legacy},
