@@ -160,7 +160,7 @@ func TestAuthStatusSafeDiagnostics(t *testing.T) {
 						want["extra_scopes"] = extra
 					}
 					if kind == "missing-scopes" {
-						want["missing_scopes"] = []string{"https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/calendar.events.owned.readonly"}
+						want["missing_scopes"] = []string{"https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/calendar.events.owned"}
 						if uses.Load() != 0 || creds.saves.Load() != 0 {
 							t.Fatal("refused token was used or saved")
 						}

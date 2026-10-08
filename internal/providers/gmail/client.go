@@ -23,7 +23,14 @@ import (
 )
 
 const gmailScope = "https://www.googleapis.com/auth/gmail.modify"
-const calendarScope = "https://www.googleapis.com/auth/calendar.events.owned.readonly"
+
+// calendarScope reads and writes events on owned calendars; login requests it. calendarReadScope is the
+// read-only grant of earlier logins, which still reads the calendar.
+const calendarScope = "https://www.googleapis.com/auth/calendar.events.owned"
+const calendarReadScope = "https://www.googleapis.com/auth/calendar.events.owned.readonly"
+
+// CalendarWriteScope is the grant that calendar writes need.
+const CalendarWriteScope = calendarScope
 const responseLimit = 50 << 20
 
 // Options supplies external-system seams (APIs, browser, terminal), not user settings. API URLs include the users/me or calendars/primary prefix; UploadURL is the drafts upload endpoint and SendUploadURL the messages.send upload endpoint.
@@ -229,6 +236,10 @@ func (c *Client) requestWithToken(ctx context.Context, name, method, endpoint st
 		status, headers, data, err := c.exchange(ctx, method, endpoint, token.AccessToken, contentType, body)
 		if err != nil {
 			return nil, safeContext(ctx, name)
+		}
+		if status == http.StatusNoContent {
+			// Calendar deletes answer with no body.
+			return map[string]json.RawMessage{}, nil
 		}
 		if status >= 200 && status < 300 {
 			return object(data, name)

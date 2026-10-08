@@ -5,6 +5,7 @@ package model
 import (
 	"context"
 	"errors"
+	"html"
 	"regexp"
 	"slices"
 	"strings"
@@ -180,8 +181,15 @@ type NewEvent struct {
 	Subject, Body, Location string
 	Start, End              time.Time
 	Attendees               []string
-	Teams                   bool
+	Online                  bool // adds the provider's online meeting: Teams on M365, Google Meet on Gmail
 }
+
+// \r\n comes first so it gives one <br>.
+var htmlLineBreaks = strings.NewReplacer("\r\n", "<br>", "\r", "<br>", "\n", "<br>")
+
+// HTMLBody returns the plain-text body as escaped HTML that keeps the line breaks. Both providers render
+// event bodies as HTML, so body text never becomes markup or a disguised link.
+func (e NewEvent) HTMLBody() string { return htmlLineBreaks.Replace(html.EscapeString(e.Body)) }
 
 // CalendarTimeValid reports whether t has a year from 1 to 9999 in its own zone and in UTC.
 func CalendarTimeValid(t time.Time) bool {
@@ -192,12 +200,12 @@ type EventChange struct {
 	Subject, Location             *string
 	Start, End                    *time.Time
 	AddAttendees, RemoveAttendees []string
-	Teams                         bool // true adds a Teams meeting; false leaves the online meeting unchanged
+	Online                        bool // true adds an online meeting if none exists; false leaves it unchanged
 }
 
 // Empty reports a change with no field set. A duration given beside it is a change too.
 func (c EventChange) Empty() bool {
-	return c.Subject == nil && c.Location == nil && c.Start == nil && c.End == nil && len(c.AddAttendees)+len(c.RemoveAttendees) == 0 && !c.Teams
+	return c.Subject == nil && c.Location == nil && c.Start == nil && c.End == nil && len(c.AddAttendees)+len(c.RemoveAttendees) == 0 && !c.Online
 }
 
 // AttendeeConflict reports an address that is both added and removed, ignoring case.

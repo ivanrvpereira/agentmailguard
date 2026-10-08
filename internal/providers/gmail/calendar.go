@@ -30,7 +30,11 @@ func (t eventTime) parse() (time.Time, error) {
 	return v.UTC(), nil
 }
 
-type eventAddress struct{ DisplayName, Email string }
+// Self marks the entry for the calendar that holds this copy of the event. Only Google sets it.
+type eventAddress struct {
+	DisplayName, Email string
+	Self               bool
+}
 
 func (a eventAddress) model() model.Address {
 	return model.Address{Name: a.DisplayName, Address: a.Email}
@@ -69,7 +73,7 @@ func parseEvent(raw []byte) (model.Event, error) {
 	if htmlRE.MatchString(v.Description) {
 		kind = model.HTML
 	}
-	e := model.Event{ID: v.ID, Subject: v.Summary, Start: start, End: end, IsAllDay: v.Start.Date != "", Location: v.Location, Organizer: v.Organizer.model(), Attendees: []model.Attendee{}, Attachments: []string{}, Categories: []string{}, IsPrivate: v.Visibility == "private" || v.Visibility == "confidential", IsCancelled: v.Status == "cancelled", ShowAs: "busy", Body: &v.Description, ContentType: &kind}
+	e := model.Event{ID: v.ID, Subject: v.Summary, Start: start, End: end, IsAllDay: v.Start.Date != "", Location: v.Location, Organizer: v.Organizer.model(), Attendees: []model.Attendee{}, Attachments: []string{}, Categories: []string{}, IsPrivate: v.Visibility == "private" || v.Visibility == "confidential", IsCancelled: v.Status == "cancelled", ShowAs: "busy", Body: &v.Description, ContentType: &kind, IsOrganizer: v.Organizer.Self}
 	if v.Transparency == "transparent" {
 		e.ShowAs = "free"
 	}

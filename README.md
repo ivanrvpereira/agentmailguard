@@ -6,7 +6,7 @@ It does not protect a human from fraud.
 
 **Exposure warning:** the client/server connection has no authentication and no built-in TLS.
 Anyone who can reach the listener can read guarded mailbox data, change mail, and clear cached verdicts.
-They can also do every action that the [write policy](#write-policy) allows, for example create drafts, send mail, and send Microsoft 365 meeting invitations, updates, cancellations, and responses.
+They can also do every action that the [write policy](#write-policy) allows, for example create drafts, send mail, and send meeting invitations, updates, cancellations, and responses.
 The default listener is `127.0.0.1:8787`.
 A non-loopback listener requires an explicit `--listen` option and prints a warning.
 Browser requests with an `Origin` header are refused, and the server does not enable CORS.
@@ -68,7 +68,8 @@ There is no automatic import of configuration, cache, or credentials from the re
 Create a private server-home directory and a `config.toml` file there.
 Prefer a restricted provider application that grants only the required scopes.
 Microsoft 365 login requests `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.Read`, `Calendars.ReadWrite`, `MailboxSettings.Read`, `offline_access`, `openid`, and `profile`.
-Gmail login requests `https://www.googleapis.com/auth/gmail.modify` and `https://www.googleapis.com/auth/calendar.events.owned.readonly`.
+Gmail login requests `https://www.googleapis.com/auth/gmail.modify` and `https://www.googleapis.com/auth/calendar.events.owned`.
+A Gmail token with the older read-only grant `https://www.googleapis.com/auth/calendar.events.owned.readonly` still reads mail and the calendar, but meeting commands fail with `missing_scopes`.
 Extra grants are the user's choice: a usable token with extra scopes or Microsoft 365 application roles is accepted with a warning. The server never uses the extra grants.
 These examples contain placeholders, not working credentials.
 
@@ -329,7 +330,7 @@ Required text flags distinguish an omitted value from an explicit empty value, i
 | Mail changes | `mail archive IDS...`, `mail trash IDS...`, `mail move FOLDER_ID IDS...`, `mail read IDS...`, `mail unread IDS...`, `mail flag IDS... --state flagged|complete|none`, `mail categorize IDS... --add NAME --remove NAME` |
 | Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID` |
 | Availability (Microsoft 365, read-only) | `calendar availability --to ADDRESS [--to ADDRESS] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'` |
-| Meetings (Microsoft 365, send notifications) | `calendar invite --to ADDRESS --subject TEXT --start 'YYYY-MM-DD HH:MM' --duration 30m\|--end 'YYYY-MM-DD HH:MM' [--body TEXT] [--location TEXT] [--no-teams]`, `calendar update ID [--subject TEXT] [--location TEXT] [--start TIME] [--duration D\|--end TIME] [--add-attendee ADDRESS] [--remove-attendee ADDRESS] [--teams]`, `calendar cancel ID [--comment TEXT]`, `calendar respond ID --response accept\|tentative\|decline [--comment TEXT]` |
+| Meetings (send notifications) | `calendar invite --to ADDRESS --subject TEXT --start 'YYYY-MM-DD HH:MM' --duration 30m\|--end 'YYYY-MM-DD HH:MM' [--body TEXT] [--location TEXT] [--no-online]`, `calendar update ID [--subject TEXT] [--location TEXT] [--start TIME] [--duration D\|--end TIME] [--add-attendee ADDRESS] [--remove-attendee ADDRESS] [--online]`, `calendar cancel ID [--comment TEXT]`, `calendar respond ID --response accept\|tentative\|decline [--comment TEXT]` |
 | Mail send (sends at once) | `mail send --to ADDRESS --subject TEXT --body TEXT`, `mail reply ID --body TEXT`, `mail forward ID --to ADDRESS` |
 | Drafts (no send) | `draft new --to ADDRESS --subject TEXT --body TEXT`, `draft reply ID --body TEXT`, `draft forward ID --to ADDRESS`, `draft update ID --body TEXT` |
 
@@ -339,7 +340,7 @@ Draft update returns the resulting draft ID, which can change on Gmail.
 `mail send`, `mail reply`, and `mail forward` return `{"ok": true}`. The providers give no ID for a sent message.
 `calendar invite` returns the new event ID. The other meeting commands return the event ID and `"ok": true`.
 The [write policy](#write-policy) can refuse trash, draft, send, and meeting commands, or store them as pending items. See [Results](#results) for these results.
-There is no permanent-delete, folder creation, category creation, Gmail calendar write, or arbitrary provider request command.
+There is no permanent-delete, folder creation, category creation, or arbitrary provider request command.
 
 Exit code `0` means the call ran, including a mutation with failed per-ID results and a `pending` result.
 Exit code `1` means the whole call failed or was refused, or `auth status` reports an unusable login.
@@ -556,6 +557,8 @@ The audit log gets content-free records for the policy. Their `operation` is the
 6. The Jev action check can make an allowed draft or meeting action wait for approval. Without an approval password, such an item stays pending. A missing Jev key or a Jev outage makes every checked action wait.
 7. The new commands `mail send`, `mail reply`, and `mail forward` send mail. The `mail_send` key denies them by default. Earlier versions could not send mail.
 8. Microsoft 365 login and token refresh now request `Mail.Send`. For an account that logged in before this change, send commands fail with `missing_scopes`, and a refresh can need new consent. To fix this, run `auth login` again on the server host and restart the server.
+9. Meeting commands now work for Gmail accounts. Gmail login now requests `calendar.events.owned` instead of `calendar.events.owned.readonly`. A Gmail account that logged in before this change still reads mail and the calendar, but its meeting commands fail with `missing_scopes`. To fix this, run `auth login` again on the server host and restart the server.
+10. The `teams` option is now `online`, with no alias. On the CLI, use `--online` and `--no-online` instead of `--teams` and `--no-teams`. On the HTTP interface, use the `online` field of `calendar.invite` and `calendar.update` instead of `teams`. A request with `teams` fails with `invalid request`. Pending items that were stored with `teams` fail when they are approved; make them again.
 
 ### Known limits
 
@@ -597,7 +600,7 @@ Before you retry such a command, ask the user to check the sent mail folder.
 
 The audit record of a send has no content. A `mail send` record has no message ID, because the providers give none. A `mail reply` or `mail forward` record has the ID of the source message.
 
-## Microsoft 365 meetings
+## Meetings
 
 **Caution:** If the write policy allows them, `calendar invite`, `calendar update`, `calendar cancel`, and `calendar respond` send real meeting notifications at once.
 The [Jev action check](#jev-action-check) can hold a command for approval, but it is a statistical check: it can miss harmful text.
@@ -605,13 +608,14 @@ An agent must run these commands only after the user authorizes that specific ac
 
 The [write policy](#write-policy) denies these commands by default.
 To use them, set `calendar_invite`, `calendar_update`, `calendar_cancel`, and `calendar_respond` to `allow` in `config.toml`, then restart the server.
-These commands work only for Microsoft 365 accounts.
-Gmail accounts get the fixed error `calendar writes are not supported for this account`, before any credential or provider access.
+These commands work for Microsoft 365 and Gmail accounts. On Gmail, they change the primary calendar.
 
 Microsoft 365 login requests the `Calendars.ReadWrite` scope, and token refreshes request it too.
 Without this grant, meeting commands fail with `missing_scopes` before any Graph calendar request. A token refresh can occur before this check.
 If an account logged in before this scope was added, a refresh can need new consent.
 In that case, run `auth login` again on the server host and restart the server.
+Gmail login requests the `calendar.events.owned` scope. Without this grant, meeting commands fail with `missing_scopes` before any Google Calendar request.
+A Gmail account that logged in with the older read-only calendar grant keeps reading. Run `auth login` again on the server host and restart the server to use meeting commands.
 
 Times use the format `YYYY-MM-DD HH:MM` in the local timezone of the client.
 The client converts them to RFC 3339 with the local offset before it sends the request.
@@ -623,26 +627,34 @@ An invite needs exactly one of `--end` and `--duration`. An update can use one o
 An invite needs one or more `--to` addresses and an explicit `--subject`, which can be empty.
 The body is empty if you omit `--body`.
 `--body` is plain text.
-The invite sends it as escaped HTML and keeps the line breaks.
+The invite sends it as escaped HTML and keeps the line breaks, so the text cannot become markup or a link with hidden text.
+Every invite has an online meeting link by default: a Microsoft Teams meeting on Microsoft 365, and a Google Meet link on Gmail.
 For a Teams meeting, Microsoft adds the Teams join block to the body.
-Every invite is a Microsoft Teams meeting by default. Use `--no-teams` to create a meeting without an online meeting. `--teams` is accepted, and the last of `--teams` and `--no-teams` wins.
+Use `--no-online` to create a meeting without an online meeting. `--online` is accepted, and the last of `--online` and `--no-online` wins.
 All invite attendees are required attendees.
+On Gmail, guests cannot invite other people to a meeting that the server creates or updates.
 
 An update needs at least one change and sends only the options that you supply.
 An explicit empty `--subject ''` or `--location ''` clears that field.
 If an update changes only `--start`, the server keeps the current duration.
 `--duration` alone or `--end` alone keeps the current start.
-Attendee changes keep the type of existing attendees. Added attendees are required attendees.
-`calendar update ID --teams` adds a Teams meeting to the same event and sends an update notification to the attendees. It does not create a new event.
-With `--teams` alone, the update sends only online-meeting settings.
-It does not replace the body or change the times or attendees. Microsoft Graph can add Teams join details to the body.
-An update without `--teams` leaves the online meeting unchanged. Updates cannot remove a Teams meeting, change the online-meeting provider, or change the body, so an existing Teams link stays in the body.
-`--teams=false` on an update is invalid usage.
+Attendee changes keep the type and the response of existing attendees. Added attendees are required attendees.
+`calendar update ID --online` adds an online meeting to the same event and sends an update notification to the attendees. It does not create a new event.
+On Microsoft 365, it adds a Teams meeting, and Microsoft Graph can add Teams join details to the body.
+On Gmail, it adds a Google Meet link only if the event has no conference. If the event already has one, the update keeps it.
+With `--online` alone, the update sends only online-meeting settings. It does not replace the body or change the times or attendees.
+An update without `--online` leaves the online meeting unchanged. Updates cannot remove an online meeting, change the online-meeting provider, or change the body, so an existing Teams link stays in the body.
+`--online=false` on an update is invalid usage.
 
 Only the organizer can update or cancel an event.
 Only an attendee can respond, and the response always goes to the organizer.
 There is no silent response and no proposal of a new time.
+On Gmail, a response changes only your own attendee entry, and the event must list you as an attendee.
 The server refuses recurring events and cancelled events. It does not write in these cases.
+
+Every Gmail meeting command notifies all guests (`sendUpdates=all`).
+On Gmail, `calendar cancel` deletes the event and notifies the guests. Google keeps the deleted event on your calendar with the status `cancelled`, so it can be restored from the calendar trash for 30 days. The server never deletes an event permanently.
+Google sends no cancellation message. On Gmail, `calendar cancel --comment` fails with `calendar cancel refused: comments are not supported for this account`, before any credential or provider access. On Microsoft 365, the comment goes with the cancellation.
 
 Invites accept 1–100 attendee addresses, and each update attendee list accepts at most 100 addresses.
 There is no limit of 20 attendees or 8 hours, and there is no distribution-list detection.
@@ -777,8 +789,8 @@ There is no scheduler and no automatic mailbox work.
 Offline tests use actual loopback HTTP, temporary SQLite/audit files, synthetic provider/Jev endpoints, and injected credential and clock adapters.
 The native workflow test builds the real client binary and runs remote commands against a long-lived in-process server with injected external adapters.
 It covers cached hidden reads, error retry, classification, preview/apply, concurrent completion, security tags, manual mutations, drafts, calendar, stats, rules, and separate accounts.
-A second native workflow sends meeting invites, updates, cancellations, and responses to a fake Graph endpoint, and reads the changed events back.
-It also covers the Gmail, missing-scope, recurring, cancelled, and wrong-role refusals.
+A second native workflow sends meeting invites, updates, cancellations, and responses to fake Graph and Google Calendar endpoints, and reads the changed events back.
+It also covers the Gmail cancel comment, missing-scope, recurring, cancelled, and wrong-role refusals.
 Offline tests also cover the write policy: validation, defaults, sealed decisions, per-ID trash decisions, rule trash, pending items, the Jev action check, and the Deleted Items refusal.
 Offline tests cover mail send against fake Graph and Gmail endpoints: the exact requests, the `missing_scopes` refusal, and no retry after a failed send.
 Native file-backend tests also cover server startup, password refusal, terminal password changes, and SIGTERM shutdown.
@@ -797,7 +809,7 @@ These earlier read-only checks do not verify the credential-backend changes. Thi
 Device-code login can still fail under Microsoft organization policies.
 Real device-code login and provider acceptance of generated drafts remain unverified here.
 No live mail send has been verified. Graph and Gmail acceptance of sends, replies, and forwards remains unverified.
-No live Microsoft 365 meeting write has been verified. Graph acceptance of invites, updates, cancellations, and responses remains unverified.
+No live meeting write has been verified. Graph and Google Calendar acceptance of invites, updates, cancellations, and responses remains unverified.
 Native Keychain migration and the user's real credential migration also remain unverified.
 Migration tests use a fake Keychain Platform at the constructor and CLI seams, not the production Security APIs.
 Production-binary Keychain migration remains deferred; the migration evidence for this change comes from these fake-Platform tests.

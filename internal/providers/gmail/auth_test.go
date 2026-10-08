@@ -17,7 +17,11 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
 )
 
+// granted is the grant of logins made before calendar writes; it still reads mail and the calendar.
 const granted = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.events.owned.readonly"
+
+// writeGranted is the grant that login requests now; it also allows calendar writes.
+const writeGranted = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.events.owned"
 
 var account = config.Account{Name: "synthetic", Provider: "gmail", ClientID: "client", ClientSecret: "secret"}
 
@@ -60,7 +64,7 @@ func respond(w http.ResponseWriter, v any) {
 func TestStatusLazyRefreshAndRawScopes(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	// Extra grants are accepted; missing required grants are refused.
-	for _, scope := range []string{granted, "", "https://www.googleapis.com/auth/gmail.modify", granted + " https://www.googleapis.com/auth/gmail.readonly"} {
+	for _, scope := range []string{granted, writeGranted, "", "https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/calendar.events.owned", granted + " https://www.googleapis.com/auth/gmail.readonly"} {
 		t.Run(scope, func(t *testing.T) {
 			store := validStore()
 			store.token.ExpiresAt = now
@@ -93,7 +97,7 @@ func TestStatusLazyRefreshAndRawScopes(t *testing.T) {
 				t.Fatal("eager credential access")
 			}
 			name, scopes, err := c.Status(context.Background())
-			if !strings.HasPrefix(scope, granted) {
+			if !strings.HasPrefix(scope, granted) && !strings.HasPrefix(scope, writeGranted) {
 				if err == nil || store.saves != 0 || store.token.AccessToken != old.AccessToken {
 					t.Fatal("invalid raw scopes accepted or saved")
 				}

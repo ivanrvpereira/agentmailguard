@@ -17,6 +17,8 @@ const (
 	CalendarCancelled               = GuardError("calendar write refused: event is cancelled")
 	CalendarOrganizerOnly           = GuardError("calendar write refused: only the organizer can update or cancel")
 	CalendarOrganizerCannotRespond  = GuardError("calendar response refused: organizer cannot respond")
+	// CalendarCancelCommentUnsupported refuses a cancel comment where the provider cannot send one (Gmail).
+	CalendarCancelCommentUnsupported = GuardError("calendar cancel refused: comments are not supported for this account")
 )
 
 // calendarWrite holds the mutation gate from check through write and audit. A denied action stops before
@@ -67,7 +69,7 @@ func (g *Guard) calendarWrite(ctx context.Context, op audit.Operation, ref *stri
 }
 
 func (g *Guard) CalendarInvite(ctx context.Context, event model.NewEvent) (string, error) {
-	args := inviteArgs{To: event.Attendees, Subject: event.Subject, Body: event.Body, Start: event.Start.Format(time.RFC3339Nano), End: event.End.Format(time.RFC3339Nano), Location: event.Location, Teams: event.Teams}
+	args := inviteArgs{To: event.Attendees, Subject: event.Subject, Body: event.Body, Start: event.Start.Format(time.RFC3339Nano), End: event.End.Format(time.RFC3339Nano), Location: event.Location, Online: event.Online}
 	return g.calendarWrite(ctx, audit.CalendarInvite, nil, args, func() error {
 		if !calendarRangeValid(event.Start, event.End) {
 			return GuardError("invalid request")

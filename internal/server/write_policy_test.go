@@ -150,9 +150,9 @@ func TestPolicyApproveReturnsPendingAndStoresTheRequest(t *testing.T) {
 		{"draft.update", `{"id":"d1","body":""}`},
 		{"draft.reply", `{"id":"m1","body":"CANARY reply"}`},
 		{"draft.forward", `{"id":"m1","to":["a@example.test","b@example.test"]}`},
-		{"calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","start":"2026-10-09T12:00:00+01:00","duration":"30m0s","add":["new@example.test"],"remove":["remove@example.test"],"teams":true}`},
+		{"calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","start":"2026-10-09T12:00:00+01:00","duration":"30m0s","add":["new@example.test"],"remove":["remove@example.test"],"online":true}`},
 		{"calendar.update", `{"id":"e1","end":"2026-10-09T11:30:00+01:00"}`},
-		{"calendar.invite", `{"to":["a@example.test"],"subject":"","body":"","start":"2026-10-09T09:00:00Z","end":"2026-10-09T10:00:00Z","location":"Room","teams":false}`},
+		{"calendar.invite", `{"to":["a@example.test"],"subject":"","body":"","start":"2026-10-09T09:00:00Z","end":"2026-10-09T10:00:00Z","location":"Room","online":false}`},
 		{"calendar.cancel", `{"id":"e1","comment":"CANARY comment"}`},
 		{"calendar.respond", `{"id":"e2","response":"tentative","comment":"CANARY comment"}`},
 	} {

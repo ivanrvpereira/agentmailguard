@@ -19,7 +19,7 @@ func TestStatusMissingScopesRefuseWithDiagnostics(t *testing.T) {
 	for _, refreshed := range []bool{false, true} {
 		t.Run(fmt.Sprint("refreshed=", refreshed), func(t *testing.T) {
 			grant := "openid https://www.googleapis.com/auth/gmail.send"
-			missing := []string{"https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/calendar.events.owned.readonly"}
+			missing := []string{"https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/calendar.events.owned"}
 			now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 			s := validStore()
 			if refreshed {
@@ -77,7 +77,7 @@ func TestExtraScopesListsOnlyUnrequestedGrants(t *testing.T) {
 	if extra := gmail.ExtraScopes(scopes); !reflect.DeepEqual(extra, []string{"https://www.googleapis.com/auth/gmail.send", "https://www.googleapis.com/auth/drive"}) {
 		t.Fatalf("extra scopes: %v", extra)
 	}
-	if extra := gmail.ExtraScopes(strings.Fields(granted)); len(extra) != 0 {
+	if extra := gmail.ExtraScopes(strings.Fields(granted + " " + writeGranted)); len(extra) != 0 {
 		t.Fatalf("requested scopes reported as extra: %v", extra)
 	}
 }

@@ -33,8 +33,15 @@ type account struct {
 	guard    *guard.Guard
 }
 
-// mailSendGrants are the M365 grants that allow mail.send, mail.reply, and mail.forward.
-var mailSendGrants = []string{"Mail.Send"}
+// providerGrants lists, for each provider, the grants of which one allows an operation. A provider without an
+// entry needs no grant beyond its login scopes.
+type providerGrants map[string][]string
+
+// mailSendGrants allow mail.send, mail.reply, and mail.forward. Gmail sends need no grant beyond gmail.modify.
+var mailSendGrants = providerGrants{"m365": {"Mail.Send"}}
+
+// calendarWriteGrants allow the meeting writes. Gmail logins made before calendar writes have only the read-only grant.
+var calendarWriteGrants = providerGrants{"m365": {"Calendars.ReadWrite"}, "gmail": {gmail.CalendarWriteScope}}
 
 var restart = errors.New("account configuration changed; restart required")
 var configError = errors.New("configuration unavailable")
@@ -48,7 +55,7 @@ func publicError(e error) (string, bool) {
 	}
 	if e, ok := e.(guard.GuardError); ok {
 		switch e {
-		case guard.CalendarWriteUnsupported, guard.CalendarAvailabilityUnsupported, "missing_scopes", "invalid request",
+		case guard.CalendarWriteUnsupported, guard.CalendarAvailabilityUnsupported, guard.CalendarCancelCommentUnsupported, "missing_scopes", "invalid request",
 			guard.CalendarRecurring, guard.CalendarCancelled, guard.CalendarOrganizerOnly, guard.CalendarOrganizerCannotRespond:
 			return string(e), true
 		case "refused by policy: mail_draft", "refused by policy: mail_send", "refused by policy: calendar_invite", "refused by policy: calendar_update", "refused by policy: calendar_cancel", "refused by policy: calendar_respond":
@@ -273,13 +280,13 @@ type rulesDTO struct {
 // Dispatch first validates a complete typed operation. Account and provider access occur only afterwards.
 func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	var call func(*account) (any, error)
-	// M365-only calendar operations name their Gmail refusal. grants lists the M365 grants that allow the operation.
-	unsupported, grants := guard.GuardError(""), []string(nil)
+	// unsupported names the Gmail refusal of an operation or request that only M365 supports.
+	unsupported, grants := guard.GuardError(""), providerGrants(nil)
 	switch r.Operation {
 	case "calendar.invite", "calendar.update", "calendar.cancel", "calendar.respond":
-		unsupported, grants = guard.CalendarWriteUnsupported, []string{"Calendars.ReadWrite"}
+		grants = calendarWriteGrants
 		var e error
-		call, e = calendarWriteCall(ctx, r.Operation, r.Params)
+		call, unsupported, e = calendarWriteCall(ctx, r.Operation, r.Params)
 		if e != nil {
 			return nil, e
 		}
@@ -429,7 +436,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		if e != nil || e2 != nil || !model.ValidAvailabilityRequest(p.To, first, last) {
 			return nil, invalid
 		}
-		unsupported, grants = guard.CalendarAvailabilityUnsupported, []string{"Calendars.ReadBasic", "Calendars.Read", "Calendars.ReadWrite"}
+		unsupported, grants = guard.CalendarAvailabilityUnsupported, providerGrants{"m365": {"Calendars.ReadBasic", "Calendars.Read", "Calendars.ReadWrite"}}
 		call = func(a *account) (any, error) {
 			v, e := a.guard.CalendarAvailability(ctx, p.To, first, last)
 			if e != nil {
@@ -500,14 +507,14 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	if e != nil {
 		return nil, e
 	}
-	// The grant check comes before the policy decision. Gmail sends need no grant beyond gmail.modify.
-	if grants != nil && a.Provider == "m365" {
+	// The grant check comes before the policy decision.
+	if needed := grants[a.Provider]; needed != nil {
 		_, scopes, e := instance.provider.Status(ctx)
 		if e != nil {
 			return nil, e
 		}
 		if !slices.ContainsFunc(scopes, func(scope string) bool {
-			return slices.ContainsFunc(grants, func(grant string) bool { return strings.EqualFold(scope, grant) })
+			return slices.ContainsFunc(needed, func(grant string) bool { return strings.EqualFold(scope, grant) })
 		}) {
 			return nil, guard.GuardError("missing_scopes")
 		}

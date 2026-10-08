@@ -147,8 +147,8 @@ func TestApprovedActionMakesTheSameWriteAsTheAllowedCall(t *testing.T) {
 		{"draft.reply", "draft.reply", `{"id":"m1","body":"CANARY reply"}`, organizerEvent},
 		// The allowed forward runs only when Jev can read the forwarded text, so the Graph API serves a green message.
 		{"draft.forward", "draft.forward", `{"id":"m1","to":["a@example.test","b@example.test"]}`, greenMessage(t, "m1")},
-		{"calendar.invite", "calendar.invite", `{"to":["a@example.test"],"subject":"CANARY","body":"CANARY body","start":"2026-10-09T09:00:00Z","end":"2026-10-09T10:00:00Z","location":"Room","teams":false}`, organizerEvent},
-		{"calendar.update duration and attendees", "calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","start":"2026-10-09T12:00:00+01:00","duration":"30m","add":["new@example.test"],"remove":["remove@example.test"],"teams":true}`, organizerEvent},
+		{"calendar.invite", "calendar.invite", `{"to":["a@example.test"],"subject":"CANARY","body":"CANARY body","start":"2026-10-09T09:00:00Z","end":"2026-10-09T10:00:00Z","location":"Room","online":false}`, organizerEvent},
+		{"calendar.update duration and attendees", "calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","start":"2026-10-09T12:00:00+01:00","duration":"30m","add":["new@example.test"],"remove":["remove@example.test"],"online":true}`, organizerEvent},
 		{"calendar.update start keeps duration", "calendar.update", `{"id":"e1","start":"2026-10-09T12:00:00+01:00"}`, organizerEvent},
 		{"calendar.update end", "calendar.update", `{"id":"e1","end":"2026-10-09T11:30:00+01:00"}`, organizerEvent},
 		{"calendar.cancel", "calendar.cancel", `{"id":"e1","comment":"CANARY comment"}`, organizerEvent},

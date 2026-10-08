@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/ivanrvpereira/agentmailguard/internal/guard"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
@@ -15,7 +16,7 @@ type inviteParam struct {
 	Start    string   `json:"start"`
 	End      string   `json:"end"`
 	Location string   `json:"location"`
-	Teams    bool     `json:"teams"`
+	Online   bool     `json:"online"`
 }
 
 type eventChangeParam struct {
@@ -27,7 +28,7 @@ type eventChangeParam struct {
 	Duration *string  `json:"duration"`
 	Add      []string `json:"add"`
 	Remove   []string `json:"remove"`
-	Teams    *bool    `json:"teams"` // only true is valid; updates never remove a Teams meeting
+	Online   *bool    `json:"online"` // only true is valid; updates never remove an online meeting
 }
 
 type eventCancelParam struct {
@@ -40,66 +41,72 @@ type eventRespondParam struct {
 	Comment  string                `json:"comment"`
 }
 
-func calendarWriteCall(ctx context.Context, operation string, raw json.RawMessage) (func(*account) (any, error), error) {
+// calendarWriteCall validates a meeting write. gmailRefusal, when not empty, refuses a valid request that
+// only M365 can carry out.
+func calendarWriteCall(ctx context.Context, operation string, raw json.RawMessage) (call func(*account) (any, error), gmailRefusal guard.GuardError, err error) {
 	switch operation {
 	case "calendar.cancel":
 		var p eventCancelParam
 		if params(raw, &p) != nil || !idValid(p.ID) || !validString(p.Comment, MaxRequestBytes, true) {
-			return nil, invalid
+			return nil, "", invalid
+		}
+		// Google sends no cancellation message, so a comment would be lost.
+		if p.Comment != "" {
+			gmailRefusal = guard.CalendarCancelCommentUnsupported
 		}
 		return func(a *account) (any, error) {
 			return updateDTO{p.ID, true}, a.guard.CalendarCancel(ctx, p.ID, p.Comment)
-		}, nil
+		}, gmailRefusal, nil
 	case "calendar.respond":
 		var p eventRespondParam
 		if params(raw, &p) != nil || !idValid(p.ID) || !validString(p.Comment, MaxRequestBytes, true) || !p.Response.Valid() {
-			return nil, invalid
+			return nil, "", invalid
 		}
 		return func(a *account) (any, error) {
 			return updateDTO{p.ID, true}, a.guard.CalendarRespond(ctx, p.ID, model.EventResponse{Response: p.Response, Comment: p.Comment})
-		}, nil
+		}, "", nil
 	case "calendar.update":
 		var p eventChangeParam
-		if params(raw, &p) != nil || !idValid(p.ID) || p.Teams != nil && !*p.Teams || !listValid(p.Add, 0, 100) || !listValid(p.Remove, 0, 100) || p.Subject != nil && !validString(*p.Subject, 65536, true) || p.Location != nil && !validString(*p.Location, 4096, true) {
-			return nil, invalid
+		if params(raw, &p) != nil || !idValid(p.ID) || p.Online != nil && !*p.Online || !listValid(p.Add, 0, 100) || !listValid(p.Remove, 0, 100) || p.Subject != nil && !validString(*p.Subject, 65536, true) || p.Location != nil && !validString(*p.Location, 4096, true) {
+			return nil, "", invalid
 		}
 		start, ok := optionalCalendarTime(p.Start)
 		end, ok2 := optionalCalendarTime(p.End)
-		change := model.EventChange{Subject: p.Subject, Location: p.Location, Start: start, End: end, AddAttendees: p.Add, RemoveAttendees: p.Remove, Teams: p.Teams != nil}
+		change := model.EventChange{Subject: p.Subject, Location: p.Location, Start: start, End: end, AddAttendees: p.Add, RemoveAttendees: p.Remove, Online: p.Online != nil}
 		if !ok || !ok2 || start != nil && end != nil && !end.After(*start) {
-			return nil, invalid
+			return nil, "", invalid
 		}
 		var duration time.Duration // 0: not given
 		if p.Duration != nil {
 			d, e := time.ParseDuration(*p.Duration)
 			if e != nil || d <= 0 || end != nil || start != nil && !model.CalendarTimeValid(start.Add(d)) {
-				return nil, invalid
+				return nil, "", invalid
 			}
 			duration = d
 		}
 		if change.AttendeeConflict() || change.Empty() && duration == 0 {
-			return nil, invalid
+			return nil, "", invalid
 		}
 		return func(a *account) (any, error) {
 			return updateDTO{p.ID, true}, a.guard.CalendarUpdate(ctx, p.ID, change, duration)
-		}, nil
+		}, "", nil
 	case "calendar.invite":
-		// Teams is on unless the caller sends an explicit false.
-		p := inviteParam{Teams: true}
+		// An online meeting is on unless the caller sends an explicit false.
+		p := inviteParam{Online: true}
 		if params(raw, &p) != nil || !listValid(p.To, 1, 100) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) || !validString(p.Location, 4096, true) {
-			return nil, invalid
+			return nil, "", invalid
 		}
 		start, ok := calendarTime(p.Start)
 		end, ok2 := calendarTime(p.End)
 		if !ok || !ok2 || !end.After(start) {
-			return nil, invalid
+			return nil, "", invalid
 		}
 		return func(a *account) (any, error) {
-			id, e := a.guard.CalendarInvite(ctx, model.NewEvent{Subject: *p.Subject, Body: *p.Body, Location: p.Location, Start: start, End: end, Attendees: p.To, Teams: p.Teams})
+			id, e := a.guard.CalendarInvite(ctx, model.NewEvent{Subject: *p.Subject, Body: *p.Body, Location: p.Location, Start: start, End: end, Attendees: p.To, Online: p.Online})
 			return draftDTO{id}, e
-		}, nil
+		}, "", nil
 	}
-	return nil, invalid
+	return nil, "", invalid
 }
 
 // calendarTime parses an RFC 3339 time with a year the providers accept.

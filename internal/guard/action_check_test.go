@@ -68,9 +68,9 @@ func TestJevSeesOnlyTheAgentFieldsOfEachAction(t *testing.T) {
 			return err
 		}, actionCall{"draft.forward", "creates a draft that the user may send later", map[string]any{"to": []any{"b@example.test"}, "forwarded_message": map[string]any{"subject": "m1", "body": "BODYTEXT [L1]"}}}},
 		{"calendar.invite", func(ctx context.Context, g *guard.Guard) error {
-			_, err := g.CalendarInvite(ctx, model.NewEvent{Subject: "Plan", Body: "Agenda", Location: "Room 1", Start: start, End: start.Add(time.Hour), Attendees: []string{"a@example.test"}, Teams: true})
+			_, err := g.CalendarInvite(ctx, model.NewEvent{Subject: "Plan", Body: "Agenda", Location: "Room 1", Start: start, End: start.Add(time.Hour), Attendees: []string{"a@example.test"}, Online: true})
 			return err
-		}, actionCall{"calendar.invite", "sends meeting invitations to the attendees", map[string]any{"to": []any{"a@example.test"}, "subject": "Plan", "body": "Agenda", "location": "Room 1", "start": "2026-09-29T15:30:00Z", "end": "2026-09-29T16:30:00Z", "teams": true}}},
+		}, actionCall{"calendar.invite", "sends meeting invitations to the attendees", map[string]any{"to": []any{"a@example.test"}, "subject": "Plan", "body": "Agenda", "location": "Room 1", "start": "2026-09-29T15:30:00Z", "end": "2026-09-29T16:30:00Z", "online": true}}},
 		{"calendar.update", func(ctx context.Context, g *guard.Guard) error {
 			return g.CalendarUpdate(ctx, "e1", model.EventChange{Subject: ptr("Moved"), Start: &start, AddAttendees: []string{"c@example.test"}}, 30*time.Minute)
 		}, actionCall{"calendar.update", "changes a meeting and notifies the attendees", map[string]any{"subject": "Moved", "start": "2026-09-29T15:30:00Z", "duration": "30m0s", "add": []any{"c@example.test"}}}},

@@ -369,7 +369,7 @@ type inviteArgs struct {
 	Start    string   `json:"start"`
 	End      string   `json:"end"`
 	Location string   `json:"location"`
-	Teams    bool     `json:"teams"`
+	Online   bool     `json:"online"`
 }
 type changeArgs struct {
 	ID       string   `json:"id"`
@@ -380,7 +380,7 @@ type changeArgs struct {
 	Duration *string  `json:"duration,omitempty"`
 	Add      []string `json:"add,omitempty"`
 	Remove   []string `json:"remove,omitempty"`
-	Teams    *bool    `json:"teams,omitempty"`
+	Online   *bool    `json:"online,omitempty"`
 }
 type cancelArgs struct {
 	ID      string `json:"id"`
@@ -411,8 +411,8 @@ func updateArgs(id string, change model.EventChange, duration time.Duration) cha
 	if len(change.RemoveAttendees) > 0 {
 		args.Remove = change.RemoveAttendees
 	}
-	if change.Teams {
-		args.Teams = pointer(true)
+	if change.Online {
+		args.Online = pointer(true)
 	}
 	return args
 }
