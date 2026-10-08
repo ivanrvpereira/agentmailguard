@@ -20,6 +20,8 @@ var credentialCheckFailed = errors.New("credential check failed")
 // An account without a login does not block the start. Its commands fail with the provider's auth error.
 const notLoggedIn = "not logged in; commands for this account fail until auth login and a server restart"
 
+const approvalNotSet = "not set; the approval console stays off until auth set-approval-password and a server restart"
+
 // memoryStore passes through to the backend until Preload succeeds.
 // After that it answers loads from memory only. Runtime saves still reach the backend.
 // Saves always reach the backend first; memory changes only after the backend accepts them.
@@ -124,7 +126,7 @@ func (s *Server) Preload(ctx context.Context, jevKey func(context.Context) (stri
 	failed := false
 	add := func(item, status string) {
 		checks = append(checks, CredentialCheck{item, status})
-		failed = failed || (status != "ok" && status != "saved" && status != "ok (OPENROUTER_API_KEY)" && status != notLoggedIn)
+		failed = failed || (status != "ok" && status != "saved" && status != "ok (OPENROUTER_API_KEY)" && status != notLoggedIn && status != approvalNotSet)
 	}
 	oauth := map[[2]string]credentials.OAuth{}
 	for _, a := range accounts {
@@ -198,6 +200,14 @@ func (s *Server) Preload(ctx context.Context, jevKey func(context.Context) (stri
 			}
 		}
 	}
+	// A missing approval password keeps the approval console off; it never blocks the start.
+	// Injected stores without a whole record have no approval password.
+	approvalHash := record.ApprovalHash
+	if approvalHash != "" {
+		add("approval password", "ok")
+	} else {
+		add("approval password", approvalNotSet)
+	}
 	if failed {
 		return checks, credentialCheckFailed
 	}
@@ -211,6 +221,7 @@ func (s *Server) Preload(ctx context.Context, jevKey func(context.Context) (stri
 	}
 	s.mu.Lock()
 	s.preloaded = true
+	s.approvalHash = approvalHash
 	s.mu.Unlock()
 	return checks, nil
 }

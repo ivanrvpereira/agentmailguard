@@ -58,6 +58,9 @@ type Server struct {
 	preloaded bool
 	// approvalBase is the approval console URL from [approvals].listen, read once at start.
 	approvalBase string
+	// approvalHash is the bcrypt hash of the approval console password, read once by Preload.
+	// Empty means not set. A change takes effect only after a restart.
+	approvalHash string
 }
 
 func (Server) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "Server{redacted}") }

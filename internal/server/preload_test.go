@@ -130,7 +130,7 @@ func TestPreloadReadsEverythingAtStartThenServesFromMemory(t *testing.T) {
 	}
 	defer s.Close()
 	checks, e := s.Preload(context.Background(), nil)
-	want := []server.CredentialCheck{{Item: "credentials (keychain)", Status: "ok"}, {Item: `account "work" (m365)`, Status: "ok"}, {Item: `account "personal" (gmail)`, Status: "ok"}, {Item: "Jev key", Status: "ok"}}
+	want := []server.CredentialCheck{{Item: "credentials (keychain)", Status: "ok"}, {Item: `account "work" (m365)`, Status: "ok"}, {Item: `account "personal" (gmail)`, Status: "ok"}, {Item: "Jev key", Status: "ok"}, {Item: "approval password", Status: "not set; the approval console stays off until auth set-approval-password and a server restart"}}
 	if e != nil || !reflect.DeepEqual(checks, want) {
 		t.Fatalf("checks=%v err=%v", checks, e)
 	}
@@ -209,7 +209,7 @@ func TestPreloadRefusesWithFixedStatuses(t *testing.T) {
 					t.Fatal("check exposed backend text or secrets")
 				}
 			}
-			if !found || len(checks) != 4 {
+			if !found || len(checks) != 5 {
 				t.Fatalf("checks=%v", checks)
 			}
 		})

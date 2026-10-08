@@ -4,15 +4,27 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"golang.org/x/crypto/bcrypt"
 )
+
+// bcryptHash is the 60-byte form that bcrypt.GenerateFromPassword returns. bcrypt.Cost alone
+// accepts any longer text after a valid prefix, which could carry a plain password.
+var bcryptHash = regexp.MustCompile(`^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$`)
+
+func validApprovalHash(hash string) bool {
+	_, err := bcrypt.Cost([]byte(hash))
+	return err == nil && bcryptHash.MatchString(hash)
+}
 
 func validateRecord(r Record) error {
 	if r.Version != 1 {
 		return ErrUnsupportedVersion
 	}
-	if r.OAuth == nil {
+	if r.OAuth == nil || (r.ApprovalHash != "" && !validApprovalHash(r.ApprovalHash)) {
 		return ErrInvalidRecord
 	}
 	for key, token := range r.OAuth {
@@ -42,7 +54,16 @@ func decodeRecord(value []byte) (Record, error) {
 	}
 	// encoding/json otherwise accepts case-insensitive aliases for struct fields.
 	var fields map[string]json.RawMessage
-	if json.Unmarshal(value, &fields) != nil || len(fields) != 3 {
+	// approval_hash is optional, so records written before it existed still load.
+	if json.Unmarshal(value, &fields) != nil {
+		return Record{}, ErrInvalidRecord
+	}
+	_, hasHash := fields["approval_hash"]
+	want := 3
+	if hasHash {
+		want = 4
+	}
+	if len(fields) != want {
 		return Record{}, ErrInvalidRecord
 	}
 	for _, key := range []string{"version", "oauth", "openrouter_key"} {
@@ -54,13 +75,17 @@ func decodeRecord(value []byte) (Record, error) {
 		Version       *int                       `json:"version"`
 		OAuth         map[string]json.RawMessage `json:"oauth"`
 		OpenRouterKey *string                    `json:"openrouter_key"`
+		ApprovalHash  *string                    `json:"approval_hash"`
 	}
 	d = json.NewDecoder(bytes.NewReader(value))
 	d.DisallowUnknownFields()
-	if d.Decode(&wire) != nil || wire.Version == nil || wire.OpenRouterKey == nil || wire.OAuth == nil {
+	if d.Decode(&wire) != nil || wire.Version == nil || wire.OpenRouterKey == nil || wire.OAuth == nil || (hasHash && (wire.ApprovalHash == nil || *wire.ApprovalHash == "")) {
 		return Record{}, ErrInvalidRecord
 	}
 	r := Record{Version: *wire.Version, OAuth: make(map[string]OAuth, len(wire.OAuth)), OpenRouterKey: strings.TrimSpace(*wire.OpenRouterKey)}
+	if wire.ApprovalHash != nil {
+		r.ApprovalHash = *wire.ApprovalHash
+	}
 	for key, raw := range wire.OAuth {
 		token, err := decodeOAuth(raw)
 		if err != nil {

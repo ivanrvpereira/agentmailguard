@@ -44,6 +44,9 @@ type Record struct {
 	Version       int              `json:"version"`
 	OAuth         map[string]OAuth `json:"oauth"`
 	OpenRouterKey string           `json:"openrouter_key"`
+	// ApprovalHash is the bcrypt hash of the approval console password. Empty means not set;
+	// omitempty keeps such a record in the shape that older builds read.
+	ApprovalHash string `json:"approval_hash,omitempty"`
 }
 
 func (Record) String() string                   { return "Record{redacted}" }
@@ -206,6 +209,25 @@ func (s *RecordStore) SaveOpenRouterKey(ctx context.Context, key string) error {
 		return errors.New("OpenRouter key is empty")
 	}
 	_, err := s.transact(ctx, func(r *Record) { r.OpenRouterKey = key })
+	return err
+}
+func (s *RecordStore) LoadApprovalHash(ctx context.Context) (string, error) {
+	r, err := s.transact(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	if r.ApprovalHash == "" {
+		return "", ErrNotFound
+	}
+	return r.ApprovalHash, nil
+}
+
+// SaveApprovalHash stores a bcrypt hash; it refuses any other value so a plain password is never stored.
+func (s *RecordStore) SaveApprovalHash(ctx context.Context, hash string) error {
+	if !validApprovalHash(hash) {
+		return ErrInvalidRecord
+	}
+	_, err := s.transact(ctx, func(r *Record) { r.ApprovalHash = hash })
 	return err
 }
 func safeError(ctx context.Context, err error) error {

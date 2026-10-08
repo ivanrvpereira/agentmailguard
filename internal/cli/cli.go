@@ -28,7 +28,7 @@ type Options struct {
 	Server             server.Options
 	LookupEnv          func(string) string
 	Now                func() time.Time
-	Stdin              io.Reader // defaults to os.Stdin; read by auth set-jev-key, by auth login for a pasted Gmail address, and by serve for a missing Jev key
+	Stdin              io.Reader // defaults to os.Stdin; read by auth set-jev-key and set-approval-password, by auth login for a pasted Gmail address, and by serve for a missing Jev key
 }
 
 func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "CLIOptions{redacted}") }
@@ -145,7 +145,7 @@ func newRoot(r *runner, raw []string) *cobra.Command {
 	f.StringVar(&r.account, "account", "", "account name from the server configuration")
 	f.StringVar(&r.base, "server", "", "server base URL")
 	f.DurationVar(&r.timeout, "timeout", client.DefaultTimeout, "request timeout")
-	f.StringVar(&r.home, "home", "", "configuration directory; serve, auth login, set-jev-key, migrate, and change-password only")
+	f.StringVar(&r.home, "home", "", "configuration directory; serve, auth login, set-jev-key, set-approval-password, migrate, and change-password only")
 	root.AddCommand(serveCmd(r), authCmd(r), statsCmd(r), cacheCmd(r), rulesCmd(r), approvalsCmd(r), mailCmd(r), calendarCmd(r), draftCmd(r))
 	return root
 }
@@ -370,8 +370,23 @@ func authCmd(r *runner) *cobra.Command {
 		r.code = setJevKey(c.Context(), r.home, r.opts.Stdin, r.stderr, r.opts.Server, r.passwordEnv)
 		return errDone
 	})
+	approvalPassword := r.leaf("set-approval-password", "Set the approval console password on this host from stdin", 0, 0, func(c *cobra.Command, _ []string) error {
+		supplied, _, err := r.resolve(c, true)
+		if err != nil {
+			return err
+		}
+		if c.Flags().Changed("account") {
+			return errUsage
+		}
+		if supplied {
+			r.code = failure(r.stderr, "approval password setup is local only; remove --server and AGENTMAILGUARD_SERVER")
+			return errDone
+		}
+		r.code = setApprovalPassword(c.Context(), r.home, r.opts.Stdin, r.stderr, r.opts.Server, r.passwordEnv)
+		return errDone
+	})
 	c := group(r, "auth", "Provider sign-in and credential setup")
-	c.AddCommand(signIn, r.leaf("status", "Report account sign-in and scope state", 0, 0, r.none("auth.status")), jevKey,
+	c.AddCommand(signIn, r.leaf("status", "Report account sign-in and scope state", 0, 0, r.none("auth.status")), jevKey, approvalPassword,
 		credentialCmd(r, "migrate", "Copy credentials to the other local backend"),
 		credentialCmd(r, "change-password", "Change the local credential file password"))
 	return c

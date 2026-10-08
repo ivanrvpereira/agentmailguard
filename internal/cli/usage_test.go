@@ -63,7 +63,7 @@ func TestCredentialCommandHelpIsScopedAndOffline(t *testing.T) {
 		}
 	}
 	code, out, errout := runOffline(t, "--help")
-	if code != 0 || errout != "" || !strings.Contains(out, "serve, auth login, set-jev-key, migrate, and change-password only") {
+	if code != 0 || errout != "" || !strings.Contains(out, "serve, auth login, set-jev-key, set-approval-password, migrate, and change-password only") {
 		t.Error("root help does not explain the supported local home scope")
 	}
 }

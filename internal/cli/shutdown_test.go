@@ -103,7 +103,7 @@ func TestServeExposureWarningAndBoundedShutdown(t *testing.T) {
 			// An account that is not logged in does not block the start; its commands fail.
 			account = "not logged in; commands for this account fail until auth login and a server restart"
 		}
-		checks := "checking credentials\ncredential check: credentials (keychain): ok\ncredential check: account \"work\" (m365): " + account + "\ncredential check: Jev key: ok\nserver listening\n"
+		checks := "checking credentials\ncredential check: credentials (keychain): ok\ncredential check: account \"work\" (m365): " + account + "\ncredential check: Jev key: ok\ncredential check: approval password: not set; the approval console stays off until auth set-approval-password and a server restart\nserver listening\n"
 		if !strings.HasSuffix(text, checks) || strings.Contains(text, "private-") {
 			t.Errorf("credential checks must precede listening: %q", text)
 		}

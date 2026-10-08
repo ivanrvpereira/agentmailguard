@@ -62,7 +62,7 @@ Independent server homes with separate Keychain identities are not supported.
 The server owns configuration, OAuth credentials, the Jev key, `cache.db`, and `audit.jsonl`.
 The CLI never loads these files for data commands, even with a loopback server.
 The server home is `--home`, then `AGENTMAILGUARD_HOME`, then `~/.agentmailguard`.
-`serve` and local `auth login`, `auth set-jev-key`, `auth migrate`, and `auth change-password` accept `--home`.
+`serve` and local `auth login`, `auth set-jev-key`, `auth set-approval-password`, `auth migrate`, and `auth change-password` accept `--home`.
 There is no automatic import of configuration, cache, or credentials from the retired Python version.
 
 Create a private server-home directory and a `config.toml` file there.
@@ -98,7 +98,7 @@ The optional `[policy]` tables in `config.toml` set the [write policy](#write-po
 
 ## Credential storage
 
-Both backends store all provider OAuth credentials and the Jev (OpenRouter) key in one versioned record.
+Both backends store all provider OAuth credentials, the Jev (OpenRouter) key, and the [approval password](#approval-password) hash in one versioned record.
 The optional configuration table selects the backend:
 
 ```toml
@@ -125,7 +125,7 @@ An ad-hoc-signed rebuild changes the application identity, so it needs approval 
 Stable code signing is outside this implementation.
 
 If the single item is absent, the first local store operation automatically imports the configured accounts and Jev key from legacy items.
-This applies to `serve`, `auth login`, and `auth set-jev-key`, so an initial login cannot hide other legacy credentials.
+This applies to `serve`, `auth login`, `auth set-jev-key`, and `auth set-approval-password`, so an initial login cannot hide other legacy credentials.
 The import leaves legacy items unchanged.
 An unreadable legacy item refuses the operation instead of creating a partial record.
 
@@ -321,7 +321,7 @@ Required text flags distinguish an omitted value from an explicit empty value, i
 
 | Group | Commands |
 | --- | --- |
-| State and auth | `stats --days 30`, `cache clear`, `rules list`, `approvals status ID`, `auth status`, local `auth login [--device-code] [--no-browser]`, `auth set-jev-key`, `auth migrate --to file\|keychain`, `auth change-password` |
+| State and auth | `stats --days 30`, `cache clear`, `rules list`, `approvals status ID`, `auth status`, local `auth login [--device-code] [--no-browser]`, `auth set-jev-key`, `auth set-approval-password`, `auth migrate --to file\|keychain`, `auth change-password` |
 | Mail reads | `mail list`, `mail get ID [--pretty]`, `mail search`, `mail link ID L1 L2` or `mail link ID --all`, `mail folders`, `mail categories` |
 | Mail changes | `mail archive IDS...`, `mail trash IDS...`, `mail move FOLDER_ID IDS...`, `mail read IDS...`, `mail unread IDS...`, `mail flag IDS... --state flagged|complete|none`, `mail categorize IDS... --add NAME --remove NAME` |
 | Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID` |
@@ -392,7 +392,7 @@ In `mail organize --apply`, only a rule move to `trash` has a key.
 The server reads the policy at start.
 After a policy change, requests for each changed account fail with `account configuration changed; restart required` until you restart the server.
 If the changed policy is invalid, requests fail with `configuration unavailable`.
-An invalid policy stops `serve`, `auth login`, `auth set-jev-key`, `auth migrate`, and `auth change-password` with `invalid policy: KEY_PATH`.
+An invalid policy stops `serve`, `auth login`, `auth set-jev-key`, `auth set-approval-password`, `auth migrate`, and `auth change-password` with `invalid policy: KEY_PATH`.
 For example: `invalid policy: accounts.personal.policy.sealed.calendar_invite`. The error never shows the value.
 A policy is invalid if it has an unknown key or table, a value other than `allow`, `approve`, or `deny`, or a calendar key in a sealed table.
 
@@ -454,7 +454,22 @@ hosts = ["my-mac.example.ts.net"]
 - `hosts`: extra host names for the console, for example a Tailscale name. This version only validates them. Each entry is a host name or IP address with an optional `:PORT`. Put an IPv6 address in brackets. The default is none.
 
 The server reads `[approvals]` at start. Restart the server after a change.
-An invalid table stops `serve`, `auth login`, `auth set-jev-key`, `auth migrate`, and `auth change-password` with `invalid approvals: KEY_PATH`, for example `invalid approvals: approvals.listen`. The error never shows the value.
+An invalid table stops `serve`, `auth login`, `auth set-jev-key`, `auth set-approval-password`, `auth migrate`, and `auth change-password` with `invalid approvals: KEY_PATH`, for example `invalid approvals: approvals.listen`. The error never shows the value.
+
+### Approval password
+
+The approval password will protect the approval console. This version does not serve the console yet.
+
+Run `agentmailguard auth set-approval-password --home /private/path/agentmailguard` locally on the server host to set or change it.
+If a password is already set, the command first asks for the current password. A wrong current password fails with `approval password is wrong`, and nothing changes.
+Then it asks for the new password. On a terminal, echo is off and it asks for the new password twice.
+Non-terminal stdin supplies the lines in the same order without a confirmation: the file backend password (if `AGENTMAILGUARD_CREDENTIALS_PASSWORD` is absent), the current approval password (if one is set), and then the new password.
+The password must be 8 to 72 bytes of valid UTF-8 without control characters.
+The command stores only a bcrypt hash of the password in the credential store (Keychain or the encrypted file). It never prints the password or the hash, and it does not accept them as arguments.
+It refuses `--server`, `AGENTMAILGUARD_SERVER`, and `--account`.
+
+The server reads the hash at start and shows `credential check: approval password: ok` or `not set`. A missing password does not stop the start.
+Restart the server after you set or change the password.
 
 ### Storage and audit
 
@@ -473,6 +488,7 @@ The audit log gets content-free records for the policy. Their `operation` is the
 2. `mail trash`, `draft reply`, and `draft forward` on `sealed` or `error` messages are now denied by default. To change this, set `[policy.sealed]`.
 3. The cache database gets the `pending` table (schema version 5). After the upgrade, `serve` of an older binary fails with `server state unavailable`.
 4. Pending items store request text in `cache.db`. Earlier versions kept no subject, recipient, or body text in storage.
+5. After you set an approval password, older builds refuse the credential record. Records without an approval password keep the old format.
 
 ### Known limits
 
