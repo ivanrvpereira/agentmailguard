@@ -82,10 +82,24 @@ func assertAudited(t *testing.T, home, operation string) {
 	}
 }
 
+// enableCalendarWrites allows the calendar keys, which the default policy denies.
+func enableCalendarWrites(t *testing.T, home string) {
+	t.Helper()
+	f, err := os.OpenFile(filepath.Join(home, "config.toml"), os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString("[policy]\ncalendar_invite='allow'\ncalendar_update='allow'\ncalendar_cancel='allow'\ncalendar_respond='allow'\n"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func calendarServer(t *testing.T, scopes string, handler http.HandlerFunc) (*server.Server, *meetingStore, string) {
 	t.Helper()
 	home := t.TempDir()
 	configFile(t, home)
+	enableCalendarWrites(t, home)
 	api := httptest.NewServer(handler)
 	t.Cleanup(api.Close)
 	creds := &meetingStore{scopes: scopes}

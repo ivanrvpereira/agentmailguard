@@ -83,19 +83,15 @@ func (l *Log) Record(ctx context.Context, account string, operation Operation, r
 	if options.Flag != nil && *options.Flag != model.Flagged && *options.Flag != model.Complete && *options.Flag != model.NoFlag {
 		return errors.New("invalid audit flag")
 	}
-	if options.Rule != nil && !model.ValidRuleName(*options.Rule) {
-		switch *options.Rule {
-		case "security:yellow", "security:red", "security:sealed":
-		default:
-			return errors.New("invalid audit rule")
-		}
+	if !validRule(options.Rule) {
+		return errors.New("invalid audit rule")
 	}
 	for _, r := range results {
-		if err := model.ValidateFailureText(r.Error); err != nil {
+		if err := validResultError(r.Error); err != nil {
 			return err
 		}
 	}
-	line := record{Time: time.Now().UTC().Format("2006-01-02T15:04:05+00:00"), Account: account, Operation: operation, Rule: options.Rule, Folder: options.Folder, Flag: options.Flag, DraftID: options.DraftID, IDs: []string{}, Results: []result{}}
+	line := record{Time: now(), Account: account, Operation: operation, Rule: options.Rule, Folder: options.Folder, Flag: options.Flag, DraftID: options.DraftID, IDs: []string{}, Results: []result{}}
 	if options.Add != nil {
 		line.Add = &options.Add
 	}
@@ -106,6 +102,24 @@ func (l *Log) Record(ctx context.Context, account string, operation Operation, r
 		line.IDs = append(line.IDs, r.ID)
 		line.Results = append(line.Results, result{ID: r.ID, OK: r.OK, Error: r.Error})
 	}
+	return l.append(ctx, line)
+}
+
+func now() string { return time.Now().UTC().Format("2006-01-02T15:04:05+00:00") }
+
+func validRule(rule *string) bool {
+	if rule == nil || model.ValidRuleName(*rule) {
+		return true
+	}
+	switch *rule {
+	case "security:yellow", "security:red", "security:sealed":
+		return true
+	}
+	return false
+}
+
+// append writes one JSON line and syncs the private audit file.
+func (l *Log) append(ctx context.Context, line any) error {
 	bytes, err := json.Marshal(line)
 	if err != nil {
 		return errors.New("cannot encode audit record")

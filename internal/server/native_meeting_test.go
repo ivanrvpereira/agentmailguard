@@ -129,6 +129,7 @@ func TestNativeBinaryMeetingWorkflow(t *testing.T) {
 		google: func(w http.ResponseWriter, r *http.Request) { googleRequests.Add(1); w.WriteHeader(500) },
 		now:    time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC), clientEnv: []string{"TZ=Europe/Lisbon"},
 	})
+	enableCalendarWrites(t, home)
 	// write runs one successful command and returns its stdout and the Graph writes it caused.
 	write := func(args ...string) (string, []externalWrite) {
 		t.Helper()

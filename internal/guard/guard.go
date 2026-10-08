@@ -12,12 +12,17 @@ import (
 
 	"github.com/ivanrvpereira/agentmailguard/internal/audit"
 	"github.com/ivanrvpereira/agentmailguard/internal/cache"
+	"github.com/ivanrvpereira/agentmailguard/internal/config"
 	"github.com/ivanrvpereira/agentmailguard/internal/content"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"github.com/ivanrvpereira/agentmailguard/internal/views"
 )
 
-type Options struct{ Now func() time.Time }
+// Options configures a guard. A zero decision in Policy counts as deny.
+type Options struct {
+	Now    func() time.Time
+	Policy config.Policy
+}
 type Guard struct {
 	account  string
 	mailbox  model.Mailbox
@@ -26,6 +31,7 @@ type Guard struct {
 	store    *cache.Cache
 	log      *audit.Log
 	now      func() time.Time
+	policy   config.Policy
 	mutation chan struct{}
 	// Security writes and final automatic authorization share this gate, never network screening/validation.
 	security chan struct{}
@@ -38,7 +44,7 @@ func New(account string, mailbox model.Mailbox, calendar model.Calendar, screene
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	return &Guard{account, mailbox, calendar, screener, store, log, opts.Now, make(chan struct{}, 1), make(chan struct{}, 1)}
+	return &Guard{account, mailbox, calendar, screener, store, log, opts.Now, opts.Policy, make(chan struct{}, 1), make(chan struct{}, 1)}
 }
 
 // GuardError contains only fixed refusal text or a safe failure code.

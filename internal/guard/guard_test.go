@@ -91,7 +91,7 @@ func setup(t *testing.T, b model.Mailbox, s model.Screener) (*guard.Guard, *cach
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	path := filepath.Join(dir, "audit.jsonl")
-	return guard.New("work", b, nil, s, c, audit.New(path), guard.Options{Now: func() time.Time { return now }}), c, path
+	return guard.New("work", b, nil, s, c, audit.New(path), guard.Options{Now: func() time.Time { return now }, Policy: allowAll}), c, path
 }
 func TestLinksResolveSafeURLsAndRefuseSecretsIndependently(t *testing.T) {
 	m := message("m1")

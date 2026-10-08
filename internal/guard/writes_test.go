@@ -18,6 +18,7 @@ import (
 type writer struct {
 	*mailbox
 	calls            []string
+	trashed          []string
 	flags            []model.FlagState
 	updates          []struct{ id, body string }
 	err              error
@@ -47,6 +48,7 @@ func (w *writer) Archive(ctx context.Context, ids []string) ([]model.MutationRes
 	return w.write("archive", ids)
 }
 func (w *writer) Trash(_ context.Context, ids []string) ([]model.MutationResult, error) {
+	w.trashed = append(w.trashed, ids...)
 	return w.write("trash", ids)
 }
 func (w *writer) Move(_ context.Context, ids []string, _ string) ([]model.MutationResult, error) {
@@ -85,7 +87,33 @@ func (w *writer) DraftUpdate(_ context.Context, id, body string) (string, error)
 	_, err := w.write("draft_update", nil)
 	return "d4", err
 }
+
+// auditRecords returns the per-operation records. Policy and approval records have an "event" field;
+// policyRecords returns those.
 func auditRecords(t *testing.T, path string) []map[string]any {
+	t.Helper()
+	out := []map[string]any{}
+	for _, r := range allAuditRecords(t, path) {
+		if _, ok := r["event"]; !ok {
+			out = append(out, r)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+func policyRecords(t *testing.T, path string) []map[string]any {
+	t.Helper()
+	out := []map[string]any{}
+	for _, r := range allAuditRecords(t, path) {
+		if _, ok := r["event"]; ok {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+func allAuditRecords(t *testing.T, path string) []map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {

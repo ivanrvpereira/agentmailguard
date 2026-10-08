@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/audit"
+	"github.com/ivanrvpereira/agentmailguard/internal/config"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
@@ -18,10 +19,11 @@ const (
 	CalendarOrganizerCannotRespond  = GuardError("calendar response refused: organizer cannot respond")
 )
 
-// calendarWrite holds the mutation gate from check through write and audit. check validates input, fetches
-// the writable event, and may resolve what write sends. write returns the event ID to audit; provider
-// errors become safe codes.
-func (g *Guard) calendarWrite(ctx context.Context, op audit.Operation, check func() error, write func(model.CalendarWriter) (model.EventID, error)) (model.EventID, error) {
+// calendarWrite holds the mutation gate from check through write and audit. A denied action stops before
+// any provider access. Otherwise check validates input, fetches the writable event, and may resolve what
+// write sends; an action that the policy approves is stored with args only after check passes.
+// write returns the event ID to audit; provider errors become safe codes. ref is the event the action changes.
+func (g *Guard) calendarWrite(ctx context.Context, op audit.Operation, ref *string, args any, check func() error, write func(model.CalendarWriter) (model.EventID, error)) (model.EventID, error) {
 	if err := g.acquire(ctx); err != nil {
 		return "", err
 	}
@@ -30,10 +32,17 @@ func (g *Guard) calendarWrite(ctx context.Context, op audit.Operation, check fun
 	if !ok {
 		return "", CalendarWriteUnsupported
 	}
-	if err := check(); err != nil {
-		return "", err
+	key := string(op)
+	d := decision{value: g.baseDecision(key)}
+	if d.value != config.Deny {
+		if err := check(); err != nil {
+			return "", err
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 	}
-	if err := ctx.Err(); err != nil {
+	if err := g.single(ctx, op, key, d, ref, args); err != nil {
 		return "", err
 	}
 	id, err := write(writer)
@@ -43,6 +52,9 @@ func (g *Guard) calendarWrite(ctx context.Context, op audit.Operation, check fun
 	if id == "" {
 		return "", GuardError("ValueError")
 	}
+	if err := g.recordDecision(ctx, op, key, d, ref, nil, nil); err != nil {
+		return "", err
+	}
 	if err := g.log.Record(context.WithoutCancel(ctx), g.account, op, []model.MutationResult{{ID: id, OK: true}}, audit.Options{}); err != nil {
 		return "", GuardError("AuditError")
 	}
@@ -50,7 +62,8 @@ func (g *Guard) calendarWrite(ctx context.Context, op audit.Operation, check fun
 }
 
 func (g *Guard) CalendarInvite(ctx context.Context, event model.NewEvent) (string, error) {
-	return g.calendarWrite(ctx, audit.CalendarInvite, func() error {
+	args := inviteArgs{To: event.Attendees, Subject: event.Subject, Body: event.Body, Start: event.Start.Format(time.RFC3339Nano), End: event.End.Format(time.RFC3339Nano), Location: event.Location, Teams: event.Teams}
+	return g.calendarWrite(ctx, audit.CalendarInvite, nil, args, func() error {
 		if !calendarRangeValid(event.Start, event.End) {
 			return GuardError("invalid request")
 		}
@@ -61,7 +74,7 @@ func (g *Guard) CalendarInvite(ctx context.Context, event model.NewEvent) (strin
 // CalendarUpdate applies change to the organizer's event. duration 0 means not given; a positive duration
 // sets the end from the new or current start. A start-only move keeps the current duration.
 func (g *Guard) CalendarUpdate(ctx context.Context, id string, change model.EventChange, duration time.Duration) error {
-	_, err := g.calendarWrite(ctx, audit.CalendarUpdate, func() error {
+	_, err := g.calendarWrite(ctx, audit.CalendarUpdate, &id, updateArgs(id, change, duration), func() error {
 		if change.Empty() && duration == 0 || duration < 0 || duration > 0 && change.End != nil || change.AttendeeConflict() {
 			return GuardError("invalid request")
 		}
@@ -97,7 +110,7 @@ func (g *Guard) CalendarUpdate(ctx context.Context, id string, change model.Even
 }
 
 func (g *Guard) CalendarCancel(ctx context.Context, id, comment string) error {
-	_, err := g.calendarWrite(ctx, audit.CalendarCancel, func() error {
+	_, err := g.calendarWrite(ctx, audit.CalendarCancel, &id, cancelArgs{id, comment}, func() error {
 		_, err := g.calendarWritableEvent(ctx, id, asOrganizer)
 		return err
 	}, func(w model.CalendarWriter) (string, error) { return id, w.Cancel(ctx, id, comment) })
@@ -105,7 +118,7 @@ func (g *Guard) CalendarCancel(ctx context.Context, id, comment string) error {
 }
 
 func (g *Guard) CalendarRespond(ctx context.Context, id string, response model.EventResponse) error {
-	_, err := g.calendarWrite(ctx, audit.CalendarRespond, func() error {
+	_, err := g.calendarWrite(ctx, audit.CalendarRespond, &id, respondArgs{id, response.Response, response.Comment}, func() error {
 		if !response.Response.Valid() {
 			return GuardError("invalid request")
 		}

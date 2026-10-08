@@ -76,6 +76,11 @@ func TestClientDisplaysOnlyExactFixedRefusals(t *testing.T) {
 		"calendar write refused: only the organizer can update or cancel",
 		"calendar response refused: organizer cannot respond",
 		"missing_scopes",
+		"refused by policy: mail_draft",
+		"refused by policy: calendar_invite",
+		"refused by policy: calendar_update",
+		"refused by policy: calendar_cancel",
+		"refused by policy: calendar_respond",
 	} {
 		for _, suffix := range []string{"", " CANARY private"} {
 			t.Run(fixed+suffix, func(t *testing.T) {

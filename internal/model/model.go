@@ -122,10 +122,12 @@ type NewDraft struct {
 }
 
 // Error must contain only a safe error code/status, never a provider response body.
+// ApprovalID is set only by the guard, for an action stored for approval (Error "pending").
 type MutationResult struct {
-	ID    MessageID
-	OK    bool
-	Error *string
+	ID         MessageID
+	OK         bool
+	Error      *string
+	ApprovalID *string
 }
 type InboxEntry struct {
 	ID         MessageID

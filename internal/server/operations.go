@@ -48,6 +48,8 @@ func publicError(e error) (string, bool) {
 		case guard.CalendarWriteUnsupported, guard.CalendarAvailabilityUnsupported, "missing_scopes", "invalid request",
 			guard.CalendarRecurring, guard.CalendarCancelled, guard.CalendarOrganizerOnly, guard.CalendarOrganizerCannotRespond:
 			return string(e), true
+		case "refused by policy: mail_draft", "refused by policy: calendar_invite", "refused by policy: calendar_update", "refused by policy: calendar_cancel", "refused by policy: calendar_respond":
+			return string(e), true
 		case "move refused: the destination must be a folder ID from `folders`", "move refused: use mail.trash", "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
 			"link refused: message is red, not green", "link refused: message is yellow, not green", "link refused: message is sealed, not green", "link refused: message is error, not green",
 			"search needs at least one of text, from, subject, after, before":
@@ -94,7 +96,7 @@ func (s *Server) instance(a config.Account) (*account, error) {
 		}
 		p = m365.New(a, s.options.Credentials, o)
 	}
-	v := &account{a, p, guard.New(a.Name, p.Mailbox(), p.Calendar(), s.options.Screener, s.cache, s.audit, guard.Options{Now: s.options.Now})}
+	v := &account{a, p, guard.New(a.Name, p.Mailbox(), p.Calendar(), s.options.Screener, s.cache, s.audit, guard.Options{Now: s.options.Now, Policy: a.Policy})}
 	s.accounts[a.Name] = v
 	return v, nil
 }
@@ -197,17 +199,24 @@ type forwardParam struct {
 	To []string `json:"to"`
 }
 type mutationDTO struct {
-	ID    string  `json:"id"`
-	OK    bool    `json:"ok"`
-	Error *string `json:"error"`
+	ID         string  `json:"id"`
+	OK         bool    `json:"ok"`
+	Error      *string `json:"error"`
+	ApprovalID *string `json:"approval_id,omitempty"`
 }
 
 func mutations(v []model.MutationResult, e error) (any, error) {
 	out := make([]mutationDTO, 0, len(v))
 	for _, r := range v {
-		out = append(out, mutationDTO{r.ID, r.OK, r.Error})
+		out = append(out, mutationDTO{r.ID, r.OK, r.Error, r.ApprovalID})
 	}
 	return out, e
+}
+
+// pendingDTO is the result of a single action that the policy stored for approval.
+type pendingDTO struct {
+	Status     string `json:"status"`
+	ApprovalID string `json:"approval_id"`
 }
 
 type folderDTO struct {
@@ -470,7 +479,12 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 			return nil, guard.GuardError("missing_scopes")
 		}
 	}
-	return call(instance)
+	v, e := call(instance)
+	var pending guard.PendingError
+	if errors.As(e, &pending) {
+		return pendingDTO{"pending", pending.ApprovalID}, nil
+	}
+	return v, e
 }
 func (s *Server) status(ctx context.Context, a *account) (any, error) {
 	out := statusDTO{Account: a.config.Name}

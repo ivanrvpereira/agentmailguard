@@ -30,6 +30,9 @@ func (g *Guard) batches(ctx context.Context, op audit.Operation, ids []string, o
 			code := "failed"
 			if r.OK {
 				code = "ok"
+			} else if r.Error != nil && (*r.Error == audit.Pending || *r.Error == string(refused(keyTrash))) {
+				// Provider results are normalized to failed for rules, so only policy results carry these codes.
+				code = *r.Error
 			}
 			outcome[r.ID] = code
 		}

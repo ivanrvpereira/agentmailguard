@@ -75,7 +75,7 @@ func calendarGuard(t *testing.T, b model.Mailbox, cal model.Calendar) (*guard.Gu
 	t.Helper()
 	s := &eventScreener{}
 	_, cache, path := setup(t, b, s)
-	return guard.New("work", b, cal, s, cache, audit.New(path), guard.Options{}), s, path
+	return guard.New("work", b, cal, s, cache, audit.New(path), guard.Options{Policy: allowAll}), s, path
 }
 func meetingWriter() *calendarWriter {
 	return &calendarWriter{calendar: &calendar{event: model.Event{ID: "e1", Start: now, End: now.Add(time.Hour), IsOrganizer: true, Subject: "CANARY", Body: ptr("CANARY")}}}
