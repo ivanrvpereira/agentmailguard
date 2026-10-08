@@ -105,6 +105,59 @@ func TestFakeAccountSendIsRefusedByTheDefaultPolicy(t *testing.T) {
 	}
 }
 
+func TestFakeAccountReadsAvailabilityFromFreeBusyRows(t *testing.T) {
+	home := fakeHome(t, "")
+	if _, err := fakeDB(t, home).Exec(`INSERT INTO free_busy (account, address, start_at, end_at, status) VALUES ('demo', 'ana@example.test', '2026-10-09T09:30:00Z', '2026-10-09T10:00:00Z', 'busy')`); err != nil {
+		t.Fatal(err)
+	}
+	s, creds := fakeServer(t, home)
+	status, body := accountRPC(t, s, "calendar.availability", "demo", `{"to":["Ana@example.test","bob@example.test"],"start":"2026-10-09T09:00:00Z","end":"2026-10-09T10:00:00Z"}`)
+	want := `{"start":"2026-10-09T09:00:00Z","end":"2026-10-09T10:00:00Z","interval_minutes":30,"schedules":[{"address":"Ana@example.test","slots":["free","busy"]},{"address":"bob@example.test","slots":["unknown","unknown"]}]}`
+	if status != 200 || body != want {
+		t.Fatalf("availability: %d %s", status, body)
+	}
+	if reads, writes := creds.accesses(); len(reads)+len(writes) != 0 {
+		t.Fatalf("credential reads=%v writes=%v", reads, writes)
+	}
+}
+
+// cancelled reads the cancel state of event id in fake.db.
+func cancelled(t *testing.T, home, id string) (bool, *string) {
+	t.Helper()
+	var done bool
+	var comment *string
+	if err := fakeDB(t, home).QueryRow(`SELECT is_cancelled, cancel_comment FROM events WHERE account = 'demo' AND id = ?`, id).Scan(&done, &comment); err != nil {
+		t.Fatal(err)
+	}
+	return done, comment
+}
+
+func TestFakeAccountCancelsWithACommentUnderAnAllowPolicy(t *testing.T) {
+	home := fakeHome(t, "[policy]\ncalendar_cancel='allow'\n")
+	if _, err := fakeDB(t, home).Exec(`INSERT INTO events (account, id, subject, start_at, end_at) VALUES ('demo', 'e1', 'Planning', '2026-10-09T09:00:00Z', '2026-10-09T10:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := fakeServer(t, home)
+	if status, body := accountRPC(t, s, "calendar.cancel", "demo", `{"id":"e1","comment":"Moved"}`); status != 200 || body != `{"id":"e1","ok":true}` {
+		t.Fatalf("cancel: %d %s", status, body)
+	}
+	if done, comment := cancelled(t, home, "e1"); !done || comment == nil || *comment != "Moved" {
+		t.Fatalf("cancelled=%v comment=%v", done, comment)
+	}
+}
+
+func TestFakeAccountInviteIsRefusedByTheDefaultPolicy(t *testing.T) {
+	home := fakeHome(t, "")
+	s, _ := fakeServer(t, home)
+	if status, body := accountRPC(t, s, "calendar.invite", "demo", `{"to":["ana@example.test"],"subject":"Planning","body":"","start":"2026-10-09T09:00:00Z","end":"2026-10-09T10:00:00Z"}`); status != 500 || body != `{"error":"refused by policy: calendar_invite"}` {
+		t.Fatalf("invite: %d %s", status, body)
+	}
+	var events, attendees int
+	if err := fakeDB(t, home).QueryRow(`SELECT (SELECT count(*) FROM events), (SELECT count(*) FROM attendees)`).Scan(&events, &attendees); err != nil || events+attendees != 0 {
+		t.Fatalf("events=%d attendees=%d err=%v", events, attendees, err)
+	}
+}
+
 func TestFakeAccountPreloadsAndReportsStatusWithoutCredentials(t *testing.T) {
 	s, creds := fakeServer(t, fakeHome(t, ""))
 	checks, err := s.Preload(context.Background(), nil)

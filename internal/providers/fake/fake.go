@@ -1,6 +1,6 @@
-// Package fake implements a local provider whose mailbox lives in <home>/fake.db. It makes no network
-// calls and needs no login. It reads and writes the database on every call, so edits made with sqlite3
-// while the server runs are seen. Its mail is untrusted, as with real providers.
+// Package fake implements a local provider whose mailbox and calendar live in <home>/fake.db. It makes no
+// network calls and needs no login. It reads and writes the database on every call, so edits made with
+// sqlite3 while the server runs are seen. Its mail and events are untrusted, as with real providers.
 package fake
 
 import (
@@ -119,17 +119,5 @@ func (p *Provider) Status(ctx context.Context) (string, []string, error) {
 
 func (p *Provider) Mailbox() model.Mailbox { return &mailbox{p} }
 
-// Calendar is read-only and empty until fake calendar data exists.
-func (p *Provider) Calendar() model.Calendar { return calendar{} }
-
-type calendar struct{}
-
-func (calendar) List(_ context.Context, start, end time.Time) ([]model.Event, error) {
-	if !end.After(start) {
-		return nil, invalid
-	}
-	return []model.Event{}, nil
-}
-func (calendar) Get(context.Context, model.EventID) (model.Event, error) {
-	return model.Event{}, notFound
-}
+// Calendar also writes meetings and reads availability, only in fake.db. No notification leaves the machine.
+func (p *Provider) Calendar() model.Calendar { return &calendar{p} }

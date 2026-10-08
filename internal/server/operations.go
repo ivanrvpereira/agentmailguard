@@ -283,7 +283,7 @@ type rulesDTO struct {
 // Dispatch first validates a complete typed operation. Account and provider access occur only afterwards.
 func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	var call func(*account) (any, error)
-	// unsupported names the Gmail refusal of an operation or request that only M365 supports.
+	// unsupported names the Gmail refusal of an operation or request that Gmail cannot carry out.
 	unsupported, grants := guard.GuardError(""), providerGrants(nil)
 	switch r.Operation {
 	case "calendar.invite", "calendar.update", "calendar.cancel", "calendar.respond":
@@ -503,7 +503,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	if r.Operation == "rules.list" {
 		return s.ruleList(ctx, a)
 	}
-	if unsupported != "" && a.Provider != "m365" {
+	if unsupported != "" && a.Provider == "gmail" {
 		return nil, unsupported
 	}
 	instance, e := s.instance(a)

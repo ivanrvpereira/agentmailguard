@@ -101,7 +101,7 @@ The optional `[policy]` tables in `config.toml` set the [write policy](#write-po
 
 ## Fake provider
 
-A fake account has a local mailbox in a SQLite file. Use it to run real workflows through the real CLI and server without a provider, a login, or Keychain access.
+A fake account has a local mailbox and calendar in a SQLite file. Use it to run real workflows through the real CLI and server without a provider, a login, or Keychain access.
 
 ```toml
 [accounts.demo]
@@ -120,7 +120,15 @@ sqlite3 ~/.agentmailguard/fake.db "INSERT INTO messages (account, id, sender_nam
 sqlite3 ~/.agentmailguard/fake.db "SELECT id, folder, subject, origin FROM messages WHERE account = 'demo';"
 ```
 
-Trash and archive are moves to the `trash` and `archive` folders; nothing is ever deleted. Drafts go to `drafts`. `mail send`, `mail reply`, and `mail forward` store the message in `sent`, with `origin` (`new`, `reply`, or `forward`) and `source_id`. Nothing leaves the machine. The calendar of a fake account is empty and read-only.
+Trash and archive are moves to the `trash` and `archive` folders; nothing is ever deleted. Drafts go to `drafts`. `mail send`, `mail reply`, and `mail forward` store the message in `sent`, with `origin` (`new`, `reply`, or `forward`) and `source_id`. Nothing leaves the machine.
+
+The calendar uses three tables. `events` holds the events, `attendees` holds the attendees of each event and their responses, and `free_busy` holds the free/busy times that `calendar availability` reads. The account organizes an event when its `organizer_address` is empty or is the account address; only then can it update or cancel the event. It can respond only to the other events. Availability comes only from `free_busy`, never from `events`. An address without `free_busy` rows is `unknown`, and a slot that no row covers is `free`. For example, an event that Ana organizes with the demo account as attendee, and Ana's busy time:
+
+```sh
+sqlite3 ~/.agentmailguard/fake.db "INSERT INTO events (account, id, subject, start_at, end_at, organizer_name, organizer_address) VALUES ('demo', 'e1', 'Planning', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z', 'Ana', 'ana@example.test'); INSERT INTO attendees (account, event_id, address, name) VALUES ('demo', 'e1', 'demo@fake.test', 'Demo'); INSERT INTO free_busy (account, address, start_at, end_at, status) VALUES ('demo', 'ana@example.test', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z', 'busy');"
+```
+
+`calendar invite`, `update`, `cancel`, and `respond` change only `fake.db`, under the write policy as for other accounts. No notification leaves the machine. A cancel sets `is_cancelled` and `cancel_comment` and deletes nothing. A response sets the account's own row in `attendees`.
 
 Fake mail is untrusted like real mail. Jev screens it, so the server still needs the Jev key.
 
@@ -354,7 +362,7 @@ Required text flags distinguish an omitted value from an explicit empty value, i
 | Mail reads | `mail list`, `mail get ID [--pretty]`, `mail search`, `mail link ID L1 L2` or `mail link ID --all`, `mail folders`, `mail categories` |
 | Mail changes | `mail archive IDS...`, `mail trash IDS...`, `mail move FOLDER_ID IDS...`, `mail read IDS...`, `mail unread IDS...`, `mail flag IDS... --state flagged|complete|none`, `mail categorize IDS... --add NAME --remove NAME` |
 | Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID` |
-| Availability (Microsoft 365, read-only) | `calendar availability --to ADDRESS [--to ADDRESS] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'` |
+| Availability (Microsoft 365 and fake, read-only) | `calendar availability --to ADDRESS [--to ADDRESS] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'` |
 | Meetings (send notifications) | `calendar invite --to ADDRESS --subject TEXT --start 'YYYY-MM-DD HH:MM' --duration 30m\|--end 'YYYY-MM-DD HH:MM' [--body TEXT] [--location TEXT] [--no-online]`, `calendar update ID [--subject TEXT] [--location TEXT] [--start TIME] [--duration D\|--end TIME] [--add-attendee ADDRESS] [--remove-attendee ADDRESS] [--online]`, `calendar cancel ID [--comment TEXT]`, `calendar respond ID --response accept\|tentative\|decline [--comment TEXT]` |
 | Mail send (sends at once) | `mail send --to ADDRESS --subject TEXT --body TEXT`, `mail reply ID --body TEXT`, `mail forward ID --to ADDRESS` |
 | Drafts (no send) | `draft new --to ADDRESS --subject TEXT --body TEXT`, `draft reply ID --body TEXT`, `draft forward ID --to ADDRESS`, `draft update ID --body TEXT` |
@@ -690,12 +698,12 @@ A timeout, transport error, or `operation failed` does not prove that the meetin
 Before you retry such a command, use `calendar list` or `calendar get` to verify the outcome.
 A second invite can send duplicate invitations.
 
-## Microsoft 365 availability
+## Calendar availability
 
 `calendar availability` shows the free/busy status of participants in 30-minute slots.
 It is read-only. It sends no notification, reserves no slot, and writes no audit record.
-It works only for Microsoft 365 accounts. Gmail accounts get the fixed error `calendar availability is not supported for this account`, before any credential or provider access.
-The `Calendars.ReadBasic`, `Calendars.Read`, or `Calendars.ReadWrite` grant is sufficient. Without one of these grants, the command fails with `missing_scopes` before any Graph request.
+It works only for Microsoft 365 and [fake](#fake-provider) accounts. Gmail accounts get the fixed error `calendar availability is not supported for this account`, before any credential or provider access.
+The `Calendars.ReadBasic`, `Calendars.Read`, or `Calendars.ReadWrite` grant is sufficient. Without one of these grants, the command fails with `missing_scopes` before any Graph request. Fake accounts need no grant.
 
 ```sh
 agentmailguard --account work calendar availability --to me@example.com --to ana@example.com --start '2026-10-09 09:00' --end '2026-10-09 18:00'

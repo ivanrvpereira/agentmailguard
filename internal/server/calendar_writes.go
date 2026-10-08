@@ -42,7 +42,7 @@ type eventRespondParam struct {
 }
 
 // calendarWriteCall validates a meeting write. gmailRefusal, when not empty, refuses a valid request that
-// only M365 can carry out.
+// Gmail cannot carry out.
 func calendarWriteCall(ctx context.Context, operation string, raw json.RawMessage) (call func(*account) (any, error), gmailRefusal guard.GuardError, err error) {
 	switch operation {
 	case "calendar.cancel":

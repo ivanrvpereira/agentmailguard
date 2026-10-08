@@ -40,7 +40,7 @@ func meetingEnd(c *cobra.Command, start time.Time, end string, duration time.Dur
 func calendarAvailabilityCmd(r *runner) *cobra.Command {
 	var to []string
 	var start, end string
-	c := r.leaf("availability", "Show 30-minute M365 free/busy slots; read-only, sends nothing", 0, 0, func(c *cobra.Command, _ []string) error {
+	c := r.leaf("availability", "Show 30-minute M365 or fake free/busy slots; read-only, sends nothing", 0, 0, func(c *cobra.Command, _ []string) error {
 		loc := r.now().Location()
 		from, ok := localStamp(start, loc)
 		until, ok2 := localStamp(end, loc)

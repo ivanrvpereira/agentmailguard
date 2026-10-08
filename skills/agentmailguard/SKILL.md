@@ -20,7 +20,7 @@ Read, search, and organize the user's Microsoft 365 and Gmail mail and calendar 
 - "Send this reply", "Forward this to Ana", "Send Ana a message" (only after specific authorization of that send).
 - "Archive, flag, categorize, move, or trash these messages" (after approval).
 - "Run my organize rules" (preview first, apply after approval).
-- "When are Ana and I both free on Friday?" (Microsoft 365 only, read-only).
+- "When are Ana and I both free on Friday?" (Microsoft 365 and fake accounts only, read-only).
 - "Invite Ana to a 30-minute meeting on Friday at 10:00", "Accept that meeting" (after specific authorization).
 
 Don't use for: sending a saved draft (the user sends drafts in their mail client), permanent deletion, Gmail free/busy checks, or mailbox administration.
@@ -177,7 +177,7 @@ Done when you report the returned event `id`, and you describe the notification 
 
 #### Find a shared free slot
 
-`calendar availability` is read-only. It sends nothing and reserves nothing. It works only for Microsoft 365 accounts.
+`calendar availability` is read-only. It sends nothing and reserves nothing. It works only for Microsoft 365 and fake accounts.
 
 - Pass every participant, including the user, with `--to`: 1–20 distinct addresses. The window from `--start` to `--end` must be less than 62 days.
 - The result has `start`, `end`, `interval_minutes` (always 30), and one `schedules` entry for each requested address, in request order.
