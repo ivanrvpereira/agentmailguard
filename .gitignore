@@ -21,3 +21,5 @@ internal/credentials/*
 /plan.md
 /PROGRESS.md
 /progress.md
+# Local pi agent state (todos).
+/.pi/
