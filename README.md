@@ -12,9 +12,35 @@ Browser requests with an `Origin` header are refused, and the server does not en
 These restrictions are not a substitute for a protected network or encrypted tunnel.
 Provider OAuth remains mandatory.
 
+## Privacy and external screening
+
+**Privacy warning:** Screening is an external service, not a local-only check.
+The server sends requests to OpenRouter's System One endpoint for model `typesafe/jev-1.13`.
+
+- Mail requests include rendered body text, subject, sender and recipient identities, attachment names, authentication results, and link domains.
+- Calendar requests include subject, organizer, attendees, location, recurrence, meeting join URLs, and other event metadata.
+- Private-event bodies are excluded, but private-event metadata and accepted meeting join URLs are still included.
+- Organization requests include the rule instructions used for classification.
+
+These transfers occur before the verdict.
+Content hidden from the agent can still reach the screening service.
+Meeting join URLs can contain access secrets.
+Content-free local logs and encrypted credentials do not prevent external disclosure.
+
+The project does not guarantee zero retention, no training, or a processing region.
+Review [OpenRouter's provider policies](https://openrouter.ai/docs/guides/privacy/logging) and the applicable screening-service terms before using real mail.
+Obtain any required organizational approval before connecting a work mailbox.
+
+## Getting started
+
+Use the [setup guide](docs/setup.md) for provider application registration, exact scopes, credential-backend selection, and the first guarded read.
+See [SECURITY.md](SECURITY.md) for supported security boundaries and vulnerability-reporting instructions.
+Maintainers can use the [GitHub publication checklist](docs/github-setup.md) for CI enforcement and repository security configuration.
+
 ## Build and checks
 
-1. Install Go 1.25 or later with CGO support and a C compiler.
+1. Install a currently supported, patched Go release with CGO support and a C compiler.
+   The minimum language version is Go 1.26.
 2. Run `make` from this repository.
 3. Run `./bin/agentmailguard --help`.
 
@@ -27,6 +53,10 @@ There is no plaintext credential fallback.
 The build does not install anything into your PATH.
 
 ## Server configuration
+
+The supported deployment is one server setup per machine, with multiple configured accounts in one server home.
+Each account has a distinct configuration name.
+Independent server homes with separate Keychain identities are not supported.
 
 The server owns configuration, OAuth credentials, the Jev key, `cache.db`, and `audit.jsonl`.
 The CLI never loads these files for data commands, even with a loopback server.
@@ -75,6 +105,7 @@ backend = "keychain" # Default. Use "file" for password-encrypted storage.
 ```
 
 An absent table selects `keychain`.
+Linux requires `backend = "file"` because the native Keychain backend is macOS-only.
 If present, the table must contain exactly one string field, `backend`.
 Unknown backend values or keys cause a configuration error.
 Neither backend detects rollback: another process under the same user can restore an older valid credential record.
@@ -83,6 +114,9 @@ The lock coordinates only processes that use the same home directory.
 ### Keychain backend
 
 The Keychain backend uses one non-synchronizable generic-password item: service `agentmailguard`, account `credentials`.
+All configured accounts share this item under the current operating-system user, with separate entries keyed by provider and account name.
+A different `--home` does not create an independent Keychain namespace.
+Use one server home and distinct account names for the supported multi-account setup.
 Choose "Always Allow" for this item to avoid repeated access prompts for the same build.
 One item replaces the separate per-account approvals with one item approval per build.
 An ad-hoc-signed rebuild changes the application identity, so it needs approval again.
@@ -245,7 +279,8 @@ These diagnostics contain no raw provider errors, token values, or callback URLs
 **Restart the server after local login or account configuration changes.**
 A cached account with changed configuration returns a fixed restart-required error.
 The server does not replace its cached provider identity in place.
-Provider access tokens still refresh normally after expiry, with the same checks and warnings on the refreshed scopes.
+Provider access tokens still refresh normally after expiry, with scope validation on the refreshed token.
+Login and `auth status` report extra grants. Ordinary mailbox requests do not emit refreshed-scope warnings.
 Rules are different: the server reloads and validates `rules.toml` on every `rules list` and `mail organize` call.
 
 ## Local and remote clients
@@ -497,3 +532,10 @@ Native Keychain migration and the user's real credential migration also remain u
 Migration tests use a fake Keychain Platform at the constructor and CLI seams, not the production Security APIs.
 Production-binary Keychain migration remains deferred; the migration evidence for this change comes from these fake-Platform tests.
 Offline verification does not establish production readiness.
+
+## License
+
+Copyright 2026 Ivan Pereira.
+Licensed under the [Apache License, Version 2.0](LICENSE) (`Apache-2.0`).
+Dependencies retain their own licenses and attribution requirements.
+Binary distributions must include the applicable third-party license notices.

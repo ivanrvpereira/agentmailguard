@@ -4,7 +4,7 @@ Long-lived server that screens Microsoft 365 and Gmail mail for AI agents, plus 
 
 ## Stack
 
-Go 1.25 with cgo (`mattn/go-sqlite3`, `keybase/go-keychain`), Cobra 1.10, charmbracelet Lip Gloss, BurntSushi/toml. macOS and Linux only.
+Go with cgo (`mattn/go-sqlite3`, `keybase/go-keychain`), Cobra 1.10, charmbracelet Lip Gloss, BurntSushi/toml. macOS and Linux only.
 
 ## Commands
 
@@ -19,9 +19,8 @@ Go 1.25 with cgo (`mattn/go-sqlite3`, `keybase/go-keychain`), Cobra 1.10, charmb
 
 ## Testing
 
-- Test exported behavior at package seams; show red/green evidence.
-- Use temp dirs, `httptest` servers, and fake `credentials.Platform` (`internal/credentials/credentials_test.go:15`).
-- Tests use only temp homes, fake providers, and fake Keychain platforms.
+- Show red/green evidence for each behavior change.
+- Tests use only temp homes, fake providers, and the fake Keychain platform (`internal/credentials/credentials_test.go:15`).
 
 ## Safety
 
@@ -39,7 +38,6 @@ Go 1.25 with cgo (`mattn/go-sqlite3`, `keybase/go-keychain`), Cobra 1.10, charmb
 - Keychain reads from a new binary trigger a macOS GUI prompt; non-interactive runs hang. Hand Keychain steps to the user.
 - Legacy Keychain names keep the `agentmailguard-go-*` prefix (`internal/credentials/keychain.go:30`); unprefixed names belong to the retired Python version.
 - The global gitignore excludes `credentials` dirs; `.gitignore` re-includes only `internal/credentials/*.go`.
-- CLI command changes must update `skills/agentmailguard/SKILL.md` and `README.md`.
 
 ## Boundaries
 
