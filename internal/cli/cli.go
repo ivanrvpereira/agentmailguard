@@ -452,7 +452,7 @@ func approvalsCmd(r *runner) *cobra.Command {
 
 func mailCmd(r *runner) *cobra.Command {
 	c := group(r, "mail", "Read, organize, and send screened mail")
-	c.AddCommand(mailListCmd(r), mailGetCmd(r), mailSearchCmd(r), mailLinkCmd(r),
+	c.AddCommand(mailListCmd(r), mailGetCmd(r), mailThreadCmd(r), mailSearchCmd(r), mailLinkCmd(r),
 		r.leaf("folders", "List mail folders", 0, 0, r.none("mail.folders")),
 		r.leaf("categories", "List mail categories", 0, 0, r.none("mail.categories")),
 		r.leaf("archive IDS...", "Move messages to the archive", 1, -1, r.ids("mail.archive")),
@@ -485,6 +485,15 @@ func mailGetCmd(r *runner) *cobra.Command {
 		return r.call(c, "mail.get", map[string]any{"id": args[0]}, pretty)
 	})
 	negated(c, "pretty", "render the message as text instead of JSON", &pretty)
+	return c
+}
+
+func mailThreadCmd(r *runner) *cobra.Command {
+	count := 25
+	c := r.leaf("thread THREAD_ID", "Show the screened messages of a conversation, oldest first", 1, 1, func(c *cobra.Command, args []string) error {
+		return r.call(c, "mail.thread", map[string]any{"id": args[0], "count": count}, false)
+	})
+	c.Flags().IntVar(&count, "count", count, "number of newest messages to return")
 	return c
 }
 

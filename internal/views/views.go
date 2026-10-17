@@ -35,6 +35,21 @@ type MailSummary struct {
 	Reason      *string            `json:"reason,omitempty"`
 	Error       *string            `json:"error,omitempty"`
 }
+
+// ThreadMessage shows the folders of a message at every verdict: they are folder and label IDs, not message text.
+type ThreadMessage struct {
+	MailSummary
+	Folders []string `json:"folders"`
+}
+
+// Thread is a conversation, oldest first. NewestReceivedAt is the received_at of its newest message; Older reports
+// that the conversation has older messages that were left out.
+type Thread struct {
+	ThreadID         string          `json:"thread_id"`
+	Messages         []ThreadMessage `json:"messages"`
+	NewestReceivedAt string          `json:"newest_received_at"`
+	Older            bool            `json:"older"`
+}
 type MailView struct {
 	MailSummary
 	Body      *string            `json:"body,omitempty"`
@@ -122,6 +137,16 @@ func Summary(m model.Message, row cache.Row, categories []string) MailSummary {
 		result.Sender = &Address{Address: content.CleanSubject(m.Sender.Address)}
 	case model.Error:
 		result.Error = safeError(row.Error)
+	}
+	return result
+}
+
+// ThreadView pairs each message, oldest first, with its summary at the same index.
+func ThreadView(thread model.ThreadID, messages []model.Message, summaries []MailSummary, older bool) Thread {
+	result := Thread{ThreadID: thread, Messages: make([]ThreadMessage, 0, len(messages)), Older: older}
+	for i, m := range messages {
+		result.Messages = append(result.Messages, ThreadMessage{summaries[i], append([]string{}, m.Folders...)})
+		result.NewestReceivedAt = iso(m.ReceivedAt)
 	}
 	return result
 }

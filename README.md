@@ -342,7 +342,7 @@ An explicit empty value, such as `draft update ID --body ''`, is not the same as
 | Group | Commands |
 | --- | --- |
 | State and auth | `stats --days 30`, `cache clear`, `rules list`, `approvals status ID`, `auth status`, local `auth login [--device-code] [--no-browser]`, `auth set-screening-key`, `auth set-approval-password`, `auth migrate --to file\|keychain`, `auth change-password` |
-| Mail reads | `mail list`, `mail get ID [--pretty]`, `mail search`, `mail link ID L1 L2` or `mail link ID --all`, `mail folders`, `mail categories` |
+| Mail reads | `mail list`, `mail get ID [--pretty]`, `mail thread THREAD_ID [--count N]`, `mail search`, `mail link ID L1 L2` or `mail link ID --all`, `mail folders`, `mail categories` |
 | Mail changes | `mail archive IDS...`, `mail trash IDS...`, `mail move FOLDER_ID IDS...`, `mail read IDS...`, `mail unread IDS...`, `mail flag IDS... --state flagged|complete|none`, `mail categorize IDS... --add NAME --remove NAME` |
 | Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID` |
 | Availability (Microsoft 365 and fake, read-only) | `calendar availability --to ADDRESS [--to ADDRESS] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'` |
@@ -352,6 +352,7 @@ An explicit empty value, such as `draft update ID --body ''`, is not the same as
 
 Successful commands print the operation's JSON result.
 `mail get --pretty` formats only the guarded view.
+`mail thread` prints JSON only. It returns the newest `--count` messages (default 25) of the conversation, oldest first, from every folder, including trash, spam or junk, sent mail, and drafts. Each message has the fields of a `mail list` result, screened the same way, plus `folders`. The result also has `thread_id`, `newest_received_at` (the `received_at` of the newest message returned), and `older`, which is true when the conversation has older messages that were left out. An unknown thread fails. Read bodies with `mail get`.
 Draft update returns the resulting draft ID, which can change on Gmail.
 `mail send`, `mail reply`, and `mail forward` return `{"ok": true}`. The providers give no ID for a sent message.
 `calendar invite` returns the new event ID. The other meeting commands return the event ID and `"ok": true`.
@@ -720,7 +721,8 @@ The calendar range must be at most 90 days.
 | error | Date and safe error code, without sender, subject, or body |
 
 Every verdict also includes the message ID, the thread ID, verdict, authentication results, read state, flag, and mailbox-listed categories.
-The thread ID (`thread_id` in `mail list`, `mail search`, and `mail get` results) is the provider's conversation ID: the Gmail `threadId` or the Microsoft 365 `conversationId`. Messages with the same `thread_id` belong to one conversation. It is an opaque provider ID, not message text. It is left out when the provider gives none, so an empty ID never groups unrelated messages.
+The thread ID (`thread_id` in `mail list`, `mail search`, `mail get`, and `mail thread` results) is the provider's conversation ID: the Gmail `threadId` or the Microsoft 365 `conversationId`. Messages with the same `thread_id` belong to one conversation. It is an opaque provider ID, not message text. It is left out when the provider gives none, so an empty ID never groups unrelated messages.
+Each `mail thread` message also includes `folders` at every verdict: the folder IDs (Microsoft 365 and fake) or label IDs (Gmail) that the message is in. They are provider IDs, not message text.
 Manual mutations work at every verdict, but the [write policy](#write-policy) can refuse or hold `mail trash`, also by verdict.
 Automatic business actions remain green-only.
 `mail organize --apply` can add existing `Yellow`, `Red`, or `Sealed` security tags to matching hidden mail.
@@ -743,6 +745,7 @@ The only data endpoint is `POST /v1/call` with `Content-Type: application/json`:
 ```
 
 Operation names match CLI groups, such as `mail.get`, `mail.send`, `draft.update`, `calendar.invite`, `cache.clear`, and `approvals.status`.
+`mail.thread` takes `{"id":"THREAD_ID","count":N}`; `count` is optional and defaults to 25.
 Meeting times on the HTTP interface are RFC 3339 timestamps. `calendar.update` also accepts a Go `duration` string.
 The `account` field is optional, and `params` must be an object.
 Unknown operations or fields, duplicate keys, malformed JSON, trailing JSON, null fields, invalid types, and oversized requests are refused.
@@ -753,7 +756,7 @@ A policy refusal returns HTTP 500 with `{"error":"refused by policy: KEY"}`.
 
 Requests are limited to 1 MiB and 16 JSON nesting levels.
 The client bounds responses at 64 MiB and never follows redirects or retries requests, including stale-connection write replay.
-Mail list/search counts range from 1 to 100, skip is at most 1,000,000, and manual mutations accept at most 50 IDs.
+Mail list, search, and thread counts range from 1 to 100, skip is at most 1,000,000, and manual mutations accept at most 50 IDs.
 Recipient and category lists accept at most 100 entries, and IDs and search strings are limited to 4,096 bytes.
 Stats accepts 1 to 365,000 days.
 

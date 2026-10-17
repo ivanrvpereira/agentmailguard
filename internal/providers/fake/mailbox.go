@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -116,6 +117,25 @@ func (b *mailbox) List(ctx context.Context, folder string, count, skip int, body
 		return nil, err
 	}
 	return b.query(ctx, body, `AND folder = ?`+newest+` LIMIT ? OFFSET ?`, folder, count, skip)
+}
+
+// Thread reads the conversation from every folder by the effective thread ID: a NULL thread_id is the message ID.
+// It reads one message more than count to learn whether older ones were left out.
+func (b *mailbox) Thread(ctx context.Context, thread string, count int) ([]model.Message, bool, error) {
+	if count < 1 {
+		return nil, false, invalid
+	}
+	out, err := b.query(ctx, false, `AND COALESCE(thread_id, id) = ? ORDER BY julianday(received_at) DESC, id DESC LIMIT ?`, thread, count+1)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(out) == 0 {
+		return nil, false, notFound
+	}
+	older := len(out) > count
+	out = out[:min(len(out), count)]
+	slices.Reverse(out)
+	return out, older, nil
 }
 
 func contains(value string, part *string) bool {

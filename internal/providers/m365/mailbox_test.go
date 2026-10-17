@@ -6,9 +6,11 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -211,5 +213,61 @@ func TestListSearchAndGetSelectAndCarryTheConversationID(t *testing.T) {
 	get, err := b.Get(ctx, []string{"m"}, true)
 	if err != nil || len(get) != 1 || get[0].ThreadID != "conversation-m" {
 		t.Fatalf("get %+v %v", get, err)
+	}
+}
+
+func TestThreadFiltersAllMessagesByConversationAndKeepsTheNewestOldestFirst(t *testing.T) {
+	newestFirst := []any{
+		map[string]any{"id": "n3", "conversationId": "c'1 &x", "receivedDateTime": "2026-03-03T09:00:00Z", "parentFolderId": "inbox-id"},
+		map[string]any{"id": "n2", "conversationId": "c'1 &x", "receivedDateTime": "2026-03-02T09:00:00Z", "parentFolderId": "deleted-id"},
+		map[string]any{"id": "n1", "conversationId": "c'1 &x", "receivedDateTime": "2026-03-01T09:00:00Z", "parentFolderId": "sent-id"},
+	}
+	// calls holds the $top and $filter of each request.
+	calls := [][2]string{}
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		calls = append(calls, [2]string{q.Get("$top"), q.Get("$filter")})
+		want := url.Values{
+			"$filter":  {q.Get("$filter")},
+			"$top":     {q.Get("$top")},
+			"$orderby": {"receivedDateTime desc"},
+			"$select":  {"id,from,sender,subject,receivedDateTime,toRecipients,ccRecipients,parentFolderId,conversationId,isDraft,isRead,flag,categories"},
+			"$expand":  {"attachments($select=name)"},
+		}
+		if r.Method != "GET" || r.URL.Path != "/v1.0/me/messages" || !reflect.DeepEqual(q, want) {
+			t.Errorf("%s %s %v", r.Method, r.URL.Path, q)
+		}
+		top, _ := strconv.Atoi(q.Get("$top"))
+		if strings.Contains(q.Get("$filter"), "gone") {
+			top = 0
+		}
+		jsonResponse(w, map[string]any{"value": newestFirst[:min(top, len(newestFirst))]})
+	})
+	b := c.Mailbox()
+	ctx := t.Context()
+	ids := func(ms []model.Message) []string {
+		out := []string{}
+		for _, m := range ms {
+			out = append(out, m.ID+"@"+m.Folders[0])
+		}
+		return out
+	}
+	got, older, err := b.Thread(ctx, "c'1 &x", 2)
+	if err != nil || !older || !reflect.DeepEqual(ids(got), []string{"n2@deleted-id", "n3@inbox-id"}) || got[0].ThreadID != "c'1 &x" {
+		t.Fatalf("ids=%v older=%v err=%v", ids(got), older, err)
+	}
+	if got, older, err := b.Thread(ctx, "c'1 &x", 3); err != nil || older || !reflect.DeepEqual(ids(got), []string{"n1@sent-id", "n2@deleted-id", "n3@inbox-id"}) {
+		t.Fatalf("whole thread ids=%v older=%v err=%v", ids(got), older, err)
+	}
+	if got, _, err := b.Thread(ctx, "gone", 25); err != model.MailboxError("Graph error 404") || len(got) != 0 {
+		t.Fatalf("unknown thread: ids=%v err=%v", ids(got), err)
+	}
+	want := [][2]string{
+		{"3", "receivedDateTime ge 1900-01-01T00:00:00Z and conversationId eq 'c''1 &x'"},
+		{"4", "receivedDateTime ge 1900-01-01T00:00:00Z and conversationId eq 'c''1 &x'"},
+		{"26", "receivedDateTime ge 1900-01-01T00:00:00Z and conversationId eq 'gone'"},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls=%q", calls)
 	}
 }

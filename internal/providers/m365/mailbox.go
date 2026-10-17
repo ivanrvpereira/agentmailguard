@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -126,6 +127,34 @@ func (b *mailbox) List(ctx context.Context, folder string, count, skip int, body
 	q.Set("$skip", strconv.Itoa(skip))
 	q.Set("$orderby", "receivedDateTime desc")
 	return b.collection(ctx, b.c.endpoint("/me/mailFolders/"+escapeID(folder)+"/messages", q), body)
+}
+
+// notFound is the error of a Graph 404, which a missing message gets.
+const notFound = model.MailboxError("Graph error 404")
+
+// Thread filters /me/messages, which covers every folder, by conversationId
+// (https://learn.microsoft.com/en-us/graph/api/user-list-messages?view=graph-rest-1.0). Graph needs a property of
+// $orderby to come first in $filter, or it answers InefficientFilter, so receivedDateTime leads with a bound that
+// keeps every message. One page of count+1 messages, newest first, tells whether older ones were left out.
+func (b *mailbox) Thread(ctx context.Context, thread string, count int) ([]model.Message, bool, error) {
+	if count < 1 {
+		return nil, false, invalidMetadata
+	}
+	q := messageQuery(false)
+	q.Set("$filter", "receivedDateTime ge 1900-01-01T00:00:00Z and conversationId eq '"+strings.ReplaceAll(thread, "'", "''")+"'")
+	q.Set("$orderby", "receivedDateTime desc")
+	q.Set("$top", strconv.Itoa(count+1))
+	out, err := b.collection(ctx, b.c.endpoint("/me/messages", q), false)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(out) == 0 {
+		return nil, false, notFound
+	}
+	older := len(out) > count
+	out = out[:min(len(out), count)]
+	slices.Reverse(out)
+	return out, older, nil
 }
 func kql(q model.SearchQuery) string {
 	term := func(s string) string {

@@ -149,13 +149,17 @@ type InboxScan struct {
 }
 
 // Mailbox deliberately has no permanent-delete operation. Its send operations reach real recipients at once.
-// List/Search may return bodies already available even when body is false.
+// List/Search/Thread may return bodies already available even when body is false.
 // ScanInbox reads all pages before returning, metadata only, excluding drafts,
 // with since <= received_at < until (nil until means no upper bound).
 type Mailbox interface {
 	List(ctx context.Context, folder FolderID, count, skip int, body bool) ([]Message, error)
 	Search(ctx context.Context, query SearchQuery, count int, body bool) ([]Message, error)
 	Get(ctx context.Context, ids []MessageID, body bool) ([]Message, error)
+	// Thread returns the newest count messages of the conversation, oldest first, from every folder (trash, spam or
+	// junk, sent, and drafts included), metadata only like List. older reports that the conversation has older
+	// messages that were left out. An unknown thread is the adapter's not-found error, as for an unknown message ID.
+	Thread(ctx context.Context, thread ThreadID, count int) (messages []Message, older bool, err error)
 	ScanInbox(ctx context.Context, since time.Time, until *time.Time) (InboxScan, error)
 	Folders(ctx context.Context) ([]Folder, error)
 	Archive(ctx context.Context, ids []MessageID) ([]MutationResult, error)

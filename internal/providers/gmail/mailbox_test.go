@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -143,5 +146,59 @@ func TestListSearchAndGetCarryTheGmailThreadID(t *testing.T) {
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("%s threads=%q want %q", name, got, want)
 		}
+	}
+}
+
+func TestThreadReadsTheNewestMessagesOfThreadsGetOldestFirst(t *testing.T) {
+	var requests []string
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests = append(requests, r.Method+" "+r.URL.EscapedPath()+"?"+r.URL.RawQuery)
+		mu.Unlock()
+		switch r.URL.EscapedPath() {
+		case "/labels":
+			respond(w, map[string]any{"labels": []any{map[string]string{"id": "INBOX", "type": "system", "name": "INBOX"}}})
+		case "/threads/t%2F1%20%3F":
+			respond(w, map[string]any{"id": "t/1 ?", "messages": []any{
+				map[string]any{"id": "first", "threadId": "t/1 ?", "labelIds": []string{"SENT"}},
+				map[string]any{"id": "second", "threadId": "t/1 ?", "labelIds": []string{"TRASH"}},
+				map[string]any{"id": "third", "threadId": "t/1 ?", "labelIds": []string{"INBOX"}},
+			}})
+		case "/threads/gone":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(404)
+			_, _ = w.Write([]byte(`{"error":{"errors":[{"reason":"notFound"}]}}`))
+		case "/messages/first", "/messages/second", "/messages/third":
+			id := r.URL.Path[len("/messages/"):]
+			date := map[string]string{"first": "1788220800001", "second": "1788220800002", "third": "1788220800003"}[id]
+			respond(w, map[string]any{"id": id, "threadId": "t/1 ?", "internalDate": date, "labelIds": []string{"INBOX"}, "payload": part("text/plain", "text")})
+		default:
+			t.Errorf("unexpected path %s", r.URL.EscapedPath())
+			w.WriteHeader(404)
+		}
+	}))
+	defer server.Close()
+	b := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), GmailURL: server.URL}).Mailbox()
+	ctx := t.Context()
+	ids := func(ms []model.Message) []string {
+		out := []string{}
+		for _, m := range ms {
+			out = append(out, m.ID)
+		}
+		return out
+	}
+	got, older, err := b.Thread(ctx, "t/1 ?", 2)
+	if err != nil || !older || !reflect.DeepEqual(ids(got), []string{"second", "third"}) || got[1].ThreadID != "t/1 ?" {
+		t.Fatalf("ids=%v older=%v err=%v", ids(got), older, err)
+	}
+	if !slices.Contains(requests, "GET /threads/t%2F1%20%3F?format=minimal") || slices.ContainsFunc(requests, func(r string) bool { return strings.HasPrefix(r, "GET /messages/first") }) {
+		t.Fatalf("requests=%q", requests)
+	}
+	if got, older, err := b.Thread(ctx, "t/1 ?", 3); err != nil || older || !reflect.DeepEqual(ids(got), []string{"first", "second", "third"}) {
+		t.Fatalf("whole thread ids=%v older=%v err=%v", ids(got), older, err)
+	}
+	if got, _, err := b.Thread(ctx, "gone", 25); err != model.MailboxError("Gmail error 404 notFound") || len(got) != 0 {
+		t.Fatalf("unknown thread: ids=%v err=%v", ids(got), err)
 	}
 }
