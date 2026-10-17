@@ -870,6 +870,18 @@ It passed device-code login, native server startup, an external key update while
 A fresh screened read after restart required the updated screening key and refreshed OAuth token at fake endpoints.
 This run did not access real providers, Keychain, or user configuration.
 Transport tests cover redirects, stale connections, cancellation, request validation, and content-free errors.
+The end-to-end tests in `internal/e2e` build the real binary and run `serve` as its own process, on a temporary home with a fake account, the fake screening engine, the file credential backend, and a `fake-provider.db` seeded from `internal/e2e/testdata/seed.sql`. The CLI runs as a separate process and the tests approve and deny items through the approval console over HTTP. They cover:
+
+- triage verdicts, hidden unsafe bodies, and the retry after a failed screening;
+- a send that waits for approval, runs once after approval, and never runs after a denial;
+- default-policy refusals of sends and meetings;
+- an allowed send and draft that the screening flag makes wait for approval;
+- trash, archive, and move as folder changes that delete nothing, the refused move into the trash, and a sealed trash that waits for approval;
+- an organize preview that writes nothing, an apply with folder, category, and security tags, and a second apply that plans nothing;
+- availability, an approved invite, a response, and a cancel that keeps the event;
+- a restart that keeps cached verdicts and pending items.
+
+After each test, the server log, `audit.jsonl`, and every table of `cache.db` except `pending` must contain no seeded name, subject, body, or address. CI (`.github/workflows/ci.yml`) runs `make`, and so these tests, on Linux and macOS.
 No test needs real mailbox data, a browser, OpenRouter, or Keychain access.
 Offline tests send the configured `[screening]` endpoint, model, and stored key to a fake TLS endpoint. No request to Jev cloud or to another configured endpoint or model has been verified live.
 
