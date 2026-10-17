@@ -73,8 +73,7 @@ func (g *Guard) audited(ctx context.Context, op audit.Operation, ids []string, h
 	if len(send) > 0 {
 		results, err = call(send)
 	}
-	switch {
-	case err != nil && opts.Rule == nil && len(held) == 0:
+	if err != nil && opts.Rule == nil && len(held) == 0 {
 		// Only these fixed refusals are public prose; external GuardError text is not trusted.
 		if ctx.Err() == nil {
 			switch err {
@@ -87,12 +86,13 @@ func (g *Guard) audited(ctx context.Context, op audit.Operation, ids []string, h
 			}
 		}
 		return nil, safeErr(ctx, err)
-	case err != nil:
+	}
+	if err != nil {
 		results = make([]model.MutationResult, 0, len(send))
 		for _, id := range send {
 			results = append(results, model.MutationResult{ID: id, Error: pointer(safeCode(err))})
 		}
-	default:
+	} else {
 		results = normalize(send, results, opts.Rule != nil)
 	}
 	// results has one entry per sent ID, in input order.
