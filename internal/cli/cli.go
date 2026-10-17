@@ -501,13 +501,14 @@ func mailThreadCmd(r *runner) *cobra.Command {
 func isDate(v string) bool { _, e := time.Parse("2006-01-02", v); return e == nil }
 
 func mailSearchCmd(r *runner) *cobra.Command {
-	var text, from, subject, after, before, folder string
+	var text, from, to, subject, after, before, folder string
 	count := 25
 	pretty := false
 	c := r.leaf("search", "Search screened messages", 0, 0, func(c *cobra.Command, _ []string) error {
 		p := map[string]any{"count": count}
 		optional(c, p, "text", &text)
 		optional(c, p, "from", &from)
+		optional(c, p, "to", &to)
 		optional(c, p, "subject", &subject)
 		optional(c, p, "after", &after)
 		optional(c, p, "before", &before)
@@ -520,6 +521,7 @@ func mailSearchCmd(r *runner) *cobra.Command {
 	negated(c, "pretty", "render the messages as a table instead of JSON", &pretty)
 	c.Flags().StringVar(&text, "text", "", "text to match")
 	c.Flags().StringVar(&from, "from", "", "sender address to match")
+	c.Flags().StringVar(&to, "to", "", "To or Cc address to match")
 	c.Flags().StringVar(&subject, "subject", "", "subject text to match")
 	c.Flags().StringVar(&after, "after", "", "earliest date YYYY-MM-DD")
 	c.Flags().StringVar(&before, "before", "", "latest date YYYY-MM-DD")

@@ -66,7 +66,7 @@ func publicError(e error) (string, bool) {
 			return string(e), true
 		case "move refused: the destination must be a folder ID from `folders`", "move refused: use mail.trash", "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
 			"link refused: message is red, not green", "link refused: message is yellow, not green", "link refused: message is sealed, not green", "link refused: message is error, not green",
-			"search needs at least one of text, from, subject, after, before":
+			"search needs at least one of text, from, to, subject, after, before":
 			return string(e), true
 		}
 	}
@@ -155,6 +155,7 @@ type threadParam struct {
 type searchParam struct {
 	Text    *string `json:"text"`
 	Sender  *string `json:"from"`
+	To      *string `json:"to"`
 	Subject *string `json:"subject"`
 	After   *string `json:"after"`
 	Before  *string `json:"before"`
@@ -328,12 +329,12 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		if params(r.Params, &p) != nil || p.Count < 1 || p.Count > 100 {
 			return nil, errInvalid
 		}
-		for _, v := range []*string{p.Text, p.Sender, p.Subject, p.Folder} {
+		for _, v := range []*string{p.Text, p.Sender, p.To, p.Subject, p.Folder} {
 			if v != nil && !validString(*v, 4096, true) {
 				return nil, errInvalid
 			}
 		}
-		q := model.SearchQuery{Text: p.Text, Sender: p.Sender, Subject: p.Subject, Folder: p.Folder}
+		q := model.SearchQuery{Text: p.Text, Sender: p.Sender, To: p.To, Subject: p.Subject, Folder: p.Folder}
 		for _, d := range []struct {
 			v   *string
 			out **time.Time

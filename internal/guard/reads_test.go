@@ -123,6 +123,17 @@ func TestDraftIdentityOverridesPreviouslyCachedVerdict(t *testing.T) {
 		})
 	}
 }
+func TestSearchByRecipientAloneIsASearchTerm(t *testing.T) {
+	g, _, _ := setup(t, &mailbox{messages: []model.Message{message("m1")}}, &screener{verdict: model.Green})
+	got, err := g.Search(t.Context(), model.SearchQuery{To: ptr("ana@example.test")}, 10)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("to-only search=%v err=%v", got, err)
+	}
+	_, err = g.Search(t.Context(), model.SearchQuery{To: ptr(""), Folder: ptr("inbox")}, 10)
+	if err == nil || err.Error() != "search needs at least one of text, from, to, subject, after, before" {
+		t.Fatalf("search without a term returned %v", err)
+	}
+}
 func TestListReusesFetchedEmptyBodiesAndValidatesReadRequests(t *testing.T) {
 	m := message("empty")
 	m.Body = new("")

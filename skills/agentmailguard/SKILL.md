@@ -51,7 +51,7 @@ agentmailguard auth status
 agentmailguard mail folders
 agentmailguard mail categories
 agentmailguard mail list [--folder inbox] [--count 25] [--skip 0]
-agentmailguard mail search [--text T] [--from ADDR] [--subject T] [--after YYYY-MM-DD] [--before YYYY-MM-DD] [--folder FOLDER_ID] [--count 25]
+agentmailguard mail search [--text T] [--from ADDR] [--to ADDR] [--subject T] [--after YYYY-MM-DD] [--before YYYY-MM-DD] [--folder FOLDER_ID] [--count 25]
 agentmailguard mail get ID
 agentmailguard mail thread THREAD_ID [--count 25]
 agentmailguard mail link ID L1 [L2 ...]
@@ -83,6 +83,8 @@ agentmailguard --timeout 2h mail organize --since 7d [--until DATE]
 agentmailguard --timeout 2h mail organize --since 7d [--until DATE] --apply
 agentmailguard stats --days 30
 ```
+
+`mail search` needs at least one of `--text`, `--from`, `--to`, `--subject`, `--after`, or `--before`. `--to` matches the To and Cc addresses.
 
 Limits: `--count` 1–100, at most 50 IDs per mutation, at most 100 recipients, categories, or meeting attendees per list. `calendar availability` accepts 1–20 addresses and a window of less than 62 days.
 

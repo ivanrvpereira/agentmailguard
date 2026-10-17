@@ -56,8 +56,8 @@ func (g *Guard) Search(ctx context.Context, q model.SearchQuery, count int) ([]v
 		return nil, err
 	}
 	nonempty := func(s *string) bool { return s != nil && *s != "" }
-	if !nonempty(q.Text) && !nonempty(q.Sender) && !nonempty(q.Subject) && q.After == nil && q.Before == nil {
-		return nil, GuardError("search needs at least one of text, from, subject, after, before")
+	if !nonempty(q.Text) && !nonempty(q.Sender) && !nonempty(q.To) && !nonempty(q.Subject) && q.After == nil && q.Before == nil {
+		return nil, GuardError("search needs at least one of text, from, to, subject, after, before")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

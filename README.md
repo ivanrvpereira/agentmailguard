@@ -352,6 +352,7 @@ An explicit empty value, such as `draft update ID --body ''`, is not the same as
 
 Successful commands print the operation's JSON result.
 `mail get --pretty` formats only the guarded view.
+`mail search` needs at least one of `--text`, `--from`, `--to`, `--subject`, `--after`, or `--before`. `--to ADDRESS` matches the To and Cc fields: the Gmail `to:` and `cc:` operators, or the Microsoft 365 `to` and `cc` search properties.
 `mail thread` prints JSON only. It returns the newest `--count` messages (default 25) of the conversation, oldest first, from every folder, including trash, spam or junk, sent mail, and drafts. Each message has the fields of a `mail list` result, screened the same way, plus `folders`. The result also has `thread_id`, `newest_received_at` (the `received_at` of the newest message returned), and `older`, which is true when the conversation has older messages that were left out. An unknown thread fails. Read bodies with `mail get`.
 Draft update returns the resulting draft ID, which can change on Gmail.
 `mail send`, `mail reply`, and `mail forward` return `{"ok": true}`. The providers give no ID for a sent message.

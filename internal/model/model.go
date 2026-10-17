@@ -118,9 +118,9 @@ type Event struct {
 	ContentType *ContentType
 }
 type SearchQuery struct {
-	Text, Sender, Subject *string
-	After, Before         *time.Time
-	Folder                *FolderID
+	Text, Sender, To, Subject *string
+	After, Before             *time.Time
+	Folder                    *FolderID
 }
 type NewDraft struct {
 	To            []string

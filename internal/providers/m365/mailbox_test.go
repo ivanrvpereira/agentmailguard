@@ -216,6 +216,28 @@ func TestListSearchAndGetSelectAndCarryTheConversationID(t *testing.T) {
 	}
 }
 
+func TestSearchByRecipientMatchesToOrCc(t *testing.T) {
+	var searches []string
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1.0/me/messages" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		searches = append(searches, r.URL.Query().Get("$search"))
+		jsonResponse(w, map[string]any{"value": []any{}})
+	})
+	b := c.Mailbox()
+	to, sender := "Ana Board", "bob@example.test"
+	for _, q := range []model.SearchQuery{{To: &to}, {Sender: &sender, To: &to}} {
+		if _, err := b.Search(t.Context(), q, 10, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{`"(to:\"Ana Board\" OR cc:\"Ana Board\")"`, `"from:bob@example.test (to:\"Ana Board\" OR cc:\"Ana Board\")"`}
+	if !reflect.DeepEqual(searches, want) {
+		t.Fatalf("$search=%q want %q", searches, want)
+	}
+}
+
 func TestThreadFiltersAllMessagesByConversationAndKeepsTheNewestOldestFirst(t *testing.T) {
 	newestFirst := []any{
 		map[string]any{"id": "n3", "conversationId": "c'1 &x", "receivedDateTime": "2026-03-03T09:00:00Z", "parentFolderId": "inbox-id"},

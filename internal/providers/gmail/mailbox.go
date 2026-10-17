@@ -161,6 +161,11 @@ func (m *mailbox) Search(ctx context.Context, query model.SearchQuery, count int
 	if query.Sender != nil && *query.Sender != "" {
 		terms = append(terms, "from:"+phrase(*query.Sender))
 	}
+	// Gmail search operators (https://support.google.com/mail/answer/7190): to: and cc: match the recipient
+	// fields, and { } matches any of the terms inside.
+	if query.To != nil && *query.To != "" {
+		terms = append(terms, "{to:"+phrase(*query.To)+" cc:"+phrase(*query.To)+"}")
+	}
 	if query.Subject != nil && *query.Subject != "" {
 		terms = append(terms, "subject:"+phrase(*query.Subject))
 	}

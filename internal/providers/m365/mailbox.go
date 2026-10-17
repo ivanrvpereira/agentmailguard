@@ -169,6 +169,11 @@ func kql(q model.SearchQuery) string {
 	if q.Sender != nil && *q.Sender != "" {
 		parts = append(parts, "from:"+term(*q.Sender))
 	}
+	// Graph $search on messages (https://learn.microsoft.com/en-us/graph/search-query-parameter, "Use $search on
+	// message collections") searches the to and cc properties and joins terms with OR.
+	if q.To != nil && *q.To != "" {
+		parts = append(parts, "(to:"+term(*q.To)+" OR cc:"+term(*q.To)+")")
+	}
 	if q.Subject != nil && *q.Subject != "" {
 		parts = append(parts, "subject:"+term(*q.Subject))
 	}

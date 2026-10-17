@@ -149,6 +149,29 @@ func TestListSearchAndGetCarryTheGmailThreadID(t *testing.T) {
 	}
 }
 
+func TestSearchByRecipientMatchesToOrCc(t *testing.T) {
+	var queries []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/messages" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		queries = append(queries, r.URL.Query().Get("q"))
+		respond(w, map[string]any{})
+	}))
+	defer server.Close()
+	b := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), GmailURL: server.URL}).Mailbox()
+	to, sender := `Ana "Board" <ana@example.test>`, "bob@example.test"
+	for _, q := range []model.SearchQuery{{To: &to}, {Sender: &sender, To: &to}} {
+		if _, err := b.Search(t.Context(), q, 10, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{`{to:"ana board ana@example.test" cc:"ana board ana@example.test"}`, `from:"bob@example.test" {to:"ana board ana@example.test" cc:"ana board ana@example.test"}`}
+	if !reflect.DeepEqual(queries, want) {
+		t.Fatalf("q=%q want %q", queries, want)
+	}
+}
+
 func TestThreadReadsTheNewestMessagesOfThreadsGetOldestFirst(t *testing.T) {
 	var requests []string
 	var mu sync.Mutex

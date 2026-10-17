@@ -151,6 +151,27 @@ func TestSearchMatchesCaseInsensitiveSubstringsAcrossTheAccount(t *testing.T) {
 	}
 }
 
+func TestSearchByRecipientMatchesToAndCcButNotTheSender(t *testing.T) {
+	home := t.TempDir()
+	seed(t, home, `INSERT INTO messages (account, id, folder, sender_address, to_addresses, cc_addresses, subject, received_at) VALUES
+		('demo', 'to', 'inbox', 'bob@example.test', '["ana@example.test"]', '[]', 'To Ana', '2026-03-01T09:00:00Z'),
+		('demo', 'cc', 'inbox', 'bob@example.test', '["carla@example.test"]', '["ana@example.test"]', 'Cc Ana', '2026-03-02T09:00:00Z'),
+		('demo', 'sender', 'inbox', 'ana@example.test', '["bob@example.test"]', '[]', 'From Ana', '2026-03-03T09:00:00Z'),
+		('demo', 'nobody', 'inbox', 'ana@example.test', '[]', '[]', 'Note to self', '2026-03-04T09:00:00Z')`)
+	m := fake.New("demo", home, func() time.Time { return now }).Mailbox()
+	to := "ANA@example"
+	got, err := m.Search(t.Context(), model.SearchQuery{To: &to}, 25, false)
+	if err != nil || !reflect.DeepEqual(ids(got), []string{"cc", "to"}) {
+		t.Fatalf("ids=%v err=%v", ids(got), err)
+	}
+	// An empty value is no filter, as for the other fields and the real providers.
+	empty, subject := "", "self"
+	got, err = m.Search(t.Context(), model.SearchQuery{To: &empty, Subject: &subject}, 25, false)
+	if err != nil || !reflect.DeepEqual(ids(got), []string{"nobody"}) {
+		t.Fatalf("empty to: ids=%v err=%v", ids(got), err)
+	}
+}
+
 func TestScanInboxListsNonDraftInboxMailInTheRange(t *testing.T) {
 	m, _ := mailbox(t)
 	ctx := context.Background()
