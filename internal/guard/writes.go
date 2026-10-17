@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/audit"
+	"github.com/ivanrvpereira/agentmailguard/internal/config"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
@@ -44,6 +45,7 @@ func normalize(ids []string, results []model.MutationResult, organizer bool) []m
 	for _, id := range ids {
 		r := byID[id]
 		r.ID = id
+		r.ApprovalID = nil
 		if counts[id] != 1 {
 			r.OK = false
 			r.Error = pointer("failed")
@@ -59,22 +61,24 @@ func normalize(ids []string, results []model.MutationResult, organizer bool) []m
 	}
 	return out
 }
-func (g *Guard) audited(ctx context.Context, op audit.Operation, ids []string, opts audit.Options, call func() ([]model.MutationResult, error)) ([]model.MutationResult, error) {
-	results, err := call()
-	if err != nil {
-		if opts.Rule != nil {
-			failed := make([]model.MutationResult, 0, len(ids))
-			for _, id := range ids {
-				failed = append(failed, model.MutationResult{ID: id, Error: pointer(safeCode(err))})
-			}
-			if e := g.log.Record(context.WithoutCancel(ctx), g.account, op, failed, opts); e != nil {
-				return nil, GuardError("AuditError")
-			}
-		}
+
+// audited runs call for the IDs that the policy did not hold and writes one record with a result for every ID.
+// held has the results of the IDs that the policy kept from the provider. allowed lists the distinct IDs with
+// an allow decision; their policy records are written with the operation record. A manual call without held
+// IDs is not audited when call fails; otherwise a failure becomes the result of each sent ID.
+func (g *Guard) audited(ctx context.Context, op audit.Operation, ids []string, held map[string]model.MutationResult, allowed []string, opts audit.Options, call func([]string) ([]model.MutationResult, error)) ([]model.MutationResult, error) {
+	send := slices.DeleteFunc(slices.Clone(ids), func(id string) bool { _, ok := held[id]; return ok })
+	var results []model.MutationResult
+	var err error
+	if len(send) > 0 {
+		results, err = call(send)
+	}
+	if err != nil && opts.Rule == nil && len(held) == 0 {
 		// Only these fixed refusals are public prose; external GuardError text is not trusted.
-		if opts.Rule == nil && ctx.Err() == nil {
+		if ctx.Err() == nil {
 			switch err {
 			case GuardError("move refused: the destination must be a folder ID from `folders`"),
+				GuardError("move refused: use mail.trash"),
 				GuardError("flag state must be one of flagged, complete, none"),
 				GuardError("categorize needs at least one category to add or remove"),
 				GuardError("categorize refused: not in the category list"):
@@ -83,18 +87,50 @@ func (g *Guard) audited(ctx context.Context, op audit.Operation, ids []string, o
 		}
 		return nil, safeErr(ctx, err)
 	}
-	results = normalize(ids, results, opts.Rule != nil)
+	if err != nil {
+		results = make([]model.MutationResult, 0, len(send))
+		for _, id := range send {
+			results = append(results, model.MutationResult{ID: id, Error: pointer(safeCode(err))})
+		}
+	} else {
+		results = normalize(send, results, opts.Rule != nil)
+	}
+	// results has one entry per sent ID, in input order.
+	merged := make([]model.MutationResult, 0, len(ids))
+	for _, id := range ids {
+		r, ok := held[id]
+		if !ok {
+			r, results = results[0], results[1:]
+		}
+		merged = append(merged, r)
+	}
 	// Once a provider has returned a write result, cancellation must not erase its audit record.
-	if err := g.log.Record(context.WithoutCancel(ctx), g.account, op, results, opts); err != nil {
+	for _, id := range allowed {
+		if e := g.recordDecision(ctx, op, keyTrash, decision{value: config.Allow}, &id, nil, opts.Rule); e != nil {
+			return nil, e
+		}
+	}
+	if e := g.log.Record(context.WithoutCancel(ctx), g.account, op, merged, opts); e != nil {
 		return nil, GuardError("AuditError")
 	}
-	return results, nil
+	if err != nil && len(held) == 0 {
+		return nil, safeErr(ctx, err)
+	}
+	return merged, nil
 }
 func (g *Guard) mutationCall(ctx context.Context, op audit.Operation, ids []string, opts audit.Options) ([]model.MutationResult, error) {
 	if err := checkIDs(ids); err != nil {
 		return nil, err
 	}
-	return g.audited(ctx, op, ids, opts, func() ([]model.MutationResult, error) {
+	var held map[string]model.MutationResult
+	var allowed []string
+	if op == audit.Trash {
+		var err error
+		if held, allowed, err = g.trashPolicy(ctx, ids, opts.Rule); err != nil {
+			return nil, err
+		}
+	}
+	return g.audited(ctx, op, ids, held, allowed, opts, func(ids []string) ([]model.MutationResult, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -109,12 +145,13 @@ func (g *Guard) mutationCall(ctx context.Context, op audit.Operation, ids []stri
 			if err != nil {
 				return nil, err
 			}
-			found := false
-			for _, f := range folders {
-				found = found || f.ID == *opts.Folder
-			}
-			if !found {
+			i := slices.IndexFunc(folders, func(f model.Folder) bool { return f.ID == *opts.Folder })
+			if i < 0 {
 				return nil, GuardError("move refused: the destination must be a folder ID from `folders`")
+			}
+			// A move into deleted items would bypass the trash operation.
+			if folders[i].Trash {
+				return nil, GuardError("move refused: use mail.trash")
 			}
 			if err := ctx.Err(); err != nil {
 				return nil, err
@@ -230,38 +267,95 @@ func (g *Guard) Flag(ctx context.Context, ids []string, state model.FlagState) (
 func (g *Guard) Categorize(ctx context.Context, ids, add, remove []string) ([]model.MutationResult, error) {
 	return g.manual(ctx, audit.Categorize, ids, audit.Options{Add: append([]string{}, add...), Remove: append([]string{}, remove...)})
 }
-func (g *Guard) draft(ctx context.Context, op audit.Operation, source string, call func() (string, error)) (string, error) {
+
+// compose applies the mail_draft decision to a draft operation, or the mail_send decision to a send, and the
+// Jev action check, then runs call. source is the message that the action references; a new message has
+// none. Reply and forward reference a received message, so the sealed decision applies to their source;
+// update acts on a draft and has no sealed check. Jev sees the agent fields, and for a forward also the text
+// of the forwarded message. call gives the draft ID; a send gives none, so its operation record has only the
+// source ID, or no ID for a new message.
+func (g *Guard) compose(ctx context.Context, op audit.Operation, source string, args any, call func() (string, error)) (string, error) {
 	if err := g.acquire(ctx); err != nil {
 		return "", err
 	}
 	defer g.release()
+	send := op == audit.MailSend || op == audit.MailReply || op == audit.MailForward
+	key := keyDraft
+	if send {
+		key = keySend
+	}
+	var ref *string
+	if op != audit.DraftNew && op != audit.MailSend {
+		ref = pointer(source)
+	}
+	d := decision{value: g.base(ctx, key)}
+	if ref != nil && op != audit.DraftUpdate {
+		decisions, err := g.decide(ctx, key, []string{source})
+		if err != nil {
+			return "", err
+		}
+		d = decisions[source]
+	}
+	d, err := g.checkAction(ctx, op, key, d, args)
+	if err != nil {
+		return "", err
+	}
+	if err := g.single(ctx, op, key, d, ref, args); err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	id, err := call()
 	if err != nil {
 		return "", safeErr(ctx, err)
 	}
-	if id == "" {
+	if id == "" && !send {
 		return "", GuardError("ValueError")
 	}
+	var results []model.MutationResult
 	opts := audit.Options{}
-	if op == audit.DraftNew {
-		source = id
-	} else {
-		opts.DraftID = &id
+	switch {
+	case ref != nil:
+		results = []model.MutationResult{{ID: source, OK: true}}
+		if !send {
+			opts.DraftID = &id
+		}
+	case !send:
+		results = []model.MutationResult{{ID: id, OK: true}}
 	}
-	if err := g.log.Record(context.WithoutCancel(ctx), g.account, op, []model.MutationResult{{ID: source, OK: true}}, opts); err != nil {
+	if err := g.recordDecision(ctx, op, key, d, ref, nil, nil); err != nil {
+		return "", err
+	}
+	if err := g.log.Record(context.WithoutCancel(ctx), g.account, op, results, opts); err != nil {
 		return "", GuardError("AuditError")
 	}
 	return id, nil
 }
 func (g *Guard) DraftNew(ctx context.Context, draft model.NewDraft) (string, error) {
-	return g.draft(ctx, audit.DraftNew, "", func() (string, error) { return g.mailbox.DraftNew(ctx, draft) })
+	return g.compose(ctx, audit.DraftNew, "", newDraftArgs{draft.To, draft.Subject, draft.Body}, func() (string, error) { return g.mailbox.DraftNew(ctx, draft) })
 }
 func (g *Guard) DraftReply(ctx context.Context, id, comment string) (string, error) {
-	return g.draft(ctx, audit.DraftReply, id, func() (string, error) { return g.mailbox.DraftReply(ctx, id, comment) })
+	return g.compose(ctx, audit.DraftReply, id, bodyArgs{id, comment}, func() (string, error) { return g.mailbox.DraftReply(ctx, id, comment) })
 }
 func (g *Guard) DraftForward(ctx context.Context, id string, to []string) (string, error) {
-	return g.draft(ctx, audit.DraftForward, id, func() (string, error) { return g.mailbox.DraftForward(ctx, id, to) })
+	return g.compose(ctx, audit.DraftForward, id, forwardArgs{id, to}, func() (string, error) { return g.mailbox.DraftForward(ctx, id, to) })
 }
 func (g *Guard) DraftUpdate(ctx context.Context, id, body string) (string, error) {
-	return g.draft(ctx, audit.DraftUpdate, id, func() (string, error) { return g.mailbox.DraftUpdate(ctx, id, body) })
+	return g.compose(ctx, audit.DraftUpdate, id, bodyArgs{id, body}, func() (string, error) { return g.mailbox.DraftUpdate(ctx, id, body) })
+}
+
+// SendNew, SendReply, and SendForward send mail at once under the mail_send decision. Their params and
+// stored args are those of the matching draft operation.
+func (g *Guard) SendNew(ctx context.Context, draft model.NewDraft) error {
+	_, err := g.compose(ctx, audit.MailSend, "", newDraftArgs{draft.To, draft.Subject, draft.Body}, func() (string, error) { return "", g.mailbox.SendNew(ctx, draft) })
+	return err
+}
+func (g *Guard) SendReply(ctx context.Context, id, comment string) error {
+	_, err := g.compose(ctx, audit.MailReply, id, bodyArgs{id, comment}, func() (string, error) { return "", g.mailbox.SendReply(ctx, id, comment) })
+	return err
+}
+func (g *Guard) SendForward(ctx context.Context, id string, to []string) error {
+	_, err := g.compose(ctx, audit.MailForward, id, forwardArgs{id, to}, func() (string, error) { return "", g.mailbox.SendForward(ctx, id, to) })
+	return err
 }

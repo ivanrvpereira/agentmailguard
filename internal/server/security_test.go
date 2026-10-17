@@ -78,7 +78,7 @@ func TestHTTPBoundsBrowserAndDeniedSurface(t *testing.T) {
 			t.Errorf("status %d expected %d body %s", res.StatusCode, tc.status, b)
 		}
 	}
-	for _, op := range []string{"auth.login", "auth.token", "rules.set", "mail.send", "mail.delete", "mail.permanentDelete", "mail.classify", "mail.raw", "calendar.raw", "calendar.create", "folder.create", "category.create", "graph.request"} {
+	for _, op := range []string{"auth.login", "auth.token", "rules.set", "mail.delete", "mail.permanentDelete", "mail.classify", "mail.raw", "calendar.raw", "calendar.create", "folder.create", "category.create", "graph.request"} {
 		status, _ := rpc(t, h.URL, `{"operation":"`+op+`","params":{}}`)
 		if status != 400 {
 			t.Errorf("denied %s: %d", op, status)

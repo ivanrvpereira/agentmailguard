@@ -3,7 +3,6 @@ package m365
 import (
 	"context"
 	"encoding/json"
-	"html"
 	"net/http"
 	"net/url"
 	"strings"
@@ -35,7 +34,7 @@ func (c *calendar) Update(ctx context.Context, id model.EventID, change model.Ev
 		body["end"] = calendarTime(*change.End)
 	}
 	// Enable only. The body is never sent, so the online-meeting details in it stay intact.
-	if change.Teams {
+	if change.Online {
 		body["isOnlineMeeting"] = true
 		body["onlineMeetingProvider"] = "teamsForBusiness"
 	}
@@ -110,9 +109,6 @@ func calendarTime(t time.Time) map[string]string {
 	return map[string]string{"dateTime": t.UTC().Format("2006-01-02T15:04:05.9999999"), "timeZone": "UTC"}
 }
 
-// \r\n comes first so it gives one <br>.
-var htmlLineBreaks = strings.NewReplacer("\r\n", "<br>", "\r", "<br>", "\n", "<br>")
-
 func (c *calendar) Invite(ctx context.Context, event model.NewEvent) (model.EventID, error) {
 	if !c.c.lockMutation(ctx) {
 		return "", requestFailed
@@ -124,12 +120,12 @@ func (c *calendar) Invite(ctx context.Context, event model.NewEvent) (model.Even
 	}
 	// The plain-text body goes as escaped HTML, so Outlook shows the Teams block that Graph adds as formatted HTML.
 	body := map[string]any{
-		"subject": event.Subject, "body": map[string]string{"contentType": "html", "content": htmlLineBreaks.Replace(html.EscapeString(event.Body))},
+		"subject": event.Subject, "body": map[string]string{"contentType": "html", "content": event.HTMLBody()},
 		"location": map[string]string{"displayName": event.Location},
 		"start":    calendarTime(event.Start), "end": calendarTime(event.End), "attendees": attendees,
-		"isOnlineMeeting": event.Teams,
+		"isOnlineMeeting": event.Online,
 	}
-	if event.Teams {
+	if event.Online {
 		body["onlineMeetingProvider"] = "teamsForBusiness"
 	}
 	d, err := c.c.request(ctx, http.MethodPost, c.c.endpoint("/me/events", nil), body, true)

@@ -82,14 +82,28 @@ func assertAudited(t *testing.T, home, operation string) {
 	}
 }
 
+// enableCalendarWrites allows the calendar keys, which the default policy denies.
+func enableCalendarWrites(t *testing.T, home string) {
+	t.Helper()
+	f, err := os.OpenFile(filepath.Join(home, "config.toml"), os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString("[policy]\ncalendar_invite='allow'\ncalendar_update='allow'\ncalendar_cancel='allow'\ncalendar_respond='allow'\n"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func calendarServer(t *testing.T, scopes string, handler http.HandlerFunc) (*server.Server, *meetingStore, string) {
 	t.Helper()
 	home := t.TempDir()
 	configFile(t, home)
+	enableCalendarWrites(t, home)
 	api := httptest.NewServer(handler)
 	t.Cleanup(api.Close)
 	creds := &meetingStore{scopes: scopes}
-	s, err := server.New(context.Background(), home, server.Options{Credentials: creds, M365: m365.Options{BaseURL: api.URL, AuthorityURL: api.URL}, Now: func() time.Time { return time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC) }})
+	s, err := server.New(context.Background(), home, server.Options{Credentials: creds, Screener: newNativeAPI().screener(t), M365: m365.Options{BaseURL: api.URL, AuthorityURL: api.URL}, Now: func() time.Time { return time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC) }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +127,7 @@ var attendeeEvent = strings.Replace(organizerEvent, `"isOrganizer":true`, `"isOr
 func TestCalendarHTTPUpdateMapsParamsToSelectedFields(t *testing.T) {
 	handler, request := recordingGraph(t, organizerEvent, "")
 	s, _, home := calendarServer(t, "Calendars.ReadWrite", handler)
-	status, body := meetingRPC(t, s, "calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","start":"2026-10-09T12:00:00+01:00","duration":"30m","add":["new@example.test"],"remove":["remove@example.test"],"teams":true}`)
+	status, body := meetingRPC(t, s, "calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","start":"2026-10-09T12:00:00+01:00","duration":"30m","add":["new@example.test"],"remove":["remove@example.test"],"online":true}`)
 	if status != 200 || body != `{"id":"e1","ok":true}` {
 		t.Fatalf("response=%d %s", status, body)
 	}
@@ -195,29 +209,20 @@ var validCalendarParams = map[string]string{
 	"calendar.respond": `{"id":"e1","response":"accept"}`,
 }
 
-func TestCalendarHTTPRequiresWriteGrantAndRefusesGmailBeforeCredentials(t *testing.T) {
-	for _, provider := range []string{"m365", "gmail"} {
-		for op, params := range validCalendarParams {
-			t.Run(provider+"/"+op, func(t *testing.T) {
-				var requests atomic.Int32
-				s, creds, home := calendarServer(t, "User.Read Mail.ReadWrite Calendars.Read role:Calendars.ReadWrite", func(w http.ResponseWriter, r *http.Request) { requests.Add(1); io.WriteString(w, organizerEvent) })
-				want := `{"error":"missing_scopes"}`
-				if provider == "gmail" {
-					useGmail(t, home)
-					want = `{"error":"calendar writes are not supported for this account"}`
-				}
-				status, body := meetingRPC(t, s, op, params)
-				if status != 500 || body != want || requests.Load() != 0 {
-					t.Fatalf("response=%d %s requests=%d", status, body, requests.Load())
-				}
-				if provider == "gmail" && creds.loads.Load() != 0 {
-					t.Fatal("Gmail accessed credentials")
-				}
-				if _, err := os.Stat(filepath.Join(home, "audit.jsonl")); !os.IsNotExist(err) {
-					t.Fatal("refusal wrote audit")
-				}
-			})
-		}
+// The Gmail grant is in TestGmailMeetingHTTPNeedsTheWriteGrant.
+func TestCalendarHTTPRequiresWriteGrant(t *testing.T) {
+	for op, params := range validCalendarParams {
+		t.Run(op, func(t *testing.T) {
+			var requests atomic.Int32
+			s, _, home := calendarServer(t, "User.Read Mail.ReadWrite Calendars.Read role:Calendars.ReadWrite", func(w http.ResponseWriter, r *http.Request) { requests.Add(1); io.WriteString(w, organizerEvent) })
+			status, body := meetingRPC(t, s, op, params)
+			if status != 500 || body != `{"error":"missing_scopes"}` || requests.Load() != 0 {
+				t.Fatalf("response=%d %s requests=%d", status, body, requests.Load())
+			}
+			if _, err := os.Stat(filepath.Join(home, "audit.jsonl")); !os.IsNotExist(err) {
+				t.Fatal("refusal wrote audit")
+			}
+		})
 	}
 }
 
@@ -237,7 +242,9 @@ func TestCalendarHTTPRejectsInvalidInputBeforeAccountAccess(t *testing.T) {
 			strings.Replace(validCalendarParams["calendar.invite"], `2026-10-09T10:00:00Z`, `2026-10-09T09:00:00Z`, 1),
 			strings.Replace(validCalendarParams["calendar.invite"], `2026-10-09T09:00:00Z`, `0000-10-09T09:00:00Z`, 1),
 			strings.Replace(validCalendarParams["calendar.invite"], `2026-10-09T10:00:00Z`, `9999-12-31T23:45:00-01:00`, 1),
-			strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"teams":"false"}`, strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"teams":0}`,
+			strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"online":"false"}`, strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"online":0}`,
+			// The old name has no alias.
+			strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"teams":true}`,
 		},
 		"calendar.update": {
 			`{}`, `{"id":"e1"}`, `{"id":"e1","add":[],"remove":[]}`, `{"id":"e1","body":"forbidden"}`, `{"id":"e1","start":"bad"}`, `{"id":"e1","end":"bad"}`,
@@ -249,15 +256,15 @@ func TestCalendarHTTPRejectsInvalidInputBeforeAccountAccess(t *testing.T) {
 			`{"id":"e1","add":["SAME@example.test"],"remove":["same@example.test"]}`,
 			`{"id":"e1","add":[""]}`, `{"id":"e1","remove":[` + strings.Repeat(`"a",`, 100) + `"a"]}`,
 			`{"id":"e1","subject":"` + strings.Repeat("s", 65537) + `"}`, `{"id":"e1","location":"` + strings.Repeat("s", 4097) + `"}`,
-			// Updates can add Teams but never remove it.
-			`{"id":"e1","teams":false}`, `{"id":"e1","subject":"","teams":false}`, `{"id":"e1","teams":"true"}`,
+			// Updates can add an online meeting but never remove it.
+			`{"id":"e1","online":false}`, `{"id":"e1","subject":"","online":false}`, `{"id":"e1","online":"true"}`, `{"id":"e1","teams":true}`,
 		},
 		"calendar.cancel":  {`{}`, `{"id":""}`, `{"id":"` + strings.Repeat("x", 4097) + `"}`, `{"id":"e1","response":"accept"}`},
 		"calendar.respond": {`{}`, `{"id":"e1"}`, `{"id":"e1","response":"Accept"}`, `{"id":"e1","response":"decline","comment":7}`},
 	}
 	for op, fields := range map[string][]string{
-		"calendar.invite":  {"to", "subject", "body", "start", "end", "location", "teams"},
-		"calendar.update":  {"id", "subject", "location", "start", "end", "duration", "add", "remove", "teams"},
+		"calendar.invite":  {"to", "subject", "body", "start", "end", "location", "online"},
+		"calendar.update":  {"id", "subject", "location", "start", "end", "duration", "add", "remove", "online"},
 		"calendar.cancel":  {"id", "comment"},
 		"calendar.respond": {"id", "response", "comment"},
 	} {
@@ -417,10 +424,10 @@ func TestCalendarHTTPInviteMapsParamsAndOnlyReturnsID(t *testing.T) {
 	assertAudited(t, home, "calendar_invite")
 }
 
-func TestCalendarHTTPInviteExplicitFalseOptsOutOfTeams(t *testing.T) {
+func TestCalendarHTTPInviteExplicitFalseOptsOutOfOnlineMeeting(t *testing.T) {
 	handler, request := recordingGraph(t, "", `{"id":"new-event"}`)
 	s, _, _ := calendarServer(t, "Calendars.ReadWrite", handler)
-	status, body := meetingRPC(t, s, "calendar.invite", strings.TrimSuffix(validCalendarParams["calendar.invite"], "}")+`,"teams":false}`)
+	status, body := meetingRPC(t, s, "calendar.invite", strings.TrimSuffix(validCalendarParams["calendar.invite"], "}")+`,"online":false}`)
 	if status != 200 || body != `{"id":"new-event"}` {
 		t.Fatalf("response=%d %s", status, body)
 	}

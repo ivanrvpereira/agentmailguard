@@ -34,6 +34,7 @@ func Home(override string) (string, error) {
 type Account struct {
 	Name, Provider, ClientID, TenantID string
 	ClientSecret                       string `json:"-"`
+	Policy                             Policy
 }
 
 func (a Account) String() string {
@@ -89,14 +90,15 @@ func CredentialsBackend(ctx context.Context, path string) (string, error) {
 	return credentialBackend(d)
 }
 
-func accounts(ctx context.Context, path string) (map[string]any, []string, error) {
+// accounts also returns the whole document for the global [policy] table.
+func accounts(ctx context.Context, path string) (map[string]any, []string, map[string]any, error) {
 	document, metadata, err := document(ctx, path)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	tables, ok := document["accounts"].(map[string]any)
 	if !ok || len(tables) == 0 {
-		return nil, nil, fmt.Errorf("no [accounts.<name>] tables in %s", path)
+		return nil, nil, nil, fmt.Errorf("no [accounts.<name>] tables in %s", path)
 	}
 	names := []string{}
 	seen := map[string]bool{}
@@ -106,23 +108,27 @@ func accounts(ctx context.Context, path string) (map[string]any, []string, error
 			seen[key[1]] = true
 		}
 	}
-	return tables, names, ctx.Err()
+	return tables, names, document, ctx.Err()
 }
 
 func AccountNames(ctx context.Context, path string) ([]string, error) {
-	_, names, err := accounts(ctx, path)
+	_, names, _, err := accounts(ctx, path)
 	return names, err
 }
 
 // LoadAccounts validates every configured account before credentials can be migrated.
 func LoadAccounts(ctx context.Context, path string) ([]Account, error) {
-	tables, names, err := accounts(ctx, path)
+	tables, names, document, err := accounts(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	policies, err := resolvePolicies(document, tables, names)
 	if err != nil {
 		return nil, err
 	}
 	result := make([]Account, len(names))
 	for i, name := range names {
-		result[i], err = loadAccount(path, name, tables[name])
+		result[i], err = loadAccount(path, name, tables[name], policies[name])
 		if err != nil {
 			return nil, err
 		}
@@ -132,7 +138,11 @@ func LoadAccounts(ctx context.Context, path string) ([]Account, error) {
 
 // LoadAccount selects only the requested account; nil selects the first in file order.
 func LoadAccount(ctx context.Context, path string, name *string) (Account, error) {
-	tables, names, err := accounts(ctx, path)
+	tables, names, document, err := accounts(ctx, path)
+	if err != nil {
+		return Account{}, err
+	}
+	policies, err := resolvePolicies(document, tables, names)
 	if err != nil {
 		return Account{}, err
 	}
@@ -144,10 +154,10 @@ func LoadAccount(ctx context.Context, path string, name *string) (Account, error
 	if !exists {
 		return Account{}, fmt.Errorf("unknown account %q; known: %s", selected, strings.Join(names, ", "))
 	}
-	return loadAccount(path, selected, value)
+	return loadAccount(path, selected, value, policies[selected])
 }
 
-func loadAccount(path, selected string, value any) (Account, error) {
+func loadAccount(path, selected string, value any, policy Policy) (Account, error) {
 	table, _ := value.(map[string]any)
 	get := func(key string) (string, error) {
 		text, ok := table[key].(string)
@@ -160,14 +170,17 @@ func loadAccount(path, selected string, value any) (Account, error) {
 	if err != nil {
 		return Account{}, err
 	}
+	if provider == "fake" {
+		return Account{Name: selected, Provider: provider, Policy: policy}, nil
+	}
 	if provider != "m365" && provider != "gmail" {
-		return Account{}, fmt.Errorf("account %q: unsupported provider; supported: m365, gmail", selected)
+		return Account{}, fmt.Errorf("account %q: unsupported provider; supported: m365, gmail, fake", selected)
 	}
 	clientID, err := get("client_id")
 	if err != nil {
 		return Account{}, err
 	}
-	result := Account{Name: selected, Provider: provider, ClientID: clientID}
+	result := Account{Name: selected, Provider: provider, ClientID: clientID, Policy: policy}
 	if provider == "m365" {
 		result.TenantID, err = get("tenant_id")
 	} else {

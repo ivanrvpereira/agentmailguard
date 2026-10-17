@@ -27,10 +27,10 @@ func (s *store) LoadOAuth(context.Context, string, string) (credentials.OAuth, e
 	return credentials.OAuth{AccessToken: "x." + base64.RawURLEncoding.EncodeToString([]byte(`{"scp":"User.Read Mail.ReadWrite Calendars.Read MailboxSettings.Read"}`)) + ".x", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Username: "synthetic@example.test"}, nil
 }
 func (*store) SaveOAuth(context.Context, string, string, credentials.OAuth) error { return nil }
-func (*store) LoadOpenRouterKey(context.Context) (string, error) {
+func (*store) LoadScreeningKey(context.Context) (string, error) {
 	return "", errors.New("private-key-canary")
 }
-func (*store) SaveOpenRouterKey(context.Context, string) error { return nil }
+func (*store) SaveScreeningKey(context.Context, string) error { return nil }
 func configFile(t *testing.T, home string) {
 	t.Helper()
 	if e := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[accounts.work]\nprovider='m365'\nclient_id='synthetic'\ntenant_id='synthetic'\n[accounts.other]\nprovider='m365'\nclient_id='other'\ntenant_id='synthetic'\n"), 0600); e != nil {
@@ -58,6 +58,8 @@ func TestValidatedAccountOperationsAndReload(t *testing.T) {
 		calls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
+		case "/me/mailFolders/deleteditems":
+			io.WriteString(w, `{"id":"deleted"}`)
 		case "/me/mailFolders":
 			io.WriteString(w, `{"value":[{"id":"f1","displayName":"Correspondência 日本","childFolderCount":0}]}`)
 		case "/me/outlook/masterCategories":
@@ -126,5 +128,53 @@ func TestValidatedAccountOperationsAndReload(t *testing.T) {
 	status, b = rpc(t, h.URL, `{"operation":"mail.folders","params":{}}`)
 	if status != 500 || b != `{"error":"account configuration changed; restart required"}` {
 		t.Fatalf("changed identity %d %s", status, b)
+	}
+}
+
+func TestMoveIntoDeletedItemsIsRefusedWithPublicReason(t *testing.T) {
+	home := t.TempDir()
+	configFile(t, home)
+	var writes atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			writes.Add(1)
+			w.WriteHeader(500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/me/mailFolders/deleteditems":
+			io.WriteString(w, `{"id":"del"}`)
+		case "/me/mailFolders":
+			io.WriteString(w, `{"value":[{"id":"f1","displayName":"Finance","childFolderCount":0},{"id":"del","displayName":"Deleted Items","childFolderCount":1}]}`)
+		case "/me/mailFolders/del/childFolders":
+			io.WriteString(w, `{"value":[{"id":"old","displayName":"Old","childFolderCount":1}]}`)
+		case "/me/mailFolders/old/childFolders":
+			io.WriteString(w, `{"value":[{"id":"older","displayName":"Older","childFolderCount":0}]}`)
+		default:
+			t.Errorf("unexpected provider request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(500)
+		}
+	}))
+	defer api.Close()
+	s, e := server.New(context.Background(), home, server.Options{Credentials: &store{}, M365: m365.Options{BaseURL: api.URL}, Now: func() time.Time { return time.Date(2026, 3, 31, 17, 0, 0, 0, time.UTC) }})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	h := httptest.NewServer(s)
+	defer h.Close()
+	for _, dest := range []string{"del", "older"} {
+		status, b := rpc(t, h.URL, `{"operation":"mail.move","params":{"ids":["m1"],"folder":"`+dest+`"}}`)
+		if status != 500 || b != `{"error":"move refused: use mail.trash"}` {
+			t.Fatalf("move to %s: %d %s", dest, status, b)
+		}
+	}
+	if writes.Load() != 0 {
+		t.Fatal("refused move reached the provider")
+	}
+	status, b := rpc(t, h.URL, `{"operation":"mail.folders","params":{}}`)
+	if status != 200 || b != `[{"id":"f1","name":"Finance"},{"id":"del","name":"Deleted Items"},{"id":"old","name":"Old"},{"id":"older","name":"Older"}]` {
+		t.Fatalf("folders %d %s", status, b)
 	}
 }

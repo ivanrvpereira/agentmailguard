@@ -21,7 +21,7 @@ func credentialCommand(ctx context.Context, op, home, target string, stdout, std
 	path := filepath.Join(home, "config.toml")
 	accounts, err := config.LoadAccounts(ctx, path)
 	if err != nil {
-		return failure(stderr, "configuration unavailable")
+		return failure(stderr, configUnavailable(err).Error())
 	}
 	backend, err := config.CredentialsBackend(ctx, path)
 	if err != nil {

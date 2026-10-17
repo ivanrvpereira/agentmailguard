@@ -56,6 +56,9 @@ func TestCommandsUseHTTPWithoutLocalState(t *testing.T) {
 		{[]string{"draft", "reply", "m", "--body", "reply-canary"}, "draft.reply", `{"id":"m","body":"reply-canary"}`},
 		{[]string{"draft", "forward", "m", "--to", "a@test", "--to", "b@test"}, "draft.forward", `{"id":"m","to":["a@test","b@test"]}`},
 		{[]string{"draft", "update", "d", "--body", ""}, "draft.update", `{"id":"d","body":""}`},
+		{[]string{"mail", "send", "--to", "a@test", "--to", "b@test", "--subject", "", "--body", "send-canary"}, "mail.send", `{"to":["a@test","b@test"],"subject":"","body":"send-canary"}`},
+		{[]string{"mail", "reply", "m", "--body", ""}, "mail.reply", `{"id":"m","body":""}`},
+		{[]string{"mail", "forward", "m", "--to", "a@test", "--to", "b@test"}, "mail.forward", `{"id":"m","to":["a@test","b@test"]}`},
 	}
 	loc, e := time.LoadLocation("America/New_York")
 	if e != nil {
@@ -215,7 +218,9 @@ func TestPrettyAliasesUseLastOption(t *testing.T) {
 }
 
 func TestUsageAndHelpNeedNoServerOrState(t *testing.T) {
-	for _, args := range [][]string{{"mail", "send", "x"}, {"draft", "update", "x"}, {"mail", "flag", "x", "--state", "urgent"}, {"mail", "get", "x", "y"}, {"stats", "--days", "0"}, {"mail", "link", "x"}, {"mail", "link", "x", "L1", "--all"}, {"mail", "get", "x", "--secret", "canary"}, {"calendar", "list", "--from", "tomorrow"}, {"mail", "organize", "--since", "0d"}, {"mail", "get", "x", "--home", "canary"}} {
+	for _, args := range [][]string{{"mail", "send", "x"}, {"draft", "update", "x"}, {"mail", "flag", "x", "--state", "urgent"}, {"mail", "get", "x", "y"}, {"stats", "--days", "0"}, {"mail", "link", "x"}, {"mail", "link", "x", "L1", "--all"}, {"mail", "get", "x", "--secret", "canary"}, {"calendar", "list", "--from", "tomorrow"}, {"mail", "organize", "--since", "0d"}, {"mail", "get", "x", "--home", "canary"},
+		{"mail", "send", "--subject", "s", "--body", "b"}, {"mail", "send", "--to", "a", "--body", "b"}, {"mail", "send", "--to", "a", "--subject", "s"},
+		{"mail", "reply", "x"}, {"mail", "reply", "--body", "b"}, {"mail", "reply", "x", "y", "--body", "b"}, {"mail", "forward", "x"}, {"mail", "forward", "--to", "a"}} {
 		var out, errout bytes.Buffer
 		code := cli.Run(context.Background(), args, &out, &errout, cli.Options{})
 		if code != 2 || out.Len() != 0 || strings.Contains(errout.String(), "canary") {

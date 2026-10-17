@@ -1,4 +1,6 @@
-// Package cache persists security metadata and explicit organization answers, never mail content.
+// Package cache persists security metadata and explicit organization answers, never mail content,
+// in mail_cache. The pending table stores write actions that wait for user approval; their request
+// arguments can contain message content (recipients, subject, body).
 package cache
 
 import (
@@ -145,6 +147,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	for _, query := range []string{
 		"SELECT account, " + columns + " FROM mail_cache LIMIT 0",
 		"EXPLAIN INSERT INTO mail_cache (account, message_id) VALUES (NULL, NULL) ON CONFLICT (account, message_id) DO NOTHING",
+		"SELECT " + pendingColumns + " FROM pending LIMIT 0",
 	} {
 		rows, err := tx.QueryContext(ctx, query)
 		if err != nil {

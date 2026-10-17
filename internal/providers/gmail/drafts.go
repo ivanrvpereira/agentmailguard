@@ -74,23 +74,44 @@ func draftID(v map[string]json.RawMessage) (string, error) {
 	}
 	return id, nil
 }
-func (m *mailbox) createDraft(ctx context.Context, raw []byte, thread *string) (string, error) {
+
+// rawMessage is the Gmail Message resource of raw MIME, in the thread when thread is not nil.
+func rawMessage(raw []byte, thread *string) map[string]any {
 	message := map[string]any{"raw": base64.URLEncoding.EncodeToString(raw)}
 	if thread != nil {
 		message["threadId"] = *thread
 	}
-	v, err := m.c.write(ctx, "POST", m.c.options.GmailURL+"/drafts", map[string]any{"message": message})
+	return message
+}
+func (m *mailbox) createDraft(ctx context.Context, raw []byte, thread *string) (string, error) {
+	v, err := m.c.write(ctx, "POST", m.c.options.GmailURL+"/drafts", map[string]any{"message": rawMessage(raw, thread)})
 	if err != nil {
 		return "", err
 	}
 	return draftID(v)
 }
+
+// sendRaw sends raw MIME at once. The request helper never repeats a POST, so a failed send is never sent again.
+func (m *mailbox) sendRaw(ctx context.Context, raw []byte, thread *string) error {
+	_, err := m.c.write(ctx, "POST", m.c.options.GmailURL+"/messages/send", rawMessage(raw, thread))
+	return err
+}
+func newMessage(draft model.NewDraft) ([]byte, error) {
+	return plainMessage([]header{{"To", strings.Join(draft.To, ", ")}, {"Subject", draft.Subject}}, draft.Body, nil)
+}
 func (m *mailbox) DraftNew(ctx context.Context, draft model.NewDraft) (string, error) {
-	raw, err := plainMessage([]header{{"To", strings.Join(draft.To, ", ")}, {"Subject", draft.Subject}}, draft.Body, nil)
+	raw, err := newMessage(draft)
 	if err != nil {
 		return "", err
 	}
 	return m.createDraft(ctx, raw, nil)
+}
+func (m *mailbox) SendNew(ctx context.Context, draft model.NewDraft) error {
+	raw, err := newMessage(draft)
+	if err != nil {
+		return err
+	}
+	return m.sendRaw(ctx, raw, nil)
 }
 func htmlText(text string) (string, error) {
 	root, err := html.Parse(strings.NewReader(text))
@@ -137,16 +158,33 @@ func (m *mailbox) original(ctx context.Context, id, format string) (wireMessage,
 	return v, data, nil
 }
 func (m *mailbox) DraftReply(ctx context.Context, id, comment string) (string, error) {
-	v, data, err := m.original(ctx, id, "full")
+	raw, thread, err := m.reply(ctx, id, comment)
 	if err != nil {
 		return "", err
 	}
+	return m.createDraft(ctx, raw, &thread)
+}
+func (m *mailbox) SendReply(ctx context.Context, id, comment string) error {
+	raw, thread, err := m.reply(ctx, id, comment)
+	if err != nil {
+		return err
+	}
+	return m.sendRaw(ctx, raw, &thread)
+}
+
+// reply builds the plain-text reply to message id that quotes its text, and gives its thread ID. A draft
+// source is refused.
+func (m *mailbox) reply(ctx context.Context, id, comment string) ([]byte, string, error) {
+	v, data, err := m.original(ctx, id, "full")
+	if err != nil {
+		return nil, "", err
+	}
 	if contains(v.LabelIDs, "DRAFT") {
-		return "", failure("Gmail", "DraftError")
+		return nil, "", failure("Gmail", "DraftError")
 	}
 	original, err := parseMessage(data, nil, false)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	headers := v.Payload.Headers
 	to := headerValue(headers, "reply-to")
@@ -163,12 +201,12 @@ func (m *mailbox) DraftReply(ctx context.Context, id, comment string) (string, e
 	ids := threadIDs(headerValue(headers, "message-id"), headerValue(headers, "references"))
 	text, kind, err := bodyText(&v.Payload, true)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	if kind == model.HTML {
 		text, err = htmlText(text)
 		if err != nil {
-			return "", err
+			return nil, "", err
 		}
 	}
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
@@ -182,7 +220,7 @@ func (m *mailbox) DraftReply(ctx context.Context, id, comment string) (string, e
 	body := comment + "\n\nOn " + original.ReceivedAt.Format("2006-01-02 15:04") + " UTC, " + original.Sender.Address + " wrote:\n" + strings.Join(lines, "\n") + "\n"
 	raw, err := plainMessage([]header{{"To", to}, {"Subject", subject}}, body, ids)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
-	return m.createDraft(ctx, raw, &v.ThreadID)
+	return raw, v.ThreadID, nil
 }

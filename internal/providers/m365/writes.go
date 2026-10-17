@@ -28,12 +28,22 @@ func recipients(addresses []string) []map[string]any {
 	}
 	return out
 }
-func (b *mailbox) draft(ctx context.Context, path string, body map[string]any) (string, error) {
+
+// post sends one POST under the mutation gate. The request helper never repeats a request.
+func (b *mailbox) post(ctx context.Context, path string, body map[string]any) (object, error) {
 	if !b.c.lockMutation(ctx) {
-		return "", requestFailed
+		return nil, requestFailed
 	}
 	defer func() { <-b.c.mutationGate }()
-	d, err := b.c.request(ctx, http.MethodPost, b.c.endpoint(path, nil), body, false)
+	return b.c.request(ctx, http.MethodPost, b.c.endpoint(path, nil), body, false)
+}
+
+// textMessage is the Graph message of a new plain-text message.
+func textMessage(draft model.NewDraft) map[string]any {
+	return map[string]any{"subject": draft.Subject, "body": map[string]string{"contentType": "text", "content": draft.Body}, "toRecipients": recipients(draft.To)}
+}
+func (b *mailbox) draft(ctx context.Context, path string, body map[string]any) (string, error) {
+	d, err := b.post(ctx, path, body)
 	if err != nil {
 		return "", err
 	}
@@ -44,13 +54,28 @@ func (b *mailbox) draft(ctx context.Context, path string, body map[string]any) (
 	return id, nil
 }
 func (b *mailbox) DraftNew(ctx context.Context, draft model.NewDraft) (string, error) {
-	return b.draft(ctx, "/me/messages", map[string]any{"subject": draft.Subject, "body": map[string]string{"contentType": "text", "content": draft.Body}, "toRecipients": recipients(draft.To)})
+	return b.draft(ctx, "/me/messages", textMessage(draft))
 }
 func (b *mailbox) DraftReply(ctx context.Context, id, comment string) (string, error) {
 	return b.draft(ctx, "/me/messages/"+escapeID(id)+"/createReply", map[string]any{"comment": comment})
 }
 func (b *mailbox) DraftForward(ctx context.Context, id string, to []string) (string, error) {
 	return b.draft(ctx, "/me/messages/"+escapeID(id)+"/createForward", map[string]any{"comment": "", "message": map[string]any{"toRecipients": recipients(to)}})
+}
+
+// send posts one Graph send action, which answers 202 Accepted without a body. A failed send is never sent again.
+func (b *mailbox) send(ctx context.Context, path string, body map[string]any) error {
+	_, err := b.post(ctx, path, body)
+	return err
+}
+func (b *mailbox) SendNew(ctx context.Context, draft model.NewDraft) error {
+	return b.send(ctx, "/me/sendMail", map[string]any{"message": textMessage(draft), "saveToSentItems": true})
+}
+func (b *mailbox) SendReply(ctx context.Context, id, comment string) error {
+	return b.send(ctx, "/me/messages/"+escapeID(id)+"/reply", map[string]any{"comment": comment})
+}
+func (b *mailbox) SendForward(ctx context.Context, id string, to []string) error {
+	return b.send(ctx, "/me/messages/"+escapeID(id)+"/forward", map[string]any{"comment": "", "toRecipients": recipients(to)})
 }
 func (b *mailbox) DraftUpdate(ctx context.Context, id, body string) (string, error) {
 	if !b.c.lockMutation(ctx) {

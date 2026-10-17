@@ -94,7 +94,7 @@ func TestRecordPreloadKeepsMissingLoginAndJevPromptSemantics(t *testing.T) {
 	defer s.Close()
 	prompts := 0
 	checks, err := s.Preload(ctx, func(context.Context) (string, error) { prompts++; return "synthetic-prompt-key", nil })
-	if err != nil || len(checks) != 4 || prompts != 1 || checks[3].Status != "saved" {
+	if err != nil || len(checks) != 5 || prompts != 1 || checks[3].Status != "saved" {
 		t.Fatal("record preload did not prompt and start")
 	}
 	for _, check := range checks[1:3] {
@@ -102,7 +102,7 @@ func TestRecordPreloadKeepsMissingLoginAndJevPromptSemantics(t *testing.T) {
 			t.Fatal("missing account no longer starts disabled")
 		}
 	}
-	if key, err := store.LoadOpenRouterKey(ctx); err != nil || key != "synthetic-prompt-key" {
+	if key, err := store.LoadScreeningKey(ctx); err != nil || key != "synthetic-prompt-key" {
 		t.Fatal("prompted key was not persisted")
 	}
 }
@@ -114,7 +114,7 @@ func TestRecordPreloadUsesOneReadRewriteAndRuntimeMemory(t *testing.T) {
 	clock := func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return now }
 	old := loggedIn(now)
 	p := &recordPlatform{}
-	p.data, _ = json.Marshal(credentials.Record{Version: 1, OAuth: old.records, OpenRouterKey: old.key})
+	p.data, _ = json.Marshal(credentials.Record{Version: 1, OAuth: old.records, ScreeningKey: old.key})
 	store := credentials.New(p, home, nil)
 	var refreshMu sync.Mutex
 	var refreshes []string
@@ -134,7 +134,7 @@ func TestRecordPreloadUsesOneReadRewriteAndRuntimeMemory(t *testing.T) {
 	}
 	defer s.Close()
 	checks, err := s.Preload(ctx, nil)
-	if err != nil || len(checks) != 4 {
+	if err != nil || len(checks) != 5 {
 		t.Fatalf("preload failed: %v", err)
 	}
 	p.mu.Lock()
@@ -154,7 +154,7 @@ func TestRecordPreloadUsesOneReadRewriteAndRuntimeMemory(t *testing.T) {
 	p.mu.Unlock()
 	// A separate local command changes the key after the server has loaded its snapshot.
 	local := credentials.New(p, home, nil)
-	if err := local.SaveOpenRouterKey(ctx, "new-local-key"); err != nil {
+	if err := local.SaveScreeningKey(ctx, "new-local-key"); err != nil {
 		t.Fatal(err)
 	}
 	clockMu.Lock()
@@ -177,7 +177,7 @@ func TestRecordPreloadUsesOneReadRewriteAndRuntimeMemory(t *testing.T) {
 	if len(refreshes) != 2 || refreshes[0] != "private-refresh-0" || refreshes[1] != "private-refresh-0" {
 		t.Fatal("failed save advanced server memory")
 	}
-	if key, err := local.LoadOpenRouterKey(ctx); err != nil || key != "new-local-key" {
+	if key, err := local.LoadScreeningKey(ctx); err != nil || key != "new-local-key" {
 		t.Fatal("runtime refresh overwrote a local command")
 	}
 }

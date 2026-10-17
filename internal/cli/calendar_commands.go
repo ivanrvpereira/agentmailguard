@@ -40,7 +40,7 @@ func meetingEnd(c *cobra.Command, start time.Time, end string, duration time.Dur
 func calendarAvailabilityCmd(r *runner) *cobra.Command {
 	var to []string
 	var start, end string
-	c := r.leaf("availability", "Show 30-minute M365 free/busy slots; read-only, sends nothing", 0, 0, func(c *cobra.Command, _ []string) error {
+	c := r.leaf("availability", "Show 30-minute M365 or fake free/busy slots; read-only, sends nothing", 0, 0, func(c *cobra.Command, _ []string) error {
 		loc := r.now().Location()
 		from, ok := localStamp(start, loc)
 		until, ok2 := localStamp(end, loc)
@@ -63,18 +63,18 @@ A slot is free for the meeting only when every address is free.`
 
 func calendarCancelCmd(r *runner) *cobra.Command {
 	comment := ""
-	c := r.leaf("cancel ID", "Cancel your own meeting and notify the attendees now", 1, 1, func(c *cobra.Command, args []string) error {
+	c := r.leaf("cancel ID", "Cancel your own meeting and notify the attendees (write policy applies)", 1, 1, func(c *cobra.Command, args []string) error {
 		p := map[string]any{"id": args[0]}
 		optional(c, p, "comment", &comment)
 		return r.call(c, "calendar.cancel", p, false)
 	})
-	c.Flags().StringVar(&comment, "comment", "", "message sent with the cancellation")
+	c.Flags().StringVar(&comment, "comment", "", "message sent with the cancellation; refused on Gmail, which sends no cancellation message")
 	return c
 }
 
 func calendarRespondCmd(r *runner) *cobra.Command {
 	response, comment := "", ""
-	c := r.leaf("respond ID", "Send your response to a meeting invitation now", 1, 1, func(c *cobra.Command, args []string) error {
+	c := r.leaf("respond ID", "Send your response to a meeting invitation (write policy applies)", 1, 1, func(c *cobra.Command, args []string) error {
 		if !model.MeetingResponse(response).Valid() {
 			return errUsage
 		}
@@ -91,8 +91,8 @@ func calendarUpdateCmd(r *runner) *cobra.Command {
 	var add, remove []string
 	var subject, location, start, end string
 	var duration time.Duration
-	teams := false
-	c := r.leaf("update ID", "Change your own meeting and send the update now", 1, 1, func(c *cobra.Command, args []string) error {
+	online := false
+	c := r.leaf("update ID", "Change your own meeting and send the update (write policy applies)", 1, 1, func(c *cobra.Command, args []string) error {
 		p := map[string]any{"id": args[0]}
 		optional(c, p, "subject", &subject)
 		optional(c, p, "location", &location)
@@ -128,12 +128,12 @@ func calendarUpdateCmd(r *runner) *cobra.Command {
 		if len(remove) > 0 {
 			p["remove"] = remove
 		}
-		if c.Flags().Changed("teams") {
-			// Updates only add Teams; removing an existing meeting link is not supported.
-			if !teams {
+		if c.Flags().Changed("online") {
+			// Updates only add an online meeting; removing an existing meeting link is not supported.
+			if !online {
 				return errUsage
 			}
-			p["teams"] = true
+			p["online"] = true
 		}
 		if len(p) == 1 {
 			return errUsage
@@ -147,7 +147,7 @@ func calendarUpdateCmd(r *runner) *cobra.Command {
 	c.Flags().DurationVar(&duration, "duration", 0, "new meeting length, for example 30m or 1h30m")
 	c.Flags().StringArrayVar(&add, "add-attendee", nil, "attendee address to add; repeatable")
 	c.Flags().StringArrayVar(&remove, "remove-attendee", nil, "attendee address to remove; repeatable")
-	c.Flags().BoolVar(&teams, "teams", false, "add a Microsoft Teams meeting to this event; cannot remove one")
+	c.Flags().BoolVar(&online, "online", false, "add an online meeting link (Teams on Microsoft 365, Google Meet on Gmail) if the event has none; cannot remove one")
 	return c
 }
 
@@ -155,8 +155,8 @@ func calendarInviteCmd(r *runner) *cobra.Command {
 	var to []string
 	var subject, body, location, start, end string
 	var duration time.Duration
-	teams := true
-	c := r.leaf("invite", "Create a meeting, with Teams by default, and send the invitation now", 0, 0, func(c *cobra.Command, _ []string) error {
+	online := true
+	c := r.leaf("invite", "Create a meeting, with an online meeting link by default, and send the invitation (write policy applies)", 0, 0, func(c *cobra.Command, _ []string) error {
 		if len(to) == 0 || !c.Flags().Changed("subject") || !c.Flags().Changed("start") {
 			return errUsage
 		}
@@ -171,7 +171,7 @@ func calendarInviteCmd(r *runner) *cobra.Command {
 		}
 		p := map[string]any{"to": to, "subject": subject, "body": body, "start": from.Format(time.RFC3339), "end": until.Format(time.RFC3339)}
 		optional(c, p, "location", &location)
-		p["teams"] = teams
+		p["online"] = online
 		return r.call(c, "calendar.invite", p, false)
 	})
 	c.Flags().StringArrayVar(&to, "to", nil, "attendee address; repeatable")
@@ -181,6 +181,6 @@ func calendarInviteCmd(r *runner) *cobra.Command {
 	c.Flags().StringVar(&start, "start", "", "local start as 'YYYY-MM-DD HH:MM'")
 	c.Flags().StringVar(&end, "end", "", "local end as 'YYYY-MM-DD HH:MM'")
 	c.Flags().DurationVar(&duration, "duration", 0, "meeting length, for example 30m or 1h30m")
-	negated(c, "teams", "add a Microsoft Teams meeting link; use --no-teams for none", &teams)
+	negated(c, "online", "add an online meeting link (Teams on Microsoft 365, Google Meet on Gmail); use --no-online for none", &online)
 	return c
 }

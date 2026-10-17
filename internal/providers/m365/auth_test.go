@@ -22,7 +22,7 @@ import (
 var now = time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC)
 
 // requestedScopes is the exact scope string that every login and refresh request must ask for.
-const requestedScopes = "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/MailboxSettings.Read offline_access openid profile"
+const requestedScopes = "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/MailboxSettings.Read offline_access openid profile"
 
 func jwt(claims any) string {
 	b, _ := json.Marshal(claims)
@@ -58,8 +58,8 @@ func (s *store) SaveOAuth(_ context.Context, p, a string, v credentials.OAuth) e
 	s.token = v
 	return s.err
 }
-func (*store) LoadOpenRouterKey(context.Context) (string, error) { panic("unexpected key access") }
-func (*store) SaveOpenRouterKey(context.Context, string) error   { panic("unexpected key access") }
+func (*store) LoadScreeningKey(context.Context) (string, error) { panic("unexpected key access") }
+func (*store) SaveScreeningKey(context.Context, string) error   { panic("unexpected key access") }
 func account() config.Account {
 	return config.Account{Name: "work", Provider: "m365", ClientID: "client", TenantID: "tenant"}
 }
@@ -274,7 +274,7 @@ func TestExpiredUnsafeCredentialUsesOnlyValidatedRefresh(t *testing.T) {
 }
 
 func TestFreshOverbroadCredentialIsUsedWithoutRefresh(t *testing.T) {
-	token := jwt(map[string]any{"scp": "User.Read Mail.ReadWrite Mail.Send", "roles": []string{"Mail.Read"}})
+	token := jwt(map[string]any{"scp": "User.Read Mail.ReadWrite Contacts.Read", "roles": []string{"Mail.Read"}})
 	old := credentials.OAuth{AccessToken: token, RefreshToken: "refresh", ExpiresAt: now.Add(time.Hour), Username: "user@example.test", Scopes: []string{"User.Read"}}
 	s := &store{token: old}
 	var refreshes, graphCalls atomic.Int64
@@ -289,10 +289,10 @@ func TestFreshOverbroadCredentialIsUsedWithoutRefresh(t *testing.T) {
 	defer server.Close()
 	c := m365.New(account(), s, m365.Options{HTTPClient: server.Client(), BaseURL: server.URL, AuthorityURL: server.URL, Now: func() time.Time { return now }})
 	user, scopes, err := c.Status(context.Background())
-	if err != nil || user != "user@example.test" || !reflect.DeepEqual(scopes, []string{"User.Read", "Mail.ReadWrite", "Mail.Send", "role:Mail.Read"}) {
+	if err != nil || user != "user@example.test" || !reflect.DeepEqual(scopes, []string{"User.Read", "Mail.ReadWrite", "Contacts.Read", "role:Mail.Read"}) {
 		t.Fatalf("fresh overbroad status: user=%q scopes=%v err=%v", user, scopes, err)
 	}
-	if extra := m365.ExtraScopes(scopes); !reflect.DeepEqual(extra, []string{"Mail.Send", "role:Mail.Read"}) {
+	if extra := m365.ExtraScopes(scopes); !reflect.DeepEqual(extra, []string{"Contacts.Read", "role:Mail.Read"}) {
 		t.Fatalf("extra scopes not reported: %v", extra)
 	}
 	if _, err := c.Mailbox().Get(context.Background(), []string{"message"}, false); err != nil {
@@ -303,15 +303,15 @@ func TestFreshOverbroadCredentialIsUsedWithoutRefresh(t *testing.T) {
 	}
 }
 
-func TestCalendarWriteScopeRecognized(t *testing.T) {
+func TestCalendarWriteAndMailSendScopesRecognized(t *testing.T) {
 	s := validStore()
-	s.token.AccessToken = jwt(map[string]any{"scp": "Calendars.ReadWrite calendars.readwrite Mail.Send"})
+	s.token.AccessToken = jwt(map[string]any{"scp": "Calendars.ReadWrite calendars.readwrite Mail.Send Contacts.Read"})
 	c := m365.New(account(), s, m365.Options{Now: func() time.Time { return now }})
 	_, scopes, err := c.Status(context.Background())
-	if err != nil || !reflect.DeepEqual(scopes, []string{"Calendars.ReadWrite", "calendars.readwrite", "Mail.Send"}) {
+	if err != nil || !reflect.DeepEqual(scopes, []string{"Calendars.ReadWrite", "calendars.readwrite", "Mail.Send", "Contacts.Read"}) {
 		t.Fatalf("write scope status = %v, %v", scopes, err)
 	}
-	if extra := m365.ExtraScopes(scopes); !reflect.DeepEqual(extra, []string{"Mail.Send"}) {
+	if extra := m365.ExtraScopes(scopes); !reflect.DeepEqual(extra, []string{"Contacts.Read"}) {
 		t.Fatalf("write scope reported as extra = %v", extra)
 	}
 }

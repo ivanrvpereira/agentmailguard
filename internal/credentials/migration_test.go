@@ -36,7 +36,7 @@ func TestFirstOperationMigratesAllConfiguredLegacyCredentials(t *testing.T) {
 			case "login":
 				err = store.SaveOAuth(ctx, "gmail", "new", credentials.OAuth{RefreshToken: "new-login"})
 			case "set-key":
-				err = store.SaveOpenRouterKey(ctx, "new-key")
+				err = store.SaveScreeningKey(ctx, "new-key")
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -53,8 +53,8 @@ func TestFirstOperationMigratesAllConfiguredLegacyCredentials(t *testing.T) {
 			if first == "set-key" {
 				wantKey = "new-key"
 			}
-			if key, err := reopened.LoadOpenRouterKey(ctx); err != nil || key != wantKey {
-				t.Fatal("migration lost Jev key")
+			if key, err := reopened.LoadScreeningKey(ctx); err != nil || key != wantKey {
+				t.Fatal("migration lost screening key")
 			}
 			for k, v := range legacy {
 				if !reflect.DeepEqual(p.values[k], v) {
@@ -81,7 +81,7 @@ func TestPlatformErrorsAreNeverTreatedAsMissingItems(t *testing.T) {
 				p.writeFailure = failure
 			}
 			store := credentials.New(p, t.TempDir(), []config.Account{{Provider: "m365", Name: "work"}})
-			if err := store.SaveOpenRouterKey(context.Background(), "replacement"); err != credentials.ErrUnavailable {
+			if err := store.SaveScreeningKey(context.Background(), "replacement"); err != credentials.ErrUnavailable {
 				t.Errorf("platform error was treated as absence: %v", err)
 			}
 			if p.writes != 0 {
@@ -108,7 +108,7 @@ func TestMigrationDenialsNeverCreatePartialRecord(t *testing.T) {
 				p.writeFailure = failure
 			}
 			store := credentials.New(p, t.TempDir(), []config.Account{{Provider: "m365", Name: "work"}, {Provider: "gmail", Name: "personal"}})
-			if err := store.SaveOpenRouterKey(context.Background(), "replacement"); err != credentials.ErrUnavailable {
+			if err := store.SaveScreeningKey(context.Background(), "replacement"); err != credentials.ErrUnavailable {
 				t.Fatal("migration did not return fixed unavailable error")
 			}
 			if p.writes != 0 || len(p.values) != 2 {
@@ -125,7 +125,7 @@ func TestMigrationRefusesPresentButEmptyLegacyKey(t *testing.T) {
 			{"agentmailguard-go-openrouter", "agentmailguard-go"}: []byte(raw),
 		}}
 		store := credentials.New(p, t.TempDir(), []config.Account{{Provider: "m365", Name: "work"}})
-		if err := store.SaveOpenRouterKey(context.Background(), "new-key"); err != credentials.ErrInvalidRecord {
+		if err := store.SaveScreeningKey(context.Background(), "new-key"); err != credentials.ErrInvalidRecord {
 			t.Errorf("present invalid key was treated as missing: %v", err)
 		}
 		if p.writes != 0 {
@@ -148,12 +148,30 @@ func TestMigrationFailsClosedWithoutWritingPartialRecord(t *testing.T) {
 				{"agentmailguard-go-gmail", "personal"}: []byte(raw),
 			}}
 			store := credentials.New(p, t.TempDir(), []config.Account{{Provider: "m365", Name: "work"}, {Provider: "gmail", Name: "personal"}})
-			if err := store.SaveOpenRouterKey(context.Background(), "new-key"); err != credentials.ErrInvalidRecord {
+			if err := store.SaveScreeningKey(context.Background(), "new-key"); err != credentials.ErrInvalidRecord {
 				t.Fatalf("failure=%v", err)
 			}
 			if p.writes != 0 {
 				t.Fatal("failed migration wrote a partial record")
 			}
 		})
+	}
+}
+
+// Fake accounts have no credentials, so migration skips them and still copies the other accounts.
+func TestMigrationSkipsFakeAccounts(t *testing.T) {
+	p := &fakePlatform{values: map[[2]string][]byte{
+		{"agentmailguard-go-m365", "work"}: []byte(`{"refresh_token":"legacy-work"}`),
+	}}
+	store := credentials.New(p, t.TempDir(), []config.Account{{Provider: "fake", Name: "demo"}, {Provider: "m365", Name: "work"}})
+	ctx := context.Background()
+	if err := store.SaveScreeningKey(ctx, "new-key"); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := credentials.New(p, t.TempDir(), nil).LoadOAuth(ctx, "m365", "work"); err != nil || v.RefreshToken != "legacy-work" {
+		t.Fatalf("migration lost the m365 account: %v", err)
+	}
+	if err := store.SaveOAuth(ctx, "fake", "demo", credentials.OAuth{RefreshToken: "x"}); err == nil {
+		t.Fatal("fake credential saved")
 	}
 }

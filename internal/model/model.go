@@ -5,6 +5,7 @@ package model
 import (
 	"context"
 	"errors"
+	"html"
 	"regexp"
 	"slices"
 	"strings"
@@ -85,6 +86,8 @@ type Message struct {
 type Folder struct {
 	ID   FolderID
 	Name string
+	// Trash marks the provider's deleted-items folder and every folder below it. Moves there must use trash instead.
+	Trash bool
 }
 type Attendee struct {
 	Address  Address
@@ -120,10 +123,12 @@ type NewDraft struct {
 }
 
 // Error must contain only a safe error code/status, never a provider response body.
+// ApprovalID is set only by the guard, for an action stored for approval (Error "pending").
 type MutationResult struct {
-	ID    MessageID
-	OK    bool
-	Error *string
+	ID         MessageID
+	OK         bool
+	Error      *string
+	ApprovalID *string
 }
 type InboxEntry struct {
 	ID         MessageID
@@ -138,7 +143,7 @@ type InboxScan struct {
 	Failures []ScanFailure
 }
 
-// Mailbox deliberately has neither a send operation nor a permanent-delete operation.
+// Mailbox deliberately has no permanent-delete operation. Its send operations reach real recipients at once.
 // List/Search may return bodies already available even when body is false.
 // ScanInbox reads all pages before returning, metadata only, excluding drafts,
 // with since <= received_at < until (nil until means no upper bound).
@@ -161,6 +166,11 @@ type Mailbox interface {
 	DraftForward(ctx context.Context, id MessageID, to []string) (MessageID, error)
 	// DraftUpdate is restricted to new drafts, and returns the possibly changed message ID.
 	DraftUpdate(ctx context.Context, id MessageID, body string) (MessageID, error)
+	// SendNew, SendReply, and SendForward send mail at once, with the same content as the matching draft
+	// operation. A send request that may have reached the provider is never sent again.
+	SendNew(ctx context.Context, draft NewDraft) error
+	SendReply(ctx context.Context, id MessageID, comment string) error
+	SendForward(ctx context.Context, id MessageID, to []string) error
 }
 type Calendar interface {
 	List(ctx context.Context, start, end time.Time) ([]Event, error)
@@ -171,8 +181,15 @@ type NewEvent struct {
 	Subject, Body, Location string
 	Start, End              time.Time
 	Attendees               []string
-	Teams                   bool
+	Online                  bool // adds the provider's online meeting: Teams on M365, Google Meet on Gmail
 }
+
+// \r\n comes first so it gives one <br>.
+var htmlLineBreaks = strings.NewReplacer("\r\n", "<br>", "\r", "<br>", "\n", "<br>")
+
+// HTMLBody returns the plain-text body as escaped HTML that keeps the line breaks. Both providers render
+// event bodies as HTML, so body text never becomes markup or a disguised link.
+func (e NewEvent) HTMLBody() string { return htmlLineBreaks.Replace(html.EscapeString(e.Body)) }
 
 // CalendarTimeValid reports whether t has a year from 1 to 9999 in its own zone and in UTC.
 func CalendarTimeValid(t time.Time) bool {
@@ -183,12 +200,12 @@ type EventChange struct {
 	Subject, Location             *string
 	Start, End                    *time.Time
 	AddAttendees, RemoveAttendees []string
-	Teams                         bool // true adds a Teams meeting; false leaves the online meeting unchanged
+	Online                        bool // true adds an online meeting if none exists; false leaves it unchanged
 }
 
 // Empty reports a change with no field set. A duration given beside it is a change too.
 func (c EventChange) Empty() bool {
-	return c.Subject == nil && c.Location == nil && c.Start == nil && c.End == nil && len(c.AddAttendees)+len(c.RemoveAttendees) == 0 && !c.Teams
+	return c.Subject == nil && c.Location == nil && c.Start == nil && c.End == nil && len(c.AddAttendees)+len(c.RemoveAttendees) == 0 && !c.Online
 }
 
 // AttendeeConflict reports an address that is both added and removed, ignoring case.
@@ -392,8 +409,38 @@ type OrganizationQuestions struct {
 	Categories map[string]string
 }
 
+// ActionFlagThreshold is the Jev action score at or above which a write action counts as suspicious.
+// The value is provisional and will be tuned.
+const ActionFlagThreshold = 0.5
+
+// ActionCheck is the result of Jev's check of one write action. It never carries action text.
+// A check that failed has Error set, no Score, and Flag true. Fake is true only for a check that the fake
+// keyword engine made, so that the approval console does not show it as a Jev check. The agent never sees it.
+type ActionCheck struct {
+	Flag  bool     `json:"flag"`
+	Score *float64 `json:"score,omitempty"`
+	Error *string  `json:"error,omitempty"`
+	Fake  bool     `json:"fake,omitempty"`
+}
+
+// Failed reports a check without a valid score.
+func (c ActionCheck) Failed() bool { return c.Error != nil }
+
+// ActionScore is the check result for score. A score outside 0..1 is a failed check.
+func ActionScore(score float64) ActionCheck {
+	if !unit(score) {
+		return ActionFailure("ValidationError")
+	}
+	return ActionCheck{Flag: score >= ActionFlagThreshold, Score: &score}
+}
+
+// ActionFailure is a failed check with the safe code.
+func ActionFailure(code string) ActionCheck { return ActionCheck{Flag: true, Error: &code} }
+
 // Screener must return an Error verdict for missing/failed screening, with safe error text only. The Go error return is for cancellation; callers must never treat a zero result as green.
+// CheckAction returns a failed check, never a clean one, when the check cannot complete.
 type Screener interface {
 	Screen(ctx context.Context, state map[string]any) (Screening, error)
 	Classify(ctx context.Context, state map[string]any, security bool, organization *OrganizationQuestions) (Classification, error)
+	CheckAction(ctx context.Context, operation, effect string, state map[string]any) (ActionCheck, error)
 }

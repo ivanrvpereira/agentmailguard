@@ -10,7 +10,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -35,7 +34,9 @@ type Options struct {
 	M365        m365.Options
 	Gmail       gmail.Options
 	Now         func() time.Time
-	LookupEnv   func(string) string // defaults to os.Getenv; used for OPENROUTER_API_KEY
+	LookupEnv   func(string) string // supplies the credentials file password; nil reads the process environment
+	// ScreeningHTTPClient is the HTTP client of the jev engine. Nil uses the default client. For tests.
+	ScreeningHTTPClient *http.Client
 }
 
 func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "ServerOptions{redacted}") }
@@ -56,6 +57,14 @@ type Server struct {
 	accounts  map[string]*account
 	creds     *memoryStore
 	preloaded bool
+	// approvals is the [approvals] table, read once at start. approvalBase is the console item URL prefix.
+	approvals    config.Approvals
+	approvalBase string
+	// screening is the [screening] table, read once at start.
+	screening config.Screening
+	// approvalHash is the bcrypt hash of the approval console password, read once by Preload.
+	// Empty means not set. A change takes effect only after a restart.
+	approvalHash string
 }
 
 func (Server) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "Server{redacted}") }
@@ -64,6 +73,20 @@ func New(ctx context.Context, home string, opts Options) (*Server, error) {
 	home, err := config.Home(home)
 	if err != nil {
 		return nil, errors.New("configuration unavailable")
+	}
+	// An invalid [approvals] table stops the start. Other configuration errors surface at preload or on
+	// the first account call, as before, and leave the default console address.
+	approvals, err := config.LoadApprovals(ctx, filepath.Join(home, "config.toml"))
+	if errors.As(err, new(config.ApprovalsError)) {
+		return nil, err
+	}
+	if err != nil {
+		approvals.Listen = config.DefaultApprovalsListen
+	}
+	// An invalid [screening] table stops the start too; it never falls back to another engine.
+	screen, err := config.LoadScreening(ctx, filepath.Join(home, "config.toml"))
+	if errors.As(err, new(config.ScreeningError)) {
+		return nil, err
 	}
 	if opts.Credentials == nil {
 		accounts, err := config.LoadAccounts(ctx, filepath.Join(home, "config.toml"))
@@ -84,9 +107,6 @@ func New(ctx context.Context, home string, opts Options) (*Server, error) {
 			}
 		}
 	}
-	if opts.LookupEnv == nil {
-		opts.LookupEnv = os.Getenv
-	}
 	c, err := cache.Open(ctx, filepath.Join(home, "cache.db"))
 	if err != nil {
 		return nil, errors.New("cache unavailable")
@@ -96,15 +116,21 @@ func New(ctx context.Context, home string, opts Options) (*Server, error) {
 	}
 	creds := &memoryStore{backend: safeStore{opts.Credentials}}
 	opts.Credentials = creds
+	if opts.Screener == nil && screen.Provider == "fake" {
+		opts.Screener = screening.NewFake()
+	}
 	if opts.Screener == nil {
-		opts.Screener = screening.New(screening.Options{Credentials: opts.Credentials, HTTPClient: safeHTTP(nil), LookupEnv: opts.LookupEnv})
+		opts.Screener = screening.New(screening.Options{Credentials: opts.Credentials, HTTPClient: safeHTTP(opts.ScreeningHTTPClient), Endpoint: screen.Endpoint, Model: screen.Model})
 	}
 	opts.Screener = safeScreener{opts.Screener}
 	opts.M365.HTTPClient = safeHTTP(opts.M365.HTTPClient)
 	opts.Gmail.HTTPClient = safeHTTP(opts.Gmail.HTTPClient)
 	ctx, cancel := context.WithCancel(ctx)
-	return &Server{home: home, options: opts, cache: c, audit: audit.New(filepath.Join(home, "audit.jsonl")), ctx: ctx, cancel: cancel, slots: make(chan struct{}, 64), accounts: make(map[string]*account), creds: creds, mu: new(sync.Mutex), work: new(sync.WaitGroup), closeOnce: new(sync.Once)}, nil
+	return &Server{home: home, options: opts, cache: c, audit: audit.New(filepath.Join(home, "audit.jsonl")), ctx: ctx, cancel: cancel, slots: make(chan struct{}, 64), accounts: make(map[string]*account), creds: creds, mu: new(sync.Mutex), work: new(sync.WaitGroup), closeOnce: new(sync.Once), approvals: approvals, approvalBase: "http://" + approvals.Listen + "/a/", screening: screen}, nil
 }
+
+// FakeScreening reports whether the [screening] table, read once at start, selects the fake engine.
+func (s *Server) FakeScreening() bool { return s.screening.Provider == "fake" }
 
 // Close stops admission, cancels active calls, and waits at most ShutdownTimeout.
 func (s *Server) Close() error {
@@ -146,6 +172,20 @@ func fail(w http.ResponseWriter, status int, message string) {
 	}{message})
 }
 
+// admit refuses work after Close and registers the work so that Close waits for it. The returned context
+// ends when ctx or the server ends; done must be called when the work ends.
+func (s *Server) admit(ctx context.Context) (context.Context, func(), error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.ctx.Err() != nil {
+		return nil, nil, ErrUnavailable
+	}
+	s.work.Add(1)
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(s.ctx, cancel)
+	return ctx, func() { stop(); cancel(); s.work.Done() }, nil
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if recover() != nil {
@@ -169,15 +209,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, 415, "content type refused")
 		return
 	}
-	s.mu.Lock()
-	if s.closed || s.ctx.Err() != nil {
-		s.mu.Unlock()
-		fail(w, 503, "server unavailable")
+	ctx, done, err := s.admit(r.Context())
+	if err != nil {
+		fail(w, 503, err.Error())
 		return
 	}
-	s.work.Add(1)
-	s.mu.Unlock()
-	defer s.work.Done()
+	defer done()
 	select {
 	case s.slots <- struct{}{}:
 		defer func() { <-s.slots }()
@@ -185,10 +222,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "server busy")
 		return
 	}
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
-	stop := context.AfterFunc(s.ctx, cancel)
-	defer stop()
 	rc := http.NewResponseController(w)
 	_ = rc.SetReadDeadline(time.Now().Add(10 * time.Second))
 	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxRequestBytes))
@@ -207,6 +240,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, invalid) {
 			status = 400
 			message = "invalid request"
+		} else if errors.Is(err, ErrApprovalNotFound) {
+			status = 404
+			message = err.Error()
 		} else if text, ok := publicError(err); ok {
 			message = text
 		}
@@ -336,6 +372,8 @@ func (s *Server) call(ctx context.Context, r request) (any, error) {
 		return struct {
 			Deleted int64 `json:"deleted"`
 		}{n}, e
+	case "approvals.status":
+		return s.approvalStatus(ctx, r.Params)
 	default:
 		return s.accountCall(ctx, r)
 	}

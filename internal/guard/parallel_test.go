@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/audit"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 	"github.com/ivanrvpereira/agentmailguard/internal/guard"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"github.com/ivanrvpereira/agentmailguard/internal/screening"
@@ -27,7 +28,7 @@ type pendingScreen struct {
 }
 
 type coordinatedJev struct {
-	*screening.Jev
+	*screening.Screener
 	entered             chan pendingScreen
 	active, peak, calls atomic.Int32
 }
@@ -89,9 +90,14 @@ func newCoordinatedJev(t *testing.T) *coordinatedJev {
 		}})
 	}))
 	t.Cleanup(func() { close(stop); server.Close() })
-	s.Jev = screening.New(screening.Options{Endpoint: server.URL, LookupEnv: func(string) string { return "synthetic" }})
+	s.Screener = screening.New(screening.Options{Endpoint: server.URL, Credentials: keyStore{}})
 	return s
 }
+
+// keyStore supplies only the screening key.
+type keyStore struct{ credentials.Store }
+
+func (keyStore) LoadScreeningKey(context.Context) (string, error) { return "synthetic", nil }
 
 func receive[T any](t *testing.T, ch <-chan T) T {
 	t.Helper()

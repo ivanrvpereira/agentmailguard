@@ -57,6 +57,18 @@ func TestInvalidAccountsAreRefusedWithoutFileValues(t *testing.T) {
 	}
 }
 
+func TestFakeAccountsNeedNoProviderFields(t *testing.T) {
+	path := file(t, "[accounts.demo]\nprovider = 'fake'\n[accounts.demo.policy]\nmail_send = 'allow'\n")
+	got, err := config.LoadAccount(context.Background(), path, nil)
+	if err != nil || got.Name != "demo" || got.Provider != "fake" || got.ClientID != "" || got.Policy.Base.MailSend != config.Allow {
+		t.Fatalf("account=%v policy=%+v error=%v", got, got.Policy, err)
+	}
+	path = file(t, "[accounts.demo]\nprovider = 'other'\n")
+	if _, err := config.LoadAccount(context.Background(), path, nil); err == nil || !strings.HasSuffix(err.Error(), "supported: m365, gmail, fake") {
+		t.Fatalf("unsupported provider error=%v", err)
+	}
+}
+
 func TestAccountSelectionUsesFileOrderAndProviderFields(t *testing.T) {
 	path := file(t, `[accounts.work]
 provider = " m365 "

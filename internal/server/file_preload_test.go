@@ -16,7 +16,7 @@ type failedPreload struct {
 }
 
 func (s failedPreload) Preload(context.Context) (credentials.Record, error) {
-	return credentials.Record{}, s.err
+	return credentials.Record{ScreeningKey: "synthetic-stored-key"}, s.err
 }
 
 func TestCredentialStoreCheckFirst(t *testing.T) {
@@ -34,7 +34,7 @@ func TestCredentialStoreCheckFirst(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			s, err := server.New(context.Background(), home, server.Options{Credentials: failedPreload{err: tc.err}, LookupEnv: func(string) string { return "synthetic-env-key" }})
+			s, err := server.New(context.Background(), home, server.Options{Credentials: failedPreload{err: tc.err}, LookupEnv: func(string) string { return "" }})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -58,12 +58,7 @@ func TestServerNewConfiguredFileNeverUsesKeychain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := server.New(context.Background(), home, server.Options{LookupEnv: func(name string) string {
-		if name == "OPENROUTER_API_KEY" {
-			return "synthetic-env-key"
-		}
-		return ""
-	}})
+	s, err := server.New(context.Background(), home, server.Options{LookupEnv: func(string) string { return "" }})
 	if err != nil {
 		t.Fatal("file constructor failed")
 	}

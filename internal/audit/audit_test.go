@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -222,5 +223,72 @@ func TestConcurrentAuditRecordsRemainWhole(t *testing.T) {
 	}
 	if err := scanner.Err(); err != nil || count != 30 {
 		t.Fatalf("count=%d error=%v", count, err)
+	}
+}
+
+func TestAuditAcceptsOnlyExactPolicyResultCodes(t *testing.T) {
+	for _, code := range []string{"pending", "refused by policy: mail_trash", "refused by policy: calendar_invite"} {
+		path := filepath.Join(t.TempDir(), "audit.jsonl")
+		if err := audit.New(path).Record(context.Background(), "work", audit.Trash, []model.MutationResult{{ID: "m1", Error: &code}}, audit.Options{}); err != nil {
+			t.Errorf("%q refused: %v", code, err)
+		}
+	}
+	for _, code := range []string{"pending CANARY", "Pending", "refused by policy: CANARY", "refused by policy: mail_trash CANARY", "refused by policy: "} {
+		path := filepath.Join(t.TempDir(), "audit.jsonl")
+		if err := audit.New(path).Record(context.Background(), "work", audit.Trash, []model.MutationResult{{ID: "m1", Error: &code}}, audit.Options{}); err == nil {
+			t.Errorf("%q accepted", code)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("rejected code created a file")
+		}
+	}
+}
+
+func TestPolicyRecordsAcceptJevReasons(t *testing.T) {
+	id := "0123456789abcdef0123456789abcdef"
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	for _, reasons := range [][]string{{"policy", "jev_flag"}, {"policy", "sealed", "jev_error"}} {
+		d := audit.Decision{Operation: "draft.forward", Key: "mail_draft", Decision: "approve", Reasons: reasons, ApprovalID: &id}
+		if err := audit.New(path).Policy(context.Background(), "work", d); err != nil {
+			t.Fatalf("%v: %v", reasons, err)
+		}
+	}
+}
+
+func TestPolicyRecordsRefuseUnknownValues(t *testing.T) {
+	id := "0123456789abcdef0123456789abcdef"
+	valid := audit.Decision{Operation: "mail.trash", Key: "mail_trash", Decision: "approve", Reasons: []string{"policy", "sealed"}, ApprovalID: &id}
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	if err := audit.New(path).Policy(context.Background(), "work", valid); err != nil {
+		t.Fatal(err)
+	}
+	if err := audit.New(path).Approval(context.Background(), "work", "mail.trash", "created", id); err != nil {
+		t.Fatal(err)
+	}
+	bad := "CANARY"
+	for name, d := range map[string]audit.Decision{
+		"operation":   {Operation: "CANARY", Key: "mail_trash", Decision: "deny", Reasons: []string{"policy"}},
+		"key":         {Operation: "mail.trash", Key: "CANARY", Decision: "deny", Reasons: []string{"policy"}},
+		"decision":    {Operation: "mail.trash", Key: "mail_trash", Decision: "CANARY", Reasons: []string{"policy"}},
+		"reason":      {Operation: "mail.trash", Key: "mail_trash", Decision: "deny", Reasons: []string{"CANARY"}},
+		"approval":    {Operation: "mail.trash", Key: "mail_trash", Decision: "approve", Reasons: []string{"policy"}, ApprovalID: &bad},
+		"no approval": {Operation: "mail.trash", Key: "mail_trash", Decision: "approve", Reasons: []string{"policy"}},
+		"rule":        {Operation: "mail.trash", Key: "mail_trash", Decision: "deny", Reasons: []string{"policy"}, Rule: &bad},
+	} {
+		if err := audit.New(path).Policy(context.Background(), "work", d); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	for _, args := range [][2]string{{"CANARY", "created"}, {"mail.trash", "CANARY"}} {
+		if err := audit.New(path).Approval(context.Background(), "work", args[0], args[1], id); err == nil {
+			t.Errorf("%v accepted", args)
+		}
+	}
+	if err := audit.New(path).Approval(context.Background(), "work", "mail.trash", "created", bad); err == nil {
+		t.Error("invalid approval ID accepted")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || strings.Count(string(data), "\n") != 2 || strings.Contains(string(data), "CANARY") {
+		t.Fatalf("audit=%s %v", data, err)
 	}
 }

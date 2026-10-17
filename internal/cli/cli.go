@@ -28,16 +28,16 @@ type Options struct {
 	Server             server.Options
 	LookupEnv          func(string) string
 	Now                func() time.Time
-	Stdin              io.Reader // defaults to os.Stdin; read by auth set-jev-key, by auth login for a pasted Gmail address, and by serve for a missing Jev key
+	Stdin              io.Reader // defaults to os.Stdin; read by auth set-screening-key and set-approval-password, by auth login for a pasted Gmail address, and by serve for a missing screening key
 }
 
 func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "CLIOptions{redacted}") }
 
-const notes = `All data commands use the server. No automatic server start. No mail send or permanent delete.
-M365 calendar invite, update, cancel, and respond send meeting notifications at once, with no policy or outbound screening.
+const notes = `All data commands use the server. No automatic server start. No permanent delete.
+mail send, reply, and forward send email at once, and calendar invite, update, cancel, and respond send meeting notifications at once, when the write policy allows them (default: deny). No outbound screening.
 serve loads all credentials at start. Accounts without login start disabled; other failures refuse the start.
 Login runs locally on the server host. Restart the server after login or account changes.
-Client/server authentication and built-in TLS are absent. Anyone who reaches the server can send meeting notifications. Protect remote access with a tunnel.`
+Client/server authentication and built-in TLS are absent. Anyone who reaches the server can run every action that the write policy allows. Protect remote access with a tunnel.`
 
 // errUsage reports a rejected command line; errDone reports a finished command that already set its code.
 var errUsage = errors.New("invalid command usage")
@@ -145,8 +145,8 @@ func newRoot(r *runner, raw []string) *cobra.Command {
 	f.StringVar(&r.account, "account", "", "account name from the server configuration")
 	f.StringVar(&r.base, "server", "", "server base URL")
 	f.DurationVar(&r.timeout, "timeout", client.DefaultTimeout, "request timeout")
-	f.StringVar(&r.home, "home", "", "configuration directory; serve, auth login, set-jev-key, migrate, and change-password only")
-	root.AddCommand(serveCmd(r), authCmd(r), statsCmd(r), cacheCmd(r), rulesCmd(r), mailCmd(r), calendarCmd(r), draftCmd(r))
+	f.StringVar(&r.home, "home", "", "configuration directory; serve, auth login, set-screening-key, set-approval-password, migrate, and change-password only")
+	root.AddCommand(serveCmd(r), authCmd(r), statsCmd(r), cacheCmd(r), rulesCmd(r), approvalsCmd(r), mailCmd(r), calendarCmd(r), draftCmd(r))
 	return root
 }
 
@@ -355,7 +355,7 @@ func authCmd(r *runner) *cobra.Command {
 	})
 	negated(signIn, "device-code", "use the provider device-code flow", &device)
 	signIn.Flags().BoolVar(&noBrowser, "no-browser", false, "print the Gmail sign-in URL without opening a browser")
-	jevKey := r.leaf("set-jev-key", "Save the Jev key on this host from stdin", 0, 0, func(c *cobra.Command, _ []string) error {
+	screeningKey := r.leaf("set-screening-key", "Save the screening key on this host from stdin", 0, 0, func(c *cobra.Command, _ []string) error {
 		supplied, _, err := r.resolve(c, true)
 		if err != nil {
 			return err
@@ -364,14 +364,29 @@ func authCmd(r *runner) *cobra.Command {
 			return errUsage
 		}
 		if supplied {
-			r.code = failure(r.stderr, "Jev key setup is local only; remove --server and AGENTMAILGUARD_SERVER")
+			r.code = failure(r.stderr, "Screening key setup is local only; remove --server and AGENTMAILGUARD_SERVER")
 			return errDone
 		}
-		r.code = setJevKey(c.Context(), r.home, r.opts.Stdin, r.stderr, r.opts.Server, r.passwordEnv)
+		r.code = setScreeningKey(c.Context(), r.home, r.opts.Stdin, r.stderr, r.opts.Server, r.passwordEnv)
+		return errDone
+	})
+	approvalPassword := r.leaf("set-approval-password", "Set the approval console password on this host from stdin", 0, 0, func(c *cobra.Command, _ []string) error {
+		supplied, _, err := r.resolve(c, true)
+		if err != nil {
+			return err
+		}
+		if c.Flags().Changed("account") {
+			return errUsage
+		}
+		if supplied {
+			r.code = failure(r.stderr, "approval password setup is local only; remove --server and AGENTMAILGUARD_SERVER")
+			return errDone
+		}
+		r.code = setApprovalPassword(c.Context(), r.home, r.opts.Stdin, r.stderr, r.opts.Server, r.passwordEnv)
 		return errDone
 	})
 	c := group(r, "auth", "Provider sign-in and credential setup")
-	c.AddCommand(signIn, r.leaf("status", "Report account sign-in and scope state", 0, 0, r.none("auth.status")), jevKey,
+	c.AddCommand(signIn, r.leaf("status", "Report account sign-in and scope state", 0, 0, r.none("auth.status")), screeningKey, approvalPassword,
 		credentialCmd(r, "migrate", "Copy credentials to the other local backend"),
 		credentialCmd(r, "change-password", "Change the local credential file password"))
 	return c
@@ -427,8 +442,16 @@ func rulesCmd(r *runner) *cobra.Command {
 	return c
 }
 
+func approvalsCmd(r *runner) *cobra.Command {
+	c := group(r, "approvals", "Write actions that wait for approval")
+	c.AddCommand(r.leaf("status ID", "Show the state of a pending write action", 1, 1, func(c *cobra.Command, args []string) error {
+		return r.call(c, "approvals.status", map[string]any{"id": args[0]}, false)
+	}))
+	return c
+}
+
 func mailCmd(r *runner) *cobra.Command {
-	c := group(r, "mail", "Read and organize screened mail")
+	c := group(r, "mail", "Read, organize, and send screened mail")
 	c.AddCommand(mailListCmd(r), mailGetCmd(r), mailSearchCmd(r), mailLinkCmd(r),
 		r.leaf("folders", "List mail folders", 0, 0, r.none("mail.folders")),
 		r.leaf("categories", "List mail categories", 0, 0, r.none("mail.categories")),
@@ -436,7 +459,10 @@ func mailCmd(r *runner) *cobra.Command {
 		r.leaf("trash IDS...", "Move messages to the trash", 1, -1, r.ids("mail.trash")),
 		r.leaf("read IDS...", "Mark messages as read", 1, -1, r.ids("mail.read")),
 		r.leaf("unread IDS...", "Mark messages as unread", 1, -1, r.ids("mail.unread")),
-		mailMoveCmd(r), mailFlagCmd(r), mailCategorizeCmd(r), mailOrganizeCmd(r))
+		mailMoveCmd(r), mailFlagCmd(r), mailCategorizeCmd(r), mailOrganizeCmd(r),
+		newMessageCmd(r, "send", "mail.send", "Send a new message at once"),
+		bodyCmd(r, "reply ID", "mail.reply", "Send a reply to a message at once"),
+		forwardCmd(r, "mail.forward", "Send a forward of a message at once"))
 	return c
 }
 
@@ -585,34 +611,36 @@ func calendarCmd(r *runner) *cobra.Command {
 	get := r.leaf("get ID", "Show one calendar event", 1, 1, func(c *cobra.Command, args []string) error {
 		return r.call(c, "calendar.get", map[string]any{"id": args[0]}, false)
 	})
-	c := group(r, "calendar", "Read calendar events and availability, and send M365 meeting notifications")
+	c := group(r, "calendar", "Read calendar events and M365 or fake availability, and send meeting notifications")
 	c.AddCommand(list, get, calendarAvailabilityCmd(r), calendarInviteCmd(r), calendarUpdateCmd(r), calendarCancelCmd(r), calendarRespondCmd(r))
 	return c
 }
 
 func draftCmd(r *runner) *cobra.Command {
-	c := group(r, "draft", "Create and update drafts; sending stays manual")
-	c.AddCommand(draftNewCmd(r), draftBodyCmd(r, "reply ID", "draft.reply", "Draft a reply to a message"),
-		draftForwardCmd(r), draftBodyCmd(r, "update ID", "draft.update", "Replace the body of a draft"))
+	c := group(r, "draft", "Create and update drafts without sending them")
+	c.AddCommand(newMessageCmd(r, "new", "draft.new", "Draft a new message"), bodyCmd(r, "reply ID", "draft.reply", "Draft a reply to a message"),
+		forwardCmd(r, "draft.forward", "Draft a forward of a message"), bodyCmd(r, "update ID", "draft.update", "Replace the body of a draft"))
 	return c
 }
 
-func draftNewCmd(r *runner) *cobra.Command {
+// newMessageCmd runs draft.new or mail.send: both need --to, --subject, and --body.
+func newMessageCmd(r *runner, use, op, short string) *cobra.Command {
 	var to []string
 	subject, body := "", ""
-	c := r.leaf("new", "Draft a new message", 0, 0, func(c *cobra.Command, _ []string) error {
+	c := r.leaf(use, short, 0, 0, func(c *cobra.Command, _ []string) error {
 		if !c.Flags().Changed("body") || !c.Flags().Changed("subject") || len(to) == 0 {
 			return errUsage
 		}
-		return r.call(c, "draft.new", map[string]any{"to": to, "subject": subject, "body": body}, false)
+		return r.call(c, op, map[string]any{"to": to, "subject": subject, "body": body}, false)
 	})
 	c.Flags().StringArrayVar(&to, "to", nil, "recipient address; repeatable")
-	c.Flags().StringVar(&subject, "subject", "", "draft subject")
-	c.Flags().StringVar(&body, "body", "", "draft body")
+	c.Flags().StringVar(&subject, "subject", "", "message subject")
+	c.Flags().StringVar(&body, "body", "", "message body")
 	return c
 }
 
-func draftBodyCmd(r *runner, use, op, short string) *cobra.Command {
+// bodyCmd runs an operation on one message ID that needs --body.
+func bodyCmd(r *runner, use, op, short string) *cobra.Command {
 	body := ""
 	c := r.leaf(use, short, 1, 1, func(c *cobra.Command, args []string) error {
 		if !c.Flags().Changed("body") {
@@ -620,17 +648,18 @@ func draftBodyCmd(r *runner, use, op, short string) *cobra.Command {
 		}
 		return r.call(c, op, map[string]any{"id": args[0], "body": body}, false)
 	})
-	c.Flags().StringVar(&body, "body", "", "draft body")
+	c.Flags().StringVar(&body, "body", "", "message body")
 	return c
 }
 
-func draftForwardCmd(r *runner) *cobra.Command {
+// forwardCmd runs draft.forward or mail.forward: one message ID and at least one --to.
+func forwardCmd(r *runner, op, short string) *cobra.Command {
 	var to []string
-	c := r.leaf("forward ID", "Draft a forward of a message", 1, 1, func(c *cobra.Command, args []string) error {
+	c := r.leaf("forward ID", short, 1, 1, func(c *cobra.Command, args []string) error {
 		if len(to) == 0 {
 			return errUsage
 		}
-		return r.call(c, "draft.forward", map[string]any{"id": args[0], "to": to}, false)
+		return r.call(c, op, map[string]any{"id": args[0], "to": to}, false)
 	})
 	c.Flags().StringArrayVar(&to, "to", nil, "recipient address; repeatable")
 	return c

@@ -30,7 +30,7 @@ func TestCacheOnlyAndClosedSchema(t *testing.T) {
 		{`{"operation":"stats","params":{"Days":1}}`, 400, `{"error":"invalid request"}`},
 		{`{"operation":"stats","operation":"cache.clear","params":{}}`, 400, `{"error":"invalid request"}`},
 		{`{"operation":"stats","params":{}} {}`, 400, `{"error":"invalid request"}`},
-		{`{"operation":"mail.send","params":{}}`, 400, `{"error":"invalid request"}`},
+		{`{"operation":"mail.delete","params":{}}`, 400, `{"error":"invalid request"}`},
 		{`{"operation":"stats","params":null}`, 400, `{"error":"invalid request"}`},
 	} {
 		req, _ := http.NewRequest("POST", h.URL+"/v1/call", strings.NewReader(tc.body))

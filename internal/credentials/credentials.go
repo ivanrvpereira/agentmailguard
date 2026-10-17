@@ -31,19 +31,23 @@ func (OAuth) String() string                   { return "OAuth{redacted}" }
 func (o OAuth) GoString() string               { return o.String() }
 func (o OAuth) Format(state fmt.State, _ rune) { _, _ = io.WriteString(state, o.String()) }
 
-// Store is the credential dependency for provider and Jev adapters. It does not obtain tokens, expand scopes, or expose provider secrets to remote clients.
+// Store is the credential dependency for provider and screening adapters. It does not obtain tokens, expand scopes, or expose provider secrets to remote clients.
 type Store interface {
 	LoadOAuth(ctx context.Context, provider, account string) (OAuth, error)
 	SaveOAuth(ctx context.Context, provider, account string, credential OAuth) error
-	LoadOpenRouterKey(ctx context.Context) (string, error)
-	SaveOpenRouterKey(ctx context.Context, key string) error
+	LoadScreeningKey(ctx context.Context) (string, error)
+	SaveScreeningKey(ctx context.Context, key string) error
 }
 
 // Record holds all secrets. Formatting must never reveal its fields.
 type Record struct {
-	Version       int              `json:"version"`
-	OAuth         map[string]OAuth `json:"oauth"`
-	OpenRouterKey string           `json:"openrouter_key"`
+	Version int              `json:"version"`
+	OAuth   map[string]OAuth `json:"oauth"`
+	// ScreeningKey keeps its first JSON name so that existing records still load.
+	ScreeningKey string `json:"openrouter_key"`
+	// ApprovalHash is the bcrypt hash of the approval console password. Empty means not set;
+	// omitempty keeps such a record in the shape that older builds read.
+	ApprovalHash string `json:"approval_hash,omitempty"`
 }
 
 func (Record) String() string                   { return "Record{redacted}" }
@@ -190,22 +194,41 @@ func (s *RecordStore) SaveOAuth(ctx context.Context, provider, account string, v
 	_, err = s.transact(ctx, func(r *Record) { r.OAuth[key] = v })
 	return err
 }
-func (s *RecordStore) LoadOpenRouterKey(ctx context.Context) (string, error) {
+func (s *RecordStore) LoadScreeningKey(ctx context.Context) (string, error) {
 	r, err := s.transact(ctx, nil)
 	if err != nil {
 		return "", err
 	}
-	if r.OpenRouterKey == "" {
+	if r.ScreeningKey == "" {
 		return "", ErrNotFound
 	}
-	return r.OpenRouterKey, nil
+	return r.ScreeningKey, nil
 }
-func (s *RecordStore) SaveOpenRouterKey(ctx context.Context, key string) error {
+func (s *RecordStore) SaveScreeningKey(ctx context.Context, key string) error {
 	key = strings.TrimSpace(key)
 	if key == "" {
-		return errors.New("OpenRouter key is empty")
+		return errors.New("screening key is empty")
 	}
-	_, err := s.transact(ctx, func(r *Record) { r.OpenRouterKey = key })
+	_, err := s.transact(ctx, func(r *Record) { r.ScreeningKey = key })
+	return err
+}
+func (s *RecordStore) LoadApprovalHash(ctx context.Context) (string, error) {
+	r, err := s.transact(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	if r.ApprovalHash == "" {
+		return "", ErrNotFound
+	}
+	return r.ApprovalHash, nil
+}
+
+// SaveApprovalHash stores a bcrypt hash; it refuses any other value so a plain password is never stored.
+func (s *RecordStore) SaveApprovalHash(ctx context.Context, hash string) error {
+	if !validApprovalHash(hash) {
+		return ErrInvalidRecord
+	}
+	_, err := s.transact(ctx, func(r *Record) { r.ApprovalHash = hash })
 	return err
 }
 func safeError(ctx context.Context, err error) error {

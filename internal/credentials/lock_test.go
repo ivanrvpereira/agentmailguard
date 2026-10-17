@@ -75,7 +75,7 @@ func TestStoreLockAcrossProcesses(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
 		p := &concurrentPlatform{}
-		if err := credentials.New(p, home, nil).SaveOpenRouterKey(ctx, "synthetic"); !errors.Is(err, context.DeadlineExceeded) {
+		if err := credentials.New(p, home, nil).SaveScreeningKey(ctx, "synthetic"); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatal("child ignored cross-process lock")
 		}
 		p.mu.Lock()
@@ -119,7 +119,7 @@ func TestStoreHonorsHomeFlockAndCancellation(t *testing.T) {
 	s := credentials.New(p, home, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if err := s.SaveOpenRouterKey(ctx, "synthetic"); !errors.Is(err, context.DeadlineExceeded) {
+	if err := s.SaveScreeningKey(ctx, "synthetic"); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("locked save=%v", err)
 	}
 	p.mu.Lock()

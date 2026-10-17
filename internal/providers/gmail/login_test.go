@@ -38,7 +38,7 @@ func TestBrowserLoginPKCERefreshAndPreservesPreviousOnRefusal(t *testing.T) {
 				if r.Form.Get("client_secret") != "secret" {
 					t.Error("missing secret")
 				}
-				scope := granted
+				scope := writeGranted
 				token := "exchanged"
 				switch r.Form.Get("grant_type") {
 				case "authorization_code":
@@ -70,7 +70,7 @@ func TestBrowserLoginPKCERefreshAndPreservesPreviousOnRefusal(t *testing.T) {
 				q := parsed.Query()
 				challenge = q.Get("code_challenge")
 				redirect = q.Get("redirect_uri")
-				if len(challenge) != 43 || q.Get("code_challenge_method") != "S256" || q.Get("scope") != granted || q.Get("access_type") != "offline" || q.Get("prompt") != "consent" || q.Get("response_type") != "code" {
+				if len(challenge) != 43 || q.Get("code_challenge_method") != "S256" || q.Get("scope") != writeGranted || q.Get("access_type") != "offline" || q.Get("prompt") != "consent" || q.Get("response_type") != "code" {
 					t.Error("authorization parameters")
 				}
 				callback, _ := url.Parse(redirect)

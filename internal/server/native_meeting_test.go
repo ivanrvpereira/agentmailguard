@@ -5,13 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,9 +19,13 @@ import (
 )
 
 // meetingNativeStore grants the M365 write scope to "work" only, so "other" proves the missing-scope refusal.
+// The Gmail account has the calendar write grant.
 type meetingNativeStore struct{ nativeStore }
 
 func (s *meetingNativeStore) LoadOAuth(ctx context.Context, p, a string) (credentials.OAuth, error) {
+	if p == "gmail" {
+		return credentials.OAuth{AccessToken: "synthetic-gmail", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Scopes: strings.Fields(gmailWriteGrant), Username: "gmail@example.test"}, nil
+	}
 	if p != "m365" {
 		return s.nativeStore.LoadOAuth(ctx, p, a)
 	}
@@ -121,14 +125,18 @@ func TestNativeBinaryMeetingWorkflow(t *testing.T) {
 	for _, r := range []string{"accept", "tentative", "decline"} {
 		g.events["attendee-"+r] = syntheticEvent("attendee-"+r, false, nil)
 	}
-	var googleRequests atomic.Int32
+	google := &meetingGoogle{events: map[string]map[string]any{
+		"g-invited":   googleEvent("g-invited", false, nil),
+		"g-recurring": googleEvent("g-recurring", true, map[string]any{"recurrence": []string{"RRULE:FREQ=WEEKLY"}}),
+	}}
 	api := newNativeAPI()
 	// Lisbon leaves summer time on 2026-10-25, between the invite and the update below.
 	_, home, run := startNative(t, buildNative(t), nativeFakes{
 		creds: &meetingNativeStore{}, graph: g.handle, jev: api.jev,
-		google: func(w http.ResponseWriter, r *http.Request) { googleRequests.Add(1); w.WriteHeader(500) },
+		google: google.handle,
 		now:    time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC), clientEnv: []string{"TZ=Europe/Lisbon"},
 	})
+	enableCalendarWrites(t, home)
 	// write runs one successful command and returns its stdout and the Graph writes it caused.
 	write := func(args ...string) (string, []externalWrite) {
 		t.Helper()
@@ -195,7 +203,7 @@ func TestNativeBinaryMeetingWorkflow(t *testing.T) {
 	if strings.TrimSpace(out) != "{\n  \"id\": \"created-1\"\n}" {
 		t.Fatalf("invite output %q", out)
 	}
-	args = []string{"--account", "work", "calendar", "invite", "--to", "first@example.test", "--subject", "private-plain-subject", "--body", "private-plain-body", "--start", "2026-10-09 11:00", "--end", "2026-10-09 11:15", "--no-teams"}
+	args = []string{"--account", "work", "calendar", "invite", "--to", "first@example.test", "--subject", "private-plain-subject", "--body", "private-plain-body", "--start", "2026-10-09 11:00", "--end", "2026-10-09 11:15", "--no-online"}
 	_, writes = write(args...)
 	exact(args, writes, "POST", "/me/events", map[string]any{"subject": "private-plain-subject", "body": map[string]any{"contentType": "html", "content": "private-plain-body"}, "location": map[string]any{"displayName": ""},
 		"start": utc("2026-10-09T10:00:00"), "end": utc("2026-10-09T10:15:00"), "attendees": []any{attendee("first@example.test", "required")}, "isOnlineMeeting": false})
@@ -204,7 +212,7 @@ func TestNativeBinaryMeetingWorkflow(t *testing.T) {
 	}
 
 	// Adding Teams later keeps the same event and sends only the online meeting fields, so Graph keeps the body, times, and attendees.
-	args = []string{"--account", "work", "calendar", "update", "created-2", "--teams"}
+	args = []string{"--account", "work", "calendar", "update", "created-2", "--online"}
 	_, writes = write(args...)
 	exact(args, writes, "PATCH", "/me/events/created-2", map[string]any{"isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"})
 	v := view("created-2")
@@ -242,8 +250,6 @@ func TestNativeBinaryMeetingWorkflow(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"--account", "gmail", "calendar", "invite", "--to", "first@example.test", "--subject", "private-gmail-subject", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar writes are not supported for this account"},
-		{[]string{"--account", "gmail", "calendar", "respond", "attendee-accept", "--response", "accept"}, "calendar writes are not supported for this account"},
 		{[]string{"--account", "gmail", "calendar", "availability", "--to", "first@example.test", "--start", "2026-10-09 09:00", "--end", "2026-10-09 18:00"}, "calendar availability is not supported for this account"},
 		{[]string{"--account", "other", "calendar", "cancel", "created-1"}, "missing_scopes"},
 		{[]string{"--account", "other", "calendar", "respond", "attendee-accept", "--response", "accept"}, "missing_scopes"},
@@ -264,8 +270,8 @@ func TestNativeBinaryMeetingWorkflow(t *testing.T) {
 			t.Fatalf("command %v: exit=%d stdout=%q stderr=%q Graph writes=%d", tc.args, code, out, errout, after-before)
 		}
 	}
-	if googleRequests.Load() != 0 {
-		t.Fatal("Gmail refusal reached the provider")
+	if len(google.recorded()) != 0 {
+		t.Fatal("refusal reached Google")
 	}
 
 	args = []string{"--account", "work", "calendar", "cancel", "created-1", "--comment", "private-cancel-comment"}
@@ -287,11 +293,14 @@ func TestNativeBinaryMeetingWorkflow(t *testing.T) {
 		t.Fatalf("Graph writes=%d, want 2 invites, 2 updates, 1 cancel, 3 responses", total)
 	}
 
+	verifyNativeGmailMeetings(t, google, run)
+
 	log, err := os.ReadFile(filepath.Join(home, "audit.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for operation, count := range map[string]int{"calendar_invite": 2, "calendar_update": 2, "calendar_cancel": 1, "calendar_respond": 3} {
+	// M365 and Gmail together.
+	for operation, count := range map[string]int{"calendar_invite": 4, "calendar_update": 5, "calendar_cancel": 2, "calendar_respond": 4} {
 		if n := bytes.Count(log, []byte(`"operation":"`+operation+`"`)); n != count {
 			t.Errorf("audit has %d %s records, want %d", n, operation, count)
 		}
@@ -300,5 +309,122 @@ func TestNativeBinaryMeetingWorkflow(t *testing.T) {
 		if bytes.Contains(log, []byte(canary)) {
 			t.Fatalf("audit contains %s", canary)
 		}
+	}
+}
+
+// verifyNativeGmailMeetings runs the meeting commands on the Gmail account through the compiled client.
+// Every write notifies all guests, and the organizer's writes keep guests from inviting others.
+func verifyNativeGmailMeetings(t *testing.T, google *meetingGoogle, run func(args ...string) (string, string, int)) {
+	t.Helper()
+	write := func(args ...string) (string, []googleWrite) {
+		t.Helper()
+		before := len(google.recorded())
+		out, errout, code := run(args...)
+		if code != 0 || errout != "" {
+			t.Fatalf("command %v code %d stderr %s", args, code, errout)
+		}
+		return out, google.recorded()[before:]
+	}
+	notify := url.Values{"sendUpdates": {"all"}}
+	withMeet := url.Values{"sendUpdates": {"all"}, "conferenceDataVersion": {"1"}}
+	// exact checks the one write; a Meet create request has a random ID, which must be present and is then ignored.
+	exact := func(args []string, writes []googleWrite, method, path string, query url.Values, body map[string]any) {
+		t.Helper()
+		if len(writes) == 1 && writes[0].Body != nil {
+			if conference, ok := writes[0].Body["conferenceData"].(map[string]any); ok {
+				request, _ := conference["createRequest"].(map[string]any)
+				if id, _ := request["requestId"].(string); id == "" {
+					t.Fatalf("command %v: Meet request without an ID: %v", args, conference)
+				}
+				delete(request, "requestId")
+			}
+		}
+		if len(writes) != 1 || writes[0].Method != method || writes[0].Path != path || !reflect.DeepEqual(writes[0].Query, query) || !reflect.DeepEqual(writes[0].Body, body) {
+			t.Fatalf("command %v: Google writes %#v, want one %s %s %v %#v", args, writes, method, path, query, body)
+		}
+	}
+	meet := map[string]any{"createRequest": map[string]any{"conferenceSolutionKey": map[string]any{"type": "hangoutsMeet"}}}
+	utc := func(stamp string) map[string]any { return map[string]any{"dateTime": stamp} }
+	view := func(id string) map[string]any {
+		t.Helper()
+		out, _ := write("--account", "gmail", "calendar", "get", id)
+		var v map[string]any
+		if json.Unmarshal([]byte(out), &v) != nil || v["verdict"] != "green" {
+			t.Fatalf("calendar get %s: %s", id, out)
+		}
+		return v
+	}
+
+	// An invite has a Google Meet link by default.
+	args := []string{"--account", "gmail", "calendar", "invite", "--to", "first@example.test", "--to", "second@example.test", "--subject", "private-gmail-subject", "--body", "private-gmail-body", "--location", "private-gmail-room", "--start", "2026-10-09 09:00", "--duration", "30m"}
+	out, writes := write(args...)
+	exact(args, writes, "POST", "/calendar/events", withMeet, map[string]any{"summary": "private-gmail-subject", "description": "private-gmail-body", "location": "private-gmail-room", "start": utc("2026-10-09T08:00:00Z"), "end": utc("2026-10-09T08:30:00Z"),
+		"attendees": []any{map[string]any{"email": "first@example.test"}, map[string]any{"email": "second@example.test"}}, "guestsCanInviteOthers": false, "conferenceData": meet})
+	if strings.TrimSpace(out) != "{\n  \"id\": \"g-created-1\"\n}" {
+		t.Fatalf("invite output %q", out)
+	}
+	if v := view("g-created-1"); v["join_url"] != "https://meet.example.test/g-created-1" {
+		t.Fatalf("invite has no Meet link: %v", v)
+	}
+	args = []string{"--account", "gmail", "calendar", "invite", "--to", "first@example.test", "--subject", "private-gmail-plain", "--start", "2026-10-09 11:00", "--end", "2026-10-09 11:15", "--no-online"}
+	_, writes = write(args...)
+	exact(args, writes, "POST", "/calendar/events", notify, map[string]any{"summary": "private-gmail-plain", "description": "", "location": "", "start": utc("2026-10-09T10:00:00Z"), "end": utc("2026-10-09T10:15:00Z"),
+		"attendees": []any{map[string]any{"email": "first@example.test"}}, "guestsCanInviteOthers": false})
+	if v := view("g-created-2"); v["join_url"] != nil {
+		t.Fatalf("opted-out invite has a meeting link: %v", v)
+	}
+
+	// --online adds a Meet link to the same event once; a second --online leaves the conference as it is.
+	args = []string{"--account", "gmail", "calendar", "update", "g-created-2", "--online"}
+	_, writes = write(args...)
+	exact(args, writes, "PATCH", "/calendar/events/g-created-2", withMeet, map[string]any{"guestsCanInviteOthers": false, "conferenceData": meet})
+	if v := view("g-created-2"); v["join_url"] != "https://meet.example.test/g-created-2" || v["subject"] != "private-gmail-plain" {
+		t.Fatalf("event after adding Meet %v", v)
+	}
+	_, writes = write(args...)
+	exact(args, writes, "PATCH", "/calendar/events/g-created-2", notify, map[string]any{"guestsCanInviteOthers": false})
+
+	// The attendee list goes as a whole: kept entries, with their responses, are unchanged.
+	google.mu.Lock()
+	google.events["g-created-1"]["attendees"] = []any{map[string]any{"email": "first@example.test", "responseStatus": "accepted"}, map[string]any{"email": "second@example.test", "optional": true, "responseStatus": "tentative"}}
+	google.mu.Unlock()
+	args = []string{"--account", "gmail", "calendar", "update", "g-created-1", "--subject", "private-gmail-new", "--start", "2026-10-30 10:00", "--add-attendee", "third@example.test", "--remove-attendee", "first@example.test"}
+	_, writes = write(args...)
+	exact(args, writes, "PATCH", "/calendar/events/g-created-1", notify, map[string]any{"summary": "private-gmail-new", "start": utc("2026-10-30T10:00:00Z"), "end": utc("2026-10-30T10:30:00Z"),
+		"attendees": []any{map[string]any{"email": "second@example.test", "optional": true, "responseStatus": "tentative"}, map[string]any{"email": "third@example.test"}}, "guestsCanInviteOthers": false})
+
+	// A response changes only the account's own attendee entry.
+	args = []string{"--account", "gmail", "calendar", "respond", "g-invited", "--response", "tentative", "--comment", "private-gmail-rsvp"}
+	_, writes = write(args...)
+	exact(args, writes, "PATCH", "/calendar/events/g-invited", notify, map[string]any{"attendees": []any{map[string]any{"email": "olga@example.test", "organizer": true, "responseStatus": "accepted"}, map[string]any{"email": "work@example.test", "self": true, "responseStatus": "tentative", "comment": "private-gmail-rsvp"}}})
+
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--account", "gmail", "calendar", "cancel", "g-created-1", "--comment", "private-gmail-cancel"}, "calendar cancel refused: comments are not supported for this account"},
+		{[]string{"--account", "gmail", "calendar", "update", "g-invited", "--subject", "private-gmail-subject"}, "calendar write refused: only the organizer can update or cancel"},
+		{[]string{"--account", "gmail", "calendar", "respond", "g-created-1", "--response", "accept"}, "calendar response refused: organizer cannot respond"},
+		{[]string{"--account", "gmail", "calendar", "cancel", "g-recurring"}, "calendar write refused: recurring events are not supported"},
+	} {
+		before := len(google.recorded())
+		out, errout, code := run(tc.args...)
+		if code != 1 || out != "" || errout != "error: "+tc.want+"\n" || len(google.recorded()) != before {
+			t.Fatalf("command %v: exit=%d stdout=%q stderr=%q", tc.args, code, out, errout)
+		}
+	}
+
+	// Cancel deletes with notifications; Google keeps the event as cancelled, so a second cancel is refused.
+	args = []string{"--account", "gmail", "calendar", "cancel", "g-created-1"}
+	_, writes = write(args...)
+	if len(writes) != 1 || writes[0].Method != "DELETE" || writes[0].Path != "/calendar/events/g-created-1" || !reflect.DeepEqual(writes[0].Query, notify) {
+		t.Fatalf("cancel writes %#v", writes)
+	}
+	out, errout, code := run(args...)
+	if code != 1 || out != "" || errout != "error: calendar write refused: event is cancelled\n" {
+		t.Fatalf("second cancel: exit=%d stdout=%q stderr=%q", code, out, errout)
+	}
+	if n := len(google.recorded()); n != 7 {
+		t.Fatalf("Google writes=%d, want 2 invites, 3 updates, 1 response, 1 cancel", n)
 	}
 }

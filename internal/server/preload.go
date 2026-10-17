@@ -20,16 +20,24 @@ var credentialCheckFailed = errors.New("credential check failed")
 // An account without a login does not block the start. Its commands fail with the provider's auth error.
 const notLoggedIn = "not logged in; commands for this account fail until auth login and a server restart"
 
+// noLogin is the check of a fake account, which reads no credentials.
+const noLogin = "no login needed"
+
+// noScreeningKey is the key check under fake screening, which reads no key.
+const noScreeningKey = "not needed (fake screening)"
+
+const approvalNotSet = "not set; the approval console stays off until auth set-approval-password and a server restart"
+
 // memoryStore passes through to the backend until Preload succeeds.
 // After that it answers loads from memory only. Runtime saves still reach the backend.
 // Saves always reach the backend first; memory changes only after the backend accepts them.
 type memoryStore struct {
-	backend   safeStore
-	mu        sync.Mutex
-	loaded    bool
-	oauth     map[[2]string]credentials.OAuth
-	jevKey    string
-	hasJevKey bool
+	backend         safeStore
+	mu              sync.Mutex
+	loaded          bool
+	oauth           map[[2]string]credentials.OAuth
+	screeningKey    string
+	hasScreeningKey bool
 }
 
 func (m *memoryStore) LoadOAuth(ctx context.Context, p, a string) (credentials.OAuth, error) {
@@ -58,26 +66,26 @@ func (m *memoryStore) SaveOAuth(ctx context.Context, p, a string, v credentials.
 	}
 	return nil
 }
-func (m *memoryStore) LoadOpenRouterKey(ctx context.Context) (string, error) {
+func (m *memoryStore) LoadScreeningKey(ctx context.Context) (string, error) {
 	m.mu.Lock()
 	if !m.loaded {
 		m.mu.Unlock()
-		return m.backend.LoadOpenRouterKey(ctx)
+		return m.backend.LoadScreeningKey(ctx)
 	}
 	defer m.mu.Unlock()
-	if !m.hasJevKey {
+	if !m.hasScreeningKey {
 		return "", credentials.ErrNotFound
 	}
-	return m.jevKey, nil
+	return m.screeningKey, nil
 }
-func (m *memoryStore) SaveOpenRouterKey(ctx context.Context, key string) error {
-	if err := m.backend.SaveOpenRouterKey(ctx, key); err != nil {
+func (m *memoryStore) SaveScreeningKey(ctx context.Context, key string) error {
+	if err := m.backend.SaveScreeningKey(ctx, key); err != nil {
 		return err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.loaded {
-		m.jevKey, m.hasJevKey = strings.TrimSpace(key), true
+		m.screeningKey, m.hasScreeningKey = strings.TrimSpace(key), true
 	}
 	return nil
 }
@@ -86,10 +94,10 @@ func (m *memoryStore) SaveOpenRouterKey(ctx context.Context, key string) error {
 // (for example macOS Keychain access dialogs) happen at server start while an operator is present.
 // The record store rewrites the whole record once to request modify permission now.
 // Injected legacy Store implementations retain their per-account write probe.
-// jevKey is called only when the Jev key is missing; nil refuses.
+// screeningKey is called only when the screening key is missing; nil refuses.
 // Missing logins do not block startup. After success, loads use memory; backend saves reread under a lock.
 // Accounts added to the configuration later require a restart.
-func (s *Server) Preload(ctx context.Context, jevKey func(context.Context) (string, error)) ([]CredentialCheck, error) {
+func (s *Server) Preload(ctx context.Context, screeningKey func(context.Context) (string, error)) ([]CredentialCheck, error) {
 	path := filepath.Join(s.home, "config.toml")
 	accounts, err := config.LoadAccounts(ctx, path)
 	if err != nil {
@@ -124,11 +132,15 @@ func (s *Server) Preload(ctx context.Context, jevKey func(context.Context) (stri
 	failed := false
 	add := func(item, status string) {
 		checks = append(checks, CredentialCheck{item, status})
-		failed = failed || (status != "ok" && status != "saved" && status != "ok (OPENROUTER_API_KEY)" && status != notLoggedIn)
+		failed = failed || (status != "ok" && status != "saved" && status != noScreeningKey && status != notLoggedIn && status != noLogin && status != approvalNotSet)
 	}
 	oauth := map[[2]string]credentials.OAuth{}
 	for _, a := range accounts {
 		item := fmt.Sprintf("account %q (%s)", a.Name, a.Provider)
+		if a.Provider == "fake" {
+			add(item, noLogin)
+			continue
+		}
 		var v credentials.OAuth
 		var err error
 		if whole {
@@ -160,49 +172,57 @@ func (s *Server) Preload(ctx context.Context, jevKey func(context.Context) (stri
 		}
 	}
 	key, hasKey := "", false
-	if strings.TrimSpace(s.options.LookupEnv("OPENROUTER_API_KEY")) != "" {
-		add("Jev key", "ok (OPENROUTER_API_KEY)")
+	if s.FakeScreening() {
+		add("screening key", noScreeningKey)
 	} else {
-		v := record.OpenRouterKey
+		v := record.ScreeningKey
 		var err error
 		if whole {
 			if v == "" {
 				err = credentials.ErrNotFound
 			}
 		} else {
-			v, err = backend.LoadOpenRouterKey(ctx)
+			v, err = backend.LoadScreeningKey(ctx)
 		}
 		switch {
 		case ctx.Err() != nil:
 			return checks, ctx.Err()
 		case err == nil:
 			key, hasKey = v, true
-			add("Jev key", "ok")
+			add("screening key", "ok")
 		case !errors.Is(err, credentials.ErrNotFound):
-			add("Jev key", "Keychain access failed or denied")
-		case jevKey == nil:
-			add("Jev key", "missing; run auth set-jev-key or set OPENROUTER_API_KEY")
+			add("screening key", "Keychain access failed or denied")
+		case screeningKey == nil:
+			add("screening key", "missing; run auth set-screening-key")
 		default:
-			entered, err := jevKey(ctx)
+			entered, err := screeningKey(ctx)
 			entered = strings.TrimSpace(entered)
 			if ctx.Err() != nil {
 				return checks, ctx.Err()
 			}
 			if err != nil || entered == "" {
-				add("Jev key", "not entered; run auth set-jev-key or set OPENROUTER_API_KEY")
-			} else if backend.SaveOpenRouterKey(ctx, entered) != nil {
-				add("Jev key", "Keychain write failed or denied")
+				add("screening key", "not entered; run auth set-screening-key")
+			} else if backend.SaveScreeningKey(ctx, entered) != nil {
+				add("screening key", "Keychain write failed or denied")
 			} else {
 				key, hasKey = entered, true
-				add("Jev key", "saved")
+				add("screening key", "saved")
 			}
 		}
+	}
+	// A missing approval password keeps the approval console off; it never blocks the start.
+	// Injected stores without a whole record have no approval password.
+	approvalHash := record.ApprovalHash
+	if approvalHash != "" {
+		add("approval password", "ok")
+	} else {
+		add("approval password", approvalNotSet)
 	}
 	if failed {
 		return checks, credentialCheckFailed
 	}
 	s.creds.mu.Lock()
-	s.creds.oauth, s.creds.jevKey, s.creds.hasJevKey, s.creds.loaded = oauth, key, hasKey, true
+	s.creds.oauth, s.creds.screeningKey, s.creds.hasScreeningKey, s.creds.loaded = oauth, key, hasKey, true
 	s.creds.mu.Unlock()
 	for _, a := range accounts {
 		if _, err := s.instance(a); err != nil {
@@ -211,6 +231,7 @@ func (s *Server) Preload(ctx context.Context, jevKey func(context.Context) (stri
 	}
 	s.mu.Lock()
 	s.preloaded = true
+	s.approvalHash = approvalHash
 	s.mu.Unlock()
 	return checks, nil
 }

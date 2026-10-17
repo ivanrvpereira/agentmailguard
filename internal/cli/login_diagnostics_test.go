@@ -55,7 +55,7 @@ func checkLoginDiagnostic(t *testing.T, scenario loginScenario) {
 	var tokens, profiles atomic.Int32
 	scope := "User.Read Mail.ReadWrite Calendars.Read MailboxSettings.Read"
 	if scenario.mode == "scopes" {
-		scope += " Mail.Send"
+		scope += " Contacts.Read"
 	}
 	claims, _ := json.Marshal(map[string]string{"scp": scope})
 	token := "private-token-canary." + base64.RawURLEncoding.EncodeToString(claims) + ".private-signature-canary"
@@ -195,7 +195,7 @@ func checkLoginDiagnostic(t *testing.T, scenario loginScenario) {
 }
 
 func TestM365LoginWarnsAboutExtraGrants(t *testing.T) {
-	extra := `warning: token grants extra scopes the server does not use: "Mail.Send". Remove the extra consent to reduce exposure.`
+	extra := `warning: token grants extra scopes the server does not use: "Contacts.Read". Remove the extra consent to reduce exposure.`
 	checkLoginDiagnostic(t, loginScenario{mode: "scopes", ok: true, want: extra, tokens: 1, profiles: 1, saves: 1})
 	checkLoginDiagnostic(t, loginScenario{mode: "scopes", device: true, ok: true, want: extra, tokens: 1, profiles: 1, saves: 1})
 	roles := `warning: token grants extra scopes the server does not use: "role:Mail.Send". role: entries are application permissions. Remove the extra consent to reduce exposure.`

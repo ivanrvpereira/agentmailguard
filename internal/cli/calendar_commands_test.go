@@ -53,21 +53,21 @@ func TestCalendarWriteCommandsSendExactRequests(t *testing.T) {
 		params string
 	}{
 		{"invite duration across spring DST", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--start", "2026-03-08 01:30", "--duration", "1h"}, "calendar.invite",
-			`{"to":["a@example.test"],"subject":"Plan","body":"","teams":true,"start":"2026-03-08T01:30:00-05:00","end":"2026-03-08T03:30:00-04:00"}`},
-		{"invite end with every option", []string{"calendar", "invite", "--to", "a@example.test", "--to", "b@example.test", "--subject", "", "--body", "Agenda", "--location", "Room 1", "--teams", "--start", "2026-10-09 09:00", "--end", "2026-10-09 10:15"}, "calendar.invite",
-			`{"to":["a@example.test","b@example.test"],"subject":"","body":"Agenda","location":"Room 1","teams":true,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T10:15:00-04:00"}`},
-		{"invite explicit empty location without Teams", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--location", "", "--teams=false", "--start", "2026-11-01 00:30", "--end", "2026-11-01 03:00"}, "calendar.invite",
-			`{"to":["a@example.test"],"subject":"Plan","body":"","location":"","teams":false,"start":"2026-11-01T00:30:00-04:00","end":"2026-11-01T03:00:00-05:00"}`},
-		{"invite opts out of Teams", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--no-teams", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar.invite",
-			`{"to":["a@example.test"],"subject":"Plan","body":"","teams":false,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T09:30:00-04:00"}`},
-		{"invite last Teams option wins", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--teams", "--no-teams", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar.invite",
-			`{"to":["a@example.test"],"subject":"Plan","body":"","teams":false,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T09:30:00-04:00"}`},
-		{"invite Teams after opt-out", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--no-teams", "--teams", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar.invite",
-			`{"to":["a@example.test"],"subject":"Plan","body":"","teams":true,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T09:30:00-04:00"}`},
-		{"invite negated opt-out", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--no-teams=false", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar.invite",
-			`{"to":["a@example.test"],"subject":"Plan","body":"","teams":true,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T09:30:00-04:00"}`},
+			`{"to":["a@example.test"],"subject":"Plan","body":"","online":true,"start":"2026-03-08T01:30:00-05:00","end":"2026-03-08T03:30:00-04:00"}`},
+		{"invite end with every option", []string{"calendar", "invite", "--to", "a@example.test", "--to", "b@example.test", "--subject", "", "--body", "Agenda", "--location", "Room 1", "--online", "--start", "2026-10-09 09:00", "--end", "2026-10-09 10:15"}, "calendar.invite",
+			`{"to":["a@example.test","b@example.test"],"subject":"","body":"Agenda","location":"Room 1","online":true,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T10:15:00-04:00"}`},
+		{"invite explicit empty location without online meeting", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--location", "", "--online=false", "--start", "2026-11-01 00:30", "--end", "2026-11-01 03:00"}, "calendar.invite",
+			`{"to":["a@example.test"],"subject":"Plan","body":"","location":"","online":false,"start":"2026-11-01T00:30:00-04:00","end":"2026-11-01T03:00:00-05:00"}`},
+		{"invite opts out of online meeting", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--no-online", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar.invite",
+			`{"to":["a@example.test"],"subject":"Plan","body":"","online":false,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T09:30:00-04:00"}`},
+		{"invite last online option wins", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--online", "--no-online", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar.invite",
+			`{"to":["a@example.test"],"subject":"Plan","body":"","online":false,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T09:30:00-04:00"}`},
+		{"invite online after opt-out", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--no-online", "--online", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar.invite",
+			`{"to":["a@example.test"],"subject":"Plan","body":"","online":true,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T09:30:00-04:00"}`},
+		{"invite negated opt-out", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--no-online=false", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar.invite",
+			`{"to":["a@example.test"],"subject":"Plan","body":"","online":true,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T09:30:00-04:00"}`},
 		{"update subject only", []string{"calendar", "update", "e1", "--subject", "New"}, "calendar.update", `{"id":"e1","subject":"New"}`},
-		{"update adds Teams", []string{"calendar", "update", "e1", "--teams"}, "calendar.update", `{"id":"e1","teams":true}`},
+		{"update adds online meeting", []string{"calendar", "update", "e1", "--online"}, "calendar.update", `{"id":"e1","online":true}`},
 		{"update explicit empty subject and location", []string{"calendar", "update", "e1", "--subject", "", "--location", ""}, "calendar.update", `{"id":"e1","subject":"","location":""}`},
 		{"update start only keeps server duration", []string{"calendar", "update", "e1", "--start", "2026-03-08 03:00"}, "calendar.update", `{"id":"e1","start":"2026-03-08T03:00:00-04:00"}`},
 		{"update duration only", []string{"calendar", "update", "e1", "--duration", "1h30m"}, "calendar.update", `{"id":"e1","duration":"1h30m0s"}`},
@@ -128,9 +128,11 @@ func TestCalendarWriteUsageErrorsNeedNoServerOrState(t *testing.T) {
 		{"calendar", "update", "e1", "e2", "--subject", "New"},
 		{"calendar", "update", "e1"},
 		{"calendar", "update", "e1", "--body", "New body"},
-		{"calendar", "update", "e1", "--teams=false"},
-		{"calendar", "update", "e1", "--subject", "New", "--teams=false"},
-		{"calendar", "update", "e1", "--no-teams"},
+		{"calendar", "update", "e1", "--online=false"},
+		{"calendar", "update", "e1", "--subject", "New", "--online=false"},
+		{"calendar", "update", "e1", "--no-online"},
+		{"calendar", "update", "e1", "--teams"},
+		append(invite, "--start", "2026-10-09 09:00", "--duration", "1h", "--no-teams"),
 		{"calendar", "update", "e1", "--subject", "New", "--body", ""},
 		{"calendar", "update", "e1", "--to", "a@example.test"},
 		{"calendar", "update", "e1", "--end", "2026-10-09 10:00", "--duration", "1h"},
@@ -163,18 +165,26 @@ func TestCalendarWriteUsageErrorsNeedNoServerOrState(t *testing.T) {
 
 func TestHelpStatesThatCalendarWritesSendNotifications(t *testing.T) {
 	code, out, errout := runOffline(t, "--help")
-	if code != 0 || errout != "" || strings.Contains(out, "No send or permanent delete") || !strings.Contains(out, "No mail send or permanent delete.") || !strings.Contains(out, "send meeting notifications at once") {
+	if code != 0 || errout != "" || strings.Contains(out, "No mail send") || !strings.Contains(out, "No permanent delete.") || !strings.Contains(out, "mail send, reply, and forward send email at once") || !strings.Contains(out, "send meeting notifications at once") {
 		t.Fatalf("root help: exit=%d stdout=%q stderr=%q", code, out, errout)
+	}
+	// Meeting writes work on both providers.
+	if strings.Contains(out, "M365 calendar invite") {
+		t.Fatalf("root help limits meeting writes to M365: %q", out)
 	}
 	code, out, errout = runOffline(t, "calendar", "--help")
 	for _, want := range []string{"invite", "update", "cancel", "respond", "meeting notifications"} {
-		if code != 0 || errout != "" || !strings.Contains(out, want) {
-			t.Fatalf("calendar help is missing %q: exit=%d stdout=%q stderr=%q", want, code, out, errout)
+		if code != 0 || errout != "" || !strings.Contains(out, want) || strings.Contains(out, "M365 meeting") {
+			t.Fatalf("calendar help is missing %q or limits meetings to M365: exit=%d stdout=%q stderr=%q", want, code, out, errout)
 		}
 	}
+	code, out, errout = runOffline(t, "calendar", "cancel", "--help")
+	if code != 0 || errout != "" || !strings.Contains(out, "refused on Gmail") {
+		t.Fatalf("cancel help must state the Gmail comment refusal: exit=%d stdout=%q stderr=%q", code, out, errout)
+	}
 	code, out, errout = runOffline(t, "calendar", "invite", "--help")
-	if code != 0 || errout != "" || !strings.Contains(out, "--no-teams") || !strings.Contains(out, "(default true)") {
-		t.Fatalf("invite help must show the Teams default and its opt-out: exit=%d stdout=%q stderr=%q", code, out, errout)
+	if code != 0 || errout != "" || !strings.Contains(out, "--no-online") || !strings.Contains(out, "(default true)") || !strings.Contains(out, "Teams on Microsoft 365, Google Meet on Gmail") {
+		t.Fatalf("invite help must show the online meeting default and its opt-out: exit=%d stdout=%q stderr=%q", code, out, errout)
 	}
 }
 

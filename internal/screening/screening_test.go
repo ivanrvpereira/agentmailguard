@@ -19,11 +19,15 @@ type fakeStore struct {
 	load func(context.Context) (string, error)
 }
 
-func (s fakeStore) LoadOpenRouterKey(ctx context.Context) (string, error) { return s.load(ctx) }
+func (s fakeStore) LoadScreeningKey(ctx context.Context) (string, error) { return s.load(ctx) }
 func missingStore() fakeStore {
 	return fakeStore{load: func(context.Context) (string, error) { return "", credentials.ErrNotFound }}
 }
-func envKey(string) string { return " synthetic-key " }
+
+// keyStore holds the stored screening key with surrounding space.
+func keyStore() fakeStore {
+	return fakeStore{load: func(context.Context) (string, error) { return " synthetic-key ", nil }}
+}
 func TestRealJevProtocol(t *testing.T) {
 	data, err := os.ReadFile("../content/testdata/reference.json")
 	if err != nil {
@@ -54,10 +58,26 @@ func TestRealJevProtocol(t *testing.T) {
 		_, _ = w.Write([]byte(`{"model":"jev","usage":{},"answers":{"injection":{"type":"noul","noul":0.35},"account_security":{"type":"noul","noul":0.1}}}`))
 	}))
 	defer server.Close()
-	s := screening.New(screening.Options{HTTPClient: server.Client(), Endpoint: server.URL + "/api/v1/systemone", Credentials: missingStore(), LookupEnv: envKey})
+	s := screening.New(screening.Options{HTTPClient: server.Client(), Endpoint: server.URL + "/api/v1/systemone", Credentials: keyStore()})
 	var _ model.Screener = s
 	result, err := s.Screen(context.Background(), state)
 	if err != nil || result.Verdict != model.Yellow || result.Score == nil || *result.Score != .35 || result.Error != nil {
 		t.Fatalf("result: %+v %v", result, err)
+	}
+}
+
+func TestConfiguredModelIsSentToJev(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct{ Model string }
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.Model != "jev-1.13.0" {
+			t.Errorf("model=%q err=%v", request.Model, err)
+		}
+		_, _ = w.Write([]byte(`{"model":"jev-1.13.0","usage":{},"answers":{"injection":{"type":"noul","noul":0.1},"account_security":{"type":"noul","noul":0.1}}}`))
+	}))
+	defer server.Close()
+	s := screening.New(screening.Options{HTTPClient: server.Client(), Endpoint: server.URL, Model: "jev-1.13.0", Credentials: keyStore()})
+	result, err := s.Screen(context.Background(), map[string]any{"subject": "SYNTHETIC"})
+	if err != nil || result.Verdict != model.Green {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 	"github.com/ivanrvpereira/agentmailguard/internal/guard"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/fake"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 	"github.com/ivanrvpereira/agentmailguard/internal/rules"
@@ -33,6 +34,16 @@ type account struct {
 	guard    *guard.Guard
 }
 
+// providerGrants lists, for each provider, the grants of which one allows an operation. A provider without an
+// entry needs no grant beyond its login scopes.
+type providerGrants map[string][]string
+
+// mailSendGrants allow mail.send, mail.reply, and mail.forward. Gmail sends need no grant beyond gmail.modify.
+var mailSendGrants = providerGrants{"m365": {"Mail.Send"}}
+
+// calendarWriteGrants allow the meeting writes. Gmail logins made before calendar writes have only the read-only grant.
+var calendarWriteGrants = providerGrants{"m365": {"Calendars.ReadWrite"}, "gmail": {gmail.CalendarWriteScope}}
+
 var restart = errors.New("account configuration changed; restart required")
 var configError = errors.New("configuration unavailable")
 var rulesError = errors.New("rules unavailable")
@@ -45,10 +56,12 @@ func publicError(e error) (string, bool) {
 	}
 	if e, ok := e.(guard.GuardError); ok {
 		switch e {
-		case guard.CalendarWriteUnsupported, guard.CalendarAvailabilityUnsupported, "missing_scopes", "invalid request",
+		case guard.CalendarWriteUnsupported, guard.CalendarAvailabilityUnsupported, guard.CalendarCancelCommentUnsupported, "missing_scopes", "invalid request",
 			guard.CalendarRecurring, guard.CalendarCancelled, guard.CalendarOrganizerOnly, guard.CalendarOrganizerCannotRespond:
 			return string(e), true
-		case "move refused: the destination must be a folder ID from `folders`", "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
+		case "refused by policy: mail_draft", "refused by policy: mail_send", "refused by policy: calendar_invite", "refused by policy: calendar_update", "refused by policy: calendar_cancel", "refused by policy: calendar_respond":
+			return string(e), true
+		case "move refused: the destination must be a folder ID from `folders`", "move refused: use mail.trash", "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
 			"link refused: message is red, not green", "link refused: message is yellow, not green", "link refused: message is sealed, not green", "link refused: message is error, not green",
 			"search needs at least one of text, from, subject, after, before":
 			return string(e), true
@@ -81,7 +94,9 @@ func (s *Server) instance(a config.Account) (*account, error) {
 		return nil, restart
 	}
 	var p provider
-	if a.Provider == "gmail" {
+	if a.Provider == "fake" {
+		p = fake.New(a.Name, s.home, s.options.Now)
+	} else if a.Provider == "gmail" {
 		o := s.options.Gmail
 		if o.Now == nil {
 			o.Now = s.options.Now
@@ -94,7 +109,7 @@ func (s *Server) instance(a config.Account) (*account, error) {
 		}
 		p = m365.New(a, s.options.Credentials, o)
 	}
-	v := &account{a, p, guard.New(a.Name, p.Mailbox(), p.Calendar(), s.options.Screener, s.cache, s.audit, guard.Options{Now: s.options.Now})}
+	v := &account{a, p, guard.New(a.Name, p.Mailbox(), p.Calendar(), s.options.Screener, s.cache, s.audit, guard.Options{Now: s.options.Now, Policy: a.Policy})}
 	s.accounts[a.Name] = v
 	return v, nil
 }
@@ -197,17 +212,26 @@ type forwardParam struct {
 	To []string `json:"to"`
 }
 type mutationDTO struct {
-	ID    string  `json:"id"`
-	OK    bool    `json:"ok"`
-	Error *string `json:"error"`
+	ID         string  `json:"id"`
+	OK         bool    `json:"ok"`
+	Error      *string `json:"error"`
+	ApprovalID *string `json:"approval_id,omitempty"`
 }
 
 func mutations(v []model.MutationResult, e error) (any, error) {
 	out := make([]mutationDTO, 0, len(v))
 	for _, r := range v {
-		out = append(out, mutationDTO{r.ID, r.OK, r.Error})
+		out = append(out, mutationDTO{r.ID, r.OK, r.Error, r.ApprovalID})
 	}
 	return out, e
+}
+
+// pendingDTO is the result of a single action that the policy stored for approval. URL is the
+// approval console page of the item.
+type pendingDTO struct {
+	Status     string `json:"status"`
+	ApprovalID string `json:"approval_id"`
+	URL        string `json:"url"`
 }
 
 type folderDTO struct {
@@ -217,6 +241,19 @@ type folderDTO struct {
 type draftDTO struct {
 	ID string `json:"id"`
 }
+
+// okDTO is the result of a send: providers give no ID for a sent message.
+type okDTO struct {
+	OK bool `json:"ok"`
+}
+
+func sent(e error) (any, error) {
+	if e != nil {
+		return nil, e
+	}
+	return okDTO{true}, nil
+}
+
 type updateDTO struct {
 	ID string `json:"id"`
 	OK bool   `json:"ok"`
@@ -246,13 +283,13 @@ type rulesDTO struct {
 // Dispatch first validates a complete typed operation. Account and provider access occur only afterwards.
 func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	var call func(*account) (any, error)
-	// M365-only calendar operations name their Gmail refusal and the grants that allow them.
-	unsupported, grants := guard.GuardError(""), []string(nil)
+	// unsupported names the Gmail refusal of an operation or request that Gmail cannot carry out.
+	unsupported, grants := guard.GuardError(""), providerGrants(nil)
 	switch r.Operation {
 	case "calendar.invite", "calendar.update", "calendar.cancel", "calendar.respond":
-		unsupported, grants = guard.CalendarWriteUnsupported, []string{"Calendars.ReadWrite"}
+		grants = calendarWriteGrants
 		var e error
-		call, e = calendarWriteCall(ctx, r.Operation, r.Params)
+		call, unsupported, e = calendarWriteCall(ctx, r.Operation, r.Params)
 		if e != nil {
 			return nil, e
 		}
@@ -402,7 +439,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		if e != nil || e2 != nil || !model.ValidAvailabilityRequest(p.To, first, last) {
 			return nil, invalid
 		}
-		unsupported, grants = guard.CalendarAvailabilityUnsupported, []string{"Calendars.ReadBasic", "Calendars.Read", "Calendars.ReadWrite"}
+		unsupported, grants = guard.CalendarAvailabilityUnsupported, providerGrants{"m365": {"Calendars.ReadBasic", "Calendars.Read", "Calendars.ReadWrite"}}
 		call = func(a *account) (any, error) {
 			v, e := a.guard.CalendarAvailability(ctx, p.To, first, last)
 			if e != nil {
@@ -414,34 +451,48 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 			}
 			return out, nil
 		}
-	case "draft.new":
+	case "draft.new", "mail.send":
 		var p newParam
 		if params(r.Params, &p) != nil || !listValid(p.To, 1, 100) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) {
 			return nil, invalid
 		}
-		call = func(a *account) (any, error) {
-			id, e := a.guard.DraftNew(ctx, model.NewDraft{To: p.To, Subject: *p.Subject, Body: *p.Body})
-			return draftDTO{id}, e
+		draft := model.NewDraft{To: p.To, Subject: *p.Subject, Body: *p.Body}
+		if r.Operation == "mail.send" {
+			grants = mailSendGrants
+			call = func(a *account) (any, error) { return sent(a.guard.SendNew(ctx, draft)) }
+		} else {
+			call = func(a *account) (any, error) { id, e := a.guard.DraftNew(ctx, draft); return draftDTO{id}, e }
 		}
-	case "draft.reply", "draft.update":
+	case "draft.reply", "draft.update", "mail.reply":
 		var p bodyParam
 		if params(r.Params, &p) != nil || !idValid(p.ID) || p.Body == nil || !validString(*p.Body, MaxRequestBytes, true) {
 			return nil, invalid
 		}
+		if r.Operation == "mail.reply" {
+			grants = mailSendGrants
+		}
 		call = func(a *account) (any, error) {
-			if r.Operation == "draft.reply" {
+			switch r.Operation {
+			case "draft.reply":
 				id, e := a.guard.DraftReply(ctx, p.ID, *p.Body)
 				return draftDTO{id}, e
+			case "mail.reply":
+				return sent(a.guard.SendReply(ctx, p.ID, *p.Body))
 			}
 			id, e := a.guard.DraftUpdate(ctx, p.ID, *p.Body)
 			return updateDTO{id, true}, e
 		}
-	case "draft.forward":
+	case "draft.forward", "mail.forward":
 		var p forwardParam
 		if params(r.Params, &p) != nil || !idValid(p.ID) || !listValid(p.To, 1, 100) {
 			return nil, invalid
 		}
-		call = func(a *account) (any, error) { id, e := a.guard.DraftForward(ctx, p.ID, p.To); return draftDTO{id}, e }
+		if r.Operation == "mail.forward" {
+			grants = mailSendGrants
+			call = func(a *account) (any, error) { return sent(a.guard.SendForward(ctx, p.ID, p.To)) }
+		} else {
+			call = func(a *account) (any, error) { id, e := a.guard.DraftForward(ctx, p.ID, p.To); return draftDTO{id}, e }
+		}
 	default:
 		return nil, invalid
 	}
@@ -452,28 +503,42 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	if r.Operation == "rules.list" {
 		return s.ruleList(ctx, a)
 	}
-	if unsupported != "" && a.Provider != "m365" {
+	if unsupported != "" && a.Provider == "gmail" {
 		return nil, unsupported
 	}
 	instance, e := s.instance(a)
 	if e != nil {
 		return nil, e
 	}
-	if grants != nil {
+	// The grant check comes before the policy decision.
+	if needed := grants[a.Provider]; needed != nil {
 		_, scopes, e := instance.provider.Status(ctx)
 		if e != nil {
 			return nil, e
 		}
 		if !slices.ContainsFunc(scopes, func(scope string) bool {
-			return slices.ContainsFunc(grants, func(grant string) bool { return strings.EqualFold(scope, grant) })
+			return slices.ContainsFunc(needed, func(grant string) bool { return strings.EqualFold(scope, grant) })
 		}) {
 			return nil, guard.GuardError("missing_scopes")
 		}
 	}
-	return call(instance)
+	v, e := call(instance)
+	var pending guard.PendingError
+	if errors.As(e, &pending) {
+		return pendingDTO{"pending", pending.ApprovalID, s.approvalBase + pending.ApprovalID}, nil
+	}
+	return v, e
 }
 func (s *Server) status(ctx context.Context, a *account) (any, error) {
 	out := statusDTO{Account: a.config.Name}
+	if a.config.Provider == "fake" {
+		out.LoggedIn = true
+		user, scopes, e := a.provider.Status(ctx)
+		if e == nil {
+			out.OK, out.Username, out.Scopes = true, &user, &scopes
+		}
+		return out, nil
+	}
 	saved, e := s.options.Credentials.LoadOAuth(ctx, a.config.Provider, a.config.Name)
 	if errors.Is(e, credentials.ErrNotFound) {
 		return out, nil

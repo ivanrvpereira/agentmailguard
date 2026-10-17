@@ -18,6 +18,7 @@ import (
 type writer struct {
 	*mailbox
 	calls            []string
+	trashed          []string
 	flags            []model.FlagState
 	updates          []struct{ id, body string }
 	err              error
@@ -47,6 +48,7 @@ func (w *writer) Archive(ctx context.Context, ids []string) ([]model.MutationRes
 	return w.write("archive", ids)
 }
 func (w *writer) Trash(_ context.Context, ids []string) ([]model.MutationResult, error) {
+	w.trashed = append(w.trashed, ids...)
 	return w.write("trash", ids)
 }
 func (w *writer) Move(_ context.Context, ids []string, _ string) ([]model.MutationResult, error) {
@@ -66,7 +68,7 @@ func (w *writer) Categorize(_ context.Context, ids, _, _ []string) ([]model.Muta
 	return w.write("categorize", ids)
 }
 func (w *writer) Folders(context.Context) ([]model.Folder, error) {
-	return []model.Folder{{ID: "f1", Name: "Finance"}}, nil
+	return []model.Folder{{ID: "f1", Name: "Finance"}, {ID: "del", Name: "Deleted Items", Trash: true}}, nil
 }
 func (w *writer) DraftNew(context.Context, model.NewDraft) (string, error) {
 	_, err := w.write("draft_new", nil)
@@ -85,7 +87,33 @@ func (w *writer) DraftUpdate(_ context.Context, id, body string) (string, error)
 	_, err := w.write("draft_update", nil)
 	return "d4", err
 }
+
+// auditRecords returns the per-operation records. Policy and approval records have an "event" field;
+// policyRecords returns those.
 func auditRecords(t *testing.T, path string) []map[string]any {
+	t.Helper()
+	out := []map[string]any{}
+	for _, r := range allAuditRecords(t, path) {
+		if _, ok := r["event"]; !ok {
+			out = append(out, r)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+func policyRecords(t *testing.T, path string) []map[string]any {
+	t.Helper()
+	out := []map[string]any{}
+	for _, r := range allAuditRecords(t, path) {
+		if _, ok := r["event"]; ok {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+func allAuditRecords(t *testing.T, path string) []map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -149,10 +177,14 @@ func TestMutationGateCancellationDoesNotAttemptQueuedDraft(t *testing.T) {
 }
 
 func TestEveryManualRouteAndDraftHasContentFreeAudit(t *testing.T) {
-	w := &writer{mailbox: &mailbox{}}
-	s := &screener{verdict: model.Error}
+	w := &writer{mailbox: &mailbox{messages: messages("m1")}}
+	s := &screener{verdict: model.Green}
 	g, _, path := setup(t, w, s)
 	ctx := context.Background()
+	// The forward's Jev check reads its source; a cached green verdict needs no new screening.
+	if _, err := g.Get(ctx, "m1"); err != nil {
+		t.Fatal(err)
+	}
 	ids := []string{"m1"}
 	calls := []func() error{
 		func() error { _, e := g.Trash(ctx, ids); return e }, func() error { _, e := g.Move(ctx, ids, "f1"); return e }, func() error { _, e := g.MarkRead(ctx, ids, true); return e }, func() error { _, e := g.MarkRead(ctx, ids, false); return e }, func() error { _, e := g.Flag(ctx, ids, model.Complete); return e }, func() error { _, e := g.Categorize(ctx, ids, []string{"Work"}, nil); return e },
@@ -188,7 +220,7 @@ func TestEveryManualRouteAndDraftHasContentFreeAudit(t *testing.T) {
 	if records[9]["draft_id"] != "d4" || !reflect.DeepEqual(records[9]["ids"], []any{"d1"}) {
 		t.Fatal("draft update lost source/result IDs")
 	}
-	if s.calls != 0 {
+	if s.calls != 1 {
 		t.Fatal("writes screened content")
 	}
 	before := len(w.calls)
@@ -237,6 +269,7 @@ func TestManualRefusalsKeepFixedReasonsWithoutWriting(t *testing.T) {
 		call       func() error
 	}{
 		{"move", "move refused: the destination must be a folder ID from `folders`", func() error { _, err := g.Move(ctx, ids, "CANARY destination"); return err }},
+		{"trash folder", "move refused: use mail.trash", func() error { _, err := g.Move(ctx, ids, "del"); return err }},
 		{"flag", "flag state must be one of flagged, complete, none", func() error { _, err := g.Flag(ctx, ids, "CANARY flag"); return err }},
 		{"empty categories", "categorize needs at least one category to add or remove", func() error { _, err := g.Categorize(ctx, ids, nil, nil); return err }},
 		{"unknown category", "categorize refused: not in the category list", func() error { _, err := g.Categorize(ctx, ids, []string{"CANARY category"}, nil); return err }},

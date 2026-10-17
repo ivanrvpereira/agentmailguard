@@ -1,0 +1,249 @@
+package e2e_test
+
+import (
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+)
+
+// verdict is the verdict field of a message view.
+func verdict(t *testing.T, view string) string {
+	t.Helper()
+	return decode[struct{ Verdict string }](t, view).Verdict
+}
+
+func TestTriageHidesUnsafeMailAndFailsClosed(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	verdicts := map[string]string{}
+	for _, m := range decode[[]struct{ ID, Verdict string }](t, s.ok("mail", "list")) {
+		verdicts[m.ID] = m.Verdict
+	}
+	want := map[string]string{"lunch": "green", "invoice": "green", "kickoff": "green", "phish": "red", "code": "sealed", "broken": "error"}
+	if !reflect.DeepEqual(verdicts, want) {
+		t.Fatalf("verdicts=%v want %v", verdicts, want)
+	}
+	if out := s.ok("mail", "get", "lunch"); !strings.Contains(out, "canary-body-lunch") {
+		t.Fatalf("green body missing: %s", out)
+	}
+	for id, want := range map[string]string{"phish": "red", "code": "sealed", "broken": "error"} {
+		out := s.ok("mail", "get", id)
+		if verdict(t, out) != want || strings.Contains(out, "canary-body") || strings.Contains(out, "482913") {
+			t.Fatalf("%s: unsafe body shown or wrong verdict: %s", id, out)
+		}
+	}
+	// A failed screening is not remembered: once the engine answers, the next read screens the message again.
+	s.exec(`UPDATE messages SET body = 'canary-body-broken: fixed' WHERE id = 'broken'`)
+	if out := s.ok("mail", "get", "broken"); verdict(t, out) != "green" || !strings.Contains(out, "canary-body-broken: fixed") {
+		t.Fatalf("error not screened again: %s", out)
+	}
+}
+
+func TestSendWaitsForApprovalAndRunsOnlyOnce(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='approve'\n")
+	sent := func() []string {
+		return s.column(`SELECT subject FROM messages WHERE account = 'demo' AND folder = 'sent' ORDER BY subject`)
+	}
+	send := func(subject string) pending {
+		return s.held("mail", "send", "--to", "ana@example.test", "--subject", subject, "--body", "canary-body-send")
+	}
+
+	approved := send("canary-subject-approved")
+	if got := sent(); len(got) != 0 {
+		t.Fatalf("pending send ran: %v", got)
+	}
+	s.approve(approved.ApprovalID)
+	if got := sent(); !reflect.DeepEqual(got, []string{"canary-subject-approved"}) || s.state(approved.ApprovalID) != "done" {
+		t.Fatalf("approved send: sent=%v state=%s", got, s.state(approved.ApprovalID))
+	}
+	if code := s.decide(approved.ApprovalID, "approve"); code != http.StatusConflict {
+		t.Fatalf("second approve: HTTP %d", code)
+	}
+
+	denied := send("canary-subject-denied")
+	if code := s.decide(denied.ApprovalID, "deny"); code != http.StatusSeeOther {
+		t.Fatalf("deny: HTTP %d", code)
+	}
+	if got := sent(); !reflect.DeepEqual(got, []string{"canary-subject-approved"}) || s.state(denied.ApprovalID) != "denied" {
+		t.Fatalf("after deny: sent=%v state=%s", got, s.state(denied.ApprovalID))
+	}
+}
+
+func TestDefaultPolicyRefusesSendsAndMeetings(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	before := s.dump()
+	s.refused("refused by policy: mail_send", "mail", "send", "--to", "ana@example.test", "--subject", "canary-subject-refused", "--body", "canary-body-refused")
+	s.refused("refused by policy: calendar_invite", "calendar", "invite", "--to", "ana@example.test", "--subject", "canary-subject-refused", "--start", "2030-01-02 09:00", "--duration", "30m", "--no-online")
+	// A refused write changes no row at the provider: no sent mail, draft, event, attendee, folder, or category.
+	s.assertTables(before)
+}
+
+func TestScreeningFlagMakesAnAllowedWriteWaitForApproval(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='allow'\nmail_draft='allow'\n")
+	if out := s.ok("mail", "send", "--to", "ana@example.test", "--subject", "canary-subject-plain", "--body", "canary-body-plain: see you at noon"); !decode[struct{ OK bool }](t, out).OK {
+		t.Fatalf("plain send: %s", out)
+	}
+	flagged := s.held("mail", "send", "--to", "ana@example.test", "--subject", "canary-subject-flagged", "--body", "canary-body-flagged: the new password is hunter2")
+	draft := s.held("draft", "new", "--to", "ana@example.test", "--subject", "canary-subject-draft", "--body", "canary-body-draft: my password is hunter2")
+	sent := func() []string {
+		return s.column(`SELECT subject FROM messages WHERE folder = 'sent' ORDER BY subject`)
+	}
+	if got := sent(); !reflect.DeepEqual(got, []string{"canary-subject-plain"}) {
+		t.Fatalf("flagged send ran: %v", got)
+	}
+	if got := s.column(`SELECT subject FROM messages WHERE folder = 'drafts'`); len(got) != 0 {
+		t.Fatalf("flagged draft ran: %v", got)
+	}
+	// The user decides: an approved run is not checked again.
+	s.approve(flagged.ApprovalID)
+	s.approve(draft.ApprovalID)
+	if got := sent(); !reflect.DeepEqual(got, []string{"canary-subject-flagged", "canary-subject-plain"}) {
+		t.Fatalf("approved flagged send: %v", got)
+	}
+	if got := s.column(`SELECT subject FROM messages WHERE folder = 'drafts'`); !reflect.DeepEqual(got, []string{"canary-subject-draft"}) {
+		t.Fatalf("approved flagged draft: %v", got)
+	}
+}
+
+// result is one entry of a mail mutation result.
+type result struct {
+	ID         string `json:"id"`
+	OK         bool   `json:"ok"`
+	Error      string `json:"error"`
+	ApprovalID string `json:"approval_id"`
+}
+
+func TestTrashArchiveAndMoveNeverDeleteMail(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy.sealed]\nmail_trash='approve'\n")
+	// At the end, only the folders of these messages have changed. No message is deleted, and no other
+	// column or row changes: not read state, flag, categories, subject, or body.
+	want := s.dump()
+	moved := map[string]string{"lunch": "trash", "invoice": "archive", "kickoff": "projects", "code": "trash"}
+	for _, message := range want["messages"] {
+		if folder, ok := moved[message["id"].(string)]; ok {
+			message["folder"] = folder
+		}
+	}
+	for _, args := range [][]string{{"mail", "trash", "lunch"}, {"mail", "archive", "invoice"}, {"mail", "move", "projects", "kickoff"}} {
+		if got := decode[[]result](t, s.ok(args...)); len(got) != 1 || !got[0].OK {
+			t.Fatalf("amg %v: %+v", args, got)
+		}
+	}
+	// Only mail trash puts mail in the trash, so the write policy decides every trash.
+	for _, folder := range []string{"trash", "old-trash"} {
+		s.refused("move refused: use mail.trash", "mail", "move", folder, "phish")
+	}
+	// A sealed message needs approval to go to the trash.
+	got := decode[[]result](t, s.ok("mail", "trash", "code"))
+	if len(got) != 1 || got[0].OK || got[0].Error != "pending" || got[0].ApprovalID == "" || s.value("folder", "code") != "inbox" {
+		t.Fatalf("sealed trash: %+v", got)
+	}
+	s.approve(got[0].ApprovalID)
+	s.assertTables(want)
+}
+
+func TestOrganizePreviewWritesNothingAndApplyRunsOnce(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	rules := "[accounts.demo.projects]\nfolder = 'projects'\ninstructions = 'canary-rule: mail about projects.'\n[accounts.demo.invoices]\ncategory = 'Invoices'\ninstructions = 'canary-rule: mail about invoices.'\n"
+	if err := os.WriteFile(filepath.Join(s.home, "rules.toml"), []byte(rules), 0600); err != nil {
+		t.Fatal(err)
+	}
+	want := s.dump()
+	if preview := s.ok("--timeout", "5m", "mail", "organize", "--since", "1d"); !strings.Contains(preview, `"rule": "projects"`) {
+		t.Fatalf("preview: %s", preview)
+	}
+	// A preview changes no row at the provider: no folder, category, read state, or flag.
+	s.assertTables(want)
+
+	// Apply moves kickoff by its folder rule, gives invoice its rule category, and tags the red and the sealed
+	// message. No other row or column changes; the message whose screening failed stays as it was.
+	s.ok("--timeout", "5m", "mail", "organize", "--since", "1d", "--apply")
+	for _, message := range want["messages"] {
+		switch message["id"] {
+		case "kickoff":
+			message["folder"] = "projects"
+		case "invoice":
+			message["categories"] = `["Invoices"]`
+		case "phish":
+			message["categories"] = `["Red"]`
+		case "code":
+			message["categories"] = `["Sealed"]`
+		}
+	}
+	s.assertTables(want)
+	if again := s.ok("--timeout", "5m", "mail", "organize", "--since", "1d", "--apply"); !strings.Contains(again, `"planned": []`) {
+		t.Fatalf("second apply: %s", again)
+	}
+	s.assertTables(want)
+}
+
+func TestMeetingsFromAvailabilityToCancel(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\ncalendar_invite='approve'\ncalendar_respond='allow'\ncalendar_cancel='allow'\n")
+	day := time.Now().UTC().AddDate(0, 0, 2).Format("2006-01-02")
+	s.exec(`INSERT INTO free_busy (account, address, start_at, end_at, status) VALUES ('demo', 'ana@example.test', ?, ?, 'busy')`, day+"T09:00:00Z", day+"T09:30:00Z")
+	s.exec(`INSERT INTO events (account, id, subject, start_at, end_at, organizer_name, organizer_address) VALUES ('demo', 'review', 'canary-subject-review', ?, ?, 'canary-name-boss', 'boss@example.test')`, day+"T14:00:00Z", day+"T15:00:00Z")
+	s.exec(`INSERT INTO attendees (account, event_id, address, name, response) VALUES ('demo', 'review', 'boss@example.test', 'canary-name-boss', 'organizer'), ('demo', 'review', 'me@demo.test', 'canary-name-me', 'none')`)
+
+	availability := decode[struct {
+		Schedules []struct {
+			Address string
+			Slots   []string
+		}
+	}](t, s.ok("calendar", "availability", "--to", "ana@example.test", "--to", "bob@example.test", "--start", day+" 09:00", "--end", day+" 10:00"))
+	if fmt.Sprint(availability.Schedules) != "[{ana@example.test [busy free]} {bob@example.test [unknown unknown]}]" {
+		t.Fatalf("availability: %+v", availability.Schedules)
+	}
+
+	invite := s.held("calendar", "invite", "--to", "ana@example.test", "--subject", "canary-subject-meeting", "--start", day+" 09:30", "--duration", "30m", "--no-online")
+	if got := s.column(`SELECT id FROM events WHERE subject = 'canary-subject-meeting'`); len(got) != 0 {
+		t.Fatalf("pending invite ran: %v", got)
+	}
+	s.approve(invite.ApprovalID)
+	ids := s.column(`SELECT id FROM events WHERE subject = 'canary-subject-meeting' AND start_at = ?`, day+"T09:30:00Z")
+	if len(ids) != 1 || !reflect.DeepEqual(s.column(`SELECT address FROM attendees WHERE event_id = ?`, ids[0]), []string{"ana@example.test"}) {
+		t.Fatalf("approved invite: events %v", ids)
+	}
+
+	s.ok("calendar", "respond", "review", "--response", "accept", "--comment", "canary-comment-respond")
+	if got := s.column(`SELECT response FROM attendees WHERE event_id = 'review' AND address = 'me@demo.test'`); !reflect.DeepEqual(got, []string{"accepted"}) {
+		t.Fatalf("response: %v", got)
+	}
+
+	s.ok("calendar", "cancel", ids[0], "--comment", "canary-comment-cancel")
+	if got := s.column(`SELECT is_cancelled || ' ' || cancel_comment FROM events WHERE id = ?`, ids[0]); !reflect.DeepEqual(got, []string{"1 canary-comment-cancel"}) {
+		t.Fatalf("cancel: %v", got)
+	}
+}
+
+func TestPendingItemsAndVerdictsSurviveARestart(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='approve'\n")
+	if out := s.ok("mail", "get", "phish"); verdict(t, out) != "red" {
+		t.Fatalf("phish: %s", out)
+	}
+	p := s.held("mail", "send", "--to", "ana@example.test", "--subject", "canary-subject-restart", "--body", "canary-body-restart")
+	s.restart()
+	// The cached verdict holds even if the engine would now fail.
+	s.exec(`UPDATE messages SET body = body || ' SCREENFAIL' WHERE id = 'phish'`)
+	if out := s.ok("mail", "get", "phish"); verdict(t, out) != "red" {
+		t.Fatalf("phish after restart: %s", out)
+	}
+	if state := s.state(p.ApprovalID); state != "pending" {
+		t.Fatalf("pending item after restart: %s", state)
+	}
+	s.approve(p.ApprovalID)
+	if got := s.column(`SELECT subject FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{"canary-subject-restart"}) {
+		t.Fatalf("sent after restart: %v", got)
+	}
+}

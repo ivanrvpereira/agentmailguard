@@ -57,7 +57,7 @@ func TestResponsesHaveWriteDeadlineBeforeEmission(t *testing.T) {
 		{"origin", "POST", "/v1/call", `{}`, "application/json", 403},
 		{"type", "POST", "/v1/call", `{}`, "text/plain", 415},
 		{"schema", "POST", "/v1/call", `{}`, "application/json", 400},
-		{"operation", "POST", "/v1/call", `{"operation":"mail.send","params":{}}`, "application/json", 400},
+		{"operation", "POST", "/v1/call", `{"operation":"mail.delete","params":{}}`, "application/json", 400},
 		{"config", "POST", "/v1/call", `{"operation":"auth.status","params":{}}`, "application/json", 500},
 		{"panic", "POST", "/v1/call", `{"operation":"stats","params":{}}`, "application/json", 500},
 		{"closed", "POST", "/v1/call", `{"operation":"stats","params":{}}`, "application/json", 503},

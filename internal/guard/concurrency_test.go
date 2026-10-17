@@ -30,6 +30,9 @@ type concurrentScreener struct{}
 func (concurrentScreener) Screen(context.Context, map[string]any) (model.Screening, error) {
 	return *answer(model.Green).Screening, nil
 }
+func (concurrentScreener) CheckAction(context.Context, string, string, map[string]any) (model.ActionCheck, error) {
+	return model.ActionScore(0), nil
+}
 func (concurrentScreener) Classify(_ context.Context, _ map[string]any, security bool, questions *model.OrganizationQuestions) (model.Classification, error) {
 	r := answer(model.Green)
 	if !security {

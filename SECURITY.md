@@ -51,13 +51,16 @@ A green verdict is not permission to obey instructions in a message.
 The guard does not protect a human from fraud.
 
 Missing or invalid screening fails closed.
-The command set does not send mail, permanently delete mail, or modify calendar events.
+The fake screening engine (`[screening] provider = "fake"`) judges by keywords only and is for tests and local work. If an account is not a fake account, `serve` warns but does not refuse.
+Mail is sent only by `mail send`, `mail reply`, and `mail forward`, and only when the write policy allows it. The default policy denies sends.
+Meeting invitations, updates, cancellations, and responses send notifications to attendees. The default policy denies them.
+The command set never permanently deletes mail.
 Manual mailbox operations still need the operator's or user's approval.
 Trash is a provider move, not permanent deletion.
 
 ## Credentials and storage
 
-Provider OAuth credentials and the Jev key are stored on the server host, not on clients.
+Provider OAuth credentials and the screening key are stored on the server host, not on clients.
 The CLI uses the server API for data commands and does not load server credentials.
 macOS supports the native Keychain backend.
 Linux requires the password-encrypted file backend.
@@ -66,12 +69,13 @@ Both platforms require CGO for SQLite.
 Keep the server home private and outside the source checkout.
 Do not commit configuration, encrypted credential files, databases, audit files, or environment files.
 Local caches and audit logs exclude mail bodies, subjects, sender identities, rule instructions, and raw provider responses.
+One exception: an action that waits for approval stores its request arguments, such as recipients, subject, and body, in the `pending` table of `cache.db`.
 Environment variables and process memory still expose secrets to sufficiently privileged local processes.
 Another process under the same operating-system user is not an isolated trust domain.
 
 ## External screening and privacy
 
-Screening sends rendered mail content, identities, calendar metadata, and rule instructions to OpenRouter's System One endpoint.
+Screening sends rendered mail content, identities, calendar metadata, and rule instructions to OpenRouter's System One endpoint, or to the endpoint that the `[screening]` table sets. The fake screening engine sends nothing.
 Private-event bodies are excluded, but private-event metadata is still sent.
 Meeting join URLs can contain access secrets.
 Content hidden from the agent can still reach the screening service before a verdict exists.

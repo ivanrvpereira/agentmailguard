@@ -77,6 +77,10 @@ func (k *keychainBackend) readRecord(ctx context.Context, migrate bool) (Record,
 func (k *keychainBackend) legacyRecord(ctx context.Context) (Record, error) {
 	r := emptyRecord()
 	for _, a := range k.accounts {
+		// Fake accounts have no credentials.
+		if a.Provider == "fake" {
+			continue
+		}
 		namespace, err := service(a.Provider)
 		if err != nil {
 			return Record{}, ErrInvalidRecord
@@ -101,11 +105,11 @@ func (k *keychainBackend) legacyRecord(ctx context.Context) (Record, error) {
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return Record{}, err
 	}
-	r.OpenRouterKey = strings.TrimSpace(string(value))
-	if err == nil && r.OpenRouterKey == "" {
+	r.ScreeningKey = strings.TrimSpace(string(value))
+	if err == nil && r.ScreeningKey == "" {
 		return Record{}, ErrInvalidRecord
 	}
-	if len(r.OAuth) == 0 && r.OpenRouterKey == "" {
+	if len(r.OAuth) == 0 && r.ScreeningKey == "" {
 		return Record{}, ErrNotFound
 	}
 	return r, nil

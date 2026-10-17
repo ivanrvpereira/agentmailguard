@@ -186,15 +186,29 @@ func (b *mailbox) collection(ctx context.Context, raw string, body bool) ([]mode
 	}
 	return out, nil
 }
+
+// Folders marks Deleted Items and every folder below it, so moves there can be refused. A failed lookup fails closed.
 func (b *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
+	deleted, err := b.c.get(ctx, b.c.endpoint("/me/mailFolders/deleteditems", url.Values{"$select": {"id"}}), false)
+	if err != nil {
+		return nil, err
+	}
+	deletedID := text(deleted, "id")
+	if deletedID == "" {
+		return nil, invalidMetadata
+	}
+	type listing struct {
+		link  string
+		trash bool
+	}
 	q := url.Values{"$select": {"id,displayName,childFolderCount"}, "$top": {"100"}}
-	pending := []string{b.c.endpoint("/me/mailFolders", q)}
+	pending := []listing{{link: b.c.endpoint("/me/mailFolders", q)}}
 	seen := map[string]bool{}
 	out := []model.Folder{}
 	for len(pending) > 0 {
 		first := pending[0]
 		pending = pending[1:]
-		items, err := b.c.all(ctx, first, false)
+		items, err := b.c.all(ctx, first.link, false)
 		if err != nil {
 			return nil, err
 		}
@@ -204,11 +218,12 @@ func (b *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
 				return nil, invalidPage
 			}
 			seen[id] = true
-			out = append(out, model.Folder{ID: id, Name: text(d, "displayName")})
+			trash := first.trash || id == deletedID
+			out = append(out, model.Folder{ID: id, Name: text(d, "displayName"), Trash: trash})
 			var children int
 			_ = json.Unmarshal(d["childFolderCount"], &children)
 			if children > 0 {
-				pending = append(pending, b.c.endpoint("/me/mailFolders/"+escapeID(id)+"/childFolders", q))
+				pending = append(pending, listing{b.c.endpoint("/me/mailFolders/"+escapeID(id)+"/childFolders", q), trash})
 			}
 		}
 	}

@@ -27,14 +27,14 @@ func fileHome(t *testing.T) string {
 	return home
 }
 
-func TestFilePasswordLinePreservesFollowingJevKey(t *testing.T) {
+func TestFilePasswordLinePreservesFollowingScreeningKey(t *testing.T) {
 	home := fileHome(t)
 	var out, stderr bytes.Buffer
-	code := cli.Run(context.Background(), []string{"auth", "set-jev-key", "--home", home}, &out, &stderr, cli.Options{Stdin: strings.NewReader("synthetic-password\nsynthetic-key\n"), LookupEnv: func(string) string { return "" }})
+	code := cli.Run(context.Background(), []string{"auth", "set-screening-key", "--home", home}, &out, &stderr, cli.Options{Stdin: strings.NewReader("synthetic-password\nsynthetic-key\n"), LookupEnv: func(string) string { return "" }})
 	if code != 0 {
 		t.Fatal("password and key lines were not accepted separately")
 	}
-	if key, err := credentials.NewFile(home, "synthetic-password").LoadOpenRouterKey(context.Background()); err != nil || key != "synthetic-key" {
+	if key, err := credentials.NewFile(home, "synthetic-password").LoadScreeningKey(context.Background()); err != nil || key != "synthetic-key" {
 		t.Fatal("following key line was lost")
 	}
 	if strings.Contains(out.String()+stderr.String(), "synthetic-") {
@@ -49,7 +49,7 @@ func TestFilePasswordHostileInput(t *testing.T) {
 			var out, stderr bytes.Buffer
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			code := cli.Run(ctx, []string{"auth", "set-jev-key", "--home", home}, &out, &stderr, cli.Options{Stdin: strings.NewReader(input + "synthetic-key\n"), LookupEnv: func(string) string { return "" }})
+			code := cli.Run(ctx, []string{"auth", "set-screening-key", "--home", home}, &out, &stderr, cli.Options{Stdin: strings.NewReader(input + "synthetic-key\n"), LookupEnv: func(string) string { return "" }})
 			if code != 1 || strings.Contains(out.String()+stderr.String(), "private-") {
 				t.Fatal("unsafe password accepted or echoed")
 			}
@@ -80,7 +80,7 @@ func TestFilePasswordDoesNotWaitForEOF(t *testing.T) {
 func TestEmptyEnvironmentPasswordNeverFallsBackToStdin(t *testing.T) {
 	if os.Getenv("CREDENTIAL_PASSWORD_TEST_CHILD") == "empty" {
 		var out, stderr bytes.Buffer
-		code := cli.Run(context.Background(), []string{"auth", "set-jev-key", "--home", fileHome(t)}, &out, &stderr, cli.Options{Stdin: strings.NewReader("synthetic-password\nsynthetic-key\n")})
+		code := cli.Run(context.Background(), []string{"auth", "set-screening-key", "--home", fileHome(t)}, &out, &stderr, cli.Options{Stdin: strings.NewReader("synthetic-password\nsynthetic-key\n")})
 		if code != 1 || !strings.Contains(stderr.String(), "password missing") {
 			t.Fatal("empty environment password fell back to stdin")
 		}
@@ -178,18 +178,18 @@ func TestFilePasswordEnvironmentDoesNotReachBrowserChild(t *testing.T) {
 	}
 }
 
-func TestFileServePipedPasswordNeverPromptsForJevKey(t *testing.T) {
+func TestFileServePipedPasswordNeverPromptsForScreeningKey(t *testing.T) {
 	home := fileHome(t)
 	input, writer := io.Pipe()
 	defer input.Close()
 	defer writer.Close()
 	go func() { _, _ = io.WriteString(writer, "synthetic-password\n") }()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), serveBound)
 	defer cancel()
 	var out, stderr bytes.Buffer
 	code := cli.Run(ctx, []string{"serve", "--home", home, "--listen", "127.0.0.1:0"}, &out, &stderr, cli.Options{Stdin: input, LookupEnv: func(string) string { return "" }})
-	if code != 1 || ctx.Err() != nil || !strings.Contains(stderr.String(), "Jev key: missing;") || strings.Contains(stderr.String(), "Enter the Jev") {
-		t.Fatal("piped password led to a Jev key prompt")
+	if code != 1 || ctx.Err() != nil || !strings.Contains(stderr.String(), "screening key: missing;") || strings.Contains(stderr.String(), "Enter the screening") {
+		t.Fatal("piped password led to a screening key prompt")
 	}
 }
 
@@ -213,12 +213,7 @@ func TestFileServePasswordFailureReportsStoreCheck(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			home := fileHome(t)
 			var out, stderr bytes.Buffer
-			code := cli.Run(context.Background(), []string{"serve", "--home", home, "--listen", "127.0.0.1:0"}, &out, &stderr, cli.Options{Stdin: tc.input, LookupEnv: func(name string) string {
-				if name == "OPENROUTER_API_KEY" {
-					return "synthetic-env-key"
-				}
-				return ""
-			}})
+			code := cli.Run(context.Background(), []string{"serve", "--home", home, "--listen", "127.0.0.1:0"}, &out, &stderr, cli.Options{Stdin: tc.input, LookupEnv: func(string) string { return "" }})
 			text := stderr.String()
 			if code != 1 || !strings.HasPrefix(text, "credential check: credentials (file): "+tc.status+"\n") || strings.Contains(text, "server listening") || strings.Contains(text, "private-") || out.Len() != 0 {
 				t.Fatal("password failure omitted fixed first store check or exposed private input")
@@ -238,7 +233,7 @@ func TestFilePasswordCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	var out, stderr bytes.Buffer
-	if code := cli.Run(ctx, []string{"auth", "set-jev-key", "--home", home}, &out, &stderr, cli.Options{Stdin: input, LookupEnv: func(string) string { return "" }}); code != 1 || !strings.Contains(stderr.String(), "canceled") {
+	if code := cli.Run(ctx, []string{"auth", "set-screening-key", "--home", home}, &out, &stderr, cli.Options{Stdin: input, LookupEnv: func(string) string { return "" }}); code != 1 || !strings.Contains(stderr.String(), "canceled") {
 		t.Fatal("password read ignored cancellation")
 	}
 }

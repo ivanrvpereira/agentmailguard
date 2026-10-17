@@ -20,13 +20,15 @@ func (scopeError) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "Gmail 
 func (e scopeError) MissingScopes() []string  { return append([]string(nil), e.missing...) }
 
 // scopes refuses only grants that cannot work. Extra grants are the user's choice; callers warn through ExtraScopes.
+// Either calendar grant reads the calendar; a missing one is reported as the grant that login requests.
 func scopes(raw string) ([]string, error) {
 	list := strings.Fields(raw)
 	var missing []string
-	for _, required := range []string{gmailScope, calendarScope} {
-		if !slices.Contains(list, required) {
-			missing = append(missing, required)
-		}
+	if !slices.Contains(list, gmailScope) {
+		missing = append(missing, gmailScope)
+	}
+	if !slices.Contains(list, calendarScope) && !slices.Contains(list, calendarReadScope) {
+		missing = append(missing, calendarScope)
 	}
 	if len(missing) != 0 {
 		return nil, scopeError{missing: missing}
@@ -39,7 +41,7 @@ func ExtraScopes(scopes []string) []string {
 	var extra []string
 	for _, s := range scopes {
 		switch s {
-		case gmailScope, calendarScope, "openid", "email", "profile", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile":
+		case gmailScope, calendarScope, calendarReadScope, "openid", "email", "profile", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile":
 		default:
 			extra = append(extra, s)
 		}

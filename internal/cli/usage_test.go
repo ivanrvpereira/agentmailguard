@@ -29,9 +29,10 @@ func runOffline(t *testing.T, args ...string) (int, string, string) {
 func TestGroupWithoutSubcommandPrintsItsOwnHelp(t *testing.T) {
 	for _, tc := range []struct{ group, want, absent string }{
 		{"mail", "organize", "calendar"},
-		{"auth", "set-jev-key", "calendar"},
+		{"auth", "set-screening-key", "calendar"},
 		{"cache", "clear", "calendar"},
 		{"rules", "list", "calendar"},
+		{"approvals", "status", "calendar"},
 		{"calendar", "get", "organize"},
 		{"draft", "forward", "organize"},
 	} {
@@ -62,7 +63,7 @@ func TestCredentialCommandHelpIsScopedAndOffline(t *testing.T) {
 		}
 	}
 	code, out, errout := runOffline(t, "--help")
-	if code != 0 || errout != "" || !strings.Contains(out, "serve, auth login, set-jev-key, migrate, and change-password only") {
+	if code != 0 || errout != "" || !strings.Contains(out, "serve, auth login, set-screening-key, set-approval-password, migrate, and change-password only") {
 		t.Error("root help does not explain the supported local home scope")
 	}
 }

@@ -202,3 +202,32 @@ func TestOrganizePreviewUsesCurrentAnswersAndSafeReport(t *testing.T) {
 		t.Fatal("preview did not reuse cached classification")
 	}
 }
+
+func TestRuleMoveIntoTrashFolderWritesNothing(t *testing.T) {
+	b, s := organizerSetup(t)
+	s.result.Organization.Categories = map[string]float64{}
+	g, c, path := setup(t, b, s)
+	r := rules.Rules{Rules: []rules.Rule{{Name: "route", Kind: rules.Folder, Target: "del", Instructions: "Route"}}}
+	report, err := g.Organize(context.Background(), now.Add(-7*24*time.Hour), r, now, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Planned) != 1 || report.Planned[0].Move == nil || report.Planned[0].Move.Result == nil || *report.Planned[0].Move.Result != "GuardError" {
+		t.Fatalf("rule move outcome: %+v", report.Planned)
+	}
+	if len(b.calls) != 0 {
+		t.Fatalf("rule move into trash folder wrote: %v", b.calls)
+	}
+	records := auditRecords(t, path)
+	if len(records) != 1 || records[0]["operation"] != "move" || records[0]["rule"] != "route" {
+		t.Fatalf("refused rule move audit: %+v", records)
+	}
+	result := records[0]["results"].([]any)[0].(map[string]any)
+	if result["id"] != "m1" || result["ok"] != false || result["error"] != "GuardError" {
+		t.Fatalf("refused rule move audit result: %+v", result)
+	}
+	rows, err := c.Get(context.Background(), "work", []string{"m1"})
+	if err != nil || rows["m1"].OrganizationAppliedAt != nil {
+		t.Fatal("refused rule move marked organization applied")
+	}
+}

@@ -82,6 +82,11 @@ func (s *screener) Screen(context.Context, map[string]any) (model.Screening, err
 	}
 	return model.Screening{Verdict: s.verdict, Score: &score}, nil
 }
+
+// CheckAction never flags, so writes behave as before the Jev action check.
+func (s *screener) CheckAction(context.Context, string, string, map[string]any) (model.ActionCheck, error) {
+	return model.ActionScore(0), nil
+}
 func setup(t *testing.T, b model.Mailbox, s model.Screener) (*guard.Guard, *cache.Cache, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -91,7 +96,7 @@ func setup(t *testing.T, b model.Mailbox, s model.Screener) (*guard.Guard, *cach
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	path := filepath.Join(dir, "audit.jsonl")
-	return guard.New("work", b, nil, s, c, audit.New(path), guard.Options{Now: func() time.Time { return now }}), c, path
+	return guard.New("work", b, nil, s, c, audit.New(path), guard.Options{Now: func() time.Time { return now }, Policy: allowAll}), c, path
 }
 func TestLinksResolveSafeURLsAndRefuseSecretsIndependently(t *testing.T) {
 	m := message("m1")

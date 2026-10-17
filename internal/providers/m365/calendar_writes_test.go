@@ -248,7 +248,7 @@ func TestCalendarUpdateSelectedFields(t *testing.T) {
 		{"resolved-time", model.EventChange{Start: &start, End: &end}, map[string]any{"start": map[string]any{"dateTime": "2026-10-09T08:00:00", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T08:30:00", "timeZone": "UTC"}}},
 		{"end-only", model.EventChange{End: &end}, map[string]any{"end": map[string]any{"dateTime": "2026-10-09T08:30:00", "timeZone": "UTC"}}},
 		// Graph keeps omitted fields, so the body with its join blob, times, and attendees stay as they are.
-		{"teams-only", model.EventChange{Teams: true}, map[string]any{"isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"}},
+		{"teams-only", model.EventChange{Online: true}, map[string]any{"isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"}},
 		{"fractional-time", model.EventChange{Start: &fracStart, End: &fracEnd}, map[string]any{"start": map[string]any{"dateTime": "2026-10-09T08:00:00.1234567", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T08:30:00.0000001", "timeZone": "UTC"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -276,7 +276,7 @@ func TestCalendarUpdateSelectedFields(t *testing.T) {
 }
 
 func TestCalendarInvitePayload(t *testing.T) {
-	for _, teams := range []bool{false, true} {
+	for _, online := range []bool{false, true} {
 		c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != "POST" || r.URL.EscapedPath() != "/v1.0/me/events" || r.Header.Get("Prefer") != `IdType="ImmutableId", outlook.timezone="UTC"` {
 				t.Error("unexpected invite request")
@@ -292,7 +292,7 @@ func TestCalendarInvitePayload(t *testing.T) {
 				"end":       map[string]any{"dateTime": "2026-10-09T08:30:00", "timeZone": "UTC"},
 				"attendees": []any{map[string]any{"type": "required", "emailAddress": map[string]any{"address": "a@example.test"}}},
 			}
-			if teams {
+			if online {
 				expected["isOnlineMeeting"] = true
 				expected["onlineMeetingProvider"] = "teamsForBusiness"
 			}
@@ -307,7 +307,7 @@ func TestCalendarInvitePayload(t *testing.T) {
 			t.Fatal("calendar cannot invite")
 		}
 		start := time.Date(2026, 10, 9, 9, 0, 0, 0, time.FixedZone("WEST", 3600))
-		id, err := writer.Invite(context.Background(), model.NewEvent{Subject: "Planning", Body: "<b>Agenda</b> & \"q\" 'a'\none\r\ntwo\rthree", Location: "Room", Start: start, End: start.Add(30 * time.Minute), Attendees: []string{"a@example.test"}, Teams: teams})
+		id, err := writer.Invite(context.Background(), model.NewEvent{Subject: "Planning", Body: "<b>Agenda</b> & \"q\" 'a'\none\r\ntwo\rthree", Location: "Room", Start: start, End: start.Add(30 * time.Minute), Attendees: []string{"a@example.test"}, Online: online})
 		if err != nil || id != "immutable-event" {
 			t.Fatalf("invite = %q, %v", id, err)
 		}

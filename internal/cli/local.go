@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -49,38 +51,91 @@ func serve(ctx context.Context, home, listen string, stdin io.Reader, stderr io.
 	}
 	s, e := server.New(context.WithoutCancel(ctx), home, opts)
 	if e != nil {
-		if e.Error() == "configuration unavailable" {
-			return failure(stderr, "configuration unavailable")
+		if e.Error() == "configuration unavailable" || errors.As(e, new(config.ApprovalsError)) || errors.As(e, new(config.ScreeningError)) {
+			return failure(stderr, e.Error())
 		}
 		return failure(stderr, "server state unavailable")
+	}
+	if fakeScreeningOfRealMail(ctx, s, home) {
+		fmt.Fprintln(stderr, "WARNING: fake screening judges the mail of real accounts by keywords, not by a decision model.")
 	}
 	if code := preload(ctx, s, stdin, stderr); code != 0 {
 		_ = s.Close()
 		return code
 	}
-	h := &http.Server{Handler: s, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, ErrorLog: log.New(io.Discard, "", 0)}
-	done := make(chan error, 1)
-	go func() { done <- h.Serve(listener) }()
+	var servers []*http.Server
+	done := make(chan error, 2)
+	start := func(handler http.Handler, l net.Listener) {
+		h := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, ErrorLog: log.New(io.Discard, "", 0)}
+		servers = append(servers, h)
+		go func() { done <- h.Serve(l) }()
+	}
+	// The approval console runs only with an approval password; the preload lines already say when it is off.
+	if console, ok := s.Console(); ok {
+		address := s.ConsoleAddress()
+		consoleListener, e := net.Listen("tcp", address)
+		if e != nil {
+			_ = s.Close()
+			return failure(stderr, "approval console listener unavailable")
+		}
+		defer consoleListener.Close()
+		if host, _, e := net.SplitHostPort(address); e != nil || !loopback(host) {
+			fmt.Fprintln(stderr, "WARNING: the approval console listens beyond loopback. Use an HTTPS tunnel such as tailscale serve.")
+		}
+		start(console, consoleListener)
+		fmt.Fprintln(stderr, "approval console listening")
+	}
+	start(s, listener)
 	fmt.Fprintln(stderr, "server listening")
 	select {
 	case <-ctx.Done():
 		drain, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = h.Shutdown(drain)
+		for _, h := range servers {
+			_ = h.Shutdown(drain)
+		}
 		cancel()
 		e = s.Close()
-		_ = h.Close()
+		for _, h := range servers {
+			_ = h.Close()
+		}
 		if e != nil {
 			return failure(stderr, "server shutdown failed")
 		}
 		return 0
 	case <-done:
+		for _, h := range servers {
+			_ = h.Close()
+		}
 		_ = s.Close()
 		return failure(stderr, "server stopped")
 	}
 }
 
+// fakeScreeningOfRealMail reports whether the server uses fake screening while an account is not fake.
+// If the accounts cannot be read, it reports false; preload then fails on the same configuration.
+func fakeScreeningOfRealMail(ctx context.Context, s *server.Server, home string) bool {
+	if !s.FakeScreening() {
+		return false
+	}
+	home, e := config.Home(home)
+	if e != nil {
+		return false
+	}
+	accounts, e := config.LoadAccounts(ctx, filepath.Join(home, "config.toml"))
+	return e == nil && slices.ContainsFunc(accounts, func(a config.Account) bool { return a.Provider != "fake" })
+}
+
+// loopback reports whether host is localhost or a loopback IP address.
+func loopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // preload asks the credential backend for everything before the server accepts requests,
-// because an operator is present at start. A missing Jev key is requested only on a terminal.
+// because an operator is present at start. A missing screening key is requested only on a terminal.
 func preload(ctx context.Context, s *server.Server, stdin io.Reader, stderr io.Writer) int {
 	if stdin == nil {
 		stdin = os.Stdin
@@ -88,7 +143,7 @@ func preload(ctx context.Context, s *server.Server, stdin io.Reader, stderr io.W
 	var prompt func(context.Context) (string, error)
 	if _, ok := terminal(stdin); ok {
 		prompt = func(ctx context.Context) (string, error) {
-			key, problem := readJevKey(ctx, stdin, stderr, "Jev key not found. Enter the Jev (OpenRouter) API key to save it: ")
+			key, problem := readScreeningKey(ctx, stdin, stderr, "Screening key not found. Enter the screening API key to save it: ")
 			if problem != "" {
 				errorLine(stderr, problem)
 				return "", errors.New(problem)
@@ -128,7 +183,10 @@ func login(ctx context.Context, home, account string, device, noBrowser bool, st
 	}
 	a, e := config.LoadAccount(ctx, filepath.Join(home, "config.toml"), name)
 	if e != nil {
-		return failure(stderr, "configuration unavailable")
+		return failure(stderr, configUnavailable(e).Error())
+	}
+	if a.Provider == "fake" {
+		return failure(stderr, "fake accounts need no login")
 	}
 	if noBrowser && a.Provider != "gmail" {
 		return failure(stderr, "--no-browser is for Gmail; use --device-code for Microsoft 365")

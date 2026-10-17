@@ -75,7 +75,7 @@ func calendarGuard(t *testing.T, b model.Mailbox, cal model.Calendar) (*guard.Gu
 	t.Helper()
 	s := &eventScreener{}
 	_, cache, path := setup(t, b, s)
-	return guard.New("work", b, cal, s, cache, audit.New(path), guard.Options{}), s, path
+	return guard.New("work", b, cal, s, cache, audit.New(path), guard.Options{Policy: allowAll}), s, path
 }
 func meetingWriter() *calendarWriter {
 	return &calendarWriter{calendar: &calendar{event: model.Event{ID: "e1", Start: now, End: now.Add(time.Hour), IsOrganizer: true, Subject: "CANARY", Body: ptr("CANARY")}}}
@@ -138,7 +138,7 @@ func TestCalendarUpdateResolvesOnlyRequestedTimeChanges(t *testing.T) {
 		{"end only", model.EventChange{End: &end}, 0, model.EventChange{End: &end}},
 		{"explicit range", model.EventChange{Start: &start, End: &end}, 0, model.EventChange{Start: &start, End: &end}},
 		{"attendees only", model.EventChange{AddAttendees: []string{"CANARY@example.test"}}, 0, model.EventChange{AddAttendees: []string{"CANARY@example.test"}}},
-		{"teams only", model.EventChange{Teams: true}, 0, model.EventChange{Teams: true}},
+		{"online only", model.EventChange{Online: true}, 0, model.EventChange{Online: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := meetingWriter()
@@ -405,7 +405,7 @@ func TestCalendarWritesHoldMutationGateDuringFetchAndWrite(t *testing.T) {
 func TestCalendarInvitePreservesPayloadAndAuditsWithoutReading(t *testing.T) {
 	w := meetingWriter()
 	g, _, path := calendarGuard(t, &mailbox{}, w)
-	event := model.NewEvent{Subject: "CANARY subject", Body: "CANARY body", Location: "CANARY location", Attendees: []string{"CANARY@example.test"}, Start: now, End: now.Add(9 * time.Hour), Teams: true}
+	event := model.NewEvent{Subject: "CANARY subject", Body: "CANARY body", Location: "CANARY location", Attendees: []string{"CANARY@example.test"}, Start: now, End: now.Add(9 * time.Hour), Online: true}
 	id, err := g.CalendarInvite(context.Background(), event)
 	if err != nil || id != "created" || !reflect.DeepEqual(w.invites, []model.NewEvent{event}) || w.calls != 0 {
 		t.Fatalf("invite = %q %v, payloads=%v reads=%d", id, err, w.invites, w.calls)
