@@ -44,8 +44,8 @@ func New(account, home string, now func() time.Time) *Provider {
 	return &Provider{account: account, path: filepath.Join(home, "fake-provider.db"), now: now}
 }
 
-// conn opens fake-provider.db once, applies the schema, and adds the fixed folders of the account. A failed open is
-// tried again on the next call.
+// conn opens fake-provider.db once, applies the schema, adds columns that older files lack, and adds the fixed
+// folders of the account. A failed open is tried again on the next call.
 func (p *Provider) conn(ctx context.Context) (*sql.DB, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -54,6 +54,10 @@ func (p *Provider) conn(ctx context.Context) (*sql.DB, error) {
 	}
 	db, err := open(ctx, p.path)
 	if err != nil {
+		return nil, storageError
+	}
+	if err := addThreadColumn(ctx, db); err != nil {
+		_ = db.Close()
 		return nil, storageError
 	}
 	_, err = db.ExecContext(ctx, `INSERT OR IGNORE INTO folders (account, id, name) VALUES (?1, 'inbox', 'Inbox'), (?1, 'drafts', 'Drafts'), (?1, 'sent', 'Sent'), (?1, 'archive', 'Archive'), (?1, 'trash', 'Trash')`, p.account)
@@ -92,6 +96,26 @@ func open(ctx context.Context, path string) (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
+}
+
+// addThreadColumn adds messages.thread_id to a file made before the column existed. The check and the change run in
+// one write transaction, so another account's provider on the same file cannot add it twice.
+func addThreadColumn(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var found int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('messages') WHERE name = 'thread_id'`).Scan(&found); err != nil {
+		return err
+	}
+	if found == 0 {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE messages ADD COLUMN thread_id TEXT`); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // identity is the account's own address from the identities table, or <account>@fake.test.

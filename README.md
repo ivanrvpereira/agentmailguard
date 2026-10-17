@@ -120,6 +120,12 @@ sqlite3 ~/.agentmailguard/fake-provider.db "SELECT id, folder, subject, origin F
 
 Trash and archive are moves to the `trash` and `archive` folders; nothing is ever deleted. Drafts go to `drafts`. `mail send`, `mail reply`, and `mail forward` store the message in `sent`, with `origin` (`new`, `reply`, or `forward`) and `source_id`. Nothing leaves the machine.
 
+To seed a conversation, give its messages the same `thread_id`. A message whose `thread_id` is NULL is its own conversation, and its `thread_id` in results is its message ID. Reply and forward drafts, and sent replies and forwards, join the conversation of their source message; new drafts and new sends are their own conversation. A `fake-provider.db` made before the `thread_id` column existed gets the column when the server first opens it. For example, a reply from Ana in the conversation of `m1`:
+
+```sh
+sqlite3 ~/.agentmailguard/fake-provider.db "INSERT INTO messages (account, id, sender_name, sender_address, subject, body, thread_id) VALUES ('demo', 'm2', 'Ana', 'ana@example.test', 'Re: Lunch on Friday?', 'Noon works.', 'm1');"
+```
+
 The calendar uses three tables. `events` holds the events, `attendees` holds the attendees of each event and their responses, and `free_busy` holds the free/busy times that `calendar availability` reads. The account organizes an event when its `organizer_address` is empty or is the account address; only then can it update or cancel the event. It can respond only to the other events. Availability comes only from `free_busy`, never from `events`. An address without `free_busy` rows is `unknown`, and a slot that no row covers is `free`. For example, an event that Ana organizes with the demo account as attendee, and Ana's busy time:
 
 ```sh
@@ -713,7 +719,8 @@ The calendar range must be at most 90 days.
 | red or sealed | Sender address, date, and reason, without display name or subject |
 | error | Date and safe error code, without sender, subject, or body |
 
-Every verdict also includes the message ID, verdict, authentication results, read state, flag, and mailbox-listed categories.
+Every verdict also includes the message ID, the thread ID, verdict, authentication results, read state, flag, and mailbox-listed categories.
+The thread ID (`thread_id` in `mail list`, `mail search`, and `mail get` results) is the provider's conversation ID: the Gmail `threadId` or the Microsoft 365 `conversationId`. Messages with the same `thread_id` belong to one conversation. It is an opaque provider ID, not message text. It is left out when the provider gives none, so an empty ID never groups unrelated messages.
 Manual mutations work at every verdict, but the [write policy](#write-policy) can refuse or hold `mail trash`, also by verdict.
 Automatic business actions remain green-only.
 `mail organize --apply` can add existing `Yellow`, `Red`, or `Sealed` security tags to matching hidden mail.

@@ -290,7 +290,7 @@ func parseMessage(data map[string]json.RawMessage, labels map[string]string, bod
 	if err != nil {
 		return model.Message{}, err
 	}
-	m := model.Message{ID: v.ID, Subject: decoded(headerValue(v.Payload.Headers, "subject")), ReceivedAt: received, To: addresses(v.Payload.Headers, "to"), CC: addresses(v.Payload.Headers, "cc"), Folders: []string{}, Attachments: []string{}, Categories: []string{}, IsDraft: contains(v.LabelIDs, "DRAFT"), IsRead: !contains(v.LabelIDs, "UNREAD"), Flag: model.NoFlag}
+	m := model.Message{ID: v.ID, ThreadID: v.ThreadID, Subject: decoded(headerValue(v.Payload.Headers, "subject")), ReceivedAt: received, To: addresses(v.Payload.Headers, "to"), CC: addresses(v.Payload.Headers, "cc"), Folders: []string{}, Attachments: []string{}, Categories: []string{}, IsDraft: contains(v.LabelIDs, "DRAFT"), IsRead: !contains(v.LabelIDs, "UNREAD"), Flag: model.NoFlag}
 	if a := addresses(v.Payload.Headers, "from"); len(a) > 0 {
 		m.Sender = a[0]
 	}

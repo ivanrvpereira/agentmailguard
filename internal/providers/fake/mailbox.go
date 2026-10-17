@@ -13,7 +13,7 @@ import (
 
 type mailbox struct{ p *Provider }
 
-const columns = `id, folder, sender_name, sender_address, to_addresses, cc_addresses, subject, body, content_type, received_at, is_draft, is_read, flag, categories, attachments, spf, dkim, dmarc, compauth, compauth_reason`
+const columns = `id, COALESCE(thread_id, id), folder, sender_name, sender_address, to_addresses, cc_addresses, subject, body, content_type, received_at, is_draft, is_read, flag, categories, attachments, spf, dkim, dmarc, compauth, compauth_reason`
 
 // newest orders by the instant, not the text, because seeded times can have any offset.
 const newest = ` ORDER BY julianday(received_at) DESC, id`
@@ -42,7 +42,7 @@ func scan(row interface{ Scan(...any) error }, body bool) (model.Message, error)
 	var m model.Message
 	var folder, to, cc, text, kind, received, flag, categories, attachments string
 	var auth model.AuthResults
-	err := row.Scan(&m.ID, &folder, &m.Sender.Name, &m.Sender.Address, &to, &cc, &m.Subject, &text, &kind, &received, &m.IsDraft, &m.IsRead, &flag, &categories, &attachments, &auth.SPF, &auth.DKIM, &auth.DMARC, &auth.CompAuth, &auth.CompAuthReason)
+	err := row.Scan(&m.ID, &m.ThreadID, &folder, &m.Sender.Name, &m.Sender.Address, &to, &cc, &m.Subject, &text, &kind, &received, &m.IsDraft, &m.IsRead, &flag, &categories, &attachments, &auth.SPF, &auth.DKIM, &auth.DMARC, &auth.CompAuth, &auth.CompAuthReason)
 	if errors.Is(err, sql.ErrNoRows) {
 		return m, notFound
 	}

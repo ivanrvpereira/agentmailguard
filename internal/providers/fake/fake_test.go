@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,7 +74,7 @@ func TestListReturnsFolderMessagesNewestFirstWithoutBodies(t *testing.T) {
 	if got[0].Body != nil || got[0].ContentType != nil || got[0].Auth != nil {
 		t.Fatal("metadata list carried body or auth")
 	}
-	want := model.Message{ID: "new", Sender: model.Address{Name: "Bob", Address: "bob@example.test"}, Subject: "Lunch plans", ReceivedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC), To: []model.Address{{Address: "demo@fake.test"}}, CC: []model.Address{}, Folders: []string{"inbox"}, Attachments: []string{}, Flag: model.NoFlag, Categories: []string{}}
+	want := model.Message{ID: "new", ThreadID: "new", Sender: model.Address{Name: "Bob", Address: "bob@example.test"}, Subject: "Lunch plans", ReceivedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC), To: []model.Address{{Address: "demo@fake.test"}}, CC: []model.Address{}, Folders: []string{"inbox"}, Attachments: []string{}, Flag: model.NoFlag, Categories: []string{}}
 	got[0].ReceivedAt = got[0].ReceivedAt.UTC()
 	if !reflect.DeepEqual(got[0], want) {
 		t.Fatalf("message=%+v", got[0])
@@ -414,5 +415,128 @@ func TestSeededMailWithoutATimeIsReceivedNow(t *testing.T) {
 	got := folderOf(t, m, "quick")
 	if d := time.Since(got.ReceivedAt); d < -time.Minute || d > time.Minute || !reflect.DeepEqual(got.Folders, []string{"inbox"}) {
 		t.Fatalf("message=%+v", got)
+	}
+}
+
+// threads maps each message ID to its thread ID.
+func threads(messages []model.Message) map[string]string {
+	out := map[string]string{}
+	for _, m := range messages {
+		out[m.ID] = m.ThreadID
+	}
+	return out
+}
+
+func TestMessagesCarryTheirSeededThreadOrTheirOwnID(t *testing.T) {
+	m, home := mailbox(t)
+	ctx := t.Context()
+	seed(t, home, `UPDATE messages SET thread_id = 'invoices' WHERE id IN ('old', 'mid')`)
+	invoice := "invoice"
+	list, err := m.List(ctx, "inbox", 25, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	search, err := m.Search(ctx, model.SearchQuery{Text: &invoice}, 25, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	get, err := m.Get(ctx, []string{"mid", "arc"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct{ got, want map[string]string }{
+		"list":   {threads(list), map[string]string{"old": "invoices", "mid": "invoices", "new": "new", "draft": "draft"}},
+		"search": {threads(search), map[string]string{"mid": "invoices", "arc": "arc", "draft": "draft"}},
+		"get":    {threads(get), map[string]string{"mid": "invoices", "arc": "arc"}},
+	} {
+		if !reflect.DeepEqual(tc.got, tc.want) {
+			t.Errorf("%s threads=%v want %v", name, tc.got, tc.want)
+		}
+	}
+}
+
+func TestRepliesAndForwardsJoinTheSourceConversationAndNewMailStartsItsOwn(t *testing.T) {
+	m, home := mailbox(t)
+	ctx := t.Context()
+	seed(t, home, `UPDATE messages SET thread_id = 'invoices' WHERE id = 'old'`)
+	created, err := m.DraftNew(ctx, model.NewDraft{To: []string{"ana@example.test"}, Subject: "Hello", Body: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, err := m.DraftReply(ctx, "old", "Thanks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	forward, err := m.DraftForward(ctx, "new", []string{"x@example.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drafts, err := m.Get(ctx, []string{created, reply, forward}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := threads(drafts), map[string]string{created: created, reply: "invoices", forward: "new"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("draft threads=%v want %v", got, want)
+	}
+	for _, send := range []func() error{
+		func() error {
+			return m.SendNew(ctx, model.NewDraft{To: []string{"ana@example.test"}, Subject: "Hello", Body: "hi"})
+		},
+		func() error { return m.SendReply(ctx, "old", "Thanks") },
+		func() error { return m.SendForward(ctx, "new", []string{"x@example.test"}) },
+	} {
+		if err := send(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sent, err := m.List(ctx, "sent", 25, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bySubject := map[string]string{}
+	for _, s := range sent {
+		bySubject[s.Subject] = s.ThreadID
+		if s.Subject == "Hello" && s.ThreadID != s.ID {
+			t.Errorf("new send thread=%q id=%q", s.ThreadID, s.ID)
+		}
+	}
+	if want := map[string]string{"Hello": bySubject["Hello"], "Re: Old report": "invoices", "Fw: Lunch plans": "new"}; !reflect.DeepEqual(bySubject, want) {
+		t.Errorf("sent threads=%v want %v", bySubject, want)
+	}
+}
+
+// A fake-provider.db made before messages had thread_id gets the column on the first open.
+func TestDatabaseFromBeforeThreadsOpensAndKeepsItsMail(t *testing.T) {
+	home := t.TempDir()
+	schema, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := strings.Replace(string(schema), "\tthread_id TEXT,\n", "", 1)
+	if before == string(schema) {
+		t.Fatal("schema.sql has no thread_id column")
+	}
+	db := open(t, home)
+	for _, s := range []string{before, `INSERT INTO messages (account, id, subject, received_at) VALUES ('demo', 'old', 'Old report', '2026-03-01T09:00:00Z')`} {
+		if _, err := db.Exec(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := fake.New("demo", home, func() time.Time { return now }).Mailbox()
+	ctx := t.Context()
+	list, err := m.List(ctx, "inbox", 25, 0, false)
+	if err != nil || !reflect.DeepEqual(threads(list), map[string]string{"old": "old"}) {
+		t.Fatalf("list threads=%v err=%v", threads(list), err)
+	}
+	reply, err := m.DraftReply(ctx, "old", "Thanks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := m.Get(ctx, []string{reply}, false); err != nil || got[0].ThreadID != "old" {
+		t.Fatalf("reply=%+v err=%v", got, err)
+	}
+	reopened := fake.New("demo", home, func() time.Time { return now }).Mailbox()
+	if got, err := reopened.Get(ctx, []string{"old", reply}, false); err != nil || !reflect.DeepEqual(threads(got), map[string]string{"old": "old", reply: "old"}) {
+		t.Fatalf("reopened threads=%v err=%v", threads(got), err)
 	}
 }

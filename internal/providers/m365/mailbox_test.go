@@ -6,7 +6,9 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -181,5 +183,33 @@ func TestGetPreservesBodyAbsenceAndEscapesIDs(t *testing.T) {
 	m := full[0]
 	if m.Body == nil || *m.Body != "" || m.ContentType == nil || m.Sender.Address != "fallback@example.test" || m.Auth.SPF == nil || *m.Auth.SPF != "fail" || *m.Auth.CompAuthReason != "001" || !m.ReceivedAt.Equal(time.Unix(0, 0)) {
 		t.Fatalf("bad mapping %+v", m)
+	}
+}
+func TestListSearchAndGetSelectAndCarryTheConversationID(t *testing.T) {
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if !slices.Contains(strings.Split(r.URL.Query().Get("$select"), ","), "conversationId") {
+			t.Errorf("%s selects %q", r.URL.Path, r.URL.Query().Get("$select"))
+		}
+		m := map[string]any{"id": "m", "conversationId": "conversation-" + path.Base(r.URL.Path)}
+		if r.URL.Path == "/v1.0/me/messages/m" {
+			jsonResponse(w, m)
+			return
+		}
+		jsonResponse(w, map[string]any{"value": []any{m}})
+	})
+	b := c.Mailbox()
+	ctx := t.Context()
+	text := "hello"
+	list, err := b.List(ctx, "inbox", 10, 0, false)
+	if err != nil || len(list) != 1 || list[0].ThreadID != "conversation-messages" {
+		t.Fatalf("list %+v %v", list, err)
+	}
+	search, err := b.Search(ctx, model.SearchQuery{Text: &text}, 10, false)
+	if err != nil || len(search) != 1 || search[0].ThreadID != "conversation-messages" {
+		t.Fatalf("search %+v %v", search, err)
+	}
+	get, err := b.Get(ctx, []string{"m"}, true)
+	if err != nil || len(get) != 1 || get[0].ThreadID != "conversation-m" {
+		t.Fatalf("get %+v %v", get, err)
 	}
 }

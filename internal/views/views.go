@@ -20,6 +20,7 @@ type Address struct {
 }
 type MailSummary struct {
 	ID          string             `json:"id"`
+	ThreadID    string             `json:"thread_id,omitempty"`
 	Verdict     model.Verdict      `json:"verdict"`
 	ReceivedAt  string             `json:"received_at"`
 	Auth        map[string]*string `json:"auth"`
@@ -109,7 +110,7 @@ func iso(t time.Time) string {
 
 func Summary(m model.Message, row cache.Row, categories []string) MailSummary {
 	v := verdict(row.Verdict)
-	result := MailSummary{ID: m.ID, Verdict: v, ReceivedAt: iso(m.ReceivedAt), Auth: auth(row.Auth), IsRead: m.IsRead, Flag: m.Flag, Categories: listed(m.Categories, categories), Reason: reason(v)}
+	result := MailSummary{ID: m.ID, ThreadID: m.ThreadID, Verdict: v, ReceivedAt: iso(m.ReceivedAt), Auth: auth(row.Auth), IsRead: m.IsRead, Flag: m.Flag, Categories: listed(m.Categories, categories), Reason: reason(v)}
 	switch v {
 	case model.Green, model.Yellow:
 		result.Sender = new(address(m.Sender))
@@ -211,6 +212,7 @@ func ToText(v MailView) string {
 		row("Attachments", strings.Join(*v.Attachments, ", "))
 	}
 	row("ID", v.ID)
+	row("Thread", v.ThreadID)
 	if v.Body != nil {
 		b.WriteString("\n\n" + *v.Body)
 		if v.Truncated != nil && *v.Truncated {

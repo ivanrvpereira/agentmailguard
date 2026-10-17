@@ -193,7 +193,8 @@ func (a *nativeAPI) jev(w http.ResponseWriter, r *http.Request) {
 	}
 	n := a.jevCalls[id]
 	a.mu.Unlock()
-	if id == "retry" && n == 1 {
+	// The screening of retry fails once, that of down every time.
+	if id == "retry" && n == 1 || id == "down" {
 		w.WriteHeader(503)
 		io.WriteString(w, "private-jev-canary")
 		return

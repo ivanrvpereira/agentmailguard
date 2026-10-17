@@ -13,6 +13,10 @@ import (
 )
 
 type MessageID = string
+
+// ThreadID is the provider's opaque conversation ID. Empty: the provider gave none, so the message joins no thread.
+type ThreadID = string
+
 type FolderID = string
 type EventID = string
 
@@ -70,6 +74,7 @@ func ValidateFailureText(text *string) error {
 
 type Message struct {
 	ID              MessageID
+	ThreadID        ThreadID
 	Sender          Address
 	Subject         string
 	ReceivedAt      time.Time

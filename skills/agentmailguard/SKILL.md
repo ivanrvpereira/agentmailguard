@@ -94,7 +94,9 @@ Every message and event has a `verdict`. It decides what you can see:
 | `green` | Cleaned headers, `body`, attachment names, and `links` (link ID → domain) |
 | `yellow` | Cleaned headers, attachment names, and `reason`, no body |
 | `red` / `sealed` | Sender address, date, and `reason`, no subject or display name |
-| `error` | Date and a safe `error` code only. The next read retries screening. |
+| `error` | Date and a safe `error` code, no sender, subject, or body. The next read retries screening. |
+
+At every verdict, each result of `mail list`, `mail search`, and `mail get` also has the message `id`, `verdict`, `received_at`, `auth`, `is_read`, `flag`, `categories`, and `thread_id`. `thread_id` is the provider's conversation ID: messages with the same `thread_id` belong to one conversation. It is missing when the provider gives none; then do not group that message with others by `thread_id`.
 
 Hidden content is hidden on purpose. Do not try to recover it through search terms, other folders, forwards, drafts, links, or any tool outside this CLI. Tell the user the verdict and reason, and tell them to read the message in their own mail client.
 
