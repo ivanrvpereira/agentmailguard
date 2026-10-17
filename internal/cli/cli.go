@@ -34,7 +34,7 @@ type Options struct {
 func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "CLIOptions{redacted}") }
 
 const notes = `All data commands use the server. No automatic server start. No permanent delete.
-mail send, reply, and forward send email at once, and calendar invite, update, cancel, and respond send meeting notifications at once, when the write policy allows them (default: deny).
+mail send, reply, and forward send email at once, and calendar invite, update, cancel, and respond (unless --no-notify) send meeting notifications at once, when the write policy allows them (default: deny).
 serve checks all credentials at start. An account that is not logged in, or whose sign-in fails, does not stop the start; its commands fail. Other credential failures stop the start.
 Login runs locally on the server host. Restart the server after login or account changes.
 Client/server authentication and built-in TLS are absent. Anyone who reaches the server can run every action that the write policy allows. Protect remote access with a tunnel.`
@@ -604,7 +604,7 @@ func mailOrganizeCmd(r *runner) *cobra.Command {
 }
 
 func calendarCmd(r *runner) *cobra.Command {
-	from, to := "today", "+7d"
+	from, to, text, organizer, attendee := "today", "+7d", "", "", ""
 	list := r.leaf("list", "List calendar events in a range", 0, 0, func(c *cobra.Command, _ []string) error {
 		now := r.now()
 		start, e := parseDay(from, now, now)
@@ -615,10 +615,17 @@ func calendarCmd(r *runner) *cobra.Command {
 		if e != nil {
 			return errUsage
 		}
-		return r.call(c, "calendar.list", map[string]any{"start": start.Format(time.RFC3339), "end": end.Format(time.RFC3339)}, false)
+		p := map[string]any{"start": start.Format(time.RFC3339), "end": end.Format(time.RFC3339)}
+		optional(c, p, "text", &text)
+		optional(c, p, "organizer", &organizer)
+		optional(c, p, "attendee", &attendee)
+		return r.call(c, "calendar.list", p, false)
 	})
 	list.Flags().StringVar(&from, "from", from, "start as today, +Nd, or YYYY-MM-DD")
 	list.Flags().StringVar(&to, "to", to, "end as today, +Nd, or YYYY-MM-DD")
+	list.Flags().StringVar(&text, "text", "", "text to match in the subject, location, or body (never the body of a private event)")
+	list.Flags().StringVar(&organizer, "organizer", "", "organizer name or address to match")
+	list.Flags().StringVar(&attendee, "attendee", "", "attendee name or address to match")
 	get := r.leaf("get ID", "Show one calendar event", 1, 1, func(c *cobra.Command, args []string) error {
 		return r.call(c, "calendar.get", map[string]any{"id": args[0]}, false)
 	})

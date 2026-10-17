@@ -186,19 +186,48 @@ type Calendar interface {
 	Get(ctx context.Context, id EventID) (Event, error)
 }
 
+// EventFilter selects listed events. A nil or empty field matches every event; a set field matches a
+// substring, ignoring case.
+type EventFilter struct{ Text, Organizer, Attendee *string }
+
+// Match reports whether e matches every set field. Text matches the subject, the location, or body, the
+// rendered body text, which never counts for a private event. Organizer matches the organizer's name or
+// address, and Attendee the name or address of any attendee.
+func (f EventFilter) Match(e Event, body string) bool {
+	if e.IsPrivate {
+		body = ""
+	}
+	if f.Text != nil && *f.Text != "" && !contains(*f.Text, e.Subject, e.Location, body) {
+		return false
+	}
+	if f.Organizer != nil && *f.Organizer != "" && !contains(*f.Organizer, e.Organizer.Name, e.Organizer.Address) {
+		return false
+	}
+	return f.Attendee == nil || *f.Attendee == "" || slices.ContainsFunc(e.Attendees, func(a Attendee) bool {
+		return contains(*f.Attendee, a.Address.Name, a.Address.Address)
+	})
+}
+
+// contains reports whether any of texts contains term, ignoring case.
+func contains(term string, texts ...string) bool {
+	term = strings.ToLower(term)
+	return slices.ContainsFunc(texts, func(s string) bool { return strings.Contains(strings.ToLower(s), term) })
+}
+
 type NewEvent struct {
 	Subject, Body, Location string
 	Start, End              time.Time
 	Attendees               []string
-	Online                  bool // adds the provider's online meeting: Teams on M365, Google Meet on Gmail
+	Optional                []string // optional attendees; they receive the invitation too
+	Online                  bool     // adds the provider's online meeting: Teams on M365, Google Meet on Gmail
 }
 
 // \r\n comes first so it gives one <br>.
 var htmlLineBreaks = strings.NewReplacer("\r\n", "<br>", "\r", "<br>", "\n", "<br>")
 
-// HTMLBody returns the plain-text body as escaped HTML that keeps the line breaks. Both providers render
+// HTMLBody returns a plain-text event body as escaped HTML that keeps the line breaks. Both providers render
 // event bodies as HTML, so body text never becomes markup or a disguised link.
-func (e NewEvent) HTMLBody() string { return htmlLineBreaks.Replace(html.EscapeString(e.Body)) }
+func HTMLBody(text string) string { return htmlLineBreaks.Replace(html.EscapeString(text)) }
 
 // CalendarTimeValid reports whether t has a year from 1 to 9999 in its own zone and in UTC.
 func CalendarTimeValid(t time.Time) bool {
@@ -207,6 +236,7 @@ func CalendarTimeValid(t time.Time) bool {
 
 type EventChange struct {
 	Subject, Location             *string
+	Body                          *string // plain text; replaces the whole body
 	Start, End                    *time.Time
 	AddAttendees, RemoveAttendees []string
 	Online                        bool // true adds an online meeting if none exists; false leaves it unchanged
@@ -214,13 +244,19 @@ type EventChange struct {
 
 // Empty reports a change with no field set. A duration given beside it is a change too.
 func (c EventChange) Empty() bool {
-	return c.Subject == nil && c.Location == nil && c.Start == nil && c.End == nil && len(c.AddAttendees)+len(c.RemoveAttendees) == 0 && !c.Online
+	return c.Subject == nil && c.Location == nil && c.Body == nil && c.Start == nil && c.End == nil && len(c.AddAttendees)+len(c.RemoveAttendees) == 0 && !c.Online
 }
 
 // AttendeeConflict reports an address that is both added and removed, ignoring case.
-func (c EventChange) AttendeeConflict() bool {
-	for _, add := range c.AddAttendees {
-		if slices.ContainsFunc(c.RemoveAttendees, func(remove string) bool { return strings.EqualFold(add, remove) }) {
+func (c EventChange) AttendeeConflict() bool { return overlap(c.AddAttendees, c.RemoveAttendees) }
+
+// AttendeeConflict reports an address that is both a required and an optional attendee, ignoring case.
+func (e NewEvent) AttendeeConflict() bool { return overlap(e.Attendees, e.Optional) }
+
+// overlap reports an address that is in both lists, ignoring case.
+func overlap(a, b []string) bool {
+	for _, x := range a {
+		if slices.ContainsFunc(b, func(y string) bool { return strings.EqualFold(x, y) }) {
 			return true
 		}
 	}
@@ -242,7 +278,11 @@ func (r MeetingResponse) Valid() bool {
 type EventResponse struct {
 	Response MeetingResponse
 	Comment  string
+	NoNotify bool // true records the response without notifying the organizer; zero notifies
 }
+
+// Valid refuses an unknown response, and a comment without notification, which would reach nobody.
+func (r EventResponse) Valid() bool { return r.Response.Valid() && !(r.NoNotify && r.Comment != "") }
 
 // CalendarWriter is optional; read-only calendar providers need not implement it.
 // Callers must resolve start-only changes into explicit Start and End.

@@ -36,12 +36,16 @@ func addMeet(body map[string]any, q url.Values) {
 }
 
 func (c *calendar) Invite(ctx context.Context, event model.NewEvent) (model.EventID, error) {
-	attendees := make([]map[string]string, 0, len(event.Attendees))
+	attendees := make([]map[string]any, 0, len(event.Attendees)+len(event.Optional))
 	for _, address := range event.Attendees {
-		attendees = append(attendees, map[string]string{"email": address})
+		attendees = append(attendees, map[string]any{"email": address})
+	}
+	// attendees[].optional marks an optional attendee (https://developers.google.com/workspace/calendar/api/v3/reference/events).
+	for _, address := range event.Optional {
+		attendees = append(attendees, map[string]any{"email": address, "optional": true})
 	}
 	// Google renders the description as HTML, so the plain-text body goes escaped.
-	body := map[string]any{"summary": event.Subject, "description": event.HTMLBody(), "location": event.Location, "start": eventDateTime(event.Start), "end": eventDateTime(event.End), "attendees": attendees, "guestsCanInviteOthers": false}
+	body := map[string]any{"summary": event.Subject, "description": model.HTMLBody(event.Body), "location": event.Location, "start": eventDateTime(event.Start), "end": eventDateTime(event.End), "attendees": attendees, "guestsCanInviteOthers": false}
 	q := notifyAll()
 	if event.Online {
 		addMeet(body, q)
@@ -89,6 +93,10 @@ func (c *calendar) Update(ctx context.Context, id model.EventID, change model.Ev
 	}
 	if change.Location != nil {
 		body["location"] = *change.Location
+	}
+	// Google renders the description as HTML, so the plain-text body goes escaped, as in Invite.
+	if change.Body != nil {
+		body["description"] = model.HTMLBody(*change.Body)
 	}
 	if change.Start != nil {
 		body["start"] = eventDateTime(*change.Start)
@@ -157,10 +165,12 @@ var responseStatus = map[model.MeetingResponse]string{model.ResponseAccept: "acc
 
 // Respond sends the full attendee list with only the account's own entry changed: its response, and the
 // comment given now (none drops an earlier one). It does not set guest permissions: Google refuses shared
-// properties from a copy that is not the organizer's (403 forbiddenForNonOrganizer).
+// properties from a copy that is not the organizer's (403 forbiddenForNonOrganizer). Google Calendar always
+// notifies the organizer ("When you respond to an invitation, the organizer gets a notification",
+// https://support.google.com/calendar/answer/37135), so a response without notification is refused, not sent.
 func (c *calendar) Respond(ctx context.Context, id model.EventID, response model.EventResponse) error {
 	status, ok := responseStatus[response.Response]
-	if !ok {
+	if !ok || response.NoNotify {
 		return failure("Calendar", "ValueError")
 	}
 	current, err := c.c.get(ctx, "Calendar", c.eventURL(id), nil)

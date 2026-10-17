@@ -117,7 +117,7 @@ func TestCalendarInvitePostsTheEventWithNotifications(t *testing.T) {
 			api := &calendarAPI{reply: map[string]any{"id": "created"}}
 			w := calendarWriter(t, api)
 			start := time.Date(2026, 10, 9, 10, 0, 0, 0, time.FixedZone("Lisbon", 3600))
-			id, err := w.Invite(context.Background(), model.NewEvent{Subject: "Plan", Body: "Agenda\r\n<a href=\"https://evil.example.test\">one</a>", Location: "Room 1", Start: start, End: start.Add(30 * time.Minute), Attendees: []string{"a@example.test", "b@example.test"}, Online: online})
+			id, err := w.Invite(context.Background(), model.NewEvent{Subject: "Plan", Body: "Agenda\r\n<a href=\"https://evil.example.test\">one</a>", Location: "Room 1", Start: start, End: start.Add(30 * time.Minute), Attendees: []string{"a@example.test", "b@example.test"}, Optional: []string{"c@example.test"}, Online: online})
 			if err != nil || id != "created" {
 				t.Fatalf("invite id=%q err=%v", id, err)
 			}
@@ -125,7 +125,7 @@ func TestCalendarInvitePostsTheEventWithNotifications(t *testing.T) {
 			wantQuery := url.Values{"sendUpdates": {"all"}}
 			want := map[string]any{"summary": "Plan", "description": "Agenda<br>&lt;a href=&#34;https://evil.example.test&#34;&gt;one&lt;/a&gt;", "location": "Room 1",
 				"start": map[string]any{"dateTime": "2026-10-09T09:00:00Z"}, "end": map[string]any{"dateTime": "2026-10-09T09:30:00Z"},
-				"attendees":             []any{map[string]any{"email": "a@example.test"}, map[string]any{"email": "b@example.test"}},
+				"attendees":             []any{map[string]any{"email": "a@example.test"}, map[string]any{"email": "b@example.test"}, map[string]any{"email": "c@example.test", "optional": true}},
 				"guestsCanInviteOthers": false}
 			if online {
 				wantQuery.Set("conferenceDataVersion", "1")
@@ -145,14 +145,14 @@ func TestCalendarInvitePostsTheEventWithNotifications(t *testing.T) {
 func TestCalendarUpdatePatchesOnlyTheChangedFields(t *testing.T) {
 	api := &calendarAPI{reply: map[string]any{"id": "ev"}, event: calendarEvent()}
 	w := calendarWriter(t, api)
-	subject, location := "New plan", ""
+	subject, location, body := "New plan", "", "<b>Agenda</b>\r\nnext"
 	start := time.Date(2026, 10, 9, 10, 0, 0, 0, time.FixedZone("Lisbon", 3600))
 	end := start.Add(45 * time.Minute)
-	if err := w.Update(context.Background(), "ev/1", model.EventChange{Subject: &subject, Location: &location, Start: &start, End: &end}); err != nil {
+	if err := w.Update(context.Background(), "ev/1", model.EventChange{Subject: &subject, Location: &location, Body: &body, Start: &start, End: &end}); err != nil {
 		t.Fatal(err)
 	}
 	got := api.only(t)
-	want := map[string]any{"summary": "New plan", "location": "", "start": map[string]any{"dateTime": "2026-10-09T09:00:00Z"}, "end": map[string]any{"dateTime": "2026-10-09T09:45:00Z"}, "guestsCanInviteOthers": false}
+	want := map[string]any{"summary": "New plan", "location": "", "description": "&lt;b&gt;Agenda&lt;/b&gt;<br>next", "start": map[string]any{"dateTime": "2026-10-09T09:00:00Z"}, "end": map[string]any{"dateTime": "2026-10-09T09:45:00Z"}, "guestsCanInviteOthers": false}
 	if got.Method != "PATCH" || got.Path != "/events/ev%2F1" || !reflect.DeepEqual(got.Query, url.Values{"sendUpdates": {"all"}}) || !reflect.DeepEqual(got.Body, want) {
 		t.Fatalf("update request %+v", got)
 	}
@@ -337,5 +337,16 @@ func TestCalendarWritesAreNotRetried(t *testing.T) {
 				t.Fatalf("status %d: %d requests for one %s", status, n, name)
 			}
 		}
+	}
+}
+
+// Google Calendar always notifies the organizer of a response, so a response without notification is refused.
+func TestCalendarRespondRefusesNoNotifyWithoutRequests(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests++ }))
+	defer server.Close()
+	c := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), CalendarURL: server.URL})
+	if err := c.Calendar().(model.CalendarWriter).Respond(t.Context(), "ev", model.EventResponse{Response: model.ResponseAccept, NoNotify: true}); err == nil || requests != 0 {
+		t.Fatalf("err=%v requests=%d", err, requests)
 	}
 }

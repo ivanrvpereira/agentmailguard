@@ -177,6 +177,19 @@ func TestGmailMeetingHTTPCancelRefusesAComment(t *testing.T) {
 	}
 }
 
+// Google Calendar always notifies the organizer of a response. no_notify is refused before any credential or
+// provider access.
+func TestGmailMeetingHTTPRespondRefusesNoNotify(t *testing.T) {
+	s, creds, home, google := gmailMeetingServer(t, gmailWriteGrant, allowAll)
+	status, body := accountRPC(t, s, "calendar.respond", "work", `{"id":"att","response":"accept","no_notify":true}`)
+	if status != 500 || body != `{"error":"calendar response refused: responses without notification are not supported for this account"}` || google.requests.Load() != 0 || creds.loads.Load() != 0 {
+		t.Fatalf("response=%d %s requests=%d loads=%d", status, body, google.requests.Load(), creds.loads.Load())
+	}
+	if _, err := os.Stat(filepath.Join(home, "audit.jsonl")); !os.IsNotExist(err) {
+		t.Fatal("refusal wrote audit")
+	}
+}
+
 // The calendar policy keys apply to Gmail as they do to M365: deny is the default, and an approved action
 // makes the same write as the allowed call.
 func TestGmailMeetingPolicyDeniesApprovesAndAllows(t *testing.T) {

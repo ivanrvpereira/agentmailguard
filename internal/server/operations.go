@@ -59,7 +59,7 @@ func publicError(e error) (string, bool) {
 	}
 	if e, ok := e.(guard.GuardError); ok {
 		switch e {
-		case guard.CalendarWriteUnsupported, guard.CalendarAvailabilityUnsupported, guard.CalendarCancelCommentUnsupported, "missing_scopes", "invalid request",
+		case guard.CalendarWriteUnsupported, guard.CalendarAvailabilityUnsupported, guard.CalendarCancelCommentUnsupported, guard.CalendarNoNotifyUnsupported, "missing_scopes", "invalid request",
 			guard.CalendarRecurring, guard.CalendarCancelled, guard.CalendarOrganizerOnly, guard.CalendarOrganizerCannotRespond:
 			return string(e), true
 		case "refused by policy: mail_draft", "refused by policy: mail_send", "refused by policy: calendar_invite", "refused by policy: calendar_update", "refused by policy: calendar_cancel", "refused by policy: calendar_respond":
@@ -186,8 +186,11 @@ type organizeParam struct {
 	Apply bool    `json:"apply"`
 }
 type calendarParam struct {
-	Start string `json:"start"`
-	End   string `json:"end"`
+	Start     string  `json:"start"`
+	End       string  `json:"end"`
+	Text      *string `json:"text"`
+	Organizer *string `json:"organizer"`
+	Attendee  *string `json:"attendee"`
 }
 type availabilityParam struct {
 	To    []string `json:"to"`
@@ -442,7 +445,13 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		if e != nil || e2 != nil || !last.After(first) || last.Sub(first) > 90*24*time.Hour+time.Hour {
 			return nil, errInvalid
 		}
-		call = func(a *account) (any, error) { return a.guard.CalendarList(ctx, first, last) }
+		for _, v := range []*string{p.Text, p.Organizer, p.Attendee} {
+			if v != nil && !validString(*v, 4096, true) {
+				return nil, errInvalid
+			}
+		}
+		filter := model.EventFilter{Text: p.Text, Organizer: p.Organizer, Attendee: p.Attendee}
+		call = func(a *account) (any, error) { return a.guard.CalendarList(ctx, first, last, filter) }
 	case "calendar.availability":
 		var p availabilityParam
 		if params(r.Params, &p) != nil || !listValid(p.To, 1, model.MaxAvailabilityAddresses) {

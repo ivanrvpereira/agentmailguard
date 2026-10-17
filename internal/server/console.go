@@ -220,12 +220,13 @@ func (c *console) list(ctx context.Context, w http.ResponseWriter) {
 	rows := make([]listRow, 0, len(items))
 	for _, item := range items {
 		args := storedFields(item.Args)
-		recipients := args["to"]
-		if recipients == nil {
-			recipients = args["add"]
+		// Optional attendees receive the invitation too.
+		recipients := append(texts(args["to"]), texts(args["optional"])...)
+		if args["to"] == nil {
+			recipients = texts(args["add"])
 		}
 		subject, _ := args["subject"].(string)
-		rows = append(rows, listRow{ID: item.ID, Account: item.Account, Op: item.Op, Recipients: strings.Join(texts(recipients), ", "), Subject: subject, Age: age(now.Sub(item.Created)), State: item.State})
+		rows = append(rows, listRow{ID: item.ID, Account: item.Account, Op: item.Op, Recipients: strings.Join(recipients, ", "), Subject: subject, Age: age(now.Sub(item.Created)), State: item.State})
 	}
 	render(w, 200, "list", rows)
 }

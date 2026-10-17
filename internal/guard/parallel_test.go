@@ -251,7 +251,10 @@ func TestCalendarParallelJevPreservesOrderedIndependentOutcomes(t *testing.T) {
 		err   error
 	}
 	done := make(chan result, 1)
-	go func() { items, err := g.CalendarList(ctx, now, now.Add(time.Hour)); done <- result{items, err} }()
+	go func() {
+		items, err := g.CalendarList(ctx, now, now.Add(time.Hour), model.EventFilter{})
+		done <- result{items, err}
+	}()
 	s.finishOutOfOrder(t, len(ids))
 	got := receive(t, done)
 	if got.err != nil || len(got.items) != len(ids) {
@@ -336,7 +339,7 @@ func TestParallelJevCancellationDrainsAndStopsQueuedItems(t *testing.T) {
 				case "Search":
 					_, err = g.Search(ctx, model.SearchQuery{Text: new("synthetic")}, 40)
 				case "CalendarList":
-					_, err = g.CalendarList(ctx, now, now.Add(time.Hour))
+					_, err = g.CalendarList(ctx, now, now.Add(time.Hour), model.EventFilter{})
 				}
 				done <- err
 			}()

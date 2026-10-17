@@ -19,6 +19,8 @@ const (
 	CalendarOrganizerCannotRespond  = GuardError("calendar response refused: organizer cannot respond")
 	// CalendarCancelCommentUnsupported refuses a cancel comment where the provider cannot send one (Gmail).
 	CalendarCancelCommentUnsupported = GuardError("calendar cancel refused: comments are not supported for this account")
+	// CalendarNoNotifyUnsupported refuses a response without notification where the provider always notifies (Gmail).
+	CalendarNoNotifyUnsupported = GuardError("calendar response refused: responses without notification are not supported for this account")
 )
 
 // calendarWrite holds the mutation gate from check through write and audit. A denied action stops before
@@ -69,9 +71,9 @@ func (g *Guard) calendarWrite(ctx context.Context, op audit.Operation, ref *stri
 }
 
 func (g *Guard) CalendarInvite(ctx context.Context, event model.NewEvent) (string, error) {
-	args := inviteArgs{To: event.Attendees, Subject: event.Subject, Body: event.Body, Start: event.Start.Format(time.RFC3339Nano), End: event.End.Format(time.RFC3339Nano), Location: event.Location, Online: event.Online}
+	args := inviteArgs{To: event.Attendees, Optional: event.Optional, Subject: event.Subject, Body: event.Body, Start: event.Start.Format(time.RFC3339Nano), End: event.End.Format(time.RFC3339Nano), Location: event.Location, Online: event.Online}
 	return g.calendarWrite(ctx, audit.CalendarInvite, nil, args, func() error {
-		if !calendarRangeValid(event.Start, event.End) {
+		if !calendarRangeValid(event.Start, event.End) || event.AttendeeConflict() {
 			return GuardError("invalid request")
 		}
 		return nil
@@ -125,8 +127,8 @@ func (g *Guard) CalendarCancel(ctx context.Context, id, comment string) error {
 }
 
 func (g *Guard) CalendarRespond(ctx context.Context, id string, response model.EventResponse) error {
-	_, err := g.calendarWrite(ctx, audit.CalendarRespond, &id, respondArgs{id, response.Response, response.Comment}, func() error {
-		if !response.Response.Valid() {
+	_, err := g.calendarWrite(ctx, audit.CalendarRespond, &id, respondArgs{id, response.Response, response.Comment, response.NoNotify}, func() error {
+		if !response.Valid() {
 			return GuardError("invalid request")
 		}
 		_, err := g.calendarWritableEvent(ctx, id, asAttendee)

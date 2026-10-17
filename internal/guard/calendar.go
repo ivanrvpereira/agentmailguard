@@ -24,9 +24,10 @@ func (g *Guard) CalendarGet(ctx context.Context, id string) (views.CalendarView,
 	if err != nil {
 		return views.CalendarView{}, err
 	}
-	return g.event(ctx, event, categories)
+	v, _, err := g.event(ctx, event, categories, model.EventFilter{})
+	return v, err
 }
-func (g *Guard) CalendarList(ctx context.Context, start, end time.Time) ([]views.CalendarView, error) {
+func (g *Guard) CalendarList(ctx context.Context, start, end time.Time, filter model.EventFilter) ([]views.CalendarView, error) {
 	if !end.After(start) {
 		return nil, GuardError("calendar range: the end must be after the start")
 	}
@@ -45,37 +46,55 @@ func (g *Guard) CalendarList(ctx context.Context, start, end time.Time) ([]views
 		return nil, err
 	}
 	out := make([]views.CalendarView, len(events))
+	matched := make([]bool, len(events))
 	err = parallelItems(ctx, len(events), func(i int) error {
 		if events[i].ID == "" {
 			return GuardError("ValueError")
 		}
-		v, err := g.event(ctx, events[i], categories)
-		out[i] = v
+		var err error
+		out[i], matched[i], err = g.event(ctx, events[i], categories, filter)
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	kept := []views.CalendarView{}
+	for i, v := range out {
+		if matched[i] {
+			kept = append(kept, v)
+		}
+	}
+	return kept, nil
 }
-func (g *Guard) event(ctx context.Context, e model.Event, categories []string) (views.CalendarView, error) {
+
+// event renders e and screens it when it matches filter. An event that does not match is never screened:
+// it gives matched false and no view.
+func (g *Guard) event(ctx context.Context, e model.Event, categories []string, filter model.EventFilter) (v views.CalendarView, matched bool, err error) {
 	if err := ctx.Err(); err != nil {
-		return views.CalendarView{}, err
+		return views.CalendarView{}, false, err
 	}
 	var r *content.Rendered
+	body, rendered := "", true
 	if !e.IsPrivate {
-		rendered, err := render(e.Body, e.ContentType)
-		if err != nil {
-			return views.EventView(e, failure("render ValueError"), nil, categories)
+		out, err := render(e.Body, e.ContentType)
+		if rendered = err == nil; rendered {
+			r, body = &out, out.Markdown
 		}
-		r = &rendered
+	}
+	if !filter.Match(e, body) {
+		return views.CalendarView{}, false, nil
+	}
+	if !rendered {
+		v, err = views.EventView(e, failure("render ValueError"), nil, categories)
+		return v, true, err
 	}
 	s, err := g.screener.Screen(ctx, views.EventScreeningState(e, r))
 	if ctx.Err() != nil {
-		return views.CalendarView{}, ctx.Err()
+		return views.CalendarView{}, false, ctx.Err()
 	}
 	if err != nil {
 		s = failure(safeCode(err))
 	}
-	return views.EventView(e, validScreen(s), r, categories)
+	v, err = views.EventView(e, validScreen(s), r, categories)
+	return v, true, err
 }

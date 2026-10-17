@@ -2,7 +2,9 @@ package fake_test
 
 import (
 	"context"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -261,5 +263,94 @@ func TestAvailabilityComesOnlyFromFreeBusyRows(t *testing.T) {
 	}
 	if _, err := reader.Availability(ctx, []string{"ana@example.test", "ANA@example.test"}, start, end); err == nil {
 		t.Fatal("duplicate addresses accepted")
+	}
+}
+
+// optionalFlags maps each attendee address of event id to its optional column.
+func optionalFlags(t *testing.T, home, id string) map[string]bool {
+	t.Helper()
+	rows, err := open(t, home).Query(`SELECT address, optional FROM attendees WHERE account = 'demo' AND event_id = ?`, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var address string
+		var optional bool
+		if err := rows.Scan(&address, &optional); err != nil {
+			t.Fatal(err)
+		}
+		out[address] = optional
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestInviteStoresOptionalAttendeesAsOptional(t *testing.T) {
+	c, home := calendar(t)
+	start := time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC)
+	id, err := writer(t, c).Invite(t.Context(), model.NewEvent{Subject: "Review", Start: start, End: start.Add(time.Hour), Attendees: []string{"ana@example.test"}, Optional: []string{"bob@example.test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := optionalFlags(t, home, id); !reflect.DeepEqual(got, map[string]bool{"ana@example.test": false, "bob@example.test": true}) {
+		t.Fatalf("optional=%v", got)
+	}
+	if got := optionalFlags(t, home, "mine"); !reflect.DeepEqual(got, map[string]bool{"ana@example.test": false, "bob@example.test": false}) {
+		t.Fatalf("seeded optional=%v", got)
+	}
+}
+
+// A fake-provider.db made before attendees had optional gets the column on the first open.
+func TestDatabaseFromBeforeOptionalAttendeesOpensAndKeepsItsAttendees(t *testing.T) {
+	home := t.TempDir()
+	schema, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := strings.Replace(string(schema), "\toptional INTEGER NOT NULL DEFAULT 0 CHECK (optional IN (0, 1)),\n", "", 1)
+	if before == string(schema) {
+		t.Fatal("schema.sql has no optional column")
+	}
+	db := open(t, home)
+	for _, s := range []string{before,
+		`INSERT INTO events (account, id, subject, start_at, end_at) VALUES ('demo', 'old', 'Old', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z')`,
+		`INSERT INTO attendees (account, event_id, address) VALUES ('demo', 'old', 'ana@example.test')`} {
+		if _, err := db.Exec(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := fake.New("demo", home, func() time.Time { return now }).Calendar()
+	ctx := t.Context()
+	if got, err := c.Get(ctx, "old"); err != nil || len(got.Attendees) != 1 {
+		t.Fatalf("old=%+v err=%v", got, err)
+	}
+	start := time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC)
+	id, err := writer(t, c).Invite(ctx, model.NewEvent{Subject: "Review", Start: start, End: start.Add(time.Hour), Optional: []string{"bob@example.test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := optionalFlags(t, home, "old"); !reflect.DeepEqual(got, map[string]bool{"ana@example.test": false}) {
+		t.Fatalf("old optional=%v", got)
+	}
+	if got := optionalFlags(t, home, id); !reflect.DeepEqual(got, map[string]bool{"bob@example.test": true}) {
+		t.Fatalf("new optional=%v", got)
+	}
+}
+
+// A new body is stored as escaped HTML, as an invitation body is, and replaces the old one.
+func TestUpdateStoresANewBodyAsEscapedHTML(t *testing.T) {
+	c, _ := calendar(t)
+	ctx := t.Context()
+	body := "Bring <notes>\nand coffee"
+	if err := writer(t, c).Update(ctx, "solo", model.EventChange{Body: &body}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.Get(ctx, "solo")
+	if err != nil || *got.Body != "Bring &lt;notes&gt;<br>and coffee" || *got.ContentType != model.HTML || got.Subject != "Focus" {
+		t.Fatalf("solo=%+v err=%v", got, err)
 	}
 }

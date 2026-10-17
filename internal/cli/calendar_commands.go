@@ -73,29 +73,34 @@ func calendarCancelCmd(r *runner) *cobra.Command {
 }
 
 func calendarRespondCmd(r *runner) *cobra.Command {
-	response, comment := "", ""
+	response, comment, noNotify := "", "", false
 	c := r.leaf("respond ID", "Send your response to a meeting invitation (write policy applies)", 1, 1, func(c *cobra.Command, args []string) error {
-		if !model.MeetingResponse(response).Valid() {
+		if !(model.EventResponse{Response: model.MeetingResponse(response), Comment: comment, NoNotify: noNotify}).Valid() {
 			return errUsage
 		}
 		p := map[string]any{"id": args[0], "response": response}
 		optional(c, p, "comment", &comment)
+		if noNotify {
+			p["no_notify"] = true
+		}
 		return r.call(c, "calendar.respond", p, false)
 	})
 	c.Flags().StringVar(&response, "response", "", "accept, tentative, or decline")
-	c.Flags().StringVar(&comment, "comment", "", "message sent to the organizer with the response")
+	c.Flags().StringVar(&comment, "comment", "", "message sent to the organizer with the response; not with --no-notify")
+	c.Flags().BoolVar(&noNotify, "no-notify", false, "record the response without notifying the organizer; refused on Gmail, which always notifies")
 	return c
 }
 
 func calendarUpdateCmd(r *runner) *cobra.Command {
 	var add, remove []string
-	var subject, location, start, end string
+	var subject, location, body, start, end string
 	var duration time.Duration
 	online := false
 	c := r.leaf("update ID", "Change your own meeting and send the update (write policy applies)", 1, 1, func(c *cobra.Command, args []string) error {
 		p := map[string]any{"id": args[0]}
 		optional(c, p, "subject", &subject)
 		optional(c, p, "location", &location)
+		optional(c, p, "body", &body)
 		loc, startSet, endSet, durationSet := r.now().Location(), c.Flags().Changed("start"), c.Flags().Changed("end"), c.Flags().Changed("duration")
 		if endSet && durationSet {
 			return errUsage
@@ -142,6 +147,7 @@ func calendarUpdateCmd(r *runner) *cobra.Command {
 	})
 	c.Flags().StringVar(&subject, "subject", "", "new meeting subject")
 	c.Flags().StringVar(&location, "location", "", "new meeting location")
+	c.Flags().StringVar(&body, "body", "", "new meeting body text; replaces the whole body")
 	c.Flags().StringVar(&start, "start", "", "new local start as 'YYYY-MM-DD HH:MM'; keeps the duration without --end or --duration")
 	c.Flags().StringVar(&end, "end", "", "new local end as 'YYYY-MM-DD HH:MM'")
 	c.Flags().DurationVar(&duration, "duration", 0, "new meeting length, for example 30m or 1h30m")
@@ -152,7 +158,7 @@ func calendarUpdateCmd(r *runner) *cobra.Command {
 }
 
 func calendarInviteCmd(r *runner) *cobra.Command {
-	var to []string
+	var to, optionalTo []string
 	var subject, body, location, start, end string
 	var duration time.Duration
 	online := true
@@ -170,11 +176,15 @@ func calendarInviteCmd(r *runner) *cobra.Command {
 			return errUsage
 		}
 		p := map[string]any{"to": to, "subject": subject, "body": body, "start": from.Format(time.RFC3339), "end": until.Format(time.RFC3339)}
+		if len(optionalTo) > 0 {
+			p["optional"] = optionalTo
+		}
 		optional(c, p, "location", &location)
 		p["online"] = online
 		return r.call(c, "calendar.invite", p, false)
 	})
 	c.Flags().StringArrayVar(&to, "to", nil, "attendee address; repeatable")
+	c.Flags().StringArrayVar(&optionalTo, "optional", nil, "optional attendee address, who also gets the invitation; repeatable, not also in --to")
 	c.Flags().StringVar(&subject, "subject", "", "meeting subject")
 	c.Flags().StringVar(&body, "body", "", "meeting body text")
 	c.Flags().StringVar(&location, "location", "", "meeting location")

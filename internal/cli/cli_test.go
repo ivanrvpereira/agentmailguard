@@ -54,6 +54,7 @@ func TestCommandsUseHTTPWithoutLocalState(t *testing.T) {
 		{[]string{"mail", "categorize", "a", "--add", "One", "--add", "Two", "--remove", "Old"}, "mail.categorize", `{"ids":["a"],"add":["One","Two"],"remove":["Old"]}`},
 		{[]string{"mail", "organize", "--since", "1m", "--until", "1d", "--apply"}, "mail.organize", `{"since":"1m","until":"1d","apply":true}`},
 		{[]string{"calendar", "list", "--from", "2026-03-07", "--to", "+2d"}, "calendar.list", `{"start":"2026-03-07T00:00:00-05:00","end":"2026-03-09T00:00:00-04:00"}`},
+		{[]string{"calendar", "list", "--from", "2026-03-07", "--to", "+2d", "--text", "budget", "--organizer", "ana", "--attendee", ""}, "calendar.list", `{"start":"2026-03-07T00:00:00-05:00","end":"2026-03-09T00:00:00-04:00","text":"budget","organizer":"ana","attendee":""}`},
 		{[]string{"calendar", "get", "e"}, "calendar.get", `{"id":"e"}`},
 		{[]string{"draft", "new", "--to", "a@test", "--to", "b@test", "--subject", "", "--body", "draft-canary"}, "draft.new", `{"to":["a@test","b@test"],"subject":"","body":"draft-canary"}`},
 		{[]string{"draft", "reply", "m", "--body", "reply-canary"}, "draft.reply", `{"id":"m","body":"reply-canary"}`},

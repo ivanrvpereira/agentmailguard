@@ -56,7 +56,11 @@ func (p *Provider) conn(ctx context.Context) (*sql.DB, error) {
 	if err != nil {
 		return nil, storageError
 	}
-	if err := addThreadColumn(ctx, db); err != nil {
+	if err := addColumn(ctx, db, "messages", "thread_id", "TEXT"); err != nil {
+		_ = db.Close()
+		return nil, storageError
+	}
+	if err := addColumn(ctx, db, "attendees", "optional", "INTEGER NOT NULL DEFAULT 0 CHECK (optional IN (0, 1))"); err != nil {
 		_ = db.Close()
 		return nil, storageError
 	}
@@ -98,20 +102,21 @@ func open(ctx context.Context, path string) (*sql.DB, error) {
 	return db, nil
 }
 
-// addThreadColumn adds messages.thread_id to a file made before the column existed. The check and the change run in
-// one write transaction, so another account's provider on the same file cannot add it twice.
-func addThreadColumn(ctx context.Context, db *sql.DB) error {
+// addColumn adds a column of schema.sql to a file made before the column existed. table, column, and definition are
+// constants. The check and the change run in one write transaction, so another account's provider on the same file
+// cannot add it twice.
+func addColumn(ctx context.Context, db *sql.DB, table, column, definition string) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	var found int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('messages') WHERE name = 'thread_id'`).Scan(&found); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&found); err != nil {
 		return err
 	}
 	if found == 0 {
-		if _, err := tx.ExecContext(ctx, `ALTER TABLE messages ADD COLUMN thread_id TEXT`); err != nil {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+column+` `+definition); err != nil {
 			return err
 		}
 	}

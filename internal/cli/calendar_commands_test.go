@@ -66,7 +66,11 @@ func TestCalendarWriteCommandsSendExactRequests(t *testing.T) {
 			`{"to":["a@example.test"],"subject":"Plan","body":"","online":true,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T09:30:00-04:00"}`},
 		{"invite negated opt-out", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--no-online=false", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar.invite",
 			`{"to":["a@example.test"],"subject":"Plan","body":"","online":true,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T09:30:00-04:00"}`},
+		{"invite optional attendees repeated", []string{"calendar", "invite", "--to", "a@example.test", "--optional", "b@example.test", "--optional", "c@example.test", "--subject", "Plan", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar.invite",
+			`{"to":["a@example.test"],"optional":["b@example.test","c@example.test"],"subject":"Plan","body":"","online":true,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T09:30:00-04:00"}`},
 		{"update subject only", []string{"calendar", "update", "e1", "--subject", "New"}, "calendar.update", `{"id":"e1","subject":"New"}`},
+		{"update body only", []string{"calendar", "update", "e1", "--body", "New agenda"}, "calendar.update", `{"id":"e1","body":"New agenda"}`},
+		{"update explicit empty body", []string{"calendar", "update", "e1", "--subject", "New", "--body", ""}, "calendar.update", `{"id":"e1","subject":"New","body":""}`},
 		{"update adds online meeting", []string{"calendar", "update", "e1", "--online"}, "calendar.update", `{"id":"e1","online":true}`},
 		{"update explicit empty subject and location", []string{"calendar", "update", "e1", "--subject", "", "--location", ""}, "calendar.update", `{"id":"e1","subject":"","location":""}`},
 		{"update start only keeps server duration", []string{"calendar", "update", "e1", "--start", "2026-03-08 03:00"}, "calendar.update", `{"id":"e1","start":"2026-03-08T03:00:00-04:00"}`},
@@ -80,6 +84,8 @@ func TestCalendarWriteCommandsSendExactRequests(t *testing.T) {
 		{"respond accept", []string{"calendar", "respond", "e1", "--response", "accept"}, "calendar.respond", `{"id":"e1","response":"accept"}`},
 		{"respond tentative with comment", []string{"calendar", "respond", "e1", "--response", "tentative", "--comment", "Maybe"}, "calendar.respond", `{"id":"e1","response":"tentative","comment":"Maybe"}`},
 		{"respond decline explicit empty comment", []string{"calendar", "respond", "e1", "--comment", "", "--response", "decline"}, "calendar.respond", `{"id":"e1","response":"decline","comment":""}`},
+		{"respond without notification", []string{"calendar", "respond", "e1", "--response", "decline", "--no-notify"}, "calendar.respond", `{"id":"e1","response":"decline","no_notify":true}`},
+		{"respond without notification and an explicit empty comment", []string{"calendar", "respond", "e1", "--response", "accept", "--no-notify", "--comment", ""}, "calendar.respond", `{"id":"e1","response":"accept","comment":"","no_notify":true}`},
 		{"update attendees repeated", []string{"calendar", "update", "e1", "--add-attendee", "a@example.test", "--remove-attendee", "c@example.test", "--add-attendee", "b@example.test"}, "calendar.update", `{"id":"e1","add":["a@example.test","b@example.test"],"remove":["c@example.test"]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -127,13 +133,11 @@ func TestCalendarWriteUsageErrorsNeedNoServerOrState(t *testing.T) {
 		{"calendar", "update", "--subject", "New"},
 		{"calendar", "update", "e1", "e2", "--subject", "New"},
 		{"calendar", "update", "e1"},
-		{"calendar", "update", "e1", "--body", "New body"},
 		{"calendar", "update", "e1", "--online=false"},
 		{"calendar", "update", "e1", "--subject", "New", "--online=false"},
 		{"calendar", "update", "e1", "--no-online"},
 		{"calendar", "update", "e1", "--teams"},
 		append(invite, "--start", "2026-10-09 09:00", "--duration", "1h", "--no-teams"),
-		{"calendar", "update", "e1", "--subject", "New", "--body", ""},
 		{"calendar", "update", "e1", "--to", "a@example.test"},
 		{"calendar", "update", "e1", "--end", "2026-10-09 10:00", "--duration", "1h"},
 		{"calendar", "update", "e1", "--duration", "0s"},
@@ -155,6 +159,7 @@ func TestCalendarWriteUsageErrorsNeedNoServerOrState(t *testing.T) {
 		{"calendar", "respond", "e1", "--response", ""},
 		{"calendar", "respond", "e1", "--response", "accept", "--start", "2026-10-09 09:00"},
 		{"calendar", "respond", "e1", "--response", "accept", "--send-response=false"},
+		{"calendar", "respond", "e1", "--response", "accept", "--no-notify", "--comment", "See you"},
 	} {
 		code, out, errout, requests := meetingClient(t, args...)
 		if code != 2 || out != "" || errout != "error: invalid command usage; use --help\n" || len(requests) != 0 {

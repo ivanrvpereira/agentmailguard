@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS events (
 -- attendees lists the attendees of each event. address is compared without case.
 -- response: none, organizer, tentativelyAccepted, accepted, declined, or notResponded, as in Microsoft 365.
 -- comment: the comment of the account's own response, or NULL.
+-- optional: 1 for an optional attendee, 0 for a required one. Optional attendees are invited too.
 CREATE TABLE IF NOT EXISTS attendees (
 	account TEXT NOT NULL,
 	event_id TEXT NOT NULL,
@@ -105,6 +106,7 @@ CREATE TABLE IF NOT EXISTS attendees (
 	name TEXT NOT NULL DEFAULT '',
 	response TEXT NOT NULL DEFAULT 'none' CHECK (response IN ('none', 'organizer', 'tentativelyAccepted', 'accepted', 'declined', 'notResponded')),
 	comment TEXT,
+	optional INTEGER NOT NULL DEFAULT 0 CHECK (optional IN (0, 1)),
 	PRIMARY KEY (account, event_id, address)
 );
 

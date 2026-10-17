@@ -236,7 +236,7 @@ func TestCalendarUpdateRejectsUnresolvedTimes(t *testing.T) {
 func TestCalendarUpdateSelectedFields(t *testing.T) {
 	start := time.Date(2026, 10, 9, 9, 0, 0, 0, time.FixedZone("WEST", 3600))
 	end := start.Add(30 * time.Minute)
-	subject, location := "Changed", ""
+	subject, location, body := "Changed", "", "<b>New</b> & more\nnext"
 	fracStart, fracEnd := start.Add(123456789*time.Nanosecond), end.Add(100*time.Nanosecond)
 	for _, tc := range []struct {
 		name   string
@@ -245,6 +245,8 @@ func TestCalendarUpdateSelectedFields(t *testing.T) {
 	}{
 		{"subject", model.EventChange{Subject: &subject}, map[string]any{"subject": "Changed"}},
 		{"clear-location", model.EventChange{Location: &location}, map[string]any{"location": map[string]any{"displayName": ""}}},
+		// The plain-text body goes as escaped HTML, as in an invitation.
+		{"body", model.EventChange{Body: &body}, map[string]any{"body": map[string]any{"contentType": "html", "content": "&lt;b&gt;New&lt;/b&gt; &amp; more<br>next"}}},
 		{"resolved-time", model.EventChange{Start: &start, End: &end}, map[string]any{"start": map[string]any{"dateTime": "2026-10-09T08:00:00", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T08:30:00", "timeZone": "UTC"}}},
 		{"end-only", model.EventChange{End: &end}, map[string]any{"end": map[string]any{"dateTime": "2026-10-09T08:30:00", "timeZone": "UTC"}}},
 		// Graph keeps omitted fields, so the body with its join blob, times, and attendees stay as they are.
@@ -290,7 +292,7 @@ func TestCalendarInvitePayload(t *testing.T) {
 				"location":  map[string]any{"displayName": "Room"},
 				"start":     map[string]any{"dateTime": "2026-10-09T08:00:00", "timeZone": "UTC"},
 				"end":       map[string]any{"dateTime": "2026-10-09T08:30:00", "timeZone": "UTC"},
-				"attendees": []any{map[string]any{"type": "required", "emailAddress": map[string]any{"address": "a@example.test"}}},
+				"attendees": []any{map[string]any{"type": "required", "emailAddress": map[string]any{"address": "a@example.test"}}, map[string]any{"type": "optional", "emailAddress": map[string]any{"address": "b@example.test"}}},
 			}
 			if online {
 				expected["isOnlineMeeting"] = true
@@ -307,9 +309,30 @@ func TestCalendarInvitePayload(t *testing.T) {
 			t.Fatal("calendar cannot invite")
 		}
 		start := time.Date(2026, 10, 9, 9, 0, 0, 0, time.FixedZone("WEST", 3600))
-		id, err := writer.Invite(context.Background(), model.NewEvent{Subject: "Planning", Body: "<b>Agenda</b> & \"q\" 'a'\none\r\ntwo\rthree", Location: "Room", Start: start, End: start.Add(30 * time.Minute), Attendees: []string{"a@example.test"}, Online: online})
+		id, err := writer.Invite(context.Background(), model.NewEvent{Subject: "Planning", Body: "<b>Agenda</b> & \"q\" 'a'\none\r\ntwo\rthree", Location: "Room", Start: start, End: start.Add(30 * time.Minute), Attendees: []string{"a@example.test"}, Optional: []string{"b@example.test"}, Online: online})
 		if err != nil || id != "immutable-event" {
 			t.Fatalf("invite = %q, %v", id, err)
 		}
+	}
+}
+
+// sendResponse false records the response without telling the organizer
+// (https://learn.microsoft.com/en-us/graph/api/event-accept). A comment would go nowhere, so it is refused.
+func TestCalendarRespondWithoutNotificationSendsNoResponse(t *testing.T) {
+	requests := 0
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var body map[string]any
+		if r.Method != "POST" || r.URL.EscapedPath() != "/v1.0/me/events/e1/decline" || json.NewDecoder(r.Body).Decode(&body) != nil || !reflect.DeepEqual(body, map[string]any{"comment": "", "sendResponse": false}) {
+			t.Errorf("respond request %s %s %v", r.Method, r.URL.EscapedPath(), body)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	})
+	writer := c.Calendar().(model.CalendarWriter)
+	if err := writer.Respond(t.Context(), "e1", model.EventResponse{Response: model.ResponseDecline, NoNotify: true}); err != nil || requests != 1 {
+		t.Fatalf("respond = %v, requests = %d", err, requests)
+	}
+	if err := writer.Respond(t.Context(), "e1", model.EventResponse{Response: model.ResponseDecline, Comment: "Sorry", NoNotify: true}); err == nil || err.Error() != "Graph error InvalidMetadata" || requests != 1 {
+		t.Fatalf("respond with comment = %v, requests = %d", err, requests)
 	}
 }
