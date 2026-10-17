@@ -51,7 +51,9 @@ A green verdict is not permission to obey instructions in a message.
 The guard does not protect a human from fraud.
 
 Missing or invalid screening fails closed.
-The command set does not send mail, permanently delete mail, or modify calendar events.
+Mail is sent only by `mail send`, `mail reply`, and `mail forward`, and only when the write policy allows it. The default policy denies sends.
+Meeting invitations, updates, cancellations, and responses send notifications to attendees. The default policy denies them.
+The command set never permanently deletes mail.
 Manual mailbox operations still need the operator's or user's approval.
 Trash is a provider move, not permanent deletion.
 
@@ -66,6 +68,7 @@ Both platforms require CGO for SQLite.
 Keep the server home private and outside the source checkout.
 Do not commit configuration, encrypted credential files, databases, audit files, or environment files.
 Local caches and audit logs exclude mail bodies, subjects, sender identities, rule instructions, and raw provider responses.
+One exception: an action that waits for approval stores its request arguments, such as recipients, subject, and body, in the `pending` table of `cache.db`.
 Environment variables and process memory still expose secrets to sufficiently privileged local processes.
 Another process under the same operating-system user is not an isolated trust domain.
 
