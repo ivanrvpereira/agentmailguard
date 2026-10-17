@@ -54,7 +54,7 @@ func TestWholeRequestFailuresFailClosedEvenOrgOnly(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var calls atomic.Int32
-			s := screening.New(screening.Options{LookupEnv: envKey, Credentials: missingStore(), HTTPClient: &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
+			s := screening.New(screening.Options{Credentials: keyStore(), HTTPClient: &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
 				calls.Add(1)
 				r := response(c.body)
 				r.StatusCode = c.status
@@ -72,7 +72,7 @@ func TestWholeRequestFailuresFailClosedEvenOrgOnly(t *testing.T) {
 	}
 }
 func TestEmptyQuestionsAndInvalidStateNeverMakeRequest(t *testing.T) {
-	s := screening.New(screening.Options{LookupEnv: envKey, Credentials: missingStore(), HTTPClient: &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
+	s := screening.New(screening.Options{Credentials: keyStore(), HTTPClient: &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
 		t.Error("unexpected request")
 		return nil, errors.New("SECRET")
 	})}})
@@ -116,7 +116,7 @@ func TestJevDoesNotReplayPOSTOnStaleConnection(t *testing.T) {
 		return &staleConn{Conn: conn}, nil
 	}}
 	defer transport.CloseIdleConnections()
-	s := screening.New(screening.Options{Endpoint: server.URL, LookupEnv: envKey, Credentials: missingStore(), HTTPClient: &http.Client{Transport: transport}})
+	s := screening.New(screening.Options{Endpoint: server.URL, Credentials: keyStore(), HTTPClient: &http.Client{Transport: transport}})
 	first, err := s.Screen(context.Background(), nil)
 	if err != nil || first.Verdict != model.Green {
 		t.Fatalf("initial request failed: %+v %v", first, err)
@@ -137,7 +137,7 @@ func TestNoCredentialRedirects(t *testing.T) {
 	defer origin.Close()
 	client := origin.Client()
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return nil }
-	s := screening.New(screening.Options{LookupEnv: envKey, Credentials: missingStore(), HTTPClient: client, Endpoint: origin.URL})
+	s := screening.New(screening.Options{Credentials: keyStore(), HTTPClient: client, Endpoint: origin.URL})
 	r, err := s.Classify(context.Background(), nil, true, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +154,7 @@ func TestTimeoutAndCancellation(t *testing.T) {
 		<-r.Context().Done()
 		return nil, r.Context().Err()
 	})}
-	s := screening.New(screening.Options{LookupEnv: envKey, Credentials: missingStore(), HTTPClient: client, Timeout: 20 * time.Millisecond})
+	s := screening.New(screening.Options{Credentials: keyStore(), HTTPClient: client, Timeout: 20 * time.Millisecond})
 	r, err := s.Classify(context.Background(), nil, false, orgQuestions())
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +199,7 @@ func TestAtMostEightAndDeadlineStartsAtActualRequest(t *testing.T) {
 		}
 		return response(reply(validAnswers)), nil
 	})}
-	s := screening.New(screening.Options{LookupEnv: envKey, Credentials: missingStore(), HTTPClient: client})
+	s := screening.New(screening.Options{Credentials: keyStore(), HTTPClient: client})
 	var wg sync.WaitGroup
 	for range 40 {
 		wg.Add(1)
@@ -244,7 +244,7 @@ func TestLazyKeyResolutionRetriesFailureCachesSuccess(t *testing.T) {
 		}
 		return response(reply(validAnswers)), nil
 	})}
-	s := screening.New(screening.Options{LookupEnv: func(string) string { return " " }, Credentials: store, HTTPClient: client})
+	s := screening.New(screening.Options{Credentials: store, HTTPClient: client})
 	if loads.Load() != 0 {
 		t.Fatal("eager keychain access")
 	}
@@ -273,7 +273,7 @@ func TestLazyKeyResolutionRetriesFailureCachesSuccess(t *testing.T) {
 	}
 }
 func TestScreenerFormattingDoesNotExposeResolvedKey(t *testing.T) {
-	s := screening.New(screening.Options{LookupEnv: envKey, Credentials: missingStore(), HTTPClient: &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) { return response(reply(validAnswers)), nil })}})
+	s := screening.New(screening.Options{Credentials: keyStore(), HTTPClient: &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) { return response(reply(validAnswers)), nil })}})
 	if _, err := s.Screen(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -284,9 +284,26 @@ func TestScreenerFormattingDoesNotExposeResolvedKey(t *testing.T) {
 	}
 }
 
-func TestEnvKeyPrecedesKeychainAndTransportErrorsAreSafe(t *testing.T) {
-	store := fakeStore{load: func(context.Context) (string, error) { t.Error("Keychain accessed with env key"); return "", nil }}
-	s := screening.New(screening.Options{LookupEnv: envKey, Credentials: store, HTTPClient: &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) { return nil, fmt.Errorf("SECRET-MAIL SECRET-KEY") })}})
+// The screening key comes only from the store: an environment key set for other tools must never reach the endpoint.
+func TestEnvironmentKeyIsNeverUsed(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "SECRET-ENV-KEY")
+	var calls atomic.Int32
+	s := screening.New(screening.Options{Credentials: missingStore(), HTTPClient: &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return response(reply(validAnswers)), nil
+	})}})
+	r, err := s.Classify(context.Background(), nil, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	safeFailure(t, r)
+	if *r.Screening.Error != "ConfigError" || calls.Load() != 0 {
+		t.Fatalf("error=%s requests=%d", *r.Screening.Error, calls.Load())
+	}
+}
+
+func TestTransportErrorsAreSafe(t *testing.T) {
+	s := screening.New(screening.Options{Credentials: keyStore(), HTTPClient: &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) { return nil, fmt.Errorf("SECRET-MAIL SECRET-KEY") })}})
 	r, err := s.Classify(context.Background(), nil, false, orgQuestions())
 	if err != nil {
 		t.Fatal(err)

@@ -20,10 +20,10 @@ func (formattingStore) LoadOAuth(context.Context, string, string) (credentials.O
 func (formattingStore) SaveOAuth(context.Context, string, string, credentials.OAuth) error {
 	panic("unexpected save")
 }
-func (formattingStore) LoadOpenRouterKey(context.Context) (string, error) {
+func (formattingStore) LoadScreeningKey(context.Context) (string, error) {
 	panic("unexpected key access")
 }
-func (formattingStore) SaveOpenRouterKey(context.Context, string) error {
+func (formattingStore) SaveScreeningKey(context.Context, string) error {
 	panic("unexpected key access")
 }
 

@@ -53,11 +53,11 @@ func TestNativeChangePasswordInTemporaryHome(t *testing.T) {
 		t.Fatal("native output unsafe or incomplete")
 	}
 	fresh := credentials.NewFile(home, "private-new-password")
-	if key, err := fresh.LoadOpenRouterKey(ctx); err != nil || key != "private-key" {
+	if key, err := fresh.LoadScreeningKey(ctx); err != nil || key != "private-key" {
 		t.Fatal("native password change lost record")
 	}
 	before, _ := os.ReadFile(filepath.Join(home, "credentials.age"))
-	refused := exec.CommandContext(ctx, binary, "auth", "set-jev-key", "--home", home)
+	refused := exec.CommandContext(ctx, binary, "auth", "set-screening-key", "--home", home)
 	refused.Env = cmd.Env
 	refused.Stdin = strings.NewReader("replacement-key\n")
 	if data, err := refused.CombinedOutput(); err == nil || bytes.Contains(data, []byte("private-")) {
@@ -156,7 +156,7 @@ func TestChangePasswordTerminalSafety(t *testing.T) {
 					t.Fatal("new password not confirmed")
 				}
 				fresh := credentials.NewFile(home, "private-new-password")
-				if key, err := fresh.LoadOpenRouterKey(ctx); err != nil || key != "private-key" {
+				if key, err := fresh.LoadScreeningKey(ctx); err != nil || key != "private-key" {
 					t.Fatal("key lost")
 				}
 				if !strings.Contains(out.String(), "Restart") {

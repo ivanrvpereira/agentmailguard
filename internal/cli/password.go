@@ -12,7 +12,7 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 )
 
-// Read one byte at a time: buffering here could consume the following Jev key line.
+// Read one byte at a time: buffering here could consume the following screening key line.
 func passwordLine(ctx context.Context, stdin io.Reader) (string, error) {
 	type result struct {
 		password string

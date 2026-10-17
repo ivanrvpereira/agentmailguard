@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -382,7 +383,9 @@ func TestApproveAndDenyAfterCloseAreRefused(t *testing.T) {
 func TestApprovalDoesNotRunWithoutItsAuditRecord(t *testing.T) {
 	s, home, graph := approvalServer(t, trashApprove)
 	id := pend(t, s, "mail.trash", `{"ids":["m1"]}`)[0]
-	if err := os.Chmod(filepath.Join(home, "audit.jsonl"), 0400); err != nil {
+	// A folder in place of the log makes every write fail, also for root, which ignores file permissions.
+	log := filepath.Join(home, "audit.jsonl")
+	if err := errors.Join(os.Remove(log), os.Mkdir(log, 0700)); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Approve(context.Background(), id); err == nil {

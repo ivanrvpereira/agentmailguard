@@ -127,7 +127,7 @@ func TestMigrateFileToKeychainUsesStdinAndPreservesSource(t *testing.T) {
 		t.Fatalf("migration failed: %s", stderr.String())
 	}
 	target := credentials.New(p, home, nil)
-	if key, err := target.LoadOpenRouterKey(ctx); err != nil || key != "private-key" {
+	if key, err := target.LoadScreeningKey(ctx); err != nil || key != "private-key" {
 		t.Fatal("key lost")
 	}
 	if token, err := target.LoadOAuth(ctx, "gmail", "work"); err != nil || token.RefreshToken != "private-token" {
@@ -168,7 +168,7 @@ func TestMigrateCommandCopiesLegacyAndKeepsConfiguration(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("migration failed: %s", stderr.String())
 	}
-	if key, err := credentials.NewFile(home, "private-file-password").LoadOpenRouterKey(ctx); err != nil || key != "private-legacy-key" {
+	if key, err := credentials.NewFile(home, "private-file-password").LoadScreeningKey(ctx); err != nil || key != "private-legacy-key" {
 		t.Fatal("target lost key or target password env was discarded")
 	}
 	after, _ := os.ReadFile(path)

@@ -57,7 +57,7 @@ func (s *preloadStore) SaveOAuth(_ context.Context, p, a string, v credentials.O
 	s.records[p+"/"+a] = v
 	return nil
 }
-func (s *preloadStore) LoadOpenRouterKey(context.Context) (string, error) {
+func (s *preloadStore) LoadScreeningKey(context.Context) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.reads = append(s.reads, "jev")
@@ -69,7 +69,7 @@ func (s *preloadStore) LoadOpenRouterKey(context.Context) (string, error) {
 	}
 	return s.key, nil
 }
-func (s *preloadStore) SaveOpenRouterKey(_ context.Context, key string) error {
+func (s *preloadStore) SaveScreeningKey(_ context.Context, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.writes = append(s.writes, "jev")
@@ -130,7 +130,7 @@ func TestPreloadReadsEverythingAtStartThenServesFromMemory(t *testing.T) {
 	}
 	defer s.Close()
 	checks, e := s.Preload(context.Background(), nil)
-	want := []server.CredentialCheck{{Item: "credentials (keychain)", Status: "ok"}, {Item: `account "work" (m365)`, Status: "ok"}, {Item: `account "personal" (gmail)`, Status: "ok"}, {Item: "Jev key", Status: "ok"}, {Item: "approval password", Status: "not set; the approval console stays off until auth set-approval-password and a server restart"}}
+	want := []server.CredentialCheck{{Item: "credentials (keychain)", Status: "ok"}, {Item: `account "work" (m365)`, Status: "ok"}, {Item: `account "personal" (gmail)`, Status: "ok"}, {Item: "screening key", Status: "ok"}, {Item: "approval password", Status: "not set; the approval console stays off until auth set-approval-password and a server restart"}}
 	if e != nil || !reflect.DeepEqual(checks, want) {
 		t.Fatalf("checks=%v err=%v", checks, e)
 	}
@@ -185,10 +185,10 @@ func TestPreloadRefusesWithFixedStatuses(t *testing.T) {
 		{"denied", func(s *preloadStore) { s.loadErr = map[string]error{"gmail/personal": credentials.ErrUnavailable} }, nil, `account "personal" (gmail)`, "Keychain access failed or denied"},
 		{"unreadable", func(s *preloadStore) { s.loadErr = map[string]error{"m365/work": canary} }, nil, `account "work" (m365)`, "credential record unreadable; run auth login"},
 		{"write denied", func(s *preloadStore) { s.saveErr = canary }, nil, `account "work" (m365)`, "Keychain write failed or denied"},
-		{"key missing", func(s *preloadStore) { s.key = "" }, nil, "Jev key", "missing; run auth set-jev-key or set OPENROUTER_API_KEY"},
-		{"key denied", func(s *preloadStore) { s.keyErr = canary }, nil, "Jev key", "Keychain access failed or denied"},
-		{"key not entered", func(s *preloadStore) { s.key = "" }, func(context.Context) (string, error) { return "", canary }, "Jev key", "not entered; run auth set-jev-key or set OPENROUTER_API_KEY"},
-		{"key save denied", func(s *preloadStore) { s.key = ""; s.keySaveErr = canary }, func(context.Context) (string, error) { return "sk-private-canary", nil }, "Jev key", "Keychain write failed or denied"},
+		{"key missing", func(s *preloadStore) { s.key = "" }, nil, "screening key", "missing; run auth set-screening-key"},
+		{"key denied", func(s *preloadStore) { s.keyErr = canary }, nil, "screening key", "Keychain access failed or denied"},
+		{"key not entered", func(s *preloadStore) { s.key = "" }, func(context.Context) (string, error) { return "", canary }, "screening key", "not entered; run auth set-screening-key"},
+		{"key save denied", func(s *preloadStore) { s.key = ""; s.keySaveErr = canary }, func(context.Context) (string, error) { return "sk-private-canary", nil }, "screening key", "Keychain write failed or denied"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := loggedIn(now)
@@ -216,7 +216,7 @@ func TestPreloadRefusesWithFixedStatuses(t *testing.T) {
 	}
 }
 
-func TestPreloadPromptsForMissingKeyAndSkipsEnvironmentKey(t *testing.T) {
+func TestPreloadPromptsForMissingKeyAndIgnoresEnvironmentKey(t *testing.T) {
 	now := time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC)
 	store := loggedIn(now)
 	store.key = ""
@@ -226,11 +226,15 @@ func TestPreloadPromptsForMissingKeyAndSkipsEnvironmentKey(t *testing.T) {
 	}
 	defer s.Close()
 	checks, e := s.Preload(context.Background(), func(context.Context) (string, error) { return "sk-entered", nil })
-	if e != nil || checks[3] != (server.CredentialCheck{Item: "Jev key", Status: "saved"}) || store.key != "sk-entered" {
+	if e != nil || checks[3] != (server.CredentialCheck{Item: "screening key", Status: "saved"}) || store.key != "sk-entered" {
 		t.Fatalf("checks=%v err=%v", checks, e)
 	}
 
+	// The environment key is no fallback, neither injected nor in the process: without a stored key and
+	// without a prompt, preload refuses.
+	t.Setenv("OPENROUTER_API_KEY", "sk-env")
 	store = loggedIn(now)
+	store.key = ""
 	s2, e := server.New(context.Background(), twoAccountHome(t), server.Options{Credentials: store, LookupEnv: func(k string) string {
 		if k == "OPENROUTER_API_KEY" {
 			return "sk-env"
@@ -242,9 +246,8 @@ func TestPreloadPromptsForMissingKeyAndSkipsEnvironmentKey(t *testing.T) {
 	}
 	defer s2.Close()
 	checks, e = s2.Preload(context.Background(), nil)
-	reads, _ := store.accesses()
-	if e != nil || checks[3] != (server.CredentialCheck{Item: "Jev key", Status: "ok (OPENROUTER_API_KEY)"}) || len(reads) != 2 {
-		t.Fatalf("checks=%v reads=%v err=%v", checks, reads, e)
+	if e == nil || len(checks) < 4 || checks[3] != (server.CredentialCheck{Item: "screening key", Status: "missing; run auth set-screening-key"}) {
+		t.Fatalf("checks=%v err=%v", checks, e)
 	}
 }
 

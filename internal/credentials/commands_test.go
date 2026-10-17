@@ -18,21 +18,21 @@ func TestChangePasswordPreservesLatestRecordAndBlocksOldWriters(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()
 	old := credentials.NewFileForTest(home, "old-password")
-	if old.SaveOpenRouterKey(ctx, "original-key") != nil {
+	if old.SaveScreeningKey(ctx, "original-key") != nil {
 		t.Fatal("seed")
 	}
 	changer := credentials.NewFileForTest(home, "old-password")
-	if old.SaveOAuth(ctx, "gmail", "work", credentials.OAuth{RefreshToken: "latest-token"}) != nil || old.SaveOpenRouterKey(ctx, "latest-key") != nil {
+	if old.SaveOAuth(ctx, "gmail", "work", credentials.OAuth{RefreshToken: "latest-token"}) != nil || old.SaveScreeningKey(ctx, "latest-key") != nil {
 		t.Fatal("update")
 	}
 	if err := changer.ChangePassword(ctx, "new-password"); err != nil {
 		t.Fatal(err)
 	}
-	if err := old.SaveOpenRouterKey(ctx, "stale"); err != credentials.ErrDecrypt {
+	if err := old.SaveScreeningKey(ctx, "stale"); err != credentials.ErrDecrypt {
 		t.Fatal("old process overwrote changed password")
 	}
 	fresh := credentials.NewFileForTest(home, "new-password")
-	if key, err := fresh.LoadOpenRouterKey(ctx); err != nil || key != "latest-key" {
+	if key, err := fresh.LoadScreeningKey(ctx); err != nil || key != "latest-key" {
 		t.Fatal("latest key lost")
 	}
 	if token, err := fresh.LoadOAuth(ctx, "gmail", "work"); err != nil || token.RefreshToken != "latest-token" {
@@ -47,7 +47,7 @@ func TestChangePasswordFailuresPreserveFile(t *testing.T) {
 			home := t.TempDir()
 			path := filepath.Join(home, "credentials.age")
 			store := credentials.NewFileForTest(home, "synthetic-password")
-			if mode != "missing" && store.SaveOpenRouterKey(ctx, "old-key") != nil {
+			if mode != "missing" && store.SaveScreeningKey(ctx, "old-key") != nil {
 				t.Fatal("seed")
 			}
 			switch mode {
@@ -106,7 +106,7 @@ func TestChangePasswordUsesSharedLockAndLatestReread(t *testing.T) {
 	defer cancel()
 	home := t.TempDir()
 	store := credentials.NewFileForTest(home, "synthetic-password")
-	if store.SaveOpenRouterKey(ctx, "old-key") != nil {
+	if store.SaveScreeningKey(ctx, "old-key") != nil {
 		t.Fatal("seed")
 	}
 	lock, err := os.OpenFile(filepath.Join(home, "credentials.lock"), os.O_RDWR, 0600)
@@ -139,7 +139,7 @@ func TestChangePasswordUsesSharedLockAndLatestReread(t *testing.T) {
 		t.Fatal(err)
 	}
 	fresh := credentials.NewFileForTest(home, "new-password")
-	if key, err := fresh.LoadOpenRouterKey(ctx); err != nil || key != "latest-key" {
+	if key, err := fresh.LoadScreeningKey(ctx); err != nil || key != "latest-key" {
 		t.Fatal("missed latest key")
 	}
 	if token, err := fresh.LoadOAuth(ctx, "gmail", "work"); err != nil || token.RefreshToken != "latest-token" {
@@ -151,7 +151,7 @@ func TestMigrationDoesNotWriteAnExistingLegacyTarget(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()
 	source := credentials.NewFileForTest(home, "synthetic-password")
-	if source.SaveOpenRouterKey(ctx, "source-key") != nil {
+	if source.SaveScreeningKey(ctx, "source-key") != nil {
 		t.Fatal("seed")
 	}
 	p := &fakePlatform{values: map[[2]string][]byte{{"agentmailguard-go-openrouter", "agentmailguard-go"}: []byte("legacy-key")}}
@@ -206,7 +206,7 @@ func TestMigrationRefusesUnsafeCopies(t *testing.T) {
 			case "denied":
 				p.readFailure = map[[2]string]error{{"agentmailguard", "credentials"}: errors.New("private-canary")}
 			}
-			if target.SaveOpenRouterKey(ctx, "existing-key") != nil {
+			if target.SaveScreeningKey(ctx, "existing-key") != nil {
 				t.Fatal("seed")
 			}
 			before, _ := os.ReadFile(filepath.Join(home, "credentials.age"))
@@ -229,7 +229,7 @@ func TestMigrationSerializesTargetCheckAndWrite(t *testing.T) {
 	defer cancel()
 	home := t.TempDir()
 	source := credentials.NewFileForTest(home, "synthetic-password")
-	if source.SaveOpenRouterKey(ctx, "original") != nil {
+	if source.SaveScreeningKey(ctx, "original") != nil {
 		t.Fatal("seed")
 	}
 	p := &concurrentPlatform{}
@@ -273,7 +273,7 @@ func TestCopyCredentialsPreservesCompleteSource(t *testing.T) {
 	home := t.TempDir()
 	p := &fakePlatform{values: map[[2]string][]byte{}}
 	source := credentials.New(p, home, nil)
-	if source.SaveOAuth(ctx, "gmail", "work", credentials.OAuth{RefreshToken: "private-token"}) != nil || source.SaveOpenRouterKey(ctx, "private-key") != nil {
+	if source.SaveOAuth(ctx, "gmail", "work", credentials.OAuth{RefreshToken: "private-token"}) != nil || source.SaveScreeningKey(ctx, "private-key") != nil {
 		t.Fatal("seed failed")
 	}
 	target := credentials.NewFileForTest(home, "synthetic-password")
@@ -281,7 +281,7 @@ func TestCopyCredentialsPreservesCompleteSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, store := range []*credentials.RecordStore{source, target} {
-		if key, err := store.LoadOpenRouterKey(ctx); err != nil || key != "private-key" {
+		if key, err := store.LoadScreeningKey(ctx); err != nil || key != "private-key" {
 			t.Fatal("key lost")
 		}
 		if token, err := store.LoadOAuth(ctx, "gmail", "work"); err != nil || token.RefreshToken != "private-token" {

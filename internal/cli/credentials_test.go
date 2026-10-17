@@ -39,7 +39,7 @@ func (p *localPlatform) Write(_ context.Context, service, account string, v []by
 	return nil
 }
 func TestLocalCommandsMigrateBeforeSaving(t *testing.T) {
-	for _, command := range []string{"set-jev-key", "login"} {
+	for _, command := range []string{"set-screening-key", "login"} {
 		t.Run(command, func(t *testing.T) {
 			home := t.TempDir()
 			if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[accounts.work]\nprovider='m365'\nclient_id='synthetic'\ntenant_id='synthetic'\n[accounts.personal]\nprovider='gmail'\nclient_id='synthetic'\nclient_secret='synthetic'\n"), 0600); err != nil {
@@ -85,12 +85,12 @@ func TestLocalCommandsMigrateBeforeSaving(t *testing.T) {
 				t.Fatal("local command hid another account's legacy token")
 			}
 			if command == "login" {
-				if key, err := reopened.LoadOpenRouterKey(ctx); err != nil || key != "private-key-canary" {
-					t.Fatal("login lost legacy Jev key")
+				if key, err := reopened.LoadScreeningKey(ctx); err != nil || key != "private-key-canary" {
+					t.Fatal("login lost legacy screening key")
 				}
 			} else {
-				if key, err := reopened.LoadOpenRouterKey(ctx); err != nil || key != "private-new-key-canary" {
-					t.Fatal("set-jev-key did not save new key")
+				if key, err := reopened.LoadScreeningKey(ctx); err != nil || key != "private-new-key-canary" {
+					t.Fatal("set-screening-key did not save new key")
 				}
 			}
 		})

@@ -58,8 +58,8 @@ func (s *store) SaveOAuth(_ context.Context, p, a string, v credentials.OAuth) e
 	s.token = v
 	return s.err
 }
-func (*store) LoadOpenRouterKey(context.Context) (string, error) { panic("unexpected key access") }
-func (*store) SaveOpenRouterKey(context.Context, string) error   { panic("unexpected key access") }
+func (*store) LoadScreeningKey(context.Context) (string, error) { panic("unexpected key access") }
+func (*store) SaveScreeningKey(context.Context, string) error   { panic("unexpected key access") }
 func account() config.Account {
 	return config.Account{Name: "work", Provider: "m365", ClientID: "client", TenantID: "tenant"}
 }

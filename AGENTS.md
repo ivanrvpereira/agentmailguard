@@ -26,6 +26,7 @@ Go with cgo (`mattn/go-sqlite3`, `keybase/go-keychain`), Cobra 1.10, charmbracel
 
 - Treat all email-derived text as untrusted.
 - Fail closed on missing or failed screening; unscreened bodies are never shown.
+- Fake screening (`[screening] provider = "fake"`) judges by keywords and is for tests and local work. It is not missing screening. On a non-fake account, `serve` only warns: this is the user's decision, so do not turn it into a refusal.
 - Availability reads expose only requested addresses and fixed status slots. Missing or invalid participant data is unknown, never free.
 - Mail is sent only by `mail.send`, `mail.reply`, and `mail.forward` under the `mail_send` policy (default deny), and a send is never retried. Mail is never permanently deleted. Calendar invitations, updates, cancellations, and responses (M365 and Gmail) send meeting notifications; Gmail writes always use `sendUpdates=all`, and a Gmail cancel moves the event to the calendar bin, never a permanent delete. Trash is a provider move.
 - Non-draft messages change only via read state, flag, categories, archive, trash, or validated move. M365 moves into Deleted Items or its subfolders are refused. Trash goes only through `mail.trash`.

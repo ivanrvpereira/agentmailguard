@@ -92,11 +92,11 @@ func TestFileTerminalPasswordConfirmationAndEcho(t *testing.T) {
 						password = "different\n"
 					}
 					_, _ = io.WriteString(master, password)
-				case strings.Contains(text, "Jev (OpenRouter) API key:"):
+				case strings.Contains(text, "Screening API key:"):
 					_, _ = io.WriteString(master, "synthetic-key\n")
 				}
 			}
-			code := cli.Run(ctx, []string{"auth", "set-jev-key", "--home", fileHome(t)}, io.Discard, stderr, cli.Options{Stdin: slave, LookupEnv: func(string) string { return "" }})
+			code := cli.Run(ctx, []string{"auth", "set-screening-key", "--home", fileHome(t)}, io.Discard, stderr, cli.Options{Stdin: slave, LookupEnv: func(string) string { return "" }})
 			if (code == 0) != (mode == "match") || (mode != "cancel" && prompts != 2) {
 				t.Fatal("terminal confirmation behavior incorrect")
 			}

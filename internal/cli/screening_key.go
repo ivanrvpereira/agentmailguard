@@ -13,11 +13,11 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
 
-const maxJevKeyBytes = 4096
+const maxScreeningKeyBytes = 4096
 
-// setJevKey reads the key from stdin so it never appears in arguments or shell history.
+// setScreeningKey reads the key from stdin so it never appears in arguments or shell history.
 // A terminal gets a prompt with echo disabled; other input is read to EOF.
-func setJevKey(ctx context.Context, home string, stdin io.Reader, stderr io.Writer, opts server.Options, lookup func(string) string) int {
+func setScreeningKey(ctx context.Context, home string, stdin io.Reader, stderr io.Writer, opts server.Options, lookup func(string) string) int {
 	if stdin == nil {
 		stdin = os.Stdin
 	}
@@ -25,14 +25,14 @@ func setJevKey(ctx context.Context, home string, stdin io.Reader, stderr io.Writ
 	if err != nil {
 		return failure(stderr, err.Error())
 	}
-	key, problem := readJevKey(ctx, stdin, stderr, "Jev (OpenRouter) API key: ")
+	key, problem := readScreeningKey(ctx, stdin, stderr, "Screening API key: ")
 	if problem != "" {
 		return failure(stderr, problem)
 	}
-	if store.SaveOpenRouterKey(ctx, key) != nil {
+	if store.SaveScreeningKey(ctx, key) != nil {
 		return failure(stderr, "credential save failed")
 	}
-	fmt.Fprintln(stderr, "Jev key saved. Restart the server if it already loaded a previous key.")
+	fmt.Fprintln(stderr, "Screening key saved. Restart the server if it already loaded a previous key.")
 	return 0
 }
 
@@ -53,10 +53,10 @@ func terminal(r io.Reader) (*os.File, bool) {
 	return f, c.Run() == nil
 }
 
-// readJevKey returns a validated key, or a fixed problem message. It never echoes or prints the key.
-func readJevKey(ctx context.Context, stdin io.Reader, stderr io.Writer, prompt string) (string, string) {
+// readScreeningKey returns a validated key, or a fixed problem message. It never echoes or prints the key.
+func readScreeningKey(ctx context.Context, stdin io.Reader, stderr io.Writer, prompt string) (string, string) {
 	read := func() (string, error) {
-		b, err := io.ReadAll(io.LimitReader(stdin, maxJevKeyBytes+1))
+		b, err := io.ReadAll(io.LimitReader(stdin, maxScreeningKeyBytes+1))
 		return string(b), err
 	}
 	restore := func() {}
@@ -70,7 +70,7 @@ func readJevKey(ctx context.Context, stdin io.Reader, stderr io.Writer, prompt s
 		}
 		restore = func() { _ = stty("echo"); fmt.Fprintln(stderr) }
 		read = func() (string, error) {
-			line, err := bufio.NewReader(io.LimitReader(f, maxJevKeyBytes+1)).ReadString('\n')
+			line, err := bufio.NewReader(io.LimitReader(f, maxScreeningKeyBytes+1)).ReadString('\n')
 			if err == io.EOF {
 				err = nil
 			}
@@ -87,22 +87,22 @@ func readJevKey(ctx context.Context, stdin io.Reader, stderr io.Writer, prompt s
 	select {
 	case <-ctx.Done():
 		restore()
-		return "", "Jev key setup canceled"
+		return "", "Screening key setup canceled"
 	case r = <-done:
 		restore()
 	}
 	if r.err != nil {
-		return "", "cannot read Jev key"
+		return "", "cannot read screening key"
 	}
-	if len(r.raw) > maxJevKeyBytes {
-		return "", "Jev key is too long"
+	if len(r.raw) > maxScreeningKeyBytes {
+		return "", "Screening key is too long"
 	}
 	key := strings.TrimSpace(r.raw)
 	if key == "" {
-		return "", "Jev key is empty"
+		return "", "Screening key is empty"
 	}
 	if strings.IndexFunc(key, func(c rune) bool { return c <= ' ' || c > '~' }) >= 0 {
-		return "", "Jev key must be one line without spaces or control characters"
+		return "", "Screening key must be one line without spaces or control characters"
 	}
 	return key, ""
 }

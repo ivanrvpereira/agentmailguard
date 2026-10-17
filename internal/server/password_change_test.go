@@ -35,7 +35,7 @@ func TestPasswordChangeBlocksRunningServerRefreshWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal("fixture encryption")
 	}
-	if json.NewEncoder(encrypted).Encode(credentials.Record{Version: 1, OAuth: map[string]credentials.OAuth{"m365/work": token}, OpenRouterKey: "original-key"}) != nil || encrypted.Close() != nil || os.WriteFile(filepath.Join(home, "credentials.age"), fixture.Bytes(), 0600) != nil {
+	if json.NewEncoder(encrypted).Encode(credentials.Record{Version: 1, OAuth: map[string]credentials.OAuth{"m365/work": token}, ScreeningKey: "original-key"}) != nil || encrypted.Close() != nil || os.WriteFile(filepath.Join(home, "credentials.age"), fixture.Bytes(), 0600) != nil {
 		t.Fatal("fixture write")
 	}
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +72,7 @@ func TestPasswordChangeBlocksRunningServerRefreshWrite(t *testing.T) {
 		t.Fatal("old-password server overwrote changed record")
 	}
 	fresh := credentials.NewFile(home, "new-password")
-	if key, err := fresh.LoadOpenRouterKey(ctx); err != nil || key != "original-key" {
+	if key, err := fresh.LoadScreeningKey(ctx); err != nil || key != "original-key" {
 		t.Fatal("external key lost")
 	}
 	if saved, err := fresh.LoadOAuth(ctx, "m365", "work"); err != nil || saved.RefreshToken != "original-refresh" {

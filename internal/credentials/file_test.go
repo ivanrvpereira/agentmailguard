@@ -71,7 +71,7 @@ func TestFileStoreHostileInputs(t *testing.T) {
 			if (tc.name == "higher-work" || tc.name == "absurd-work") && time.Since(started) > 500*time.Millisecond {
 				t.Fatal("hostile work factor was not refused before expensive derivation")
 			}
-			if err := s.SaveOpenRouterKey(context.Background(), "replacement"); err != tc.want {
+			if err := s.SaveScreeningKey(context.Background(), "replacement"); err != tc.want {
 				t.Fatal("save did not fail closed")
 			}
 			after, _ := os.ReadFile(path)
@@ -104,7 +104,7 @@ func TestFileStoreConcurrentAndCanceledWrites(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		if a.SaveOpenRouterKey(ctx, "synthetic-key") != nil {
+		if a.SaveScreeningKey(ctx, "synthetic-key") != nil {
 			t.Error("key save failed")
 		}
 	}()
@@ -115,7 +115,7 @@ func TestFileStoreConcurrentAndCanceledWrites(t *testing.T) {
 		}
 	}()
 	wg.Wait()
-	if key, err := a.LoadOpenRouterKey(ctx); err != nil || key != "synthetic-key" {
+	if key, err := a.LoadScreeningKey(ctx); err != nil || key != "synthetic-key" {
 		t.Fatal("concurrent key lost")
 	}
 	if token, err := a.LoadOAuth(ctx, "gmail", "work"); err != nil || token.RefreshToken != "synthetic-token" {
@@ -123,10 +123,10 @@ func TestFileStoreConcurrentAndCanceledWrites(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if err := a.SaveOpenRouterKey(canceled, "replacement"); !errors.Is(err, context.Canceled) {
+	if err := a.SaveScreeningKey(canceled, "replacement"); !errors.Is(err, context.Canceled) {
 		t.Fatal("canceled write succeeded")
 	}
-	if key, _ := a.LoadOpenRouterKey(ctx); key != "synthetic-key" {
+	if key, _ := a.LoadScreeningKey(ctx); key != "synthetic-key" {
 		t.Fatal("cancellation lost old key")
 	}
 }
@@ -138,7 +138,7 @@ func TestFileStoreFailedWritePreservesPreviousFile(t *testing.T) {
 	home := t.TempDir()
 	ctx := context.Background()
 	s := credentials.NewFileForTest(home, "synthetic-password")
-	if s.SaveOpenRouterKey(ctx, "synthetic-key") != nil {
+	if s.SaveScreeningKey(ctx, "synthetic-key") != nil {
 		t.Fatal("initial save failed")
 	}
 	before, err := os.ReadFile(filepath.Join(home, "credentials.age"))
@@ -149,14 +149,14 @@ func TestFileStoreFailedWritePreservesPreviousFile(t *testing.T) {
 		t.Fatal("cannot constrain temporary home")
 	}
 	defer os.Chmod(home, 0700)
-	if s.SaveOpenRouterKey(ctx, "replacement") == nil {
+	if s.SaveScreeningKey(ctx, "replacement") == nil {
 		t.Fatal("write to read-only home succeeded")
 	}
 	after, err := os.ReadFile(filepath.Join(home, "credentials.age"))
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("failed write lost old encrypted file")
 	}
-	if key, err := s.LoadOpenRouterKey(ctx); err != nil || key != "synthetic-key" {
+	if key, err := s.LoadScreeningKey(ctx); err != nil || key != "synthetic-key" {
 		t.Fatal("old record no longer readable")
 	}
 }
@@ -165,14 +165,14 @@ func TestFileStoreEncryptedRoundTrip(t *testing.T) {
 	home := t.TempDir()
 	ctx := context.Background()
 	s := credentials.NewFileForTest(home, "synthetic-password")
-	if err := s.SaveOpenRouterKey(ctx, "private-key-canary"); err != nil {
+	if err := s.SaveScreeningKey(ctx, "private-key-canary"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SaveOAuth(ctx, "gmail", "work", credentials.OAuth{RefreshToken: "private-token-canary"}); err != nil {
 		t.Fatal(err)
 	}
 	reopened := credentials.NewFileForTest(home, "synthetic-password")
-	if key, err := reopened.LoadOpenRouterKey(ctx); err != nil || key != "private-key-canary" {
+	if key, err := reopened.LoadScreeningKey(ctx); err != nil || key != "private-key-canary" {
 		t.Fatal("key did not survive reopen")
 	}
 	if token, err := reopened.LoadOAuth(ctx, "gmail", "work"); err != nil || token.RefreshToken != "private-token-canary" {

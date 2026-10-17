@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -44,7 +45,7 @@ func consoleServer(t *testing.T, table string, password bool) *consoleFixture {
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(text), 0600); err != nil {
 		t.Fatal(err)
 	}
-	record := credentials.Record{Version: 1, OpenRouterKey: "synthetic-key", OAuth: map[string]credentials.OAuth{
+	record := credentials.Record{Version: 1, ScreeningKey: "synthetic-key", OAuth: map[string]credentials.OAuth{
 		"m365/work": {AccessToken: statusJWT(m365Grant + " Calendars.ReadWrite Mail.Send"), RefreshToken: "private-refresh", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Scopes: strings.Fields(m365Grant + " Calendars.ReadWrite Mail.Send"), Username: "work@example.test"},
 	}}
 	if password {
@@ -65,7 +66,7 @@ func consoleServer(t *testing.T, table string, password bool) *consoleFixture {
 	jev := httptest.NewServer(http.HandlerFunc(api.jev))
 	t.Cleanup(jev.Close)
 	f := &consoleFixture{home: home, api: api, now: time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC)}
-	screen := screening.New(screening.Options{Endpoint: jev.URL, Credentials: store, LookupEnv: func(string) string { return "synthetic-key" }})
+	screen := screening.New(screening.Options{Endpoint: jev.URL, Credentials: store})
 	s, err := server.New(context.Background(), home, server.Options{Credentials: store, Screener: screen, M365: m365.Options{BaseURL: graph.URL, AuthorityURL: graph.URL}, Now: func() time.Time { return f.now }, LookupEnv: func(string) string { return "" }})
 	if err != nil {
 		t.Fatal(err)
@@ -339,6 +340,109 @@ func TestConsoleItemShowsTheJevCheck(t *testing.T) {
 	}
 	if page := f.get(t, "/", nil).Body.String(); strings.Contains(page, "Jev") {
 		t.Errorf("list shows a Jev result: %s", page)
+	}
+}
+
+// offlineTransport fails every request, so a test server never reaches a real screening endpoint.
+type offlineTransport struct{}
+
+func (offlineTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("offline")
+}
+
+// fakeConsole starts a server on home whose credential record holds a screening key and the approval
+// password. The [screening] table of home selects the engine; the jev engine has no network.
+func fakeConsole(t *testing.T, home string) *consoleFixture {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte(consolePassword), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(credentials.Record{Version: 1, ScreeningKey: "synthetic-key", ApprovalHash: string(hash), OAuth: map[string]credentials.OAuth{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := credentials.New(&recordPlatform{data: data}, home, nil)
+	s, err := server.New(context.Background(), home, server.Options{Credentials: store, ScreeningHTTPClient: &http.Client{Transport: offlineTransport{}}, LookupEnv: func(string) string { return "" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if _, err := s.Preload(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	handler, ok := s.Console()
+	if !ok {
+		t.Fatal("console is off")
+	}
+	return &consoleFixture{s: s, home: home, console: handler}
+}
+
+// pendDemo makes a call of the fake account demo that the policy holds and returns the approval ID.
+func pendDemo(t *testing.T, s *server.Server, op, params string) string {
+	t.Helper()
+	status, body := accountRPC(t, s, op, "demo", params)
+	match := approvalIDs.FindStringSubmatch(body)
+	if status != 200 || match == nil {
+		t.Fatalf("%s: %d %s", op, status, body)
+	}
+	return match[1]
+}
+
+const fakeScreeningDraftApprove = "[screening]\nprovider='fake'\n[policy]\nmail_draft='approve'\n"
+
+// A check made by the fake engine is labeled as a keyword check, never as a Jev check.
+func TestConsoleItemLabelsTheFakeCheck(t *testing.T) {
+	f := fakeConsole(t, fakeHome(t, fakeScreeningDraftApprove))
+	for body, want := range map[string]string{
+		"See you at noon":        "Fake check (keywords only): not flagged (score 0.05)",
+		"Your new password is x": "Fake check (keywords only): flagged (score 0.90)",
+		"SCREENFAIL":             "Fake check (keywords only): check failed (TypeSafeAPIError 503)",
+	} {
+		id := pendDemo(t, f.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"`+body+`"}`)
+		if page := f.get(t, "/a/"+id, nil).Body.String(); !strings.Contains(page, want) || strings.Contains(page, "Jev") {
+			t.Errorf("%q: item page misses %q or names Jev: %s", body, want, page)
+		}
+	}
+}
+
+// The label follows the engine that made the check, not the engine of the running server: an item checked by
+// the fake engine keeps its label after a restart with Jev screening.
+func TestConsoleItemKeepsTheFakeLabelAfterARestartWithJev(t *testing.T) {
+	home := fakeHome(t, fakeScreeningDraftApprove)
+	before := fakeConsole(t, home)
+	id := pendDemo(t, before.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"See you at noon"}`)
+	if err := before.s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[accounts.demo]\nprovider='fake'\n[policy]\nmail_draft='approve'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	after := fakeConsole(t, home)
+	if after.s.FakeScreening() {
+		t.Fatal("the restarted server uses fake screening")
+	}
+	page := after.get(t, "/a/"+id, nil).Body.String()
+	if want := "Fake check (keywords only): not flagged (score 0.05)"; !strings.Contains(page, want) || strings.Contains(page, "Jev") {
+		t.Fatalf("item page misses %q or names Jev: %s", want, page)
+	}
+}
+
+// The mark of the fake engine stays with the stored item: the agent's responses and the audit log never
+// carry it.
+func TestFakeCheckMarkStaysOutOfAgentResponsesAndTheAudit(t *testing.T) {
+	home := fakeHome(t, fakeScreeningDraftApprove)
+	f := fakeConsole(t, home)
+	status, body := accountRPC(t, f.s, "draft.new", "demo", `{"to":["a@example.test"],"subject":"s","body":"Your new password is x"}`)
+	match := approvalID.FindStringSubmatch(body)
+	if status != 200 || match == nil {
+		t.Fatalf("draft: %d %s", status, body)
+	}
+	if status, body := approvalStatus(t, f.s, match[1]); status != 200 || body != `{"state":"pending"}` {
+		t.Fatalf("status: %d %s", status, body)
+	}
+	if text, _ := auditOf(t, home); strings.Contains(text, "fake") || !strings.Contains(text, `"jev_flag"`) {
+		t.Fatalf("audit=%s", text)
 	}
 }
 

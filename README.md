@@ -16,7 +16,9 @@ Provider OAuth remains mandatory.
 ## Privacy and external screening
 
 **Privacy warning:** Screening is an external service, not a local-only check.
-The server sends requests to OpenRouter's System One endpoint for model `typesafe/jev-1.13`.
+By default, the server sends requests to OpenRouter's System One endpoint for model `typesafe/jev-1.13`.
+The [`[screening]`](#screening) table can set another endpoint and model, which then receives the same data.
+The fake screening engine sends nothing, but it is only for tests and local work.
 
 - Mail requests include rendered body text, subject, sender and recipient identities, attachment names, authentication results, and link domains.
 - Calendar requests include subject, organizer, attendees, location, recurrence, meeting join URLs, and other event metadata.
@@ -59,10 +61,10 @@ The supported deployment is one server setup per machine, with multiple configur
 Each account has a distinct configuration name.
 Independent server homes with separate Keychain identities are not supported.
 
-The server owns configuration, OAuth credentials, the Jev key, `cache.db`, and `audit.jsonl`.
+The server owns configuration, OAuth credentials, the screening key, `cache.db`, and `audit.jsonl`.
 The CLI never loads these files for data commands, even with a loopback server.
 The server home is `--home`, then `AGENTMAILGUARD_HOME`, then `~/.agentmailguard`.
-`serve` and local `auth login`, `auth set-jev-key`, `auth set-approval-password`, `auth migrate`, and `auth change-password` accept `--home`.
+`serve` and local `auth login`, `auth set-screening-key`, `auth set-approval-password`, `auth migrate`, and `auth change-password` accept `--home`.
 There is no automatic import of configuration, cache, or credentials from the retired Python version.
 
 Create a private server-home directory and a `config.toml` file there.
@@ -110,14 +112,14 @@ provider = "fake"
 
 A fake account needs no `client_id`, `tenant_id`, or `client_secret`, and `auth login` refuses it with `fake accounts need no login`. The `[policy]` tables and `rules.toml` work as for other accounts. At start, `serve` shows `account "demo" (fake): no login needed`, and `auth status` shows the account address with no scopes.
 
-All fake accounts share `fake.db` in the server home, for example `~/.agentmailguard/fake.db`. Each row has an `account` column with the account name. The server creates the file with mode 0600 and applies the schema in [`internal/providers/fake/schema.sql`](internal/providers/fake/schema.sql) when it first opens the file. The schema file explains each table and column. Each account gets the folders `inbox`, `drafts`, `sent`, `archive`, and `trash`. The account address is `<account>@fake.test` unless the `identities` table has a row for the account.
+All fake accounts share `fake-provider.db` in the server home, for example `~/.agentmailguard/fake-provider.db`. Each row has an `account` column with the account name. The server creates the file with mode 0600 and applies the schema in [`internal/providers/fake/schema.sql`](internal/providers/fake/schema.sql) when it first opens the file. The schema file explains each table and column. Each account gets the folders `inbox`, `drafts`, `sent`, `archive`, and `trash`. The account address is `<account>@fake.test` unless the `identities` table has a row for the account.
 
-The server reads and writes `fake.db` on every call, so you can seed and inspect it with `sqlite3` while the server runs:
+The server reads and writes `fake-provider.db` on every call, so you can seed and inspect it with `sqlite3` while the server runs:
 
 ```sh
-sqlite3 ~/.agentmailguard/fake.db < internal/providers/fake/schema.sql
-sqlite3 ~/.agentmailguard/fake.db "INSERT INTO messages (account, id, sender_name, sender_address, to_addresses, subject, body, received_at, spf, dkim, dmarc) VALUES ('demo', 'm1', 'Ana', 'ana@example.test', '[\"demo@fake.test\"]', 'Lunch on Friday?', 'Are you free at noon?', '2026-04-01T09:30:00Z', 'pass', 'pass', 'pass');"
-sqlite3 ~/.agentmailguard/fake.db "SELECT id, folder, subject, origin FROM messages WHERE account = 'demo';"
+sqlite3 ~/.agentmailguard/fake-provider.db < internal/providers/fake/schema.sql
+sqlite3 ~/.agentmailguard/fake-provider.db "INSERT INTO messages (account, id, sender_name, sender_address, to_addresses, subject, body, received_at, spf, dkim, dmarc) VALUES ('demo', 'm1', 'Ana', 'ana@example.test', '[\"demo@fake.test\"]', 'Lunch on Friday?', 'Are you free at noon?', '2026-04-01T09:30:00Z', 'pass', 'pass', 'pass');"
+sqlite3 ~/.agentmailguard/fake-provider.db "SELECT id, folder, subject, origin FROM messages WHERE account = 'demo';"
 ```
 
 Trash and archive are moves to the `trash` and `archive` folders; nothing is ever deleted. Drafts go to `drafts`. `mail send`, `mail reply`, and `mail forward` store the message in `sent`, with `origin` (`new`, `reply`, or `forward`) and `source_id`. Nothing leaves the machine.
@@ -125,16 +127,47 @@ Trash and archive are moves to the `trash` and `archive` folders; nothing is eve
 The calendar uses three tables. `events` holds the events, `attendees` holds the attendees of each event and their responses, and `free_busy` holds the free/busy times that `calendar availability` reads. The account organizes an event when its `organizer_address` is empty or is the account address; only then can it update or cancel the event. It can respond only to the other events. Availability comes only from `free_busy`, never from `events`. An address without `free_busy` rows is `unknown`, and a slot that no row covers is `free`. For example, an event that Ana organizes with the demo account as attendee, and Ana's busy time:
 
 ```sh
-sqlite3 ~/.agentmailguard/fake.db "INSERT INTO events (account, id, subject, start_at, end_at, organizer_name, organizer_address) VALUES ('demo', 'e1', 'Planning', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z', 'Ana', 'ana@example.test'); INSERT INTO attendees (account, event_id, address, name) VALUES ('demo', 'e1', 'demo@fake.test', 'Demo'); INSERT INTO free_busy (account, address, start_at, end_at, status) VALUES ('demo', 'ana@example.test', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z', 'busy');"
+sqlite3 ~/.agentmailguard/fake-provider.db "INSERT INTO events (account, id, subject, start_at, end_at, organizer_name, organizer_address) VALUES ('demo', 'e1', 'Planning', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z', 'Ana', 'ana@example.test'); INSERT INTO attendees (account, event_id, address, name) VALUES ('demo', 'e1', 'demo@fake.test', 'Demo'); INSERT INTO free_busy (account, address, start_at, end_at, status) VALUES ('demo', 'ana@example.test', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z', 'busy');"
 ```
 
-`calendar invite`, `update`, `cancel`, and `respond` change only `fake.db`, under the write policy as for other accounts. No notification leaves the machine. A cancel sets `is_cancelled` and `cancel_comment` and deletes nothing. A response sets the account's own row in `attendees`.
+`calendar invite`, `update`, `cancel`, and `respond` change only `fake-provider.db`, under the write policy as for other accounts. No notification leaves the machine. A cancel sets `is_cancelled` and `cancel_comment` and deletes nothing. A response sets the account's own row in `attendees`.
 
-Fake mail is untrusted like real mail. Jev screens it, so the server still needs the Jev key.
+Fake mail is untrusted like real mail. The configured [screening](#screening) engine screens it. With the fake screening engine, the server needs no screening key.
+
+## Screening
+
+The server screens every message and checks the text of agent actions with a decision engine. The optional `[screening]` table selects the engine:
+
+```toml
+[screening]
+provider = "jev"                                     # Default. Use "fake" for the keyword engine.
+endpoint = "https://openrouter.ai/api/v1/systemone"  # Default. Used only by "jev".
+model = "typesafe/jev-1.13"                          # Default. Used only by "jev".
+```
+
+- `jev` calls Jev at `endpoint` with the stored screening key. The endpoint can be OpenRouter, Jev cloud, or another host that serves the same protocol. It must be an `https` URL with a host name, no user name or password, and no fragment, because each request carries mail text and the key. A port is optional and must be from 1 to 65535.
+- `model` names the model that `jev` asks. The default, `typesafe/jev-1.13`, is the model name at OpenRouter. Jev cloud uses other model names. For example, to use Jev cloud:
+
+  ```toml
+  [screening]
+  endpoint = "https://api.typesafe.ai/v1/systemone"
+  model = "jev-1.13.0"
+  ```
+
+  A model name starts with a letter or a digit. It contains only letters, digits, `.`, `_`, `:`, `/`, and `-`, and it has a maximum of 128 characters. The screening thresholds are tuned for jev-1.13, so another model can change the verdicts.
+- `fake` decides by keywords in the message or action. It makes no network calls and needs no key. It is for tests and local development:
+  - "ignore previous instructions" makes a message `red`;
+  - "verification code" makes a message `sealed`;
+  - "SCREENFAIL" makes the screening fail, as when the engine is down;
+  - "password" flags an action, so an allowed action waits for approval;
+  - a folder or category rule is chosen when its rule name (the table name in `rules.toml`) is in the message.
+- At start, `serve` shows `screening key: not needed (fake screening)`. If a configured account is not a fake account, `serve` also prints a warning: the mail of that account is then judged by keywords, not by a decision model.
+- An absent table selects `jev` with the default endpoint and model. An unknown key or provider, an invalid endpoint, or an invalid model stops `serve` with `invalid screening: KEY_PATH`, for example `invalid screening: screening.endpoint` or `invalid screening: screening.model`. The error never shows the value.
+- The server reads `[screening]` only at start. After a change, restart the server.
 
 ## Credential storage
 
-Both backends store all provider OAuth credentials, the Jev (OpenRouter) key, and the [approval password](#approval-password) hash in one versioned record.
+Both backends store all provider OAuth credentials, the screening key, and the [approval password](#approval-password) hash in one versioned record.
 The optional configuration table selects the backend:
 
 ```toml
@@ -160,8 +193,8 @@ One item replaces the separate per-account approvals with one item approval per 
 An ad-hoc-signed rebuild changes the application identity, so it needs approval again.
 Stable code signing is outside this implementation.
 
-If the single item is absent, the first local store operation automatically imports the configured accounts and Jev key from legacy items.
-This applies to `serve`, `auth login`, `auth set-jev-key`, and `auth set-approval-password`, so an initial login cannot hide other legacy credentials.
+If the single item is absent, the first local store operation automatically imports the configured accounts and screening key from legacy items.
+This applies to `serve`, `auth login`, `auth set-screening-key`, and `auth set-approval-password`, so an initial login cannot hide other legacy credentials.
 The import leaves legacy items unchanged.
 An unreadable legacy item refuses the operation instead of creating a partial record.
 
@@ -186,16 +219,16 @@ Unsetting the variable does not remove the initial environment exposure or erase
 Do not put passwords in command arguments, shell history, or configuration files.
 A secret manager can supply the environment variable or stdin.
 
-Run `agentmailguard auth set-jev-key --home /private/path/agentmailguard` locally to save the Jev key.
+Run `agentmailguard auth set-screening-key --home /private/path/agentmailguard` locally to save the screening key.
 Terminal input disables echo. Non-terminal stdin supplies the key as one line.
 With the file backend and no password environment variable, piped input must contain two lines: the password first, then the key.
 With the password environment variable, piped input contains only the key line.
 The command refuses keys with spaces or control characters. It never prints the key or accepts it as an argument.
 It also refuses `--server`, `AGENTMAILGUARD_SERVER`, and `--account`.
 
-The server can use `OPENROUTER_API_KEY` instead of the stored key.
-The server selects its Jev key at start. Restart it after replacing the key.
-No remote client command transfers a provider token or Jev key to the server.
+The server reads the screening key only from the credential store. It ignores `OPENROUTER_API_KEY`, so a key set for other tools is never sent to a configured endpoint.
+The server selects its screening key at start. Restart it after replacing the key.
+No remote client command transfers a provider token or screening key to the server.
 
 ### Copy credentials to the other backend
 
@@ -262,17 +295,17 @@ Run login locally on the server host:
 
 1. It reads the whole store and rewrites the record once to check read and write access, not once per account.
 2. Its first `credential check:` item is `credentials (keychain)` or `credentials (file)`. A store failure refuses startup.
-3. It checks every configured account. It also checks the stored Jev key unless `OPENROUTER_API_KEY` supplies the key. Check lines contain fixed statuses, not secrets.
-4. If the Jev key is missing and stdin is a terminal, it prompts with echo disabled and saves the key. Piped password input gets no Jev prompt.
+3. It checks every configured account. It also checks the stored screening key, unless `[screening]` selects the fake engine. Check lines contain fixed statuses, not secrets.
+4. If the screening key is missing and stdin is a terminal, it prompts with echo disabled and saves the key. Piped password input gets no key prompt.
 
 An account that is not logged in does not block startup.
 Its commands fail until local `auth login` and a server restart.
-Other credential failures, a missing Jev key, or missing configuration refuse startup.
+Other credential failures, a missing screening key, or missing configuration refuse startup.
 Store statuses include `ok`, `access denied`, `wrong password or damaged file`, `password missing`, and `unsupported version`.
 
 After startup, ordinary credential loads use server memory.
 Each runtime save rereads the backend under an exclusive `<home>/credentials.lock` before it changes its own entry.
-A token refresh preserves other accounts' entries and the Jev key from concurrent local commands.
+A token refresh preserves other accounts' entries and the screening key from concurrent local commands.
 The running server still keeps its earlier in-memory credentials.
 Token refreshes reach the backend before memory. With Keychain "Always Allow", the reread does not need another prompt for the same build.
 A file save needs one scrypt derivation for the read and another for the write.
@@ -358,7 +391,7 @@ Required text flags distinguish an omitted value from an explicit empty value, i
 
 | Group | Commands |
 | --- | --- |
-| State and auth | `stats --days 30`, `cache clear`, `rules list`, `approvals status ID`, `auth status`, local `auth login [--device-code] [--no-browser]`, `auth set-jev-key`, `auth set-approval-password`, `auth migrate --to file\|keychain`, `auth change-password` |
+| State and auth | `stats --days 30`, `cache clear`, `rules list`, `approvals status ID`, `auth status`, local `auth login [--device-code] [--no-browser]`, `auth set-screening-key`, `auth set-approval-password`, `auth migrate --to file\|keychain`, `auth change-password` |
 | Mail reads | `mail list`, `mail get ID [--pretty]`, `mail search`, `mail link ID L1 L2` or `mail link ID --all`, `mail folders`, `mail categories` |
 | Mail changes | `mail archive IDS...`, `mail trash IDS...`, `mail move FOLDER_ID IDS...`, `mail read IDS...`, `mail unread IDS...`, `mail flag IDS... --state flagged|complete|none`, `mail categorize IDS... --add NAME --remove NAME` |
 | Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID` |
@@ -431,7 +464,7 @@ In `mail organize --apply`, only a rule move to `trash` has a key.
 The server reads the policy at start.
 After a policy change, requests for each changed account fail with `account configuration changed; restart required` until you restart the server.
 If the changed policy is invalid, requests fail with `configuration unavailable`.
-An invalid policy stops `serve`, `auth login`, `auth set-jev-key`, `auth set-approval-password`, `auth migrate`, and `auth change-password` with `invalid policy: KEY_PATH`.
+An invalid policy stops `serve`, `auth login`, `auth set-screening-key`, `auth set-approval-password`, `auth migrate`, and `auth change-password` with `invalid policy: KEY_PATH`.
 For example: `invalid policy: accounts.personal.policy.sealed.calendar_invite`. The error never shows the value.
 A policy is invalid if it has an unknown key or table, a value other than `allow`, `approve`, or `deny`, or a calendar key in a sealed table.
 
@@ -461,12 +494,13 @@ The check comes after the policy decision:
 
 - `deny` refuses the action. Jev does not see it.
 - If Jev flags the action, or the check fails, `allow` becomes `approve`, and the action waits in the [approval console](#approval-console). `approve` stays `approve`.
-- A missing Jev key or a Jev outage makes every check fail, so every checked action waits for approval.
+- A missing screening key or a Jev outage makes every check fail, so every checked action waits for approval.
 - When a person approves an item, the server runs it without a second check.
 
 Jev gives a score from 0 to 1. A score of 0.5 or more is a flag. This threshold is provisional and will change after tuning.
 The agent never sees the score or the flag. It gets the normal result or the normal `pending` result.
 The item page of the approval console shows the result, for example `Jev: flagged (score 0.62)`, `Jev: not flagged (score 0.08)`, or `Jev: check failed (TimeoutError)`.
+If the [fake screening engine](#screening) made the check, the page shows `Fake check (keywords only):` instead of `Jev:`, for example `Fake check (keywords only): flagged (score 0.90)`. The item keeps this label after a change to `[screening]` and a restart.
 
 ### Results
 
@@ -513,7 +547,7 @@ hosts = ["my-mac.example.ts.net"]
 - `hosts`: extra host names that the console accepts, for example a Tailscale name. Each entry is a host name or IP address with an optional `:PORT`. An entry without a port matches a request without a port. Put an IPv6 address in brackets. The default is none.
 
 The server reads `[approvals]` at start. Restart the server after a change.
-An invalid table stops `serve`, `auth login`, `auth set-jev-key`, `auth set-approval-password`, `auth migrate`, and `auth change-password` with `invalid approvals: KEY_PATH`, for example `invalid approvals: approvals.listen`. The error never shows the value.
+An invalid table stops `serve`, `auth login`, `auth set-screening-key`, `auth set-approval-password`, `auth migrate`, and `auth change-password` with `invalid approvals: KEY_PATH`, for example `invalid approvals: approvals.listen`. The error never shows the value.
 
 ### Approval password
 
@@ -571,7 +605,7 @@ Known limits:
 
 Pending items are in the `pending` table of `cache.db`. They do not expire.
 A pending item stores the account, the operation, and the request arguments: recipients, subject, body, comment, event fields, and the message or event ID.
-It also stores the result of the Jev check, if a check ran: the flag and the score, or the safe error code.
+It also stores the result of the Jev check, if a check ran: the flag and the score, or the safe error code, and whether the fake screening engine made the check.
 `cache clear` does not delete pending items.
 
 The audit log gets content-free records for the policy. Their `operation` is the API operation name, for example `mail.trash`.
@@ -587,11 +621,15 @@ The audit log gets content-free records for the policy. Their `operation` is the
 3. The cache database gets the `pending` table (schema version 5). After the upgrade, `serve` of an older binary fails with `server state unavailable`.
 4. Pending items store request text in `cache.db`. Earlier versions kept no subject, recipient, or body text in storage.
 5. After you set an approval password, older builds refuse the credential record. Records without an approval password keep the old format.
-6. The Jev action check can make an allowed draft or meeting action wait for approval. Without an approval password, such an item stays pending. A missing Jev key or a Jev outage makes every checked action wait.
+6. The Jev action check can make an allowed draft or meeting action wait for approval. Without an approval password, such an item stays pending. A missing screening key or a Jev outage makes every checked action wait.
 7. The new commands `mail send`, `mail reply`, and `mail forward` send mail. The `mail_send` key denies them by default. Earlier versions could not send mail.
 8. Microsoft 365 login and token refresh now request `Mail.Send`. For an account that logged in before this change, send commands fail with `missing_scopes`, and a refresh can need new consent. To fix this, run `auth login` again on the server host and restart the server.
 9. Meeting commands now work for Gmail accounts. Gmail login now requests `calendar.events.owned` instead of `calendar.events.owned.readonly`. A Gmail account that logged in before this change still reads mail and the calendar, but its meeting commands fail with `missing_scopes`. To fix this, run `auth login` again on the server host and restart the server.
 10. The `teams` option is now `online`, with no alias. On the CLI, use `--online` and `--no-online` instead of `--teams` and `--no-teams`. On the HTTP interface, use the `online` field of `calendar.invite` and `calendar.update` instead of `teams`. A request with `teams` fails with `invalid request`. Pending items that were stored with `teams` fail when they are approved; make them again.
+11. The server now ignores `OPENROUTER_API_KEY` and reads the screening key only from the credential store. If you gave the key only through `OPENROUTER_API_KEY`, run `auth set-screening-key` on the server host before you start the new version. Otherwise `serve` asks for the key on a terminal, or stops with `credential check: screening key: missing; run auth set-screening-key`.
+12. `auth set-jev-key` is now `auth set-screening-key`, with no alias. Keys that are already stored still work.
+13. The fake provider database `fake.db` is now `fake-provider.db`. The server does not read `fake.db`. To keep your fake data, rename `fake.db` to `fake-provider.db` before you start the server.
+14. The new optional [`[screening]`](#screening) table selects the screening engine. Without it, the server screens with Jev at OpenRouter, as before.
 
 ### Known limits
 
@@ -829,10 +867,11 @@ Offline tests cover mail send against fake Graph and Gmail endpoints: the exact 
 Native file-backend tests also cover server startup, password refusal, terminal password changes, and SIGTERM shutdown.
 A separate combined native acceptance run used the file backend, temporary HOME, synthetic credentials, and a non-forwarding loopback HTTPS proxy.
 It passed device-code login, native server startup, an external key update while serving, token refresh, terminal password change, and restart.
-A fresh screened read after restart required the updated Jev key and refreshed OAuth token at fake endpoints.
+A fresh screened read after restart required the updated screening key and refreshed OAuth token at fake endpoints.
 This run did not access real providers, Keychain, or user configuration.
 Transport tests cover redirects, stale connections, cancellation, request validation, and content-free errors.
 No test needs real mailbox data, a browser, OpenRouter, or Keychain access.
+Offline tests send the configured `[screening]` endpoint, model, and stored key to a fake TLS endpoint. No request to Jev cloud or to another configured endpoint or model has been verified live.
 
 Earlier authorized checks passed for live Gmail reads and a real Jev request containing synthetic text only.
 Earlier Microsoft 365 checks refused extra scopes. After the approved policy change, a user-authorized browser login and `auth status` succeeded with warnings.

@@ -335,19 +335,25 @@ func (c *console) reference(ctx context.Context, item cache.Pending, args map[st
 	return kind, out, false
 }
 
-// jevText describes the Jev action check of an item, or is empty when no check ran.
+// jevText describes the Jev action check of an item, or is empty when no check ran. A check that the fake
+// engine made says so, so that nobody takes a keyword match for a Jev check.
 func jevText(c *model.ActionCheck) string {
-	switch {
-	case c == nil:
+	if c == nil {
 		return ""
-	case c.Error != nil:
-		return "Jev: check failed (" + *c.Error + ")"
-	case c.Score == nil:
-		return "Jev: check failed"
-	case c.Flag:
-		return fmt.Sprintf("Jev: flagged (score %.2f)", *c.Score)
 	}
-	return fmt.Sprintf("Jev: not flagged (score %.2f)", *c.Score)
+	engine := "Jev: "
+	if c.Fake {
+		engine = "Fake check (keywords only): "
+	}
+	switch {
+	case c.Error != nil:
+		return engine + "check failed (" + *c.Error + ")"
+	case c.Score == nil:
+		return engine + "check failed"
+	case c.Flag:
+		return engine + fmt.Sprintf("flagged (score %.2f)", *c.Score)
+	}
+	return engine + fmt.Sprintf("not flagged (score %.2f)", *c.Score)
 }
 
 func ptr(s string) *string { return &s }

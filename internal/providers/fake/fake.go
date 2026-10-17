@@ -1,4 +1,4 @@
-// Package fake implements a local provider whose mailbox and calendar live in <home>/fake.db. It makes no
+// Package fake implements a local provider whose mailbox and calendar live in <home>/fake-provider.db. It makes no
 // network calls and needs no login. It reads and writes the database on every call, so edits made with
 // sqlite3 while the server runs are seen. Its mail and events are untrusted, as with real providers.
 package fake
@@ -36,15 +36,15 @@ type Provider struct {
 	db            *sql.DB
 }
 
-// New has no side effects. fake.db is opened on the first call.
+// New has no side effects. fake-provider.db is opened on the first call.
 func New(account, home string, now func() time.Time) *Provider {
 	if now == nil {
 		now = time.Now
 	}
-	return &Provider{account: account, path: filepath.Join(home, "fake.db"), now: now}
+	return &Provider{account: account, path: filepath.Join(home, "fake-provider.db"), now: now}
 }
 
-// conn opens fake.db once, applies the schema, and adds the fixed folders of the account. A failed open is
+// conn opens fake-provider.db once, applies the schema, and adds the fixed folders of the account. A failed open is
 // tried again on the next call.
 func (p *Provider) conn(ctx context.Context) (*sql.DB, error) {
 	p.mu.Lock()
@@ -119,5 +119,5 @@ func (p *Provider) Status(ctx context.Context) (string, []string, error) {
 
 func (p *Provider) Mailbox() model.Mailbox { return &mailbox{p} }
 
-// Calendar also writes meetings and reads availability, only in fake.db. No notification leaves the machine.
+// Calendar also writes meetings and reads availability, only in fake-provider.db. No notification leaves the machine.
 func (p *Provider) Calendar() model.Calendar { return &calendar{p} }

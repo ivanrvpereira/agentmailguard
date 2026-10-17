@@ -46,19 +46,19 @@ func (s safeStore) SaveOAuth(ctx context.Context, p, a string, v credentials.OAu
 	}
 	return s.store.SaveOAuth(ctx, p, a, v)
 }
-func (s safeStore) LoadOpenRouterKey(ctx context.Context) (v string, err error) {
+func (s safeStore) LoadScreeningKey(ctx context.Context) (v string, err error) {
 	defer recoverAdapter(&err)
 	if s.store == nil {
 		return "", credentials.ErrUnavailable
 	}
-	return s.store.LoadOpenRouterKey(ctx)
+	return s.store.LoadScreeningKey(ctx)
 }
-func (s safeStore) SaveOpenRouterKey(ctx context.Context, v string) (err error) {
+func (s safeStore) SaveScreeningKey(ctx context.Context, v string) (err error) {
 	defer recoverAdapter(&err)
 	if s.store == nil {
 		return credentials.ErrUnavailable
 	}
-	return s.store.SaveOpenRouterKey(ctx, v)
+	return s.store.SaveScreeningKey(ctx, v)
 }
 
 type safeScreener struct{ screen model.Screener }

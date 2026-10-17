@@ -149,15 +149,20 @@ func (g *Guard) checkAction(ctx context.Context, op audit.Operation, key string,
 	return d, nil
 }
 
-// validCheck keeps a safe error code or a score from 0 to 1, and sets the flag from the score.
+// validCheck keeps a safe error code or a score from 0 to 1, sets the flag from the score, and keeps the
+// mark of the fake engine.
 func validCheck(c model.ActionCheck) model.ActionCheck {
-	if c.Error != nil {
-		return model.ActionFailure(*safeText(c.Error))
+	var v model.ActionCheck
+	switch {
+	case c.Error != nil:
+		v = model.ActionFailure(*safeText(c.Error))
+	case c.Score == nil:
+		v = model.ActionFailure("ValidationError")
+	default:
+		v = model.ActionScore(*c.Score)
 	}
-	if c.Score == nil {
-		return model.ActionFailure("ValidationError")
-	}
-	return model.ActionScore(*c.Score)
+	v.Fake = c.Fake
+	return v
 }
 
 // actionFields gives the agent fields of the stored args without the referenced ID. A response or a

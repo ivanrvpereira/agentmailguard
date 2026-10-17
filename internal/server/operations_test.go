@@ -27,10 +27,10 @@ func (s *store) LoadOAuth(context.Context, string, string) (credentials.OAuth, e
 	return credentials.OAuth{AccessToken: "x." + base64.RawURLEncoding.EncodeToString([]byte(`{"scp":"User.Read Mail.ReadWrite Calendars.Read MailboxSettings.Read"}`)) + ".x", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Username: "synthetic@example.test"}, nil
 }
 func (*store) SaveOAuth(context.Context, string, string, credentials.OAuth) error { return nil }
-func (*store) LoadOpenRouterKey(context.Context) (string, error) {
+func (*store) LoadScreeningKey(context.Context) (string, error) {
 	return "", errors.New("private-key-canary")
 }
-func (*store) SaveOpenRouterKey(context.Context, string) error { return nil }
+func (*store) SaveScreeningKey(context.Context, string) error { return nil }
 func configFile(t *testing.T, home string) {
 	t.Helper()
 	if e := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[accounts.work]\nprovider='m365'\nclient_id='synthetic'\ntenant_id='synthetic'\n[accounts.other]\nprovider='m365'\nclient_id='other'\ntenant_id='synthetic'\n"), 0600); e != nil {

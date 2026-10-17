@@ -1,5 +1,5 @@
--- Schema of fake.db, the mailbox and calendar of accounts with provider = "fake".
--- The server applies it when it first opens fake.db. To seed by hand: sqlite3 fake.db < schema.sql
+-- Schema of fake-provider.db, the mailbox and calendar of accounts with provider = "fake".
+-- The server applies it when it first opens fake-provider.db. To seed by hand: sqlite3 fake-provider.db < schema.sql
 -- Every row belongs to the account named in its account column (the name of [accounts.NAME]).
 -- Lists are JSON arrays in TEXT columns. Times are RFC 3339 text, for example 2026-04-01T09:30:00Z.
 -- All mail and event text is untrusted, as with real providers.

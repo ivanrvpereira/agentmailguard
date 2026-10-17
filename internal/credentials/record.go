@@ -72,17 +72,17 @@ func decodeRecord(value []byte) (Record, error) {
 		}
 	}
 	var wire struct {
-		Version       *int                       `json:"version"`
-		OAuth         map[string]json.RawMessage `json:"oauth"`
-		OpenRouterKey *string                    `json:"openrouter_key"`
-		ApprovalHash  *string                    `json:"approval_hash"`
+		Version      *int                       `json:"version"`
+		OAuth        map[string]json.RawMessage `json:"oauth"`
+		ScreeningKey *string                    `json:"openrouter_key"`
+		ApprovalHash *string                    `json:"approval_hash"`
 	}
 	d = json.NewDecoder(bytes.NewReader(value))
 	d.DisallowUnknownFields()
-	if d.Decode(&wire) != nil || wire.Version == nil || wire.OpenRouterKey == nil || wire.OAuth == nil || (hasHash && (wire.ApprovalHash == nil || *wire.ApprovalHash == "")) {
+	if d.Decode(&wire) != nil || wire.Version == nil || wire.ScreeningKey == nil || wire.OAuth == nil || (hasHash && (wire.ApprovalHash == nil || *wire.ApprovalHash == "")) {
 		return Record{}, ErrInvalidRecord
 	}
-	r := Record{Version: *wire.Version, OAuth: make(map[string]OAuth, len(wire.OAuth)), OpenRouterKey: strings.TrimSpace(*wire.OpenRouterKey)}
+	r := Record{Version: *wire.Version, OAuth: make(map[string]OAuth, len(wire.OAuth)), ScreeningKey: strings.TrimSpace(*wire.ScreeningKey)}
 	if wire.ApprovalHash != nil {
 		r.ApprovalHash = *wire.ApprovalHash
 	}

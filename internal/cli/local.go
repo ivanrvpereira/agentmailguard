@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -50,10 +51,13 @@ func serve(ctx context.Context, home, listen string, stdin io.Reader, stderr io.
 	}
 	s, e := server.New(context.WithoutCancel(ctx), home, opts)
 	if e != nil {
-		if e.Error() == "configuration unavailable" || errors.As(e, new(config.ApprovalsError)) {
+		if e.Error() == "configuration unavailable" || errors.As(e, new(config.ApprovalsError)) || errors.As(e, new(config.ScreeningError)) {
 			return failure(stderr, e.Error())
 		}
 		return failure(stderr, "server state unavailable")
+	}
+	if fakeScreeningOfRealMail(ctx, s, home) {
+		fmt.Fprintln(stderr, "WARNING: fake screening judges the mail of real accounts by keywords, not by a decision model.")
 	}
 	if code := preload(ctx, s, stdin, stderr); code != 0 {
 		_ = s.Close()
@@ -107,6 +111,20 @@ func serve(ctx context.Context, home, listen string, stdin io.Reader, stderr io.
 	}
 }
 
+// fakeScreeningOfRealMail reports whether the server uses fake screening while an account is not fake.
+// If the accounts cannot be read, it reports false; preload then fails on the same configuration.
+func fakeScreeningOfRealMail(ctx context.Context, s *server.Server, home string) bool {
+	if !s.FakeScreening() {
+		return false
+	}
+	home, e := config.Home(home)
+	if e != nil {
+		return false
+	}
+	accounts, e := config.LoadAccounts(ctx, filepath.Join(home, "config.toml"))
+	return e == nil && slices.ContainsFunc(accounts, func(a config.Account) bool { return a.Provider != "fake" })
+}
+
 // loopback reports whether host is localhost or a loopback IP address.
 func loopback(host string) bool {
 	if strings.EqualFold(host, "localhost") {
@@ -117,7 +135,7 @@ func loopback(host string) bool {
 }
 
 // preload asks the credential backend for everything before the server accepts requests,
-// because an operator is present at start. A missing Jev key is requested only on a terminal.
+// because an operator is present at start. A missing screening key is requested only on a terminal.
 func preload(ctx context.Context, s *server.Server, stdin io.Reader, stderr io.Writer) int {
 	if stdin == nil {
 		stdin = os.Stdin
@@ -125,7 +143,7 @@ func preload(ctx context.Context, s *server.Server, stdin io.Reader, stderr io.W
 	var prompt func(context.Context) (string, error)
 	if _, ok := terminal(stdin); ok {
 		prompt = func(ctx context.Context) (string, error) {
-			key, problem := readJevKey(ctx, stdin, stderr, "Jev key not found. Enter the Jev (OpenRouter) API key to save it: ")
+			key, problem := readScreeningKey(ctx, stdin, stderr, "Screening key not found. Enter the screening API key to save it: ")
 			if problem != "" {
 				errorLine(stderr, problem)
 				return "", errors.New(problem)

@@ -17,11 +17,11 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// consoleStore is a credential record with a Jev key and, when password is true, an approval password.
+// consoleStore is a credential record with a screening key and, when password is true, an approval password.
 func consoleStore(t *testing.T, password bool) credentials.Store {
 	t.Helper()
 	store := approvalStore(t)
-	if err := store.SaveOpenRouterKey(context.Background(), "private-jev-canary"); err != nil {
+	if err := store.SaveScreeningKey(context.Background(), "private-jev-canary"); err != nil {
 		t.Fatal(err)
 	}
 	if password {
@@ -63,6 +63,9 @@ func consoleHome(t *testing.T, listen string) string {
 	return home
 }
 
+// serveBound is how long a test waits for serve to start or stop before it fails. Parallel race runs are slow.
+const serveBound = 30 * time.Second
+
 // startServe runs serve until the test ends and returns its log once the server listens.
 func startServe(t *testing.T, home string, store credentials.Store) *notices {
 	t.Helper()
@@ -79,7 +82,7 @@ func startServe(t *testing.T, home string, store credentials.Store) *notices {
 			if code != 0 {
 				t.Errorf("shutdown exit %d", code)
 			}
-		case <-time.After(5 * time.Second):
+		case <-time.After(serveBound):
 			t.Error("server did not stop")
 		}
 	})
@@ -87,7 +90,7 @@ func startServe(t *testing.T, home string, store credentials.Store) *notices {
 	case <-logs.ready:
 	case code := <-done:
 		t.Fatalf("serve exit %d: %s", code, logs.text.String())
-	case <-time.After(5 * time.Second):
+	case <-time.After(serveBound):
 		t.Fatal("listener did not start")
 	}
 	return logs
@@ -159,7 +162,7 @@ func TestServeRefusesToStartWhenTheConsolePortIsTaken(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer taken.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), serveBound)
 	defer cancel()
 	var stderr strings.Builder
 	code := cli.Run(ctx, []string{"serve", "--home", consoleHome(t, taken.Addr().String()), "--listen", "127.0.0.1:0"}, io.Discard, &stderr, cli.Options{LookupEnv: func(string) string { return "" }, Server: server.Options{Credentials: consoleStore(t, true)}})

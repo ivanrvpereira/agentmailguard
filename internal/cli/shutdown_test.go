@@ -36,7 +36,7 @@ func (s *serveStore) SaveOAuth(context.Context, string, string, credentials.OAut
 	s.writes++
 	return nil
 }
-func (s *serveStore) LoadOpenRouterKey(context.Context) (string, error) {
+func (s *serveStore) LoadScreeningKey(context.Context) (string, error) {
 	if s.key == "" {
 		return "", credentials.ErrNotFound
 	}
@@ -82,7 +82,7 @@ func TestServeExposureWarningAndBoundedShutdown(t *testing.T) {
 		}()
 		select {
 		case <-logs.ready:
-		case <-time.After(3 * time.Second):
+		case <-time.After(serveBound):
 			cancel()
 			t.Fatal("listener did not start")
 		}
@@ -92,6 +92,7 @@ func TestServeExposureWarningAndBoundedShutdown(t *testing.T) {
 			if code != 0 {
 				t.Errorf("shutdown exit %d", code)
 			}
+		// Shorter than the 5 s HTTP drain: an idle server must stop at once, not wait out the drain.
 		case <-time.After(3 * time.Second):
 			t.Fatal("idle server did not stop")
 		}
@@ -103,7 +104,7 @@ func TestServeExposureWarningAndBoundedShutdown(t *testing.T) {
 			// An account that is not logged in does not block the start; its commands fail.
 			account = "not logged in; commands for this account fail until auth login and a server restart"
 		}
-		checks := "checking credentials\ncredential check: credentials (keychain): ok\ncredential check: account \"work\" (m365): " + account + "\ncredential check: Jev key: ok\ncredential check: approval password: not set; the approval console stays off until auth set-approval-password and a server restart\nserver listening\n"
+		checks := "checking credentials\ncredential check: credentials (keychain): ok\ncredential check: account \"work\" (m365): " + account + "\ncredential check: screening key: ok\ncredential check: approval password: not set; the approval console stays off until auth set-approval-password and a server restart\nserver listening\n"
 		if !strings.HasSuffix(text, checks) || strings.Contains(text, "private-") {
 			t.Errorf("credential checks must precede listening: %q", text)
 		}
@@ -120,8 +121,8 @@ func TestServeRefusesToStartWhenCredentialsAreMissing(t *testing.T) {
 		store *serveStore
 		want  []string
 	}{
-		// A piped or absent stdin never gets a key prompt; automated hosts use OPENROUTER_API_KEY.
-		{"key missing without terminal", serveHome, &serveStore{}, []string{"credential check: Jev key: missing; run auth set-jev-key or set OPENROUTER_API_KEY", "error: credential check failed"}},
+		// A piped or absent stdin never gets a key prompt; automated hosts save the key with auth set-screening-key first.
+		{"key missing without terminal", serveHome, &serveStore{}, []string{"credential check: screening key: missing; run auth set-screening-key", "error: credential check failed"}},
 		{"no configuration", func(t *testing.T) string { return t.TempDir() }, &serveStore{key: "k"}, []string{"error: configuration unavailable"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

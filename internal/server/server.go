@@ -10,7 +10,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -35,7 +34,9 @@ type Options struct {
 	M365        m365.Options
 	Gmail       gmail.Options
 	Now         func() time.Time
-	LookupEnv   func(string) string // defaults to os.Getenv; used for OPENROUTER_API_KEY
+	LookupEnv   func(string) string // supplies the credentials file password; nil reads the process environment
+	// ScreeningHTTPClient is the HTTP client of the jev engine. Nil uses the default client. For tests.
+	ScreeningHTTPClient *http.Client
 }
 
 func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "ServerOptions{redacted}") }
@@ -59,6 +60,8 @@ type Server struct {
 	// approvals is the [approvals] table, read once at start. approvalBase is the console item URL prefix.
 	approvals    config.Approvals
 	approvalBase string
+	// screening is the [screening] table, read once at start.
+	screening config.Screening
 	// approvalHash is the bcrypt hash of the approval console password, read once by Preload.
 	// Empty means not set. A change takes effect only after a restart.
 	approvalHash string
@@ -80,6 +83,11 @@ func New(ctx context.Context, home string, opts Options) (*Server, error) {
 	if err != nil {
 		approvals.Listen = config.DefaultApprovalsListen
 	}
+	// An invalid [screening] table stops the start too; it never falls back to another engine.
+	screen, err := config.LoadScreening(ctx, filepath.Join(home, "config.toml"))
+	if errors.As(err, new(config.ScreeningError)) {
+		return nil, err
+	}
 	if opts.Credentials == nil {
 		accounts, err := config.LoadAccounts(ctx, filepath.Join(home, "config.toml"))
 		if err != nil {
@@ -99,9 +107,6 @@ func New(ctx context.Context, home string, opts Options) (*Server, error) {
 			}
 		}
 	}
-	if opts.LookupEnv == nil {
-		opts.LookupEnv = os.Getenv
-	}
 	c, err := cache.Open(ctx, filepath.Join(home, "cache.db"))
 	if err != nil {
 		return nil, errors.New("cache unavailable")
@@ -111,15 +116,21 @@ func New(ctx context.Context, home string, opts Options) (*Server, error) {
 	}
 	creds := &memoryStore{backend: safeStore{opts.Credentials}}
 	opts.Credentials = creds
+	if opts.Screener == nil && screen.Provider == "fake" {
+		opts.Screener = screening.NewFake()
+	}
 	if opts.Screener == nil {
-		opts.Screener = screening.New(screening.Options{Credentials: opts.Credentials, HTTPClient: safeHTTP(nil), LookupEnv: opts.LookupEnv})
+		opts.Screener = screening.New(screening.Options{Credentials: opts.Credentials, HTTPClient: safeHTTP(opts.ScreeningHTTPClient), Endpoint: screen.Endpoint, Model: screen.Model})
 	}
 	opts.Screener = safeScreener{opts.Screener}
 	opts.M365.HTTPClient = safeHTTP(opts.M365.HTTPClient)
 	opts.Gmail.HTTPClient = safeHTTP(opts.Gmail.HTTPClient)
 	ctx, cancel := context.WithCancel(ctx)
-	return &Server{home: home, options: opts, cache: c, audit: audit.New(filepath.Join(home, "audit.jsonl")), ctx: ctx, cancel: cancel, slots: make(chan struct{}, 64), accounts: make(map[string]*account), creds: creds, mu: new(sync.Mutex), work: new(sync.WaitGroup), closeOnce: new(sync.Once), approvals: approvals, approvalBase: "http://" + approvals.Listen + "/a/"}, nil
+	return &Server{home: home, options: opts, cache: c, audit: audit.New(filepath.Join(home, "audit.jsonl")), ctx: ctx, cancel: cancel, slots: make(chan struct{}, 64), accounts: make(map[string]*account), creds: creds, mu: new(sync.Mutex), work: new(sync.WaitGroup), closeOnce: new(sync.Once), approvals: approvals, approvalBase: "http://" + approvals.Listen + "/a/", screening: screen}, nil
 }
+
+// FakeScreening reports whether the [screening] table, read once at start, selects the fake engine.
+func (s *Server) FakeScreening() bool { return s.screening.Provider == "fake" }
 
 // Close stops admission, cancels active calls, and waits at most ShutdownTimeout.
 func (s *Server) Close() error {

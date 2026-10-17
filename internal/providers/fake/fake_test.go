@@ -16,7 +16,7 @@ import (
 
 var now = time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
 
-// seed applies schema.sql to <home>/fake.db by hand, as the README shows, and runs the statements.
+// seed applies schema.sql to <home>/fake-provider.db by hand, as the README shows, and runs the statements.
 func seed(t *testing.T, home string, statements ...string) {
 	t.Helper()
 	db := open(t, home)
@@ -32,7 +32,7 @@ func seed(t *testing.T, home string, statements ...string) {
 }
 func open(t *testing.T, home string) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite3", filepath.Join(home, "fake.db"))
+	db, err := sql.Open("sqlite3", filepath.Join(home, "fake-provider.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,14 +364,14 @@ func TestFakeDBIsPrivate(t *testing.T) {
 	fresh, seeded := t.TempDir(), t.TempDir()
 	// A file made by hand with sqlite3 gets the default mode.
 	seed(t, seeded)
-	if err := os.Chmod(filepath.Join(seeded, "fake.db"), 0644); err != nil {
+	if err := os.Chmod(filepath.Join(seeded, "fake-provider.db"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	for _, home := range []string{fresh, seeded} {
 		if _, _, err := fake.New("demo", home, nil).Status(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		if info, err := os.Stat(filepath.Join(home, "fake.db")); err != nil || info.Mode().Perm() != 0600 {
+		if info, err := os.Stat(filepath.Join(home, "fake-provider.db")); err != nil || info.Mode().Perm() != 0600 {
 			t.Fatalf("mode=%v err=%v", info.Mode(), err)
 		}
 	}

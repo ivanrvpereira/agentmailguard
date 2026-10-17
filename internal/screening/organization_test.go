@@ -63,7 +63,7 @@ func TestOrganizationWireAndIndependentValidation(t *testing.T) {
 				_, _ = w.Write([]byte(reply(c.answers)))
 			}))
 			defer server.Close()
-			s := screening.New(screening.Options{HTTPClient: server.Client(), Endpoint: server.URL, LookupEnv: envKey, Credentials: missingStore()})
+			s := screening.New(screening.Options{HTTPClient: server.Client(), Endpoint: server.URL, Credentials: keyStore()})
 			result, err := s.Classify(context.Background(), map[string]any{}, c.security, orgQuestions())
 			if err != nil {
 				t.Fatal(err)

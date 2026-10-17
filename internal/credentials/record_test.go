@@ -41,8 +41,8 @@ func TestInvalidRecordsFailClosedWithoutFallbackOrOverwrite(t *testing.T) {
 			}}
 			s := credentials.New(p, t.TempDir(), nil)
 			for _, op := range []func() error{
-				func() error { _, e := s.LoadOpenRouterKey(context.Background()); return e },
-				func() error { return s.SaveOpenRouterKey(context.Background(), "replacement-canary") },
+				func() error { _, e := s.LoadScreeningKey(context.Background()); return e },
+				func() error { return s.SaveScreeningKey(context.Background(), "replacement-canary") },
 			} {
 				err := op()
 				if !errors.Is(err, tc.want) {

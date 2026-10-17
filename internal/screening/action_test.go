@@ -25,7 +25,7 @@ func TestCheckActionAsksOneSuspiciousQuestion(t *testing.T) {
 		_, _ = w.Write([]byte(`{"model":"jev","usage":{},"answers":{"suspicious":{"type":"noul","noul":0.62}}}`))
 	}))
 	defer server.Close()
-	s := screening.New(screening.Options{HTTPClient: server.Client(), Endpoint: server.URL, Credentials: missingStore(), LookupEnv: envKey})
+	s := screening.New(screening.Options{HTTPClient: server.Client(), Endpoint: server.URL, Credentials: keyStore()})
 	got, err := s.CheckAction(context.Background(), "draft.new", "creates a draft that the user may send later", state)
 	if err != nil || !reflect.DeepEqual(got, model.ActionCheck{Flag: true, Score: ptr(0.62)}) {
 		t.Fatalf("check=%+v %v", got, err)
@@ -59,7 +59,7 @@ func TestCheckActionFlagsFromTheThreshold(t *testing.T) {
 		client := &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
 			return response(`{"model":"jev","usage":{},"answers":{"suspicious":{"type":"noul","noul":` + tc.answer + `}}}`), nil
 		})}
-		s := screening.New(screening.Options{HTTPClient: client, Credentials: missingStore(), LookupEnv: envKey})
+		s := screening.New(screening.Options{HTTPClient: client, Credentials: keyStore()})
 		got, err := s.CheckAction(context.Background(), "draft.reply", "creates a draft that the user may send later", map[string]any{"body": "ok"})
 		if err != nil || !reflect.DeepEqual(got, tc.want) {
 			t.Fatalf("%s: check=%+v %v", tc.answer, got, err)
@@ -72,7 +72,7 @@ func TestCheckActionFailuresAreFailedChecks(t *testing.T) {
 		name   string
 		answer string
 		status int
-		env    string
+		noKey  bool
 		err    error
 		want   string
 	}{
@@ -81,7 +81,7 @@ func TestCheckActionFailuresAreFailedChecks(t *testing.T) {
 		{name: "out of range", answer: `{"suspicious":{"type":"noul","noul":1.5}}`, want: "ValidationError"},
 		{name: "API error", status: 500, want: "TypeSafeAPIError 500"},
 		{name: "timeout", err: timeoutErr{}, want: "TimeoutError"},
-		{name: "missing key", env: " ", want: "ConfigError"},
+		{name: "missing key", noKey: true, want: "ConfigError"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client := &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
@@ -94,11 +94,11 @@ func TestCheckActionFailuresAreFailedChecks(t *testing.T) {
 				}
 				return r, nil
 			})}
-			lookup := envKey
-			if tc.env != "" {
-				lookup = func(string) string { return tc.env }
+			store := keyStore()
+			if tc.noKey {
+				store = missingStore()
 			}
-			s := screening.New(screening.Options{HTTPClient: client, Credentials: missingStore(), LookupEnv: lookup, Timeout: time.Second})
+			s := screening.New(screening.Options{HTTPClient: client, Credentials: store, Timeout: time.Second})
 			got, err := s.CheckAction(context.Background(), "calendar.invite", "sends meeting invitations to the attendees", map[string]any{"subject": "x"})
 			if err != nil || !reflect.DeepEqual(got, model.ActionCheck{Flag: true, Error: ptr(tc.want)}) {
 				t.Fatalf("check=%+v %v", got, err)
@@ -118,7 +118,7 @@ var _ net.Error = timeoutErr{}
 func TestCheckActionCancelledReturnsTheContextError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	s := screening.New(screening.Options{Credentials: missingStore(), LookupEnv: envKey})
+	s := screening.New(screening.Options{Credentials: keyStore()})
 	got, err := s.CheckAction(ctx, "draft.new", "creates a draft that the user may send later", nil)
 	if !errors.Is(err, context.Canceled) || !got.Failed() {
 		t.Fatalf("check=%+v %v", got, err)

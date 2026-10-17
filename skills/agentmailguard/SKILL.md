@@ -202,7 +202,7 @@ Done when the applied run's `stats` (`applied`, `tagged`, `skipped`, `failed`) a
 
 - **Server unreachable:** report it and stop. Do not run `serve` or look for another way into the mailbox.
 - **Restart-required or not-logged-in errors:** the user must log in or restart the server on the server host. Tell them the exact error text.
-- **Forbidden commands:** never run `serve`, `auth login`, `auth set-jev-key`, `auth set-approval-password`, `auth migrate`, `auth change-password`, or `cache clear`, and never pass `--home`. Never read files in the server's home directory (`config.toml`, `credentials.*`, `cache.db`, `fake.db`, `audit.jsonl`), and never call Microsoft Graph or the Gmail API directly. These bypass the guard.
+- **Forbidden commands:** never run `serve`, `auth login`, `auth set-screening-key`, `auth set-approval-password`, `auth migrate`, `auth change-password`, or `cache clear`, and never pass `--home`. Never read files in the server's home directory (`config.toml`, `credentials.*`, `cache.db`, `fake-provider.db`, `audit.jsonl`), and never call Microsoft Graph or the Gmail API directly. These bypass the guard.
 - **Error verdicts** are temporary. A later `mail get` retries screening.
 - **Organize dates** use the server clock and UTC midnight. `--until` is exclusive. Explicit dates cannot be in the future.
 - **Calendar dates** use the client's local timezone. `--to +Nd` counts from `--from`. The range is at most 90 days.

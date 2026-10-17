@@ -29,7 +29,7 @@ func TestRecordWithoutApprovalPasswordKeepsTheOldShape(t *testing.T) {
 	if _, err := store.LoadApprovalHash(ctx); !errors.Is(err, credentials.ErrNotFound) {
 		t.Fatalf("unset approval password: %v", err)
 	}
-	if err := store.SaveOpenRouterKey(ctx, "new-key"); err != nil {
+	if err := store.SaveScreeningKey(ctx, "new-key"); err != nil {
 		t.Fatal(err)
 	}
 	if got := string(p.values[item]); got != `{"version":1,"oauth":{},"openrouter_key":"new-key"}` {
@@ -41,7 +41,7 @@ func TestApprovalHashRoundTripsAndOnlyAcceptsBcrypt(t *testing.T) {
 	ctx := context.Background()
 	p := &fakePlatform{values: map[[2]string][]byte{}}
 	store := credentials.New(p, t.TempDir(), nil)
-	if err := store.SaveOpenRouterKey(ctx, "key"); err != nil {
+	if err := store.SaveScreeningKey(ctx, "key"); err != nil {
 		t.Fatal(err)
 	}
 	for _, bad := range []string{"", "private-canary", "$2a$04$short", testHash(t, "other") + " private-canary"} {
@@ -60,8 +60,8 @@ func TestApprovalHashRoundTripsAndOnlyAcceptsBcrypt(t *testing.T) {
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(got), []byte("private-approval")) != nil {
 		t.Fatalf("hash round trip failed: %v", err)
 	}
-	if key, err := store.LoadOpenRouterKey(ctx); err != nil || key != "key" {
-		t.Fatal("saving the hash lost the Jev key")
+	if key, err := store.LoadScreeningKey(ctx); err != nil || key != "key" {
+		t.Fatal("saving the hash lost the screening key")
 	}
 	record := credentials.Record{Version: 1, OAuth: map[string]credentials.OAuth{}, ApprovalHash: hash}
 	for _, format := range []string{"%v", "%+v", "%#v", "%s"} {

@@ -49,10 +49,10 @@ func (s *memoryStore) SaveOAuth(_ context.Context, _, _ string, v credentials.OA
 	s.token = v
 	return nil
 }
-func (*memoryStore) LoadOpenRouterKey(context.Context) (string, error) {
+func (*memoryStore) LoadScreeningKey(context.Context) (string, error) {
 	return "", errors.New("unused")
 }
-func (*memoryStore) SaveOpenRouterKey(context.Context, string) error { return errors.New("unused") }
+func (*memoryStore) SaveScreeningKey(context.Context, string) error { return errors.New("unused") }
 func validStore() *memoryStore {
 	return &memoryStore{token: credentials.OAuth{AccessToken: "access", RefreshToken: "refresh", ExpiresAt: time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC), Scopes: strings.Fields(granted), Username: "synthetic@example.test"}}
 }

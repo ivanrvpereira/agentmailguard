@@ -19,7 +19,7 @@ func TestLocalCommandsRefuseInvalidPolicyWithKeyPath(t *testing.T) {
 	for _, args := range [][]string{
 		{"serve", "--listen", "127.0.0.1:0"},
 		{"auth", "login"},
-		{"auth", "set-jev-key"},
+		{"auth", "set-screening-key"},
 		{"auth", "change-password"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -34,6 +34,38 @@ func TestLocalCommandsRefuseInvalidPolicyWithKeyPath(t *testing.T) {
 				t.Fatalf("exit=%d stderr=%q", code, text)
 			}
 		})
+	}
+}
+
+func TestServeRefusesInvalidScreeningWithKeyPath(t *testing.T) {
+	home := serveHome(t)
+	if e := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[screening]\nendpoint='http://SECRET-CANARY/'\n[accounts.work]\nprovider='fake'\n"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	var stderr strings.Builder
+	code := cli.Run(context.Background(), []string{"serve", "--listen", "127.0.0.1:0", "--home", home}, io.Discard, &stderr, cli.Options{Stdin: strings.NewReader(""), LookupEnv: func(string) string { return "" }, Server: server.Options{Credentials: &serveStore{}}})
+	text := stderr.String()
+	if code != 1 || !strings.HasSuffix(text, "error: invalid screening: screening.endpoint\n") || strings.Contains(text, "SECRET-CANARY") {
+		t.Fatalf("exit=%d stderr=%q", code, text)
+	}
+}
+
+func TestServeWarnsWhenFakeScreeningJudgesRealAccounts(t *testing.T) {
+	home := serveHome(t)
+	f, err := os.OpenFile(filepath.Join(home, "config.toml"), os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString("[screening]\nprovider='fake'\n")
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := startServe(t, home, &serveStore{})
+	logs.mu.Lock()
+	defer logs.mu.Unlock()
+	if !strings.Contains(logs.text.String(), "WARNING: fake screening judges the mail of real accounts by keywords, not by a decision model.\n") {
+		t.Fatalf("log=%q", logs.text.String())
 	}
 }
 

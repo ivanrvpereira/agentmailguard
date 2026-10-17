@@ -414,11 +414,13 @@ type OrganizationQuestions struct {
 const ActionFlagThreshold = 0.5
 
 // ActionCheck is the result of Jev's check of one write action. It never carries action text.
-// A check that failed has Error set, no Score, and Flag true.
+// A check that failed has Error set, no Score, and Flag true. Fake is true only for a check that the fake
+// keyword engine made, so that the approval console does not show it as a Jev check. The agent never sees it.
 type ActionCheck struct {
 	Flag  bool     `json:"flag"`
 	Score *float64 `json:"score,omitempty"`
 	Error *string  `json:"error,omitempty"`
+	Fake  bool     `json:"fake,omitempty"`
 }
 
 // Failed reports a check without a valid score.

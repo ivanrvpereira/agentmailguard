@@ -39,6 +39,11 @@ func (s *nativeStore) LoadOAuth(ctx context.Context, p, a string) (credentials.O
 	return s.store.LoadOAuth(ctx, p, a)
 }
 
+// keyed supplies the screening key over s.
+type keyed struct{ credentials.Store }
+
+func (keyed) LoadScreeningKey(context.Context) (string, error) { return "synthetic-key", nil }
+
 type externalWrite struct {
 	path, method string
 	body         map[string]any
@@ -70,7 +75,7 @@ func (a *nativeAPI) screener(t *testing.T) model.Screener {
 	t.Helper()
 	jev := httptest.NewServer(http.HandlerFunc(a.jev))
 	t.Cleanup(jev.Close)
-	return screening.New(screening.Options{Endpoint: jev.URL, LookupEnv: func(string) string { return "synthetic-key" }})
+	return screening.New(screening.Options{Endpoint: jev.URL, Credentials: keyed{}})
 }
 func response(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -278,7 +283,7 @@ func startNative(t *testing.T, binary string, f nativeFakes) (*server.Server, st
 	t.Cleanup(google.Close)
 	jev := httptest.NewServer(f.jev)
 	t.Cleanup(jev.Close)
-	screen := screening.New(screening.Options{Endpoint: jev.URL, Credentials: f.creds, LookupEnv: func(string) string { return "synthetic-key" }})
+	screen := screening.New(screening.Options{Endpoint: jev.URL, Credentials: keyed{f.creds}})
 	s, err := server.New(context.Background(), home, server.Options{Credentials: f.creds, Screener: screen, M365: m365.Options{BaseURL: graph.URL}, Gmail: gmail.Options{GmailURL: google.URL + "/gmail", ProfileURL: google.URL + "/gmail/profile", CalendarURL: google.URL + "/calendar"}, Now: func() time.Time { return f.now }})
 	if err != nil {
 		t.Fatal(err)
@@ -578,7 +583,8 @@ func verifyNativeFileServe(t *testing.T, binary string) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = f.WriteString("\n[credentials]\nbackend='file'\n")
+			// Fake screening needs no key, so the file backend holds no secret the test must enter.
+			_, err = f.WriteString("\n[credentials]\nbackend='file'\n[screening]\nprovider='fake'\n")
 			f.Close()
 			if err != nil {
 				t.Fatal(err)
@@ -586,7 +592,7 @@ func verifyNativeFileServe(t *testing.T, binary string) {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, binary, "serve", "--home", home, "--listen", "127.0.0.1:0")
-			cmd.Env = []string{"HOME=" + home, "OPENROUTER_API_KEY=synthetic-env-key"}
+			cmd.Env = []string{"HOME=" + home}
 			if source == "environment" {
 				cmd.Env = append(cmd.Env, credentials.PasswordEnvironment+"=synthetic-password")
 			} else {
@@ -635,9 +641,8 @@ func verifyNativeFileServe(t *testing.T, binary string) {
 			if err != nil || !bytes.Contains(data, []byte(" 18\n")) {
 				t.Fatal("native writer did not use production work factor")
 			}
-			// Even an environment Jev key cannot bypass a failed file store.
 			bad := exec.CommandContext(ctx, binary, "serve", "--home", home, "--listen", "127.0.0.1:0")
-			bad.Env = []string{"HOME=" + home, "OPENROUTER_API_KEY=synthetic-env-key", credentials.PasswordEnvironment + "=wrong-password"}
+			bad.Env = []string{"HOME=" + home, credentials.PasswordEnvironment + "=wrong-password"}
 			var stderr bytes.Buffer
 			bad.Stderr = &stderr
 			if bad.Run() == nil || !strings.Contains(stderr.String(), "credentials (file): wrong password or damaged file") || strings.Contains(stderr.String(), "server listening") {
