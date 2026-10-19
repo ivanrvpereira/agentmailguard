@@ -6,8 +6,8 @@ require (
 	github.com/BurntSushi/toml v1.5.0
 	github.com/keybase/go-keychain v0.0.1
 	github.com/mattn/go-sqlite3 v1.14.32
-	golang.org/x/net v0.58.0
-	golang.org/x/text v0.41.0
+	golang.org/x/net v0.60.0
+	golang.org/x/text v0.43.0
 )
 
 require (
@@ -16,7 +16,7 @@ require (
 	github.com/charmbracelet/colorprofile v0.4.3
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.58.0
 )
 
 require (
@@ -33,6 +33,6 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
 )
