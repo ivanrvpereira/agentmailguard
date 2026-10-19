@@ -297,9 +297,20 @@ Run login locally on the server host:
 2. Its first `credential check:` item is `credentials (keychain)` or `credentials (file)`. A store failure refuses startup.
 3. It checks every configured account. It also checks the stored screening key, unless `[screening]` selects the fake engine. Check lines contain fixed statuses, not secrets.
 4. If the screening key is missing and stdin is a terminal, it prompts with echo disabled and saves the key. Piped password input gets no key prompt.
+5. If every check passes, it asks the provider about each saved login, with a 20-second limit per account. The account line then shows the provider's answer.
 
-An account that is not logged in does not block startup.
-Its commands fail until local `auth login` and a server restart.
+Each account has one line. Its status names the step that failed:
+
+- `ok`: a login is saved, and the provider accepted it.
+- `no login needed`: a fake account, which reads no credentials.
+- `not logged in; ...`: no login is saved for this account.
+- `credential record unreadable; run auth login`, `Keychain access failed or denied`, or `Keychain write failed or denied`: the credential store failed for this account.
+- `sign-in failed; ...`: a login is saved, but the provider refused it or did not answer. The cause can be an expired or revoked login, wrong client settings in `config.toml`, or a network problem. The provider codes cannot tell these apart.
+
+For Microsoft 365, an unexpired saved access token passes without a provider request.
+An account that is not logged in, or whose sign-in failed, does not block startup.
+Its commands fail until the cause is fixed. After a new `auth login`, restart the server.
+A login can also expire or be revoked while the server runs. Commands for that account then fail with `sign-in failed; check the network, or run auth login and restart the server`.
 Other credential failures, a missing screening key, or missing configuration refuse startup.
 Store statuses include `ok`, `access denied`, `wrong password or damaged file`, `password missing`, and `unsupported version`.
 

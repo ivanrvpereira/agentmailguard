@@ -50,6 +50,9 @@ func New(account string, mailbox model.Mailbox, calendar model.Calendar, screene
 // GuardError contains only fixed refusal text or a safe failure code.
 type GuardError string
 
+// AuthFailed is the code of a provider auth failure: a refused or expired login, or a failed token request.
+const AuthFailed = "AuthError"
+
 func (e GuardError) Error() string { return string(e) }
 func pointer[T any](v T) *T        { return &v }
 func safeCode(err error) string {
@@ -61,6 +64,10 @@ func safeCode(err error) string {
 	}
 	if err == nil {
 		return "Error"
+	}
+	// A refused login keeps its code, so the server can tell the user to sign in again.
+	if err == model.MailboxError("AuthError") || err == model.MailboxError("Gmail error AuthError") {
+		return AuthFailed
 	}
 	if safe, ok := err.(GuardError); ok {
 		code := string(safe)

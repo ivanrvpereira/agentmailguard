@@ -3,6 +3,8 @@ package cli_test
 import (
 	"context"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,8 @@ import (
 
 	"github.com/ivanrvpereira/agentmailguard/internal/cli"
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
 
@@ -77,8 +81,14 @@ func TestServeExposureWarningAndBoundedShutdown(t *testing.T) {
 		logs := &notices{ready: make(chan struct{})}
 		done := make(chan int, 1)
 		home := serveHome(t)
+		// The fake authority refuses every refresh, so the logged-in account fails its sign-in check.
+		authority := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(400)
+			io.WriteString(w, `{"error":"invalid_grant"}`)
+		}))
+		defer authority.Close()
 		go func() {
-			done <- cli.Run(ctx, []string{"serve", "--home", home, "--listen", tc.listen}, io.Discard, logs, cli.Options{LookupEnv: func(string) string { return "" }, Server: server.Options{Credentials: &serveStore{key: "private-jev-canary", missing: !tc.loggedIn}}})
+			done <- cli.Run(ctx, []string{"serve", "--home", home, "--listen", tc.listen}, io.Discard, logs, cli.Options{LookupEnv: func(string) string { return "" }, Server: server.Options{Credentials: &serveStore{key: "private-jev-canary", missing: !tc.loggedIn}, M365: m365.Options{AuthorityURL: authority.URL, BaseURL: authority.URL}}})
 		}()
 		select {
 		case <-logs.ready:
@@ -99,7 +109,7 @@ func TestServeExposureWarningAndBoundedShutdown(t *testing.T) {
 		logs.mu.Lock()
 		text := logs.text.String()
 		logs.mu.Unlock()
-		account := "ok"
+		account := "sign-in failed; check the network, or run auth login and restart the server"
 		if !tc.loggedIn {
 			// An account that is not logged in does not block the start; its commands fail.
 			account = "not logged in; commands for this account fail until auth login and a server restart"
@@ -111,6 +121,51 @@ func TestServeExposureWarningAndBoundedShutdown(t *testing.T) {
 		if strings.Contains(text, "unauthenticated mailbox access") != tc.warning || tc.warning && (!strings.Contains(text, "no built-in TLS") || !strings.Contains(text, "tunnel")) {
 			t.Errorf("exposure warning mismatch: %s", text)
 		}
+	}
+}
+
+func TestServeReportsRefusedSignInOnTheAccountLine(t *testing.T) {
+	home := t.TempDir()
+	if e := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[accounts.good]\nprovider='gmail'\nclient_id='synthetic'\nclient_secret='synthetic'\n[accounts.revoked]\nprovider='gmail'\nclient_id='revoked'\nclient_secret='synthetic'\n"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	// Google refuses the revoked client's refresh token and accepts the other one.
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/profile" {
+			io.WriteString(w, `{"emailAddress":"good@example.test"}`)
+			return
+		}
+		_ = r.ParseForm()
+		if r.Form.Get("client_id") == "revoked" {
+			w.WriteHeader(400)
+			io.WriteString(w, `{"error":"invalid_grant"}`)
+			return
+		}
+		io.WriteString(w, `{"access_token":"private-access-canary","expires_in":3600,"scope":"https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.events.owned.readonly"}`)
+	}))
+	defer api.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	logs := &notices{ready: make(chan struct{})}
+	done := make(chan int, 1)
+	go func() {
+		done <- cli.Run(ctx, []string{"serve", "--home", home, "--listen", "127.0.0.1:0"}, io.Discard, logs, cli.Options{LookupEnv: func(string) string { return "" }, Server: server.Options{Credentials: &serveStore{key: "private-jev-canary"}, Gmail: gmail.Options{HTTPClient: api.Client(), TokenURL: api.URL + "/token", ProfileURL: api.URL + "/profile"}}})
+	}()
+	select {
+	case <-logs.ready:
+	case code := <-done:
+		t.Fatalf("serve exited %d before listening", code)
+	case <-time.After(5 * time.Second):
+		t.Fatal("listener did not start")
+	}
+	cancel()
+	<-done
+	logs.mu.Lock()
+	text := logs.text.String()
+	logs.mu.Unlock()
+	want := "checking credentials\ncredential check: credentials (keychain): ok\ncredential check: account \"good\" (gmail): ok\ncredential check: account \"revoked\" (gmail): sign-in failed; check the network, or run auth login and restart the server\ncredential check: screening key: ok\ncredential check: approval password: not set; the approval console stays off until auth set-approval-password and a server restart\nserver listening\n"
+	if !strings.HasSuffix(text, want) || strings.Contains(text, "private-") {
+		t.Fatalf("sign-in checks: %q", text)
 	}
 }
 

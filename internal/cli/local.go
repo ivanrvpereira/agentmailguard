@@ -153,10 +153,15 @@ func preload(ctx context.Context, s *server.Server, stdin io.Reader, stderr io.W
 	}
 	fmt.Fprintln(stderr, "checking credentials")
 	checks, e := s.Preload(ctx, prompt)
+	if e == nil {
+		s.CheckSignIns(ctx, checks)
+	}
 	for _, c := range checks {
 		fmt.Fprintf(stderr, "credential check: %s: %s\n", c.Item, c.Status)
 	}
 	switch {
+	case e == nil && ctx.Err() != nil:
+		return failure(stderr, "credential check canceled")
 	case e == nil:
 		return 0
 	case ctx.Err() != nil:
