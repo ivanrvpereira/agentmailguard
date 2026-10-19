@@ -83,10 +83,10 @@ func serve(ctx context.Context, home, listen string, stdin io.Reader, stderr io.
 			fmt.Fprintln(stderr, "WARNING: the approval console listens beyond loopback. Use an HTTPS tunnel such as tailscale serve.")
 		}
 		start(console, consoleListener)
-		fmt.Fprintln(stderr, "approval console listening")
+		fmt.Fprintln(stderr, "approval console listening on "+listenURL(address, consoleListener))
 	}
 	start(s, listener)
-	fmt.Fprintln(stderr, "server listening")
+	fmt.Fprintln(stderr, "server listening on "+listenURL(listen, listener))
 	select {
 	case <-ctx.Done():
 		drain, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -123,6 +123,17 @@ func fakeScreeningOfRealMail(ctx context.Context, s *server.Server, home string)
 	}
 	accounts, e := config.LoadAccounts(ctx, filepath.Join(home, "config.toml"))
 	return e == nil && slices.ContainsFunc(accounts, func(a config.Account) bool { return a.Provider != "fake" })
+}
+
+// listenURL keeps the configured host, because the approval console checks the Host header,
+// and takes the port from the listener, because a configured port 0 picks a free one.
+func listenURL(address string, l net.Listener) string {
+	host, _, _ := net.SplitHostPort(address)
+	actualHost, port, _ := net.SplitHostPort(l.Addr().String())
+	if host == "" {
+		host = actualHost
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 // loopback reports whether host is localhost or a loopback IP address.

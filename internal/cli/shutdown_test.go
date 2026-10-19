@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -104,8 +105,8 @@ func TestServeExposureWarningAndBoundedShutdown(t *testing.T) {
 			// An account that is not logged in does not block the start; its commands fail.
 			account = "not logged in; commands for this account fail until auth login and a server restart"
 		}
-		checks := "checking credentials\ncredential check: credentials (keychain): ok\ncredential check: account \"work\" (m365): " + account + "\ncredential check: screening key: ok\ncredential check: approval password: not set; the approval console stays off until auth set-approval-password and a server restart\nserver listening\n"
-		if !strings.HasSuffix(text, checks) || strings.Contains(text, "private-") {
+		checks := "checking credentials\ncredential check: credentials (keychain): ok\ncredential check: account \"work\" (m365): " + account + "\ncredential check: screening key: ok\ncredential check: approval password: not set; to turn on the approval console, run: agentmailguard auth set-approval-password, then restart the server\nserver listening on http://" + strings.Split(tc.listen, ":")[0] + ":"
+		if !regexp.MustCompile(regexp.QuoteMeta(checks)+`[1-9][0-9]*\n$`).MatchString(text) || strings.Contains(text, "private-") {
 			t.Errorf("credential checks must precede listening: %q", text)
 		}
 		if strings.Contains(text, "unauthenticated mailbox access") != tc.warning || tc.warning && (!strings.Contains(text, "no built-in TLS") || !strings.Contains(text, "tunnel")) {

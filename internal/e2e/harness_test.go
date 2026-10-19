@@ -132,7 +132,7 @@ func (s *server) serve() {
 }
 
 // logWriter appends all that serve writes to stderr to the server log, and closes listening when serve writes
-// the line "server listening". exec calls Write from one goroutine.
+// the line "server listening on URL". exec calls Write from one goroutine.
 type logWriter struct {
 	s         *server
 	line      []byte // the part of the current line that serve wrote, until serve listens
@@ -152,7 +152,7 @@ func (w *logWriter) Write(p []byte) (int, error) {
 		if end < 0 {
 			return len(p), nil
 		}
-		if string(w.line[:end]) == "server listening" {
+		if strings.HasPrefix(string(w.line[:end]), "server listening on ") {
 			close(w.listening)
 			w.line, w.listening = nil, nil
 			return len(p), nil

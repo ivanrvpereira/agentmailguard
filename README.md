@@ -568,7 +568,8 @@ Restart the server after you set or change the password.
 
 The approval console is a small web page where you approve or deny pending items.
 To turn it on, set the [approval password](#approval-password) and restart the server.
-At start, the server then shows `approval console listening`.
+At start, the server then shows the console address, for example `approval console listening on http://localhost:8788`.
+Without the password, the start check shows `approval password: not set` with the command that sets it.
 The console listens on `[approvals].listen`, by default `http://localhost:8788`. The pending `url` opens the page of its item.
 If the console address is taken, the server does not start and shows `approval console listener unavailable`.
 

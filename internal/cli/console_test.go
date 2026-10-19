@@ -125,7 +125,7 @@ func TestServeStartsTheApprovalConsoleWhenAPasswordIsSet(t *testing.T) {
 	logs.mu.Lock()
 	text := logs.text.String()
 	logs.mu.Unlock()
-	if !strings.Contains(text, "credential check: approval password: ok\napproval console listening\nserver listening\n") || strings.Contains(text, "WARNING") || strings.Contains(text, "private-") {
+	if !strings.Contains(text, "credential check: approval password: ok\napproval console listening on http://"+address+"\nserver listening on http://127.0.0.1:") || strings.Contains(text, "WARNING") || strings.Contains(text, "private-") {
 		t.Fatalf("log=%q", text)
 	}
 }
@@ -151,7 +151,7 @@ func TestServeWarnsWhenTheApprovalConsoleListensBeyondLoopback(t *testing.T) {
 	logs := startServe(t, consoleHome(t, "0.0.0.0:"+port), consoleStore(t, true))
 	logs.mu.Lock()
 	defer logs.mu.Unlock()
-	if !strings.Contains(logs.text.String(), "WARNING: the approval console listens beyond loopback. Use an HTTPS tunnel such as tailscale serve.\napproval console listening\n") {
+	if !strings.Contains(logs.text.String(), "WARNING: the approval console listens beyond loopback. Use an HTTPS tunnel such as tailscale serve.\napproval console listening on http://0.0.0.0:"+port+"\n") {
 		t.Fatalf("log=%q", logs.text.String())
 	}
 }

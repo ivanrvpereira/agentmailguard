@@ -11,7 +11,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-const approvalNotSet = "not set; the approval console stays off until auth set-approval-password and a server restart"
+const approvalNotSet = "not set; to turn on the approval console, run: agentmailguard auth set-approval-password, then restart the server"
 
 func TestPreloadReportsTheApprovalPassword(t *testing.T) {
 	hash, err := bcrypt.GenerateFromPassword([]byte("private-approval"), bcrypt.MinCost)

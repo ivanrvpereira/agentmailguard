@@ -130,7 +130,7 @@ func TestPreloadReadsEverythingAtStartThenServesFromMemory(t *testing.T) {
 	}
 	defer s.Close()
 	checks, e := s.Preload(context.Background(), nil)
-	want := []server.CredentialCheck{{Item: "credentials (keychain)", Status: "ok"}, {Item: `account "work" (m365)`, Status: "ok"}, {Item: `account "personal" (gmail)`, Status: "ok"}, {Item: "screening key", Status: "ok"}, {Item: "approval password", Status: "not set; the approval console stays off until auth set-approval-password and a server restart"}}
+	want := []server.CredentialCheck{{Item: "credentials (keychain)", Status: "ok"}, {Item: `account "work" (m365)`, Status: "ok"}, {Item: `account "personal" (gmail)`, Status: "ok"}, {Item: "screening key", Status: "ok"}, {Item: "approval password", Status: "not set; to turn on the approval console, run: agentmailguard auth set-approval-password, then restart the server"}}
 	if e != nil || !reflect.DeepEqual(checks, want) {
 		t.Fatalf("checks=%v err=%v", checks, e)
 	}

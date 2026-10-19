@@ -26,7 +26,7 @@ const noLogin = "no login needed"
 // noScreeningKey is the key check under fake screening, which reads no key.
 const noScreeningKey = "not needed (fake screening)"
 
-const approvalNotSet = "not set; the approval console stays off until auth set-approval-password and a server restart"
+const approvalNotSet = "not set; to turn on the approval console, run: agentmailguard auth set-approval-password, then restart the server"
 
 // memoryStore passes through to the backend until Preload succeeds.
 // After that it answers loads from memory only. Runtime saves still reach the backend.

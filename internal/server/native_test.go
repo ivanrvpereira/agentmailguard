@@ -614,7 +614,7 @@ func verifyNativeFileServe(t *testing.T, binary string) {
 				for scanner.Scan() {
 					line := scanner.Text()
 					output.WriteString(line + "\n")
-					if line == "server listening" {
+					if strings.HasPrefix(line, "server listening on ") {
 						listening <- struct{}{}
 					}
 				}
