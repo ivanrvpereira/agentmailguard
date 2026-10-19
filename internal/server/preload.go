@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
@@ -27,6 +29,11 @@ const noLogin = "no login needed"
 const noScreeningKey = "not needed (fake screening)"
 
 const approvalNotSet = "not set; the approval console stays off until auth set-approval-password and a server restart"
+
+// Providers return fixed codes that cannot tell a revoked login from a network failure, so one message covers both.
+const signInFailed = "sign-in failed; check the network, or run auth login and restart the server"
+
+func accountItem(a config.Account) string { return fmt.Sprintf("account %q (%s)", a.Name, a.Provider) }
 
 // memoryStore passes through to the backend until Preload succeeds.
 // After that it answers loads from memory only. Runtime saves still reach the backend.
@@ -136,7 +143,7 @@ func (s *Server) Preload(ctx context.Context, screeningKey func(context.Context)
 	}
 	oauth := map[[2]string]credentials.OAuth{}
 	for _, a := range accounts {
-		item := fmt.Sprintf("account %q (%s)", a.Name, a.Provider)
+		item := accountItem(a)
 		if a.Provider == "fake" {
 			add(item, noLogin)
 			continue
@@ -234,4 +241,31 @@ func (s *Server) Preload(ctx context.Context, screeningKey func(context.Context)
 	s.approvalHash = approvalHash
 	s.mu.Unlock()
 	return checks, nil
+}
+
+// CheckSignIns runs after a successful Preload. A saved token can be expired or revoked, so each
+// account line Preload marked ok is replaced with the provider's answer. A refusal does not block the start.
+func (s *Server) CheckSignIns(ctx context.Context, checks []CredentialCheck) {
+	accounts, err := config.LoadAccounts(ctx, filepath.Join(s.home, "config.toml"))
+	if err != nil {
+		return
+	}
+	for _, a := range accounts {
+		i := slices.Index(checks, CredentialCheck{accountItem(a), "ok"})
+		s.mu.Lock()
+		v := s.accounts[a.Name]
+		s.mu.Unlock()
+		if i < 0 || v == nil {
+			continue
+		}
+		check, cancel := context.WithTimeout(ctx, 20*time.Second)
+		_, _, err := v.provider.Status(check)
+		cancel()
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			checks[i].Status = signInFailed
+		}
+	}
 }
