@@ -97,14 +97,14 @@ func TestMigrationKeepsTheApprovalHash(t *testing.T) {
 	if err := source.SaveApprovalHash(ctx, testHash(t, "private-approval")); err != nil {
 		t.Fatal(err)
 	}
-	target := credentials.NewFileForTest(home, "synthetic-password")
+	target := credentials.NewFile(home, "synthetic-password")
 	if err := source.Migrate(ctx, target); err != nil {
 		t.Fatal(err)
 	}
 	if err := target.ChangePassword(ctx, "other-password"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := credentials.NewFileForTest(home, "other-password").LoadApprovalHash(ctx)
+	got, err := credentials.NewFile(home, "other-password").LoadApprovalHash(ctx)
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(got), []byte("private-approval")) != nil {
 		t.Fatalf("migration or password change lost the hash: %v", err)
 	}

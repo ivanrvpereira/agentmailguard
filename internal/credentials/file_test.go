@@ -63,7 +63,7 @@ func TestFileStoreHostileInputs(t *testing.T) {
 			if os.WriteFile(path, tc.data, 0600) != nil {
 				t.Fatal("fixture write")
 			}
-			s := credentials.NewFileForTest(home, tc.password)
+			s := credentials.NewFile(home, tc.password)
 			started := time.Now()
 			if _, err := s.Preload(context.Background()); err != tc.want {
 				t.Fatal("unsafe or missing fixed error")
@@ -91,7 +91,7 @@ func TestFileStoreHostileInputs(t *testing.T) {
 	large[len(large)-1] ^= 1
 	home := t.TempDir()
 	_ = os.WriteFile(filepath.Join(home, "credentials.age"), large, 0600)
-	if _, err := credentials.NewFileForTest(home, "synthetic-password").Preload(context.Background()); err != credentials.ErrDecrypt {
+	if _, err := credentials.NewFile(home, "synthetic-password").Preload(context.Background()); err != credentials.ErrDecrypt {
 		t.Fatal("decoded before complete authentication")
 	}
 }
@@ -99,7 +99,7 @@ func TestFileStoreHostileInputs(t *testing.T) {
 func TestFileStoreConcurrentAndCanceledWrites(t *testing.T) {
 	home := t.TempDir()
 	ctx := context.Background()
-	a, b := credentials.NewFileForTest(home, "synthetic-password"), credentials.NewFileForTest(home, "synthetic-password")
+	a, b := credentials.NewFile(home, "synthetic-password"), credentials.NewFile(home, "synthetic-password")
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -137,7 +137,7 @@ func TestFileStoreFailedWritePreservesPreviousFile(t *testing.T) {
 	}
 	home := t.TempDir()
 	ctx := context.Background()
-	s := credentials.NewFileForTest(home, "synthetic-password")
+	s := credentials.NewFile(home, "synthetic-password")
 	if s.SaveScreeningKey(ctx, "synthetic-key") != nil {
 		t.Fatal("initial save failed")
 	}
@@ -164,14 +164,14 @@ func TestFileStoreFailedWritePreservesPreviousFile(t *testing.T) {
 func TestFileStoreEncryptedRoundTrip(t *testing.T) {
 	home := t.TempDir()
 	ctx := context.Background()
-	s := credentials.NewFileForTest(home, "synthetic-password")
+	s := credentials.NewFile(home, "synthetic-password")
 	if err := s.SaveScreeningKey(ctx, "private-key-canary"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SaveOAuth(ctx, "gmail", "work", credentials.OAuth{RefreshToken: "private-token-canary"}); err != nil {
 		t.Fatal(err)
 	}
-	reopened := credentials.NewFileForTest(home, "synthetic-password")
+	reopened := credentials.NewFile(home, "synthetic-password")
 	if key, err := reopened.LoadScreeningKey(ctx); err != nil || key != "private-key-canary" {
 		t.Fatal("key did not survive reopen")
 	}
