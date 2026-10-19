@@ -17,11 +17,11 @@ import (
 func TestChangePasswordPreservesLatestRecordAndBlocksOldWriters(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()
-	old := credentials.NewFileForTest(home, "old-password")
+	old := credentials.NewFile(home, "old-password")
 	if old.SaveScreeningKey(ctx, "original-key") != nil {
 		t.Fatal("seed")
 	}
-	changer := credentials.NewFileForTest(home, "old-password")
+	changer := credentials.NewFile(home, "old-password")
 	if old.SaveOAuth(ctx, "gmail", "work", credentials.OAuth{RefreshToken: "latest-token"}) != nil || old.SaveScreeningKey(ctx, "latest-key") != nil {
 		t.Fatal("update")
 	}
@@ -31,7 +31,7 @@ func TestChangePasswordPreservesLatestRecordAndBlocksOldWriters(t *testing.T) {
 	if err := old.SaveScreeningKey(ctx, "stale"); err != credentials.ErrDecrypt {
 		t.Fatal("old process overwrote changed password")
 	}
-	fresh := credentials.NewFileForTest(home, "new-password")
+	fresh := credentials.NewFile(home, "new-password")
 	if key, err := fresh.LoadScreeningKey(ctx); err != nil || key != "latest-key" {
 		t.Fatal("latest key lost")
 	}
@@ -46,7 +46,7 @@ func TestChangePasswordFailuresPreserveFile(t *testing.T) {
 			ctx := context.Background()
 			home := t.TempDir()
 			path := filepath.Join(home, "credentials.age")
-			store := credentials.NewFileForTest(home, "synthetic-password")
+			store := credentials.NewFile(home, "synthetic-password")
 			if mode != "missing" && store.SaveScreeningKey(ctx, "old-key") != nil {
 				t.Fatal("seed")
 			}
@@ -60,7 +60,7 @@ func TestChangePasswordFailuresPreserveFile(t *testing.T) {
 					t.Fatal("fixture")
 				}
 			case "wrong-current":
-				store = credentials.NewFileForTest(home, "wrong-password")
+				store = credentials.NewFile(home, "wrong-password")
 			case "canceled":
 				var cancel context.CancelFunc
 				ctx, cancel = context.WithCancel(ctx)
@@ -105,7 +105,7 @@ func TestChangePasswordUsesSharedLockAndLatestReread(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	home := t.TempDir()
-	store := credentials.NewFileForTest(home, "synthetic-password")
+	store := credentials.NewFile(home, "synthetic-password")
 	if store.SaveScreeningKey(ctx, "old-key") != nil {
 		t.Fatal("seed")
 	}
@@ -138,7 +138,7 @@ func TestChangePasswordUsesSharedLockAndLatestReread(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	fresh := credentials.NewFileForTest(home, "new-password")
+	fresh := credentials.NewFile(home, "new-password")
 	if key, err := fresh.LoadScreeningKey(ctx); err != nil || key != "latest-key" {
 		t.Fatal("missed latest key")
 	}
@@ -150,7 +150,7 @@ func TestChangePasswordUsesSharedLockAndLatestReread(t *testing.T) {
 func TestMigrationDoesNotWriteAnExistingLegacyTarget(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()
-	source := credentials.NewFileForTest(home, "synthetic-password")
+	source := credentials.NewFile(home, "synthetic-password")
 	if source.SaveScreeningKey(ctx, "source-key") != nil {
 		t.Fatal("seed")
 	}
@@ -177,7 +177,7 @@ func TestMigrationNeverCreatesTargetFromFailedSource(t *testing.T) {
 				p.readFailure = map[[2]string]error{{"agentmailguard", "credentials"}: errors.New("private-canary")}
 			}
 			source := credentials.New(p, home, nil)
-			if err := source.Migrate(context.Background(), credentials.NewFileForTest(home, "synthetic-password")); err == nil || strings.Contains(err.Error(), "private-") {
+			if err := source.Migrate(context.Background(), credentials.NewFile(home, "synthetic-password")); err == nil || strings.Contains(err.Error(), "private-") {
 				t.Fatal("missing/failed source accepted or exposed")
 			}
 			if _, err := os.Stat(filepath.Join(home, "credentials.age")); !errors.Is(err, os.ErrNotExist) {
@@ -194,7 +194,7 @@ func TestMigrationRefusesUnsafeCopies(t *testing.T) {
 			home := t.TempDir()
 			p := &fakePlatform{values: map[[2]string][]byte{}}
 			source := credentials.New(p, home, nil)
-			target := credentials.NewFileForTest(home, "synthetic-password")
+			target := credentials.NewFile(home, "synthetic-password")
 			if mode != "missing" {
 				p.values[[2]string{"agentmailguard", "credentials"}] = []byte(`{"version":1,"oauth":{},"openrouter_key":"source-key"}`)
 			}
@@ -228,7 +228,7 @@ func TestMigrationSerializesTargetCheckAndWrite(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	home := t.TempDir()
-	source := credentials.NewFileForTest(home, "synthetic-password")
+	source := credentials.NewFile(home, "synthetic-password")
 	if source.SaveScreeningKey(ctx, "original") != nil {
 		t.Fatal("seed")
 	}
@@ -276,7 +276,7 @@ func TestCopyCredentialsPreservesCompleteSource(t *testing.T) {
 	if source.SaveOAuth(ctx, "gmail", "work", credentials.OAuth{RefreshToken: "private-token"}) != nil || source.SaveScreeningKey(ctx, "private-key") != nil {
 		t.Fatal("seed failed")
 	}
-	target := credentials.NewFileForTest(home, "synthetic-password")
+	target := credentials.NewFile(home, "synthetic-password")
 	if err := source.Migrate(ctx, target); err != nil {
 		t.Fatal(err)
 	}

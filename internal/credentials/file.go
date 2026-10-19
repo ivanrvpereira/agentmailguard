@@ -56,11 +56,15 @@ func (fileBackend) Format(s fmt.State, _ rune) {
 	_, _ = io.WriteString(s, "FileCredentials{redacted}")
 }
 
-// NewFile uses password encryption with a fixed production scrypt work factor.
+// FileWorkFactor is the scrypt work factor of credential files that NewFile writes.
+// Only tests lower it, to keep scrypt cheap under the race detector. No production code changes it,
+// and the native test in internal/server checks that the built binary still writes 18.
+var FileWorkFactor = 18
+
+// NewFile uses password encryption with the production scrypt work factor, FileWorkFactor.
 // Missing or invalid passwords fail on the first store operation, including Preload.
-func NewFile(home, password string) *RecordStore { return newFile(home, password, 18) }
-func newFile(home, password string, logN int) *RecordStore {
-	return NewStore(home, &fileBackend{home: home, password: password, logN: logN})
+func NewFile(home, password string) *RecordStore {
+	return NewStore(home, &fileBackend{home: home, password: password, logN: FileWorkFactor})
 }
 func (b *fileBackend) Read(ctx context.Context) (Record, error) {
 	if err := ValidatePassword(b.password); err != nil {
