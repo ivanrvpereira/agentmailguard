@@ -310,6 +310,7 @@ Each account has one line. Its status names the step that failed:
 For Microsoft 365, an unexpired saved access token passes without a provider request.
 An account that is not logged in, or whose sign-in failed, does not block startup.
 Its commands fail until the cause is fixed. After a new `auth login`, restart the server.
+A login can also expire or be revoked while the server runs. Commands for that account then fail with `sign-in failed; check the network, or run auth login and restart the server`.
 Other credential failures, a missing screening key, or missing configuration refuse startup.
 Store statuses include `ok`, `access denied`, `wrong password or damaged file`, `password missing`, and `unsupported version`.
 

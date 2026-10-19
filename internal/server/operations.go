@@ -54,6 +54,9 @@ func publicError(e error) (string, bool) {
 			return fixed.Error(), true
 		}
 	}
+	if e == guard.GuardError(guard.AuthFailed) {
+		return signInFailed, true
+	}
 	if e, ok := e.(guard.GuardError); ok {
 		switch e {
 		case guard.CalendarWriteUnsupported, guard.CalendarAvailabilityUnsupported, guard.CalendarCancelCommentUnsupported, "missing_scopes", "invalid request",
