@@ -41,7 +41,7 @@ func TestPythonReference(t *testing.T) {
 			if strings.Contains(r.Markdown, "CANARY") || strings.Contains(r.Markdown, "<") || strings.Contains(r.Markdown, "://") || utf8.RuneCountInString(r.Markdown) > content.MaxChars {
 				t.Fatal("leak gate failed")
 			}
-			for _, line := range strings.Split(r.Markdown, "\n") {
+			for line := range strings.SplitSeq(r.Markdown, "\n") {
 				if strings.Contains(strings.TrimLeft(line, "> "), ">") {
 					t.Fatal("raw angle bracket")
 				}

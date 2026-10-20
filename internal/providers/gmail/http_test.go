@@ -97,7 +97,7 @@ func TestCredentialRedirectAndHostileResponsesRefused(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch mode {
 				case "redirect":
-					http.Redirect(w, r, target.URL, 307)
+					http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
 				case "array":
 					_, _ = io.WriteString(w, `["SECRET"]`)
 				case "null":
@@ -172,9 +172,7 @@ func TestMailboxCalendarShareEightSlotsIncludingBackoff(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, 16)
 	for i := range 16 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			var err error
 			if i%2 == 0 {
 				_, err = c.Mailbox().Folders(ctx)
@@ -182,7 +180,7 @@ func TestMailboxCalendarShareEightSlotsIncludingBackoff(t *testing.T) {
 				_, err = c.Calendar().Get(ctx, "ev")
 			}
 			errs <- err
-		}()
+		})
 	}
 	for range 8 {
 		select {
@@ -227,13 +225,11 @@ func TestExpiredTokenRefreshSharedByConcurrentCalls(t *testing.T) {
 	c := gmail.New(account, store, gmail.Options{HTTPClient: server.Client(), GmailURL: server.URL, TokenURL: server.URL + "/token", Now: func() time.Time { return now.Add(2 * time.Second) }})
 	var wg sync.WaitGroup
 	for range 16 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if _, err := c.Mailbox().Folders(context.Background()); err != nil {
 				t.Error(err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if refreshes.Load() != 1 || store.saves != 1 || store.loads != 1 {
@@ -256,7 +252,7 @@ func TestWaitingForSharedRefreshHonorsCancellation(t *testing.T) {
 	store := validStore()
 	store.token.ExpiresAt = time.Time{}
 	c := gmail.New(account, store, gmail.Options{HTTPClient: server.Client(), GmailURL: server.URL, TokenURL: server.URL + "/token"})
-	first, cancel := context.WithCancel(context.Background())
+	first, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go func() { _, _ = c.Mailbox().Folders(first) }()
 	<-started

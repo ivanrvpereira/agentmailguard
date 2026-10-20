@@ -134,13 +134,12 @@ func (s *jev) apiKey(ctx context.Context) (string, error) {
 }
 func failure(code string) model.Screening { return model.Screening{Verdict: model.Error, Error: &code} }
 func failed(code string, organization bool) model.Classification {
-	result := model.Classification{Screening: pointer(failure(code))}
+	result := model.Classification{Screening: new(failure(code))}
 	if organization {
 		result.Error = &code
 	}
 	return result
 }
-func pointer[T any](v T) *T { return &v }
 func (s *Screener) Screen(ctx context.Context, state map[string]any) (model.Screening, error) {
 	result, err := s.Classify(ctx, state, true, nil)
 	if result.Screening == nil {
@@ -173,7 +172,7 @@ func (s *Screener) Classify(ctx context.Context, state map[string]any, security 
 	}
 	result := model.Classification{}
 	if security {
-		result.Screening = pointer(validateSecurity(answers))
+		result.Screening = new(validateSecurity(answers))
 	}
 	if organization != nil {
 		result.Organization, code = validateOrganization(answers, organization)

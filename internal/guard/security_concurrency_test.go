@@ -212,7 +212,7 @@ func TestFinalAuthorizationRevalidatesCacheAndPreservesValidSibling(t *testing.T
 	done := make(chan error, 1)
 	go func() { _, err := g.Organize(ctx, now.Add(-7*24*time.Hour), r, now, true, nil); done <- err }()
 	receive(t, b.validating)
-	if err := c.Put(ctx, "work", cache.Row{MessageID: "m1", ReceivedAt: now, ScreenedAt: now, Verdict: model.Green, Score: ptr(.9)}); err != nil {
+	if err := c.Put(ctx, "work", cache.Row{MessageID: "m1", ReceivedAt: now, ScreenedAt: now, Verdict: model.Green, Score: new(.9)}); err != nil {
 		t.Fatal(err)
 	}
 	close(b.release)

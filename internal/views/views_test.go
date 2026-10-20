@@ -12,7 +12,6 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/views"
 )
 
-func ptr[T any](v T) *T { return &v }
 func jsonFields(t *testing.T, v any) map[string]any {
 	t.Helper()
 	data, err := json.Marshal(v)
@@ -26,11 +25,11 @@ func jsonFields(t *testing.T, v any) map[string]any {
 	return fields
 }
 func TestMailVerdictViews(t *testing.T) {
-	message := model.Message{ID: "id", Sender: model.Address{Name: "SECRET-NAME", Address: "a@example.test"}, Subject: "SECRET-SUBJECT", To: []model.Address{}, CC: []model.Address{}, Attachments: []string{}, ReceivedAt: time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC), Flag: model.NoFlag, Categories: []string{"listed", "SECRET-CATEGORY"}, Body: ptr("RAW-BODY")}
+	message := model.Message{ID: "id", Sender: model.Address{Name: "SECRET-NAME", Address: "a@example.test"}, Subject: "SECRET-SUBJECT", To: []model.Address{}, CC: []model.Address{}, Attachments: []string{}, ReceivedAt: time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC), Flag: model.NoFlag, Categories: []string{"listed", "SECRET-CATEGORY"}, Body: new("RAW-BODY")}
 	rendered := content.Rendered{Markdown: "VISIBLE-BODY", Links: map[string]string{"L1": "https://example.test/SECRET-TOKEN"}}
 	for _, verdict := range []model.Verdict{model.Green, model.Yellow, model.Sealed, model.Red, model.Error} {
 		t.Run(string(verdict), func(t *testing.T) {
-			row := cache.Row{Verdict: verdict, Error: ptr("TimeoutError")}
+			row := cache.Row{Verdict: verdict, Error: new("TimeoutError")}
 			v, err := views.View(message, row, []string{"listed"}, &rendered)
 			if err != nil {
 				t.Fatal(err)

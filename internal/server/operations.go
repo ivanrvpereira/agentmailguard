@@ -44,12 +44,12 @@ var mailSendGrants = providerGrants{"m365": {"Mail.Send"}}
 // calendarWriteGrants allow the meeting writes. Gmail logins made before calendar writes have only the read-only grant.
 var calendarWriteGrants = providerGrants{"m365": {"Calendars.ReadWrite"}, "gmail": {gmail.CalendarWriteScope}}
 
-var restart = errors.New("account configuration changed; restart required")
-var configError = errors.New("configuration unavailable")
-var rulesError = errors.New("rules unavailable")
+var errRestart = errors.New("account configuration changed; restart required")
+var errConfig = errors.New("configuration unavailable")
+var errRules = errors.New("rules unavailable")
 
 func publicError(e error) (string, bool) {
-	for _, fixed := range []error{restart, configError, rulesError} {
+	for _, fixed := range []error{errRestart, errConfig, errRules} {
 		if e == fixed {
 			return fixed.Error(), true
 		}
@@ -75,12 +75,12 @@ func publicError(e error) (string, bool) {
 func (s *Server) load(ctx context.Context, name *string) (config.Account, error) {
 	a, e := config.LoadAccount(ctx, filepath.Join(s.home, "config.toml"), name)
 	if e != nil {
-		return config.Account{}, configError
+		return config.Account{}, errConfig
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if old := s.accounts[a.Name]; (old != nil && old.config != a) || (old == nil && s.preloaded) {
-		return config.Account{}, restart
+		return config.Account{}, errRestart
 	}
 	return a, nil
 }
@@ -89,12 +89,12 @@ func (s *Server) instance(a config.Account) (*account, error) {
 	defer s.mu.Unlock()
 	if old := s.accounts[a.Name]; old != nil {
 		if old.config != a {
-			return nil, restart
+			return nil, errRestart
 		}
 		return old, nil
 	}
 	if s.preloaded {
-		return nil, restart
+		return nil, errRestart
 	}
 	var p provider
 	if a.Provider == "fake" {
@@ -299,7 +299,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	case "mail.get", "calendar.get":
 		var p idParam
 		if params(r.Params, &p) != nil || !idValid(p.ID) {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) {
 			if r.Operation == "mail.get" {
@@ -310,17 +310,17 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	case "mail.list":
 		p := listParam{Folder: "inbox", Count: 25}
 		if params(r.Params, &p) != nil || !idValid(p.Folder) || p.Count < 1 || p.Count > 100 || p.Skip < 0 || p.Skip > 1000000 {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) { return a.guard.List(ctx, p.Folder, p.Count, p.Skip) }
 	case "mail.search":
 		p := searchParam{Count: 25}
 		if params(r.Params, &p) != nil || p.Count < 1 || p.Count > 100 {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		for _, v := range []*string{p.Text, p.Sender, p.Subject, p.Folder} {
 			if v != nil && !validString(*v, 4096, true) {
-				return nil, invalid
+				return nil, errInvalid
 			}
 		}
 		q := model.SearchQuery{Text: p.Text, Sender: p.Sender, Subject: p.Subject, Folder: p.Folder}
@@ -331,7 +331,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 			if d.v != nil {
 				t, e := time.Parse("2006-01-02", *d.v)
 				if e != nil {
-					return nil, invalid
+					return nil, errInvalid
 				}
 				*d.out = &t
 			}
@@ -340,12 +340,12 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	case "mail.link":
 		var p linkParam
 		if params(r.Params, &p) != nil || !idValid(p.ID) || p.All == (len(p.Links) > 0) || !listValid(p.Links, 0, 1000) {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) { return a.guard.Links(ctx, p.ID, p.Links) }
 	case "mail.folders", "mail.categories", "auth.status", "rules.list":
 		if params(r.Params, &struct{}{}) != nil {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) {
 			switch r.Operation {
@@ -361,12 +361,12 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 			case "auth.status":
 				return s.status(ctx, a)
 			}
-			return nil, invalid
+			return nil, errInvalid
 		}
 	case "mail.archive", "mail.trash", "mail.read", "mail.unread":
 		var p idsParam
 		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, 50) {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) {
 			switch r.Operation {
@@ -381,36 +381,36 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	case "mail.move":
 		var p moveParam
 		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, 50) || !idValid(p.Folder) {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) { return mutations(a.guard.Move(ctx, p.IDs, p.Folder)) }
 	case "mail.flag":
 		var p flagParam
 		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, 50) || (p.State != model.Flagged && p.State != model.NoFlag && p.State != model.Complete) {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) { return mutations(a.guard.Flag(ctx, p.IDs, p.State)) }
 	case "mail.categorize":
 		var p categoryParam
 		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, 50) || !listValid(p.Add, 0, 100) || !listValid(p.Remove, 0, 100) {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) { return mutations(a.guard.Categorize(ctx, p.IDs, p.Add, p.Remove)) }
 	case "mail.organize":
 		p := organizeParam{Since: "7d"}
 		if params(r.Params, &p) != nil {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		now := s.options.Now().UTC()
 		since, e := parseWhen(p.Since, now)
 		if e != nil {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		var until *time.Time
 		if p.Until != nil {
 			u, e := parseWhen(*p.Until, now)
 			if e != nil || !u.After(since) {
-				return nil, invalid
+				return nil, errInvalid
 			}
 			until = &u
 		}
@@ -424,23 +424,23 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	case "calendar.list":
 		var p calendarParam
 		if params(r.Params, &p) != nil {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		first, e := time.Parse(time.RFC3339, p.Start)
 		last, e2 := time.Parse(time.RFC3339, p.End)
 		if e != nil || e2 != nil || !last.After(first) || last.Sub(first) > 90*24*time.Hour+time.Hour {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) { return a.guard.CalendarList(ctx, first, last) }
 	case "calendar.availability":
 		var p availabilityParam
 		if params(r.Params, &p) != nil || !listValid(p.To, 1, model.MaxAvailabilityAddresses) {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		first, e := time.Parse(time.RFC3339, p.Start)
 		last, e2 := time.Parse(time.RFC3339, p.End)
 		if e != nil || e2 != nil || !model.ValidAvailabilityRequest(p.To, first, last) {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		unsupported, grants = guard.CalendarAvailabilityUnsupported, providerGrants{"m365": {"Calendars.ReadBasic", "Calendars.Read", "Calendars.ReadWrite"}}
 		call = func(a *account) (any, error) {
@@ -457,7 +457,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	case "draft.new", "mail.send":
 		var p newParam
 		if params(r.Params, &p) != nil || !listValid(p.To, 1, 100) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		draft := model.NewDraft{To: p.To, Subject: *p.Subject, Body: *p.Body}
 		if r.Operation == "mail.send" {
@@ -469,7 +469,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	case "draft.reply", "draft.update", "mail.reply":
 		var p bodyParam
 		if params(r.Params, &p) != nil || !idValid(p.ID) || p.Body == nil || !validString(*p.Body, MaxRequestBytes, true) {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		if r.Operation == "mail.reply" {
 			grants = mailSendGrants
@@ -488,7 +488,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 	case "draft.forward", "mail.forward":
 		var p forwardParam
 		if params(r.Params, &p) != nil || !idValid(p.ID) || !listValid(p.To, 1, 100) {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		if r.Operation == "mail.forward" {
 			grants = mailSendGrants
@@ -497,7 +497,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 			call = func(a *account) (any, error) { id, e := a.guard.DraftForward(ctx, p.ID, p.To); return draftDTO{id}, e }
 		}
 	default:
-		return nil, invalid
+		return nil, errInvalid
 	}
 	a, e := s.load(ctx, r.Account)
 	if e != nil {
@@ -526,8 +526,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		}
 	}
 	v, e := call(instance)
-	var pending guard.PendingError
-	if errors.As(e, &pending) {
+	if pending, ok := errors.AsType[guard.PendingError](e); ok {
 		return pendingDTO{"pending", pending.ApprovalID, s.approvalBase + pending.ApprovalID}, nil
 	}
 	return v, e
@@ -596,11 +595,11 @@ func safeScopeDiagnostics(scopes []string) []string {
 func (s *Server) loadRules(ctx context.Context, name string) (rules.Rules, error) {
 	names, e := config.AccountNames(ctx, filepath.Join(s.home, "config.toml"))
 	if e != nil {
-		return rules.Rules{}, configError
+		return rules.Rules{}, errConfig
 	}
 	r, e := rules.Load(ctx, filepath.Join(s.home, "rules.toml"), name, names)
 	if e != nil {
-		return rules.Rules{}, rulesError
+		return rules.Rules{}, errRules
 	}
 	return r, nil
 }
@@ -661,7 +660,7 @@ func parseWhen(value string, now time.Time) (time.Time, error) {
 	if match := relativePattern.FindStringSubmatch(value); match != nil {
 		n, e := strconv.Atoi(match[1])
 		if e != nil || n < 1 || n > 3650000 {
-			return time.Time{}, invalid
+			return time.Time{}, errInvalid
 		}
 		var t time.Time
 		switch match[2] {
@@ -669,25 +668,25 @@ func parseWhen(value string, now time.Time) (time.Time, error) {
 			t = today.AddDate(0, 0, -n)
 		case "w":
 			if n > 521428 {
-				return t, invalid
+				return t, errInvalid
 			}
 			t = today.AddDate(0, 0, -7*n)
 		case "m":
 			if n > 119987 {
-				return t, invalid
+				return t, errInvalid
 			}
 			first := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, -n, 0)
 			last := first.AddDate(0, 1, -1).Day()
 			t = time.Date(first.Year(), first.Month(), min(today.Day(), last), 0, 0, 0, 0, time.UTC)
 		}
 		if t.Year() < 1 || t.Year() > 9999 {
-			return time.Time{}, invalid
+			return time.Time{}, errInvalid
 		}
 		return t, nil
 	}
 	t, e := time.Parse("2006-01-02", value)
 	if e != nil || t.Year() < 1 || t.After(today) {
-		return time.Time{}, invalid
+		return time.Time{}, errInvalid
 	}
 	return t, nil
 }

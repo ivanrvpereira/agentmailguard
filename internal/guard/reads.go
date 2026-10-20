@@ -41,11 +41,11 @@ func (g *Guard) Links(ctx context.Context, id string, ids []string) ([]LinkResul
 		item := LinkResult{Link: id}
 		url, ok := r.Links[id]
 		if !ok {
-			item.Error = pointer("no such link in this message")
+			item.Error = new("no such link in this message")
 		} else if content.IsSecretURL(url) {
-			item.Error = pointer("the URL likely carries a secret (sign-in, reset, token)")
+			item.Error = new("the URL likely carries a secret (sign-in, reset, token)")
 		} else {
-			item.URL = pointer(url)
+			item.URL = new(url)
 		}
 		out = append(out, item)
 	}

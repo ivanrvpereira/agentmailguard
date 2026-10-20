@@ -104,7 +104,7 @@ func (g *Guard) tag(ctx context.Context, ids []string, rows map[string]*cache.Ro
 		}
 		cancel()
 		for _, id := range errorOrder {
-			report.Errors = append(report.Errors, ReportError{pointer(id), "tag " + codes[id]})
+			report.Errors = append(report.Errors, ReportError{new(id), "tag " + codes[id]})
 			broken[id] = true
 		}
 	}

@@ -78,7 +78,7 @@ func calendarGuard(t *testing.T, b model.Mailbox, cal model.Calendar) (*guard.Gu
 	return guard.New("work", b, cal, s, cache, audit.New(path), guard.Options{Policy: allowAll}), s, path
 }
 func meetingWriter() *calendarWriter {
-	return &calendarWriter{calendar: &calendar{event: model.Event{ID: "e1", Start: now, End: now.Add(time.Hour), IsOrganizer: true, Subject: "CANARY", Body: ptr("CANARY")}}}
+	return &calendarWriter{calendar: &calendar{event: model.Event{ID: "e1", Start: now, End: now.Add(time.Hour), IsOrganizer: true, Subject: "CANARY", Body: new("CANARY")}}}
 }
 func assertCalendarAudit(t *testing.T, path, operation, id string) {
 	t.Helper()
@@ -98,7 +98,7 @@ func TestCalendarUpdateRequiresProviderAuthorityAndPreservesSelectedFields(t *te
 	}{
 		{"organizer", "", func(*model.Event) {}},
 		{"spoofed address", "calendar write refused: only the organizer can update or cancel", func(e *model.Event) { e.IsOrganizer = false; e.Organizer = model.Address{Address: "work@example.test"} }},
-		{"recurring", "calendar write refused: recurring events are not supported", func(e *model.Event) { e.Recurrence = ptr("CANARY") }},
+		{"recurring", "calendar write refused: recurring events are not supported", func(e *model.Event) { e.Recurrence = new("CANARY") }},
 		{"cancelled", "calendar write refused: event is cancelled", func(e *model.Event) { e.IsCancelled = true }},
 		{"wrong id", "ValueError", func(e *model.Event) { e.ID = "unexpected" }},
 	} {
@@ -106,7 +106,7 @@ func TestCalendarUpdateRequiresProviderAuthorityAndPreservesSelectedFields(t *te
 			w := meetingWriter()
 			tc.mutate(&w.event)
 			g, _, path := calendarGuard(t, &mailbox{}, w)
-			change := model.EventChange{Subject: ptr("CANARY new subject"), Location: ptr("")}
+			change := model.EventChange{Subject: new("CANARY new subject"), Location: new("")}
 			err := g.CalendarUpdate(context.Background(), "e1", change, 0)
 			if tc.refusal != "" {
 				if err == nil || err.Error() != tc.refusal || len(w.changes) != 0 || len(auditRecords(t, path)) != 0 {
@@ -133,8 +133,8 @@ func TestCalendarUpdateResolvesOnlyRequestedTimeChanges(t *testing.T) {
 		want     model.EventChange
 	}{
 		{"start preserves hour", model.EventChange{Start: &start}, 0, model.EventChange{Start: &start, End: &end}},
-		{"duration uses old start", model.EventChange{}, half, model.EventChange{End: ptr(now.Add(30 * time.Minute))}},
-		{"start and duration", model.EventChange{Start: &start}, half, model.EventChange{Start: &start, End: ptr(now.Add(150 * time.Minute))}},
+		{"duration uses old start", model.EventChange{}, half, model.EventChange{End: new(now.Add(30 * time.Minute))}},
+		{"start and duration", model.EventChange{Start: &start}, half, model.EventChange{Start: &start, End: new(now.Add(150 * time.Minute))}},
 		{"end only", model.EventChange{End: &end}, 0, model.EventChange{End: &end}},
 		{"explicit range", model.EventChange{Start: &start, End: &end}, 0, model.EventChange{Start: &start, End: &end}},
 		{"attendees only", model.EventChange{AddAttendees: []string{"CANARY@example.test"}}, 0, model.EventChange{AddAttendees: []string{"CANARY@example.test"}}},
@@ -165,15 +165,15 @@ func TestCalendarWritesRejectInvalidRangesAndChanges(t *testing.T) {
 		{name: "empty"},
 		{name: "empty lists", change: model.EventChange{AddAttendees: []string{}, RemoveAttendees: []string{}}},
 		{name: "negative duration", duration: -time.Hour},
-		{name: "negative duration with change", change: model.EventChange{Subject: ptr("CANARY")}, duration: -time.Hour},
-		{name: "end duration", change: model.EventChange{End: ptr(now.Add(time.Hour))}, duration: time.Hour},
-		{name: "early end", change: model.EventChange{End: ptr(now)}},
-		{name: "reversed range", change: model.EventChange{Start: ptr(now.Add(time.Hour)), End: ptr(now)}},
-		{name: "year zero", change: model.EventChange{Start: ptr(time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC))}},
-		{name: "overflow year", change: model.EventChange{Start: ptr(time.Date(9999, 12, 31, 23, 45, 0, 0, time.UTC))}},
-		{name: "UTC overflow", change: model.EventChange{End: ptr(time.Date(9999, 12, 31, 23, 45, 0, 0, time.FixedZone("west", -3600)))}},
-		{name: "bad old duration", change: model.EventChange{Start: ptr(now)}, oldEnd: ptr(now.Add(-time.Hour))},
-		{name: "duration saturation", change: model.EventChange{Start: ptr(now)}, oldStart: ptr(time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)), oldEnd: ptr(time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC))},
+		{name: "negative duration with change", change: model.EventChange{Subject: new("CANARY")}, duration: -time.Hour},
+		{name: "end duration", change: model.EventChange{End: new(now.Add(time.Hour))}, duration: time.Hour},
+		{name: "early end", change: model.EventChange{End: new(now)}},
+		{name: "reversed range", change: model.EventChange{Start: new(now.Add(time.Hour)), End: new(now)}},
+		{name: "year zero", change: model.EventChange{Start: new(time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC))}},
+		{name: "overflow year", change: model.EventChange{Start: new(time.Date(9999, 12, 31, 23, 45, 0, 0, time.UTC))}},
+		{name: "UTC overflow", change: model.EventChange{End: new(time.Date(9999, 12, 31, 23, 45, 0, 0, time.FixedZone("west", -3600)))}},
+		{name: "bad old duration", change: model.EventChange{Start: new(now)}, oldEnd: new(now.Add(-time.Hour))},
+		{name: "duration saturation", change: model.EventChange{Start: new(now)}, oldStart: new(time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)), oldEnd: new(time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC))},
 		{name: "overlapping attendee identities", change: model.EventChange{AddAttendees: []string{"CANARY@example.test"}, RemoveAttendees: []string{"canary@EXAMPLE.test"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -209,7 +209,7 @@ func TestCalendarCancelAndRespondRequireCorrectRoleAndAuditPayloads(t *testing.T
 				w.event.IsOrganizer = state == "organizer"
 				switch state {
 				case "recurring":
-					w.event.Recurrence = ptr("CANARY")
+					w.event.Recurrence = new("CANARY")
 				case "cancelled":
 					w.event.IsCancelled = true
 				case "wrong id":
@@ -260,7 +260,7 @@ func callCalendarWrite(ctx context.Context, g *guard.Guard, op string) error {
 		_, err := g.CalendarInvite(ctx, model.NewEvent{Start: now, End: now.Add(time.Hour), Attendees: []string{"CANARY@example.test"}})
 		return err
 	case "update":
-		return g.CalendarUpdate(ctx, "e1", model.EventChange{Subject: ptr("CANARY")}, 0)
+		return g.CalendarUpdate(ctx, "e1", model.EventChange{Subject: new("CANARY")}, 0)
 	case "cancel":
 		return g.CalendarCancel(ctx, "e1", "CANARY")
 	default:
@@ -335,7 +335,7 @@ func TestCalendarWriteFailureAndCancellationBoundaries(t *testing.T) {
 		}
 	}
 	w := meetingWriter()
-	w.returnID = ptr("")
+	w.returnID = new("")
 	g, _, path := calendarGuard(t, &mailbox{}, w)
 	if err := callCalendarWrite(context.Background(), g, "invite"); err == nil || err.Error() != "ValueError" || len(auditRecords(t, path)) != 0 {
 		t.Fatalf("empty created ID=%v", err)

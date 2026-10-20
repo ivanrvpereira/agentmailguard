@@ -182,7 +182,7 @@ func (r Rendered) Domains() map[string]string {
 			name := norm.NFKC.String(cases.Fold().String(u.Hostname()))
 			ascii, err := idna.Punycode.ToASCII(name)
 			validLabels := true
-			for _, label := range strings.Split(strings.TrimSuffix(ascii, "."), ".") {
+			for label := range strings.SplitSeq(strings.TrimSuffix(ascii, "."), ".") {
 				if len(label) == 0 || len(label) > 63 {
 					validLabels = false
 				}

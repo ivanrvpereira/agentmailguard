@@ -91,11 +91,11 @@ func New(ctx context.Context, home string, opts Options) (*Server, error) {
 	if opts.Credentials == nil {
 		accounts, err := config.LoadAccounts(ctx, filepath.Join(home, "config.toml"))
 		if err != nil {
-			return nil, configError
+			return nil, errConfig
 		}
 		backend, err := config.CredentialsBackend(ctx, filepath.Join(home, "config.toml"))
 		if err != nil {
-			return nil, configError
+			return nil, errConfig
 		}
 		if backend == "file" {
 			password, _ := credentials.TakePasswordEnv(opts.LookupEnv)
@@ -160,7 +160,7 @@ type request struct {
 	Params    json.RawMessage `json:"params"`
 }
 
-var invalid = errors.New("invalid request")
+var errInvalid = errors.New("invalid request")
 
 func fail(w http.ResponseWriter, status int, message string) {
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(30 * time.Second))
@@ -237,7 +237,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		status := 500
 		message := "operation failed"
-		if errors.Is(err, invalid) {
+		if errors.Is(err, errInvalid) {
 			status = 400
 			message = "invalid request"
 		} else if errors.Is(err, ErrApprovalNotFound) {
@@ -263,11 +263,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Token validation rejects duplicate keys at every depth, including escaped spellings.
 func jsonValue(d *json.Decoder, depth int) error {
 	if depth > 16 {
-		return invalid
+		return errInvalid
 	}
 	t, err := d.Token()
 	if err != nil {
-		return invalid
+		return errInvalid
 	}
 	if delim, ok := t.(json.Delim); ok {
 		switch delim {
@@ -277,48 +277,48 @@ func jsonValue(d *json.Decoder, depth int) error {
 				k, e := d.Token()
 				key, ok := k.(string)
 				if e != nil || !ok || seen[key] {
-					return invalid
+					return errInvalid
 				}
 				seen[key] = true
 				if jsonValue(d, depth+1) != nil {
-					return invalid
+					return errInvalid
 				}
 			}
 			end, e := d.Token()
 			if e != nil || end != json.Delim('}') {
-				return invalid
+				return errInvalid
 			}
 		case '[':
 			for d.More() {
 				if jsonValue(d, depth+1) != nil {
-					return invalid
+					return errInvalid
 				}
 			}
 			end, e := d.Token()
 			if e != nil || end != json.Delim(']') {
-				return invalid
+				return errInvalid
 			}
 		default:
-			return invalid
+			return errInvalid
 		}
 	}
 	return nil
 }
 func strict(b []byte, out any, keys ...string) error {
 	if !utf8.Valid(b) {
-		return invalid
+		return errInvalid
 	}
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.UseNumber()
 	if jsonValue(d, 0) != nil {
-		return invalid
+		return errInvalid
 	}
 	if _, e := d.Token(); e != io.EOF {
-		return invalid
+		return errInvalid
 	}
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(b, &fields) != nil || fields == nil {
-		return invalid
+		return errInvalid
 	}
 	for k, v := range fields {
 		allowed := false
@@ -326,13 +326,13 @@ func strict(b []byte, out any, keys ...string) error {
 			allowed = allowed || k == a
 		}
 		if !allowed || bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
-			return invalid
+			return errInvalid
 		}
 	}
 	d = json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
 	if d.Decode(out) != nil {
-		return invalid
+		return errInvalid
 	}
 	return nil
 }
@@ -356,7 +356,7 @@ func (s *Server) call(ctx context.Context, r request) (any, error) {
 			Days int `json:"days"`
 		}{30}
 		if strict(r.Params, &p, "days") != nil || p.Days < 1 || p.Days > 365000 {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		stats, e := s.cache.Stats(ctx, p.Days, s.options.Now())
 		out := map[string]statsDTO{}
@@ -366,7 +366,7 @@ func (s *Server) call(ctx context.Context, r request) (any, error) {
 		return out, e
 	case "cache.clear":
 		if strict(r.Params, &struct{}{}) != nil {
-			return nil, invalid
+			return nil, errInvalid
 		}
 		n, e := s.cache.Clear(ctx)
 		return struct {

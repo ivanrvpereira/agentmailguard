@@ -51,19 +51,19 @@ func (g *Guard) classifyOne(ctx context.Context, id string, row *cache.Row, aske
 	}
 	fetched, err := g.fetch(ctx, []string{id}, true)
 	if err != nil {
-		result.Error = pointer("fetch " + safeCode(err))
+		result.Error = new("fetch " + safeCode(err))
 		return result
 	}
 	m := fetched[id]
 	if m.IsDraft {
-		result.Error = pointer("draft")
+		result.Error = new("draft")
 		return result
 	}
 	result.Screened = security
 	reload := func() {
 		rows, err := g.cached(ctx, []string{id})
 		if err != nil {
-			result.Error = pointer("cache " + safeCode(err))
+			result.Error = new("cache " + safeCode(err))
 			return
 		}
 		if saved, ok := rows[id]; ok {
@@ -72,14 +72,14 @@ func (g *Guard) classifyOne(ctx context.Context, id string, row *cache.Row, aske
 	}
 	put := func(s model.Screening) bool {
 		if _, err := g.put(ctx, m, s); err != nil {
-			result.Error = pointer("cache " + safeCode(err))
+			result.Error = new("cache " + safeCode(err))
 			return false
 		}
 		return true
 	}
 	rendered, err := render(m.Body, m.ContentType)
 	if err != nil {
-		result.Error = pointer("render ValueError")
+		result.Error = new("render ValueError")
 		if put(failure("render ValueError")) {
 			reload()
 		}
@@ -91,18 +91,18 @@ func (g *Guard) classifyOne(ctx context.Context, id string, row *cache.Row, aske
 	}
 	classified, err := g.screener.Classify(ctx, views.ScreeningState(m, rendered), security, questions)
 	if ctx.Err() != nil {
-		result.Error = pointer(safeCode(ctx.Err()))
+		result.Error = new(safeCode(ctx.Err()))
 		return result
 	}
 	if err != nil {
-		result.Error = pointer(safeCode(err))
+		result.Error = new(safeCode(err))
 		if put(failure(safeCode(err))) {
 			reload()
 		}
 		return result
 	}
 	if security && classified.Screening == nil {
-		classified.Screening = pointer(failure("ValidationError"))
+		classified.Screening = new(failure("ValidationError"))
 	}
 	if classified.Screening != nil {
 		s := *classified.Screening
@@ -118,14 +118,14 @@ func (g *Guard) classifyOne(ctx context.Context, id string, row *cache.Row, aske
 		if classified.Organization != nil {
 			code := organizationError(*classified.Organization, asked)
 			if code != "" {
-				result.Error = pointer(code)
+				result.Error = new(code)
 			} else if err := g.store.SaveOrganization(ctx, g.account, id, *classified.Organization); err != nil {
-				result.Error = pointer("cache " + safeCode(err))
+				result.Error = new("cache " + safeCode(err))
 			} else {
 				result.Classified = true
 			}
 		} else if result.Error == nil {
-			result.Error = pointer("ValidationError")
+			result.Error = new("ValidationError")
 		}
 	}
 	reload()

@@ -97,7 +97,7 @@ func TestSecurityTagsAreIndependentAndTrustSuccessfulMarker(t *testing.T) {
 	b, s := organizerSetup(t)
 	s.result = answer(model.Yellow)
 	s.result.Organization = nil
-	s.result.Error = ptr("invalid answer folder")
+	s.result.Error = new("invalid answer folder")
 	g, _, path := setup(t, b, s)
 	ctx := context.Background()
 	since := now.Add(-7 * 24 * time.Hour)

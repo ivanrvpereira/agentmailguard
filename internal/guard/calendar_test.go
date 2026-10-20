@@ -28,7 +28,7 @@ type eventScreener struct {
 
 func (s *eventScreener) Screen(_ context.Context, state map[string]any) (model.Screening, error) {
 	s.states = append(s.states, state)
-	return model.Screening{Verdict: model.Green, Score: ptr(0.0)}, nil
+	return model.Screening{Verdict: model.Green, Score: new(0.0)}, nil
 }
 
 // CheckAction never flags, so writes behave as before the Jev action check.
@@ -46,7 +46,7 @@ func TestEventMissingBodyFailsClosedAndDoesNotBecomeCached(t *testing.T) {
 	if err != nil || v.Verdict != model.Error || v.Subject != nil || v.Body != nil || len(s.states) != 0 {
 		t.Fatalf("missing event body did not fail before Jev: %+v %v", v, err)
 	}
-	cal.event.Body = ptr("BODYTEXT")
+	cal.event.Body = new("BODYTEXT")
 	cal.event.ContentType = ptr(model.Text)
 	for range 2 {
 		v, err = g.CalendarGet(ctx, "e1")
@@ -66,9 +66,9 @@ func TestEventMissingBodyFailsClosedAndDoesNotBecomeCached(t *testing.T) {
 func TestPrivateEventsScreenEveryReadWithoutBody(t *testing.T) {
 	b := &mailbox{}
 	s := &eventScreener{}
-	g, c, path := setup(t, b, s)
-	cal := &calendar{event: model.Event{ID: "e1", Subject: "meeting", Start: now, End: now.Add(time.Hour), IsPrivate: true, Body: ptr("SECRET"), ContentType: ptr(model.HTML)}}
-	g = guard.New("work", b, cal, s, c, audit.New(path), guard.Options{Now: func() time.Time { return now }})
+	_, c, path := setup(t, b, s)
+	cal := &calendar{event: model.Event{ID: "e1", Subject: "meeting", Start: now, End: now.Add(time.Hour), IsPrivate: true, Body: new("SECRET"), ContentType: ptr(model.HTML)}}
+	g := guard.New("work", b, cal, s, c, audit.New(path), guard.Options{Now: func() time.Time { return now }})
 	for range 2 {
 		v, err := g.CalendarGet(context.Background(), "e1")
 		if err != nil {

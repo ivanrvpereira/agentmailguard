@@ -95,7 +95,7 @@ type signInWriter struct {
 func (w *signInWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	for _, line := range strings.Split(string(p), "\n") {
+	for line := range strings.SplitSeq(string(p), "\n") {
 		if u, err := url.Parse(line); err == nil && u.Scheme == "http" && u.Query().Get("redirect_uri") != "" {
 			w.uri <- u
 		}

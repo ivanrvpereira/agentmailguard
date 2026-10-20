@@ -317,18 +317,18 @@ func (c *console) reference(ctx context.Context, item cache.Pending, args map[st
 	}
 	switch v := result.(type) {
 	case views.MailView:
-		add("Verdict", ptr(string(v.Verdict)))
+		add("Verdict", new(string(v.Verdict)))
 		if v.Sender != nil {
-			add("Sender", ptr(addressText(*v.Sender)))
+			add("Sender", new(addressText(*v.Sender)))
 		}
 		add("Subject", v.Subject)
-		add("Received", ptr(v.ReceivedAt))
+		add("Received", new(v.ReceivedAt))
 	case views.CalendarView:
-		add("Verdict", ptr(string(v.Verdict)))
+		add("Verdict", new(string(v.Verdict)))
 		add("Subject", v.Subject)
-		add("Start", ptr(v.Start))
-		add("End", ptr(v.End))
-		add("Organizer", ptr(addressText(v.Organizer)))
+		add("Start", new(v.Start))
+		add("End", new(v.End))
+		add("Organizer", new(addressText(v.Organizer)))
 	default:
 		return kind, nil, true
 	}
@@ -355,8 +355,6 @@ func jevText(c *model.ActionCheck) string {
 	}
 	return engine + fmt.Sprintf("not flagged (score %.2f)", *c.Score)
 }
-
-func ptr(s string) *string { return &s }
 
 func addressText(a views.Address) string {
 	if a.Name != nil && *a.Name != "" && *a.Name != a.Address {

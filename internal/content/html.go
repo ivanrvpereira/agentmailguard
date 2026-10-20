@@ -44,7 +44,7 @@ func cssIdentifier(s string) string {
 
 func words(s string) map[string]bool {
 	m := map[string]bool{}
-	for _, w := range strings.Fields(s) {
+	for w := range strings.FieldsSeq(s) {
 		m[w] = true
 	}
 	return m
@@ -122,7 +122,7 @@ func balancedHTML(source string) (*html.Node, error) {
 // A semicolon inside url() or a quoted string splits the declaration; at worst that over-hides, which removes text from Jev and the agent alike.
 func inlineStyle(n *html.Node) map[string]string {
 	s := map[string]string{}
-	for _, decl := range strings.Split(cssComment.ReplaceAllString(attr(n, "style"), ""), ";") {
+	for decl := range strings.SplitSeq(cssComment.ReplaceAllString(attr(n, "style"), ""), ";") {
 		if k, v, ok := strings.Cut(decl, ":"); ok {
 			v, _, _ = strings.Cut(v, "!")
 			s[strings.ToLower(strings.TrimSpace(cssIdentifier(k)))] = strings.ToLower(strings.TrimSpace(cssIdentifier(v)))

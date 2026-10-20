@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/mail"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -273,12 +274,7 @@ func timestamp(s string) (time.Time, error) {
 	return t, nil
 }
 func contains(a []string, s string) bool {
-	for _, v := range a {
-		if v == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(a, s)
 }
 func parseMessage(data map[string]json.RawMessage, labels map[string]string, body bool) (model.Message, error) {
 	raw, _ := json.Marshal(data)

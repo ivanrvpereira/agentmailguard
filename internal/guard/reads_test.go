@@ -54,7 +54,7 @@ func TestUnexpectedFetchedIDsNeverReachScreeningOrViews(t *testing.T) {
 }
 
 func TestFailClosedScreeningAndErrorRetryThroughReads(t *testing.T) {
-	for _, result := range []model.Screening{{}, {Verdict: model.Green}, {Verdict: model.Green, Score: ptr(.9)}, {Verdict: model.Error, Error: ptr("CANARY raw")}} {
+	for _, result := range []model.Screening{{}, {Verdict: model.Green}, {Verdict: model.Green, Score: new(.9)}, {Verdict: model.Error, Error: new("CANARY raw")}} {
 		t.Run(string(result.Verdict), func(t *testing.T) {
 			b := &mailbox{messages: []model.Message{message("m1")}}
 			s := &screeningResult{result: result}
@@ -68,7 +68,7 @@ func TestFailClosedScreeningAndErrorRetryThroughReads(t *testing.T) {
 			if v.Verdict != model.Error || v.Body != nil || v.Subject != nil || v.Sender != nil || strings.Contains(string(data), "CANARY") {
 				t.Fatalf("failed screening exposed fields: %s", data)
 			}
-			s.result = model.Screening{Verdict: model.Green, Score: ptr(0.0)}
+			s.result = model.Screening{Verdict: model.Green, Score: new(0.0)}
 			v, err = g.Get(ctx, "m1")
 			if err != nil {
 				t.Fatal(err)
@@ -125,12 +125,12 @@ func TestDraftIdentityOverridesPreviouslyCachedVerdict(t *testing.T) {
 }
 func TestListReusesFetchedEmptyBodiesAndValidatesReadRequests(t *testing.T) {
 	m := message("empty")
-	m.Body = ptr("")
+	m.Body = new("")
 	b := &mailbox{messages: []model.Message{m}, listedBodies: true}
 	s := &screener{verdict: model.Green}
 	g, _, _ := setup(t, b, s)
 	ctx := context.Background()
-	got, err := g.Search(ctx, model.SearchQuery{Text: ptr("x")}, 100)
+	got, err := g.Search(ctx, model.SearchQuery{Text: new("x")}, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,14 +141,14 @@ func TestListReusesFetchedEmptyBodiesAndValidatesReadRequests(t *testing.T) {
 		if _, err := g.List(ctx, "inbox", n, 0); err == nil {
 			t.Fatal("bad list count allowed")
 		}
-		if _, err := g.Search(ctx, model.SearchQuery{Text: ptr("x")}, n); err == nil {
+		if _, err := g.Search(ctx, model.SearchQuery{Text: new("x")}, n); err == nil {
 			t.Fatal("bad search count allowed")
 		}
 	}
 	if _, err := g.List(ctx, "inbox", 1, -1); err == nil {
 		t.Fatal("negative skip allowed")
 	}
-	if _, err := g.Search(ctx, model.SearchQuery{Folder: ptr("inbox")}, 1); err == nil {
+	if _, err := g.Search(ctx, model.SearchQuery{Folder: new("inbox")}, 1); err == nil {
 		t.Fatal("folder-only search allowed")
 	}
 	b.messages[0].Body = nil

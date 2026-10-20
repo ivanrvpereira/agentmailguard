@@ -200,7 +200,7 @@ func TestConcurrentAuditRecordsRemainWhole(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	log := audit.New(path)
 	var wg sync.WaitGroup
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		wg.Go(func() {
 			if err := log.Record(context.Background(), "work", "read", []model.MutationResult{{ID: "m1", OK: true}}, audit.Options{}); err != nil {
 				t.Error(err)

@@ -20,9 +20,10 @@ import (
 var ctx = context.Background()
 var received = time.Date(2026, 9, 25, 8, 30, 0, 0, time.UTC)
 
-func ptr[T any](v T) *T { return &v }
+//go:fix inline
+func ptr[T any](v T) *T { return new(v) }
 func row(id string) cache.Row {
-	return cache.Row{MessageID: id, ReceivedAt: received, Score: ptr(.05), Verdict: model.Green, Auth: model.AuthResults{SPF: ptr("pass"), DKIM: ptr("pass"), DMARC: ptr("fail"), CompAuth: ptr("fail"), CompAuthReason: ptr("000")}, ScreenedAt: received.Add(30 * time.Minute)}
+	return cache.Row{MessageID: id, ReceivedAt: received, Score: new(.05), Verdict: model.Green, Auth: model.AuthResults{SPF: new("pass"), DKIM: new("pass"), DMARC: new("fail"), CompAuth: new("fail"), CompAuthReason: new("000")}, ScreenedAt: received.Add(30 * time.Minute)}
 }
 func open(t *testing.T) (*cache.Cache, string) {
 	t.Helper()
@@ -142,12 +143,12 @@ func TestUnvalidatedSecurityMetadataNeverReplacesCachedState(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, change := range []func(*cache.Row){
-		func(r *cache.Row) { r.Error = ptr("RAW CONTENT CANARY") },
-		func(r *cache.Row) { r.Auth.SPF = ptr("RAW CONTENT CANARY") },
-		func(r *cache.Row) { r.Auth.DKIM = ptr("RAW CONTENT CANARY") },
-		func(r *cache.Row) { r.Auth.DMARC = ptr("RAW CONTENT CANARY") },
-		func(r *cache.Row) { r.Auth.CompAuth = ptr("RAW CONTENT CANARY") },
-		func(r *cache.Row) { r.Auth.CompAuthReason = ptr("RAW CONTENT CANARY") },
+		func(r *cache.Row) { r.Error = new("RAW CONTENT CANARY") },
+		func(r *cache.Row) { r.Auth.SPF = new("RAW CONTENT CANARY") },
+		func(r *cache.Row) { r.Auth.DKIM = new("RAW CONTENT CANARY") },
+		func(r *cache.Row) { r.Auth.DMARC = new("RAW CONTENT CANARY") },
+		func(r *cache.Row) { r.Auth.CompAuth = new("RAW CONTENT CANARY") },
+		func(r *cache.Row) { r.Auth.CompAuthReason = new("RAW CONTENT CANARY") },
 	} {
 		bad := original
 		change(&bad)
@@ -176,7 +177,7 @@ func TestStatsWindowSharesAndClear(t *testing.T) {
 		}
 	}
 	clean := row("clean")
-	clean.Auth = model.AuthResults{DMARC: ptr("pass")}
+	clean.Auth = model.AuthResults{DMARC: new("pass")}
 	old := row("old")
 	old.ReceivedAt = received.Add(-40 * 24 * time.Hour)
 	sealed := row("sealed")
@@ -191,7 +192,7 @@ func TestStatsWindowSharesAndClear(t *testing.T) {
 		}
 	}
 	stats, err := c.Stats(ctx, 30, received.Add(time.Hour))
-	want := cache.AccountStats{Total: 10, Counts: map[model.Verdict]int{model.Green: 6, model.Yellow: 1, model.Sealed: 1, model.Red: 1, model.Error: 1}, Shares: map[model.Verdict]float64{model.Green: .6, model.Yellow: .1, model.Sealed: .1, model.Red: .1, model.Error: .1}, GreenShareNonSealed: ptr(.667), DMARCFail: 9, CompAuthFail: 9}
+	want := cache.AccountStats{Total: 10, Counts: map[model.Verdict]int{model.Green: 6, model.Yellow: 1, model.Sealed: 1, model.Red: 1, model.Error: 1}, Shares: map[model.Verdict]float64{model.Green: .6, model.Yellow: .1, model.Sealed: .1, model.Red: .1, model.Error: .1}, GreenShareNonSealed: new(.667), DMARCFail: 9, CompAuthFail: 9}
 	if err != nil || !reflect.DeepEqual(stats["work"], want) || stats["home"].GreenShareNonSealed != nil {
 		t.Fatalf("stats=%+v error=%v", stats, err)
 	}
@@ -237,7 +238,7 @@ func TestRescreenPreservesAnswersAndIndependentMarkers(t *testing.T) {
 		}
 	}
 	changed := row("m1")
-	changed.Verdict, changed.Score = model.Red, ptr(.9)
+	changed.Verdict, changed.Score = model.Red, new(.9)
 	if err := c.Put(ctx, "work", changed); err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +307,7 @@ func TestConcurrentCacheAccessPreservesIndependentState(t *testing.T) {
 func TestCacheRoundTripIsolationAndPrivateFiles(t *testing.T) {
 	c, path := open(t)
 	a, b := row("m1"), row("m1")
-	b.Verdict, b.Score, b.Error = model.Error, nil, ptr("TimeoutError")
+	b.Verdict, b.Score, b.Error = model.Error, nil, new("TimeoutError")
 	if err := c.Put(ctx, "work", a); err != nil {
 		t.Fatal(err)
 	}

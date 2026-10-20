@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -78,9 +79,7 @@ func (g *meetingGoogle) handle(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&write.Body)
 	g.writes = append(g.writes, write)
 	apply := func(e map[string]any) {
-		for k, v := range write.Body {
-			e[k] = v
-		}
+		maps.Copy(e, write.Body)
 		if conference, ok := write.Body["conferenceData"].(map[string]any); ok && conference["createRequest"] != nil && write.Query.Get("conferenceDataVersion") == "1" {
 			e["conferenceData"] = map[string]any{"entryPoints": []any{map[string]any{"entryPointType": "video", "uri": "https://meet.example.test/" + e["id"].(string)}}}
 		}
@@ -116,9 +115,7 @@ func googleEvent(id string, organizer bool, extra map[string]any) map[string]any
 		e["organizer"] = map[string]any{"email": "work@example.test", "self": true}
 		e["attendees"] = []any{map[string]any{"email": "keep@example.test", "responseStatus": "accepted"}, map[string]any{"email": "work@example.test", "self": true, "organizer": true, "responseStatus": "accepted"}}
 	}
-	for k, v := range extra {
-		e[k] = v
-	}
+	maps.Copy(e, extra)
 	return e
 }
 

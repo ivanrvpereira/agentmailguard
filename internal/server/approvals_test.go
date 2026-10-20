@@ -96,7 +96,7 @@ func auditOf(t *testing.T, home string) (string, []map[string]any) {
 		t.Fatal(err)
 	}
 	var out []map[string]any
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
 		var record map[string]any
 		if err := json.Unmarshal([]byte(line), &record); err != nil {
 			t.Fatal(err)

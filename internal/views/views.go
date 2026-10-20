@@ -41,9 +41,8 @@ type MailView struct {
 	Truncated *bool              `json:"truncated,omitempty"`
 }
 
-func pointer[T any](v T) *T { return &v }
 func address(a model.Address) Address {
-	return Address{pointer(content.CleanSubject(a.Name)), content.CleanSubject(a.Address)}
+	return Address{new(content.CleanSubject(a.Name)), content.CleanSubject(a.Address)}
 }
 func addresses(as []model.Address) []Address {
 	result := make([]Address, 0, len(as))
@@ -86,17 +85,17 @@ func verdict(v model.Verdict) model.Verdict {
 func reason(v model.Verdict) *string {
 	switch v {
 	case model.Yellow, model.Red:
-		return pointer("injection")
+		return new("injection")
 	case model.Sealed:
-		return pointer("account_security")
+		return new("account_security")
 	case model.Error:
-		return pointer("screening_error")
+		return new("screening_error")
 	}
 	return nil
 }
 func safeError(s *string) *string {
 	if model.ValidateFailureText(s) != nil {
-		return pointer("Error")
+		return new("Error")
 	}
 	return s
 }
@@ -113,11 +112,11 @@ func Summary(m model.Message, row cache.Row, categories []string) MailSummary {
 	result := MailSummary{ID: m.ID, Verdict: v, ReceivedAt: iso(m.ReceivedAt), Auth: auth(row.Auth), IsRead: m.IsRead, Flag: m.Flag, Categories: listed(m.Categories, categories), Reason: reason(v)}
 	switch v {
 	case model.Green, model.Yellow:
-		result.Sender = pointer(address(m.Sender))
-		result.Subject = pointer(content.CleanSubject(m.Subject))
-		result.To = pointer(addresses(m.To))
-		result.CC = pointer(addresses(m.CC))
-		result.Attachments = pointer(cleanStrings(m.Attachments))
+		result.Sender = new(address(m.Sender))
+		result.Subject = new(content.CleanSubject(m.Subject))
+		result.To = new(addresses(m.To))
+		result.CC = new(addresses(m.CC))
+		result.Attachments = new(cleanStrings(m.Attachments))
 	case model.Red, model.Sealed:
 		result.Sender = &Address{Address: content.CleanSubject(m.Sender.Address)}
 	case model.Error:
@@ -131,9 +130,9 @@ func View(m model.Message, row cache.Row, categories []string, rendered *content
 		if rendered == nil {
 			return MailView{}, errors.New("green view needs the rendered body")
 		}
-		result.Body = pointer(rendered.Markdown)
-		result.Links = pointer(rendered.Domains())
-		result.Truncated = pointer(rendered.Truncated)
+		result.Body = new(rendered.Markdown)
+		result.Links = new(rendered.Domains())
+		result.Truncated = new(rendered.Truncated)
 	}
 	return result, nil
 }

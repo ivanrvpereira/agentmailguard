@@ -39,8 +39,7 @@ func serve(ctx context.Context, home, listen string, stdin io.Reader, stderr io.
 	defer listener.Close()
 	opts.Credentials, e = localCredentials(ctx, home, opts.Credentials, stdin, stderr, lookup)
 	if e != nil {
-		var passwordError credentialPasswordError
-		if errors.As(e, &passwordError) {
+		if passwordError, ok := errors.AsType[credentialPasswordError](e); ok {
 			status := "access denied"
 			if errors.Is(passwordError.error, credentials.ErrPasswordMissing) {
 				status = "password missing"
@@ -262,8 +261,7 @@ func login(ctx context.Context, home, account string, device, noBrowser bool, st
 		fmt.Fprintln(stderr)
 	}
 	if e != nil {
-		var diagnostic m365.LoginError
-		if errors.As(e, &diagnostic) {
+		if diagnostic, ok := errors.AsType[m365.LoginError](e); ok {
 			return failure(stderr, diagnostic.Message())
 		}
 		return failure(stderr, "provider login failed")

@@ -21,11 +21,11 @@ func TestInvalidCachedScreeningCannotAuthorizeViewsOrOrganization(t *testing.T) 
 		err     *string
 	}{
 		{"missing score", model.Green, nil, nil},
-		{"green red score", model.Green, ptr(.9), nil},
-		{"yellow green score", model.Yellow, ptr(.1), nil},
-		{"red green score", model.Red, ptr(.1), nil},
-		{"sealed red score", model.Sealed, ptr(.9), nil},
-		{"green error", model.Green, ptr(.1), ptr("ValidationError")},
+		{"green red score", model.Green, new(.9), nil},
+		{"yellow green score", model.Yellow, new(.1), nil},
+		{"red green score", model.Red, new(.1), nil},
+		{"sealed red score", model.Sealed, new(.9), nil},
+		{"green error", model.Green, new(.1), new("ValidationError")},
 	} {
 		for _, surface := range []string{"Get", "Links", "List", "Search", "Classify", "Organize", "Noop"} {
 			t.Run(bad.name+"/"+surface, func(t *testing.T) {
@@ -59,7 +59,7 @@ func TestInvalidCachedScreeningCannotAuthorizeViewsOrOrganization(t *testing.T) 
 					var v []views.MailSummary
 					var err error
 					if surface == "Search" {
-						v, err = g.Search(ctx, model.SearchQuery{Text: ptr("synthetic")}, 1)
+						v, err = g.Search(ctx, model.SearchQuery{Text: new("synthetic")}, 1)
 					} else {
 						v, err = g.List(ctx, "inbox", 1, 0)
 					}
@@ -104,8 +104,7 @@ func TestInvalidCachedScreeningCannotAuthorizeViewsOrOrganization(t *testing.T) 
 func TestGuardFormattingRedactsPopulatedRealJev(t *testing.T) {
 	s := newCoordinatedJev(t)
 	g, _, _ := setup(t, concurrentMailbox{}, s)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	done := make(chan error, 1)
 	go func() { _, err := g.Get(ctx, "m00"); done <- err }()
 	p := receive(t, s.entered)

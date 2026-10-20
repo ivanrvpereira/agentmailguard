@@ -17,7 +17,7 @@ import (
 // CredentialCheck is one startup result. Item and Status never contain secrets or backend text.
 type CredentialCheck struct{ Item, Status string }
 
-var credentialCheckFailed = errors.New("credential check failed")
+var errCredentialCheck = errors.New("credential check failed")
 
 // An account without a login does not block the start. Its commands fail with the provider's auth error.
 const notLoggedIn = "not logged in; commands for this account fail until auth login and a server restart"
@@ -108,11 +108,11 @@ func (s *Server) Preload(ctx context.Context, screeningKey func(context.Context)
 	path := filepath.Join(s.home, "config.toml")
 	accounts, err := config.LoadAccounts(ctx, path)
 	if err != nil {
-		return nil, configError
+		return nil, errConfig
 	}
 	name, err := config.CredentialsBackend(ctx, path)
 	if err != nil {
-		return nil, configError
+		return nil, errConfig
 	}
 	backend := s.creds.backend
 	record, whole, err := backend.preload(ctx)
@@ -134,7 +134,7 @@ func (s *Server) Preload(ctx context.Context, screeningKey func(context.Context)
 		if ctx.Err() != nil {
 			return checks, ctx.Err()
 		}
-		return checks, credentialCheckFailed
+		return checks, errCredentialCheck
 	}
 	failed := false
 	add := func(item, status string) {
@@ -226,7 +226,7 @@ func (s *Server) Preload(ctx context.Context, screeningKey func(context.Context)
 		add("approval password", approvalNotSet)
 	}
 	if failed {
-		return checks, credentialCheckFailed
+		return checks, errCredentialCheck
 	}
 	s.creds.mu.Lock()
 	s.creds.oauth, s.creds.screeningKey, s.creds.hasScreeningKey, s.creds.loaded = oauth, key, hasKey, true

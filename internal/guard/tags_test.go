@@ -40,7 +40,7 @@ func TestTagMetadataFailuresAndScanFailuresNeverMutateThoseIDs(t *testing.T) {
 		base.messages = append(base.messages, m)
 		base.scan.Messages = append(base.scan.Messages, model.InboxEntry{ID: id, ReceivedAt: m.ReceivedAt})
 	}
-	base.scan.Failures = []model.ScanFailure{{ID: ptr("scan-bad"), Error: "Graph error InvalidMetadata"}}
+	base.scan.Failures = []model.ScanFailure{{ID: new("scan-bad"), Error: "Graph error InvalidMetadata"}}
 	b := &metadataBox{base}
 	g, _, path := setup(t, b, s)
 	report, err := g.Organize(context.Background(), now.Add(-7*24*time.Hour), orgRules(), now, true, nil)

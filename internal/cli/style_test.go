@@ -77,7 +77,7 @@ func TestMailListAndSearchPrettyRenderAPlainTable(t *testing.T) {
 			t.Errorf("%v: sender name should replace the address: %s", args, out)
 		}
 		// A row shows only what its verdict view exposes: no subject for red or sealed, neither cell for error.
-		for _, line := range strings.Split(out, "\n") {
+		for line := range strings.SplitSeq(out, "\n") {
 			for _, id := range []string{"red-id", "sealed-id", "error-id"} {
 				if strings.Contains(line, id) && strings.Contains(line, "Quarterly") {
 					t.Errorf("%v: %s row leaked a subject: %q", args, id, line)
@@ -238,7 +238,7 @@ func TestPrettyTableTruncatesSenderAndSubject(t *testing.T) {
 	if code != 0 || errout != "" {
 		t.Fatalf("exit=%d stderr=%q", code, errout)
 	}
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(line, "long-id") {
 			if utf8.RuneCountInString(line) > 140 {
 				t.Errorf("row is %d cells wide: %q", utf8.RuneCountInString(line), line)

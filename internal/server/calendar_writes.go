@@ -48,7 +48,7 @@ func calendarWriteCall(ctx context.Context, operation string, raw json.RawMessag
 	case "calendar.cancel":
 		var p eventCancelParam
 		if params(raw, &p) != nil || !idValid(p.ID) || !validString(p.Comment, MaxRequestBytes, true) {
-			return nil, "", invalid
+			return nil, "", errInvalid
 		}
 		// Google sends no cancellation message, so a comment would be lost.
 		if p.Comment != "" {
@@ -60,7 +60,7 @@ func calendarWriteCall(ctx context.Context, operation string, raw json.RawMessag
 	case "calendar.respond":
 		var p eventRespondParam
 		if params(raw, &p) != nil || !idValid(p.ID) || !validString(p.Comment, MaxRequestBytes, true) || !p.Response.Valid() {
-			return nil, "", invalid
+			return nil, "", errInvalid
 		}
 		return func(a *account) (any, error) {
 			return updateDTO{p.ID, true}, a.guard.CalendarRespond(ctx, p.ID, model.EventResponse{Response: p.Response, Comment: p.Comment})
@@ -68,24 +68,24 @@ func calendarWriteCall(ctx context.Context, operation string, raw json.RawMessag
 	case "calendar.update":
 		var p eventChangeParam
 		if params(raw, &p) != nil || !idValid(p.ID) || p.Online != nil && !*p.Online || !listValid(p.Add, 0, 100) || !listValid(p.Remove, 0, 100) || p.Subject != nil && !validString(*p.Subject, 65536, true) || p.Location != nil && !validString(*p.Location, 4096, true) {
-			return nil, "", invalid
+			return nil, "", errInvalid
 		}
 		start, ok := optionalCalendarTime(p.Start)
 		end, ok2 := optionalCalendarTime(p.End)
 		change := model.EventChange{Subject: p.Subject, Location: p.Location, Start: start, End: end, AddAttendees: p.Add, RemoveAttendees: p.Remove, Online: p.Online != nil}
 		if !ok || !ok2 || start != nil && end != nil && !end.After(*start) {
-			return nil, "", invalid
+			return nil, "", errInvalid
 		}
 		var duration time.Duration // 0: not given
 		if p.Duration != nil {
 			d, e := time.ParseDuration(*p.Duration)
 			if e != nil || d <= 0 || end != nil || start != nil && !model.CalendarTimeValid(start.Add(d)) {
-				return nil, "", invalid
+				return nil, "", errInvalid
 			}
 			duration = d
 		}
 		if change.AttendeeConflict() || change.Empty() && duration == 0 {
-			return nil, "", invalid
+			return nil, "", errInvalid
 		}
 		return func(a *account) (any, error) {
 			return updateDTO{p.ID, true}, a.guard.CalendarUpdate(ctx, p.ID, change, duration)
@@ -94,19 +94,19 @@ func calendarWriteCall(ctx context.Context, operation string, raw json.RawMessag
 		// An online meeting is on unless the caller sends an explicit false.
 		p := inviteParam{Online: true}
 		if params(raw, &p) != nil || !listValid(p.To, 1, 100) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) || !validString(p.Location, 4096, true) {
-			return nil, "", invalid
+			return nil, "", errInvalid
 		}
 		start, ok := calendarTime(p.Start)
 		end, ok2 := calendarTime(p.End)
 		if !ok || !ok2 || !end.After(start) {
-			return nil, "", invalid
+			return nil, "", errInvalid
 		}
 		return func(a *account) (any, error) {
 			id, e := a.guard.CalendarInvite(ctx, model.NewEvent{Subject: *p.Subject, Body: *p.Body, Location: p.Location, Start: start, End: end, Attendees: p.To, Online: p.Online})
 			return draftDTO{id}, e
 		}, "", nil
 	}
-	return nil, "", invalid
+	return nil, "", errInvalid
 }
 
 // calendarTime parses an RFC 3339 time with a year the providers accept.

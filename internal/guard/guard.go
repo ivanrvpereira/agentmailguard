@@ -54,7 +54,9 @@ type GuardError string
 const AuthFailed = "AuthError"
 
 func (e GuardError) Error() string { return string(e) }
-func pointer[T any](v T) *T        { return &v }
+
+//go:fix inline
+func pointer[T any](v T) *T { return new(v) }
 func safeCode(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return "CancelledError"
@@ -99,12 +101,12 @@ func safeText(text *string) *string {
 		return nil
 	}
 	if model.ValidateFailureText(text) != nil {
-		return pointer("Error")
+		return new("Error")
 	}
-	return pointer(*text)
+	return new(*text)
 }
 func failure(code string) model.Screening {
-	return model.Screening{Verdict: model.Error, Error: pointer(code)}
+	return model.Screening{Verdict: model.Error, Error: new(code)}
 }
 func validScreen(s model.Screening) model.Screening {
 	switch s.Verdict {
@@ -119,7 +121,7 @@ func validScreen(s model.Screening) model.Screening {
 		s.Score = nil
 		s.Error = safeText(s.Error)
 		if s.Error == nil {
-			s.Error = pointer("Error")
+			s.Error = new("Error")
 		}
 	default:
 		return failure("ValidationError")

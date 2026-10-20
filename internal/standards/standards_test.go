@@ -10,6 +10,7 @@ import (
 	"go/token"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -306,9 +307,7 @@ func TestPublicRefusalsReachTheUser(t *testing.T) {
 	serverSrc := packageFiles(t, "internal/server")
 	guardConsts := stringValues(guardSrc, token.CONST, "GuardError")
 	serverVars := stringValues(serverSrc, token.VAR, "errors.New")
-	for name, text := range stringValues(serverSrc, token.CONST, "") {
-		serverVars[name] = text
-	}
+	maps.Copy(serverVars, stringValues(serverSrc, token.CONST, ""))
 	audited := refusals(t, findFunc(t, guardSrc, "audited"), func(e ast.Expr) (string, bool) {
 		return guardText(e, guardConsts)
 	})

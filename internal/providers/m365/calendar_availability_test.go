@@ -3,6 +3,7 @@ package m365_test
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"reflect"
 	"strings"
@@ -55,9 +56,7 @@ func TestCalendarAvailabilityMarksUnprovenParticipantsUnknown(t *testing.T) {
 	ok := map[string]any{"scheduleId": "ok@example.test", "availabilityView": "00"}
 	entry := func(fields map[string]any) map[string]any {
 		e := map[string]any{"scheduleId": "a@example.test"}
-		for k, v := range fields {
-			e[k] = v
-		}
+		maps.Copy(e, fields)
 		return e
 	}
 	unknown := []model.AvailabilityStatus{"unknown", "unknown"}
