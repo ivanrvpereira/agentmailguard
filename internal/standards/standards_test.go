@@ -306,6 +306,9 @@ func TestPublicRefusalsReachTheUser(t *testing.T) {
 	serverSrc := packageFiles(t, "internal/server")
 	guardConsts := stringValues(guardSrc, token.CONST, "GuardError")
 	serverVars := stringValues(serverSrc, token.VAR, "errors.New")
+	for name, text := range stringValues(serverSrc, token.CONST, "") {
+		serverVars[name] = text
+	}
 	audited := refusals(t, findFunc(t, guardSrc, "audited"), func(e ast.Expr) (string, bool) {
 		return guardText(e, guardConsts)
 	})
@@ -370,6 +373,7 @@ func findFunc(t *testing.T, files []*ast.File, name string) *ast.FuncDecl {
 }
 
 // stringValues maps package-level names to the string literal passed to wrap, as in `X = GuardError("text")`.
+// An empty wrap maps plain string literals, as in `const X = "text"`.
 func stringValues(files []*ast.File, tok token.Token, wrap string) map[string]string {
 	values := map[string]string{}
 	for _, f := range files {
@@ -382,6 +386,10 @@ func stringValues(files []*ast.File, tok token.Token, wrap string) map[string]st
 				v := spec.(*ast.ValueSpec)
 				for i, name := range v.Names {
 					if i >= len(v.Values) {
+						continue
+					}
+					if lit, ok := v.Values[i].(*ast.BasicLit); ok && wrap == "" && lit.Kind == token.STRING {
+						values[name.Name], _ = strconv.Unquote(lit.Value)
 						continue
 					}
 					call, ok := v.Values[i].(*ast.CallExpr)
@@ -428,7 +436,8 @@ func guardText(e ast.Expr, consts map[string]string) (string, bool) {
 	return "", false
 }
 
-// refusals collects the texts that a function lets through: every case value and every element of an error list.
+// refusals collects the texts that a function lets through: every case value, every element of an error list,
+// and every named or literal text that a `return text, true` passes on.
 // An expression it cannot resolve fails the test, so a new allowlist shape gets a matching resolver.
 func refusals(t *testing.T, fn *ast.FuncDecl, resolve func(ast.Expr) (string, bool)) []string {
 	t.Helper()
@@ -445,6 +454,13 @@ func refusals(t *testing.T, fn *ast.FuncDecl, resolve func(ast.Expr) (string, bo
 		case *ast.CaseClause:
 			for _, e := range n.List {
 				add(e)
+			}
+		case *ast.ReturnStmt:
+			if len(n.Results) == 2 && exprName(n.Results[1]) == "true" {
+				switch n.Results[0].(type) {
+				case *ast.Ident, *ast.BasicLit:
+					add(n.Results[0])
+				}
 			}
 		case *ast.CompositeLit:
 			if a, ok := n.Type.(*ast.ArrayType); ok && exprName(a.Elt) == "error" {
