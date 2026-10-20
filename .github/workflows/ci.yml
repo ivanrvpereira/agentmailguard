@@ -47,6 +47,16 @@ jobs:
         run: go mod verify
       - name: Format, vet, race tests, and build
         run: make
+      - name: Check that go fix has nothing to change
+        run: 'out="$(go fix -diff ./... 2>&1)" && test -z "$out" || { printf "%s\n" "$out"; exit 1; }'
+      - name: Install pinned staticcheck and govulncheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+      - name: Staticcheck
+        run: '"$(go env GOPATH)/bin/staticcheck" ./...'
+      - name: Govulncheck
+        run: '"$(go env GOPATH)/bin/govulncheck" ./...'
 
   secrets:
     name: Secret scan
