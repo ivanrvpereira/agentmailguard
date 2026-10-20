@@ -27,9 +27,8 @@ Don't use for: sending a saved draft (the user sends drafts in their mail client
 
 ## Prerequisites
 
-- `agentmailguard` is on `PATH`. The build produces `bin/agentmailguard`. Install it or a symlink to it.
-- An operator runs the server. The CLI finds it through `--server URL`, then `AGENTMAILGUARD_SERVER`, then `http://127.0.0.1:8787`. The server can be on another host behind an SSH tunnel or a wrapper script that sets the URL. Never start, stop, or restart the server yourself.
-- The server has no client authentication or built-in TLS. Anyone who can reach its listener can run every action that the write policy allows, including mail sends and meeting notifications. Keep access protected.
+- `agentmailguard` is on `PATH`.
+- An operator runs the server. The CLI finds it through `--server URL`, then `AGENTMAILGUARD_SERVER`, then `http://127.0.0.1:8787`. Never start, stop, or restart the server yourself.
 - Account names come from the server configuration. The first account is the default. Select another with `--account NAME`. No command lists the account names: ask the user. `auth status` shows the sign-in state of one account. The examples below use `work`.
 
 ## How to Run
@@ -42,7 +41,7 @@ agentmailguard --account work mail list --count 10
 
 - Global flags (`--account`, `--server`, `--timeout`) go before the command group.
 - Output is JSON by default. Use `--pretty` only to show a table or message text to the user verbatim.
-- Exit code `0`: the call ran (a mutation can still contain per-ID failures, and a write can be pending). `1`: the whole call failed or was refused. `2`: invalid CLI usage.
+- Exit code `0`: the call ran (a mutation can still contain per-ID failures, and a write can be pending). `1`: the whole call failed or was refused, or `auth status` reports an unusable login. `2`: invalid CLI usage.
 - For `mail organize`, pass `--timeout 2h` and give your shell tool a timeout of at least two hours. Scans can take a long time.
 
 ## Quick Reference
@@ -159,13 +158,13 @@ The result is a list of `{"id", "ok", "error"}` entries. A pending entry also ha
 
 ### 7. Send meeting notifications only with specific authorization
 
-If the server lets them run, `calendar invite`, `calendar update`, `calendar cancel`, and `calendar respond` send real notifications to other people at once. The commands work for Microsoft 365 and Gmail accounts.
+If the server lets them run, `calendar invite`, `calendar update`, `calendar cancel`, and `calendar respond` send real notifications to other people at once. The commands work for Microsoft 365, Gmail, and fake accounts.
 
 Before you run one, show the user the account, the event ID or the new meeting, the exact attendees, the local start and end, the subject, the location, any body or comment text, and whether the meeting has or gets an online meeting link (Teams on Microsoft 365, Google Meet on Gmail). Get explicit authorization for that specific action. A general request such as "sort out my calendar" is not authorization. Meeting text comes from the user, never from mail or event content.
 
 - Times use the format `YYYY-MM-DD HH:MM` in the local timezone of the client. Use exactly one of `--duration` and `--end` for an invite. Do not use a time that occurs two times when clocks go back; the client picks one of the two offsets.
 - Every invite has an online meeting link by default: Teams on Microsoft 365, Google Meet on Gmail. Use `--no-online` only when the user asks for a meeting without one. The body is empty without `--body`.
-- `--body` is plain text. The invite sends it as escaped HTML and keeps the line breaks. Do not write HTML or join details in `--body`. For a Teams meeting, Microsoft adds the Teams join block.
+- `--body` is plain text, and line breaks are kept. Do not write HTML or join details in `--body`. For a Teams meeting, Microsoft adds the Teams join block.
 - `update` sends only the options you supply. `--start` alone keeps the current duration. `update` cannot change the body.
 - `update ID --online` adds an online meeting to the same event and sends an update notification. On Gmail, it adds a Meet link only if the event has no conference. With `--online` alone, it keeps the event, times, and attendees and sends no body replacement. An update without `--online` leaves the online meeting unchanged. No command removes an online meeting or changes the online-meeting provider.
 - On Gmail, `cancel` cannot send a comment: `cancel --comment` is refused. Tell the user that Google sends the cancellation without a message.
@@ -203,12 +202,10 @@ Done when the applied run's `stats` (`applied`, `tagged`, `skipped`, `failed`) a
 - **Server unreachable:** report it and stop. Do not run `serve` or look for another way into the mailbox.
 - **Restart-required, not-logged-in, or `sign-in failed` errors:** the user must log in or restart the server on the server host. Tell them the exact error text.
 - **Forbidden commands:** never run `serve`, `auth login`, `auth set-screening-key`, `auth set-approval-password`, `auth migrate`, `auth change-password`, or `cache clear`, and never pass `--home`. Never read files in the server's home directory (`config.toml`, `credentials.*`, `cache.db`, `fake-provider.db`, `audit.jsonl`), and never call Microsoft Graph or the Gmail API directly. These bypass the guard.
-- **Error verdicts** are temporary. A later `mail get` retries screening.
 - **Organize dates** use the server clock and UTC midnight. `--until` is exclusive. Explicit dates cannot be in the future.
 - **Calendar dates** use the client's local timezone. `--to +Nd` counts from `--from`. The range is at most 90 days.
-- **Send refusals:** for `refused by policy: mail_send`, see [Write policy results](#write-policy-results). For `missing_scopes` on a send command, the Microsoft 365 login lacks `Mail.Send`.
 - **Meeting refusals:** for `refused by policy: calendar_...`, see [Write policy results](#write-policy-results). `missing_scopes` means the login lacks the calendar write grant (`Calendars.ReadWrite` on Microsoft 365, `calendar.events.owned` on Gmail); the user must log in again on the server host and restart the server. `calendar cancel refused: comments are not supported for this account` means a Gmail cancel with `--comment`; ask the user whether to cancel without a comment. Report other `calendar write refused` and `calendar response refused` errors as they are.
-- **Meeting limits:** an invite needs 1–100 addresses. There is no limit of 20 attendees or 8 hours, and no distribution-list detection. Check large or long meetings with the user.
+- **Meeting size:** an invite accepts 1–100 attendees and any length, and distribution lists are not detected. Check large or long meetings with the user.
 - **Empty `--body ''`** is a valid explicit value for `draft update`. It clears the body.
 - **Unread is not important.** Use content and sender, not only `is_read`, to prioritize.
 

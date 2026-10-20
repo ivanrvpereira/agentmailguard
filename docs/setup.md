@@ -55,7 +55,7 @@ https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite
 Browser login requests `http://localhost:PORT` and accepts the callback path `/`.
 The listener binds to `127.0.0.1` on a random available port. This is not the server port `8787`.
 Microsoft ignores the port for registered localhost redirects.
-On a headless host or Linux, use `--device-code`. Microsoft browser login currently invokes macOS `open` by default.
+Microsoft browser login opens the browser with macOS `open`, so on Linux or a headless host use `--device-code`.
 Device-code login requires no callback, but organization policies can refuse it.
 
 Sources: [desktop registration](https://learn.microsoft.com/en-us/entra/identity-platform/scenario-desktop-app-registration), [redirect rules](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url#localhost-exceptions), and [Graph permissions](https://learn.microsoft.com/en-us/graph/permissions-reference).
@@ -80,7 +80,6 @@ Gmail device-code login does not support these scopes.
 **Testing caveat:** External projects in Testing receive refresh tokens that expire after seven days for these scopes.
 The basic-profile exception does not apply. See [Google's refresh-token expiration rules](https://developers.google.com/identity/protocols/oauth2#expiration).
 Publishing the OAuth application for broader use can require Google verification or a security assessment because `gmail.modify` is restricted.
-Publishing this Go source alone does not require Google verification.
 
 Sources: [installed-app OAuth](https://developers.google.com/identity/protocols/oauth2/native-app), [consent and test users](https://developers.google.com/workspace/guides/configure-oauth-consent), [Gmail scopes](https://developers.google.com/workspace/gmail/api/auth/scopes), and [Calendar scopes](https://developers.google.com/workspace/calendar/api/auth).
 
@@ -121,7 +120,7 @@ Do not put tokens, the screening key, or the file password in this file. Keep th
 
 ## Approve external screening
 
-**CAUTION: Review the data transfers before consent or the first read.** Screening sends email content and calendar event content outside your machine.
+**CAUTION: Review the data transfers before consent or the first read.** Screening sends email content, calendar event content, and the text of actions that the agent writes outside your machine.
 Organization requests also send rule instructions and criteria to OpenRouter/Jev.
 The default endpoint is `https://openrouter.ai/api/v1/systemone`, with model `typesafe/jev-1.13`. The [`[screening]`](../README.md#screening) table can select another endpoint and model, which then receives the same data.
 
@@ -136,7 +135,7 @@ See [Privacy and external screening](../README.md#privacy-and-external-screening
 ## Operator-only login and start
 
 Local login and key commands refuse `--server` and `AGENTMAILGUARD_SERVER`. Remove that environment variable from the operator shell first.
-`auth set-screening-key` and `auth set-approval-password` also refuse `--account`. Account selection belongs on login and account-specific client commands, not key setup.
+`auth set-screening-key` and `auth set-approval-password` also refuse `--account`.
 
 For the file backend, enter the password at the terminal prompts. New credential files require password confirmation.
 Do not put the password in command arguments, shell history, or configuration.
@@ -158,7 +157,7 @@ A secret manager can supply one password line through stdin. For piped key setup
 ./bin/agentmailguard auth set-screening-key --home /private/path/agentmailguard
 ```
 
-3. Optional: set the approval password to turn on the [approval console](../README.md#approval-console). You need it if the write policy uses `approve`:
+3. Set the approval password to turn on the [approval console](../README.md#approval-console). Without it, every action that waits for approval stays pending. That includes a policy of `approve`, and a draft, send, or meeting write that the Jev action check flags or cannot check:
 
 ```sh
 ./bin/agentmailguard auth set-approval-password --home /private/path/agentmailguard
@@ -223,4 +222,4 @@ Other users who can reach either local listener can access the server. The tunne
 | Missing account or stale login | Restart after local login or account configuration changes. Use the same private home each time. |
 | Keychain approval or a blocked terminal | Approve access interactively. A rebuilt binary can require approval again. Choose “Always Allow” only for your trusted build. |
 
-Native provider acceptance remains unverified by this guide. Administrator consent, Google verification requirements, and screening-service access depend on your deployment.
+Administrator consent, Google verification requirements, and screening-service access depend on your deployment.

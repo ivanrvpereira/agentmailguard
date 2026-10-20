@@ -1,11 +1,11 @@
 # Coding standards
 
-Read this file when you review a diff. It holds the judgement calls that no linter makes for this repository.
+Read this file before you write or review a diff. It holds the judgement calls that no linter makes for this repository.
 
 - Skip anything that `make` or `.github/workflows/ci.yml` already enforces. The tests in `internal/standards` check the mechanical rules.
 - Review the code the diff adds or changes. Code that predates a rule is not a finding, and a diff does not rewrite it only to comply.
 - [AGENTS.md § Safety](AGENTS.md#safety) states the product rules. This file states how the code keeps them.
-- Where a rule here endorses something the generic smell baseline flags, the rule wins. See [Smell overrides](#smell-overrides).
+- Where a rule here endorses something that Fowler's code smells flag, the rule wins. See [Smell overrides](#smell-overrides).
 - Sections marked **hard** protect the safety boundary: a breach is a finding. The other sections are judgement calls: report a breach as possible and quote the hunk.
 - Each section starts with the diffs it applies to. Apply every section whose trigger matches.
 
@@ -18,7 +18,7 @@ Applies when the diff changes output, a view, the renderer, screening input, or 
 - **Verdict-limited.** A new view field states which verdicts show it, and matches the verdict tables in `README.md` and `skills/agentmailguard/SKILL.md`.
 - **Under-hide.** The renderer removes text only on a specific hiding signal backed by evidence. Text it keeps reaches screening; text it removes escapes screening. When in doubt, keep the text. The current signals are inline hides on one element.
 - **One tree.** The renderer decides what to hide and writes Markdown from the same parsed tree that `balancedHTML` returns. Parsing can change content, so a decision made on one parse holds only for output built from that parse ([`x/net/html` security considerations](https://pkg.go.dev/golang.org/x/net/html#hdr-Security_Considerations)).
-- **Escape into markup.** User text that a provider renders as HTML is escaped, as the M365 invite body is with `html.EscapeString`.
+- **Escape into markup.** User text that a provider renders as HTML is escaped, as `model.NewEvent.HTMLBody` escapes the invite body with `html.EscapeString`.
 - **Terminal-safe.** Server text that the CLI prints in a human format passes through `terminalSafe`. `ansi.Strip` alone keeps carriage return, backspace, BEL, and C1 controls, so the rune filter after it stays.
 - **Confined paths.** Files under the server home have fixed names. A path built from request or mail data opens through `os.Root`.
 - **Provider data is untrusted.** Adapters limit response size (`io.LimitReader`), page count, and loop count, and follow a next-page link only on the configured origin and path. The guard checks adapter results against the interface contract (requested IDs only, no duplicates, expected order and count) and turns a mismatch into `ValueError`, `failed`, or `unknown`.
@@ -28,7 +28,7 @@ Applies when the diff changes output, a view, the renderer, screening input, or 
 Applies when the diff creates, returns, persists, or prints an error, or writes the cache, the audit log, or stderr.
 
 - **Fixed text.** An error that can reach a client, the cache, or the audit log carries fixed text or a safe code: a `GuardError` constant, a `model.MailboxError` built from a status code or a fixed name, or a type name that `model.ValidateFailureText` accepts. The guard converts other errors with `safeErr`. Provider response bodies, email text, and `err.Error()` of an external error stay out. Config and rules errors may name operator-owned paths and account names.
-- **Identity, not text.** Branch on errors with `errors.Is`, `errors.As`, or a fixed sentinel, never on standard-library or provider error text. Go 1.27 reimplemented `encoding/json` on the v2 engine, so its error text differs between supported toolchains.
+- **Identity, not text.** Branch on errors with `errors.Is`, `errors.As`, or a fixed sentinel, never on standard-library or provider error text, which changes between Go releases.
 - **Named public refusals.** A refusal that users should read is a named `GuardError` constant, as in `internal/guard/calendar_writes.go`. Every allowlist on its path (`Guard.audited` for mail mutations, `server.publicError`, `client.Call`) lists the exact string; a test checks that the three agree. Review which refusals become public: each one is text that the agent reads.
 - **Redacted types.** A type that holds a token, key, password, credential store, client options, or an adapter implements `Format` or `String` and prints `Name{redacted}`, as `guard.Guard` and `credentials.OAuth` do.
 - **Content-free records.** Cache rows, audit records, and stderr carry IDs, verdicts, scores, safe codes, and operation settings only. Audit options come from validated mailbox values (folder IDs, listed categories, rule names), not from message text.
@@ -38,7 +38,7 @@ Applies when the diff creates, returns, persists, or prints an error, or writes 
 Applies when the diff adds a decision, a default, a lookup, or a result type.
 
 - **Zero is not success.** A zero value, nil, missing entry, or failed lookup becomes `error`, `unknown`, or `failed`, never green, free, or OK. Go zero-fills every struct, map miss, and unread field, so a default that means success turns any dropped value into an approval. Follow `model.Decide` (an invalid score is `Error`), `guard.normalize` (a missing or duplicate result fails), and `guard.CalendarAvailability` (every slot starts `unknown`).
-- **Validate before access.** Decode the complete typed request (`params` into a struct, then `idValid`, `listValid`, `validString`, and explicit bounds) before loading an account, reading credentials, or calling a provider, as `server.accountCall` does. Keep the token walk in `strict`: v1 `encoding/json` still accepts duplicate keys, even when backed by v2 in Go 1.27.
+- **Validate before access.** Decode the complete typed request (`params` into a struct, then `idValid`, `listValid`, `validString`, and explicit bounds) before loading an account, reading credentials, or calling a provider, as `server.accountCall` does. Keep the token walk in `strict`: `encoding/json` accepts duplicate keys.
 - **Strict browser refusal.** The server refuses every request that carries an `Origin` header. `http.CrossOriginProtection` does not replace this check: it allows GET, HEAD, OPTIONS, requests without browser headers, and an `Origin` that matches `Host`, which a DNS-rebinding page can satisfy.
 - **Guard re-checks.** The guard validates every input it depends on, even when the server already did. The guard is the trust seam; the server is one of its callers.
 - **Bounded.** Every request, response, list, page walk, loop, and fan-out has an explicit limit. A new client-visible limit goes into "HTTP interface and limits" in `README.md`.
@@ -70,10 +70,10 @@ Applies to every diff.
 
 ## Tests
 
-Applies when the diff adds or changes tests. These rules add repository specifics to the `tdd` skill.
+Applies when the diff adds or changes tests.
 
 - **Each layer owns its assertions.** Provider tests assert exact Graph or Gmail requests and response mapping. Guard tests assert verdicts, refusals, gates, and audit records. Server tests assert parameter mapping, response shape, public refusals, and audit writes. Native tests build the real binary and run whole workflows against fake external endpoints. A test that asserts another layer's payloads again is duplication.
-- **Fakes at external seams.** Use `httptest` servers for Graph, Gmail, and Jev, a fake `credentials.Platform`, an injected `Now`, and temporary homes. Use the real guard, cache, audit log, and views. `export_test.go` may lower test cost, like scrypt work, and exposes no internals. Keep injected `Now` clocks: `testing/synctest` fits only pure-Go gate and fan-out tests, because real sockets and cgo calls do not block durably inside its bubble.
+- **Fakes at external seams.** Use `httptest` servers for Graph, Gmail, and Jev, a fake `credentials.Platform`, an injected `Now`, and temporary homes. Use the real guard, cache, audit log, and views. Test-cost hooks are exported variables set in `TestMain`, as `credentials.FileWorkFactor` lowers scrypt work; an `export_test.go` may hold such hooks and exposes no internals. Keep injected `Now` clocks: `testing/synctest` fits only pure-Go gate and fan-out tests, because real sockets and cgo calls do not block durably inside its bubble.
 - **Stable assertions.** Tests assert error identity or this project's fixed text, never standard-library error text, which changes between Go releases.
 - **Synthetic data.** Tokens and keys are visibly synthetic. A test checks that addresses use reserved domains.
 - **Safety regressions fail.** Each changed safety behavior (refusal, fail-closed default, redaction, audit record, limit) has a test that fails when its check is removed. Prove it with a mutation probe: remove the check, see the test fail, restore the check.
@@ -83,7 +83,7 @@ Applies when the diff adds or changes tests. These rules add repository specific
 
 Applies when the diff changes a command, flag, operation, limit, refusal, scope, view field, screened field, or provider capability.
 
-- **Docs follow behavior.** Update every surface that states the changed fact: `README.md`, `skills/agentmailguard/SKILL.md`, CLI help (including `notes` in `internal/cli/cli.go`), `SECURITY.md` for boundaries, and `docs/setup.md` for scopes and setup. "Privacy and external screening" in `README.md` lists every field sent to Jev.
+- **Docs follow behavior.** Update every surface that states the changed fact: `README.md`, `skills/agentmailguard/SKILL.md`, CLI help (including `notes` in `internal/cli/cli.go`), `SECURITY.md` for boundaries, and `docs/setup.md` for scopes and setup. "Privacy and external screening" in `README.md` lists every field sent to the screening service.
 - **Honest verification.** "Verification and limits" in `README.md` names what each claim was verified against (fake Graph endpoint, fake Keychain `Platform`, live call). A new capability adds what remains unverified live.
 
 ## Dependencies and toolchain
@@ -95,7 +95,7 @@ Applies when the diff changes `go.mod`, `go.sum`, build tags, the SQLite DSN, or
 
 ## Smell overrides
 
-The generic smell baseline yields to these conventions:
+Fowler's code smells yield to these conventions:
 
 - **Repeated checks at trust seams** (server, then guard) are not Duplicated Code, provided the rule has one definition.
 - **Closed allowlists** of exact strings in the guard, server, and client are not Repeated Switches. They are the safety boundary.

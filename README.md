@@ -11,7 +11,7 @@ The default listener is `127.0.0.1:8787`.
 A non-loopback listener requires an explicit `--listen` option and prints a warning.
 Browser requests with an `Origin` header are refused, and the server does not enable CORS.
 These restrictions are not a substitute for a protected network or encrypted tunnel.
-Provider OAuth remains mandatory.
+Provider OAuth is required.
 
 ## Privacy and external screening
 
@@ -24,6 +24,7 @@ The fake screening engine sends nothing, but it is only for tests and local work
 - Calendar requests include subject, organizer, attendees, location, recurrence, meeting join URLs, and other event metadata.
 - Private-event bodies are excluded, but private-event metadata and accepted meeting join URLs are still included.
 - Organization requests include the rule instructions used for classification.
+- [Action checks](#jev-action-check) include the recipients, subject, body, comment, and event fields that the agent wrote, and for a forward the subject and body of the forwarded message.
 
 These transfers occur before the verdict.
 Content hidden from the agent can still reach the screening service.
@@ -47,10 +48,7 @@ See [SECURITY.md](SECURITY.md) for supported security boundaries and vulnerabili
 3. Run `./bin/agentmailguard --help`.
 
 `make` checks formatting, runs `go vet` and race tests, builds the packages, and creates `bin/agentmailguard`.
-SQLite still requires CGO with either credential backend.
-The native Keychain backend requires macOS and CGO.
-The file backend does not require Keychain, but it does not remove the SQLite build requirement.
-Credential locking uses Unix `flock`, and terminal password input uses `stty`. Windows is not supported.
+Both credential backends need CGO for SQLite. The Keychain backend works only on macOS. Windows is not supported.
 There is no plaintext credential fallback.
 The build does not install anything into your PATH.
 
@@ -64,13 +62,11 @@ The server owns configuration, OAuth credentials, the screening key, `cache.db`,
 The CLI never loads these files for data commands, even with a loopback server.
 The server home is `--home`, then `AGENTMAILGUARD_HOME`, then `~/.agentmailguard`.
 `serve` and local `auth login`, `auth set-screening-key`, `auth set-approval-password`, `auth migrate`, and `auth change-password` accept `--home`.
-There is no automatic import of configuration, cache, or credentials from the retired Python version.
 
 Create a private server-home directory and a `config.toml` file there.
 Prefer a restricted provider application that grants only the required scopes.
 Microsoft 365 login requests `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.Read`, `Calendars.ReadWrite`, `MailboxSettings.Read`, `offline_access`, `openid`, and `profile`.
 Gmail login requests `https://www.googleapis.com/auth/gmail.modify` and `https://www.googleapis.com/auth/calendar.events.owned`.
-A Gmail token with the older read-only grant `https://www.googleapis.com/auth/calendar.events.owned.readonly` still reads mail and the calendar, but meeting commands fail with `missing_scopes`.
 Extra grants are the user's choice: a usable token with extra scopes or Microsoft 365 application roles is accepted with a warning. The server never uses the extra grants.
 These examples contain placeholders, not working credentials.
 
@@ -174,32 +170,20 @@ backend = "keychain" # Default. Use "file" for password-encrypted storage.
 
 An absent table selects `keychain`.
 Linux requires `backend = "file"` because the native Keychain backend is macOS-only.
-If present, the table must contain exactly one string field, `backend`.
-Unknown backend values or keys cause a configuration error.
+Any other key or value is a configuration error.
 Neither backend detects rollback: another process under the same user can restore an older valid credential record.
-The lock coordinates only processes that use the same home directory.
 
 ### Keychain backend
 
 The Keychain backend uses one non-synchronizable generic-password item: service `agentmailguard`, account `credentials`.
 All configured accounts share this item under the current operating-system user, with separate entries keyed by provider and account name.
-A different `--home` does not create an independent Keychain namespace.
-Use one server home and distinct account names for the supported multi-account setup.
 Choose "Always Allow" for this item to avoid repeated access prompts for the same build.
-One item replaces the separate per-account approvals with one item approval per build.
-An ad-hoc-signed rebuild changes the application identity, so it needs approval again.
-Stable code signing is outside this implementation.
-
-If the single item is absent, the first local store operation automatically imports the configured accounts and screening key from legacy items.
-This applies to `serve`, `auth login`, `auth set-screening-key`, and `auth set-approval-password`, so an initial login cannot hide other legacy credentials.
-The import leaves legacy items unchanged.
-An unreadable legacy item refuses the operation instead of creating a partial record.
+A rebuilt binary needs approval again.
 
 ### File backend and password input
 
 The file backend stores the record in `<home>/credentials.age` with mode `0600`.
-It uses age password encryption with scrypt work factor `logN = 18` and refuses a higher decryption work factor.
-Writes use a same-directory temporary file, file fsync, atomic rename, and directory fsync.
+It uses age password encryption, and writes are atomic.
 A wrong password or damaged file refuses access with the same fixed error.
 Unknown record versions also refuse access.
 
@@ -243,10 +227,9 @@ No remote client command transfers a provider token or screening key to the serv
 
 Migration copies the whole record from the configured backend to the other backend under the same-home lock.
 It leaves the source record and configuration unchanged.
-It refuses an existing target record, including legacy Keychain entries. It also refuses a target that matches the configured backend.
+It refuses an existing target record. It also refuses a target that matches the configured backend.
 The file password comes from the normal sources. Terminal creation of the file target asks twice.
 Migration refuses `--server`, `AGENTMAILGUARD_SERVER`, and `--account`.
-Migration of your real Keychain needs separate permission and remains unverified by this workflow.
 
 ### Change the file password
 
@@ -261,22 +244,6 @@ The new password cannot come from an environment variable or a pipe.
 A running server retains its old password and cannot save refreshed tokens after this change.
 The command refuses `--server`, `AGENTMAILGUARD_SERVER`, and `--account`.
 
-### Optional manual cleanup of legacy Keychain items
-
-**Caution:** Do not delete legacy items before you verify the copied credentials after a server restart.
-Deletion removes the old copies and can break older binaries that still use them.
-The program never deletes these items.
-
-The following commands are templates, not verification steps. Replace each placeholder with the exact legacy account name and intended Keychain path.
-Use only the commands for items that you intend to delete.
-Do not delete the new `agentmailguard` / `credentials` item.
-
-```sh
-security delete-generic-password -s agentmailguard-go-m365 -a '<m365-account-name>' '<keychain-path>'
-security delete-generic-password -s agentmailguard-go-gmail -a '<gmail-account-name>' '<keychain-path>'
-security delete-generic-password -s agentmailguard-go-openrouter -a agentmailguard-go '<keychain-path>'
-```
-
 ## Local login and server start
 
 Run login locally on the server host:
@@ -290,7 +257,7 @@ Run login locally on the server host:
 
 `serve` loads every credential before it accepts requests, because an operator is present at server start:
 
-1. It reads the whole store and rewrites the record once to check read and write access, not once per account.
+1. It reads the credential store and writes it back once, so any Keychain prompt appears at start.
 2. Its first `credential check:` item is `credentials (keychain)` or `credentials (file)`. A store failure refuses startup.
 3. It checks every configured account. It also checks the stored screening key, unless `[screening]` selects the fake engine. Check lines contain fixed statuses, not secrets.
 4. If the screening key is missing and stdin is a terminal, it prompts with echo disabled and saves the key. Piped password input gets no key prompt.
@@ -304,19 +271,13 @@ Each account has one line. Its status names the step that failed:
 - `credential record unreadable; run auth login`, `Keychain access failed or denied`, or `Keychain write failed or denied`: the credential store failed for this account.
 - `sign-in failed; ...`: a login is saved, but the provider refused it or did not answer. The cause can be an expired or revoked login, wrong client settings in `config.toml`, or a network problem. The provider codes cannot tell these apart.
 
-For Microsoft 365, an unexpired saved access token passes without a provider request.
 An account that is not logged in, or whose sign-in failed, does not block startup.
 Its commands fail until the cause is fixed. After a new `auth login`, restart the server.
 A login can also expire or be revoked while the server runs. Commands for that account then fail with `sign-in failed; check the network, or run auth login and restart the server`.
 Other credential failures, a missing screening key, or missing configuration refuse startup.
 Store statuses include `ok`, `access denied`, `wrong password or damaged file`, `password missing`, and `unsupported version`.
 
-After startup, ordinary credential loads use server memory.
-Each runtime save rereads the backend under an exclusive `<home>/credentials.lock` before it changes its own entry.
-A token refresh preserves other accounts' entries and the screening key from concurrent local commands.
-The running server still keeps its earlier in-memory credentials.
-Token refreshes reach the backend before memory. With Keychain "Always Allow", the reread does not need another prompt for the same build.
-An account added to `config.toml` after startup returns the restart-required error.
+After startup, the server keeps credentials in memory. A token refresh saves to the store without losing the other accounts' entries or the screening key.
 
 Browser login is the default.
 Microsoft 365 supports device-code login.
@@ -336,10 +297,8 @@ The program does not print or log the pasted address. The terminal shows it as y
 Without `--no-browser`, Gmail login opens the URL with `open` on macOS or `xdg-open` on Linux. If that fails, login continues and accepts the loopback callback or a pasted address.
 `--no-browser` is refused for Microsoft 365. Use `--device-code` on a headless host.
 
-Gmail login and device-code login print numbered steps on stderr. The sign-in URL is on its own line, without quotes.
 A successful login prints a final `✓ Signed in as ...` line on stderr.
 Stdout gets the JSON result with `account`, `username`, and `scopes`.
-Login is never an HTTP operation.
 A supplied `--server` or `AGENTMAILGUARD_SERVER` value makes `auth login` refuse the operation instead of silently logging in locally.
 Data commands and `auth status` never open a login prompt.
 Login and `auth status` print a warning on stderr for extra grants. `auth status` lists them in `extra_scopes`; `scopes` lists only requested grants. Application roles appear with a `role:` prefix.
@@ -349,13 +308,10 @@ The program does not start a server automatically.
 Microsoft 365 `auth status` can use a cached token and username without a Graph request.
 A successful status does not prove current Graph access, all required permissions, or provider acceptance of mailbox operations.
 Login errors are fixed texts that name the failed step. They contain no raw provider errors, token values, or callback URLs.
-The browser callback only confirms receipt of a response. The terminal shows the final result.
 
 **Restart the server after local login or account configuration changes.**
 A cached account with changed configuration returns a fixed restart-required error.
 The server does not replace its cached provider identity in place.
-Provider access tokens still refresh normally after expiry, with scope validation on the refreshed token.
-Login and `auth status` report extra grants. Ordinary mailbox requests do not emit refreshed-scope warnings.
 Rules are different: the server reloads and validates `rules.toml` on every `rules list` and `mail organize` call.
 
 ## Local and remote clients
@@ -371,7 +327,7 @@ The server URL comes from `--server`, then `AGENTMAILGUARD_SERVER`, then `http:/
 The client supports HTTP or HTTPS URLs without userinfo, query parameters, or fragments.
 HTTPS requires an external TLS endpoint because `serve` does not provide TLS.
 The overall client deadline defaults to 30 minutes and accepts a positive `--timeout` duration.
-Long organizer scans can require many 30-second Jev batches.
+Long `mail organize` scans need a longer `--timeout`.
 
 For protected remote access, keep the server bound to loopback and use an SSH tunnel:
 
@@ -402,7 +358,7 @@ An explicit empty value, such as `draft update ID --body ''`, is not the same as
 | Mail send (sends at once) | `mail send --to ADDRESS --subject TEXT --body TEXT`, `mail reply ID --body TEXT`, `mail forward ID --to ADDRESS` |
 | Drafts (no send) | `draft new --to ADDRESS --subject TEXT --body TEXT`, `draft reply ID --body TEXT`, `draft forward ID --to ADDRESS`, `draft update ID --body TEXT` |
 
-Successful commands print the original operation's JSON result, not an RPC envelope.
+Successful commands print the operation's JSON result.
 `mail get --pretty` formats only the guarded view.
 Draft update returns the resulting draft ID, which can change on Gmail.
 `mail send`, `mail reply`, and `mail forward` return `{"ok": true}`. The providers give no ID for a sent message.
@@ -502,7 +458,7 @@ The check comes after the policy decision:
 Jev gives a score from 0 to 1. A score of 0.5 or more is a flag. This threshold is provisional and will change after tuning.
 The agent never sees the score or the flag. It gets the normal result or the normal `pending` result.
 The item page of the approval console shows the result, for example `Jev: flagged (score 0.62)`, `Jev: not flagged (score 0.08)`, or `Jev: check failed (TimeoutError)`.
-If the [fake screening engine](#screening) made the check, the page shows `Fake check (keywords only):` instead of `Jev:`, for example `Fake check (keywords only): flagged (score 0.90)`. The item keeps this label after a change to `[screening]` and a restart.
+If the [fake screening engine](#screening) made the check, the page shows `Fake check (keywords only):` instead of `Jev:`, for example `Fake check (keywords only): flagged (score 0.90)`. 
 
 ### Results
 
@@ -532,8 +488,7 @@ The message stays incomplete, so each later `--apply` run makes a new pending it
 On Microsoft 365, `mail move` to Deleted Items or to a folder below it fails with `move refused: use mail.trash`.
 Use `mail trash` instead.
 A rule move to such a folder also fails, and the report shows `GuardError`. Use `folder = "trash"` in the rule.
-On Microsoft 365, `mail folders`, `mail move`, `mail organize`, and `rules list` now also look up Deleted Items. If this lookup fails, the command fails.
-Gmail moves do not change.
+On Microsoft 365, `mail folders`, `mail move`, `mail organize`, and `rules list` fail if the server cannot look up Deleted Items.
 
 ### Approvals configuration
 
@@ -601,7 +556,6 @@ Protections:
 Known limits:
 
 - Do not forward the console port through an SSH tunnel that the agent can use. Then the agent could reach the console, and only the password would stop it.
-- An agent with a shell as the same OS user can go around the console, for example by changing `cache.db` or `config.toml`.
 
 ### Storage and audit
 
@@ -644,10 +598,8 @@ Both providers keep a copy in the sent mail folder. On Gmail, the server refuses
 A result of `{"ok": true}` means that the provider accepted the message. It does not prove delivery.
 
 Microsoft 365 login requests the `Mail.Send` scope, and token refreshes request it too.
-Without this grant, send commands fail with `missing_scopes` before the policy decision and before any Graph request. A token refresh can occur before this check.
-If an account logged in before this scope was added, a refresh can need new consent.
-In that case, or after `missing_scopes`, run `auth login` again on the server host and restart the server.
-Gmail needs no new grant: `gmail.modify` permits sending.
+Without this grant, send commands fail with `missing_scopes` before the policy decision and before any Graph request.
+After `missing_scopes`, run `auth login` again on the server host and restart the server.
 
 The server sends each request to the provider once. It does not retry a send, also not after a timeout or a rate limit, because a second send can deliver a duplicate message.
 A send command can return `operation failed` after the message was sent, for example if the audit write fails.
@@ -664,20 +616,17 @@ An agent must run these commands only after the user authorizes that specific ac
 
 The [write policy](#write-policy) denies these commands by default.
 To use them, set `calendar_invite`, `calendar_update`, `calendar_cancel`, and `calendar_respond` to `allow` in `config.toml`, then restart the server.
-These commands work for Microsoft 365 and Gmail accounts. On Gmail, they change the primary calendar.
+These commands work for Microsoft 365, Gmail, and fake accounts. On Gmail, they change the primary calendar.
 
 Microsoft 365 login requests the `Calendars.ReadWrite` scope, and token refreshes request it too.
-Without this grant, meeting commands fail with `missing_scopes` before any Graph calendar request. A token refresh can occur before this check.
-If an account logged in before this scope was added, a refresh can need new consent.
-In that case, run `auth login` again on the server host and restart the server.
+Without this grant, meeting commands fail with `missing_scopes` before any Graph calendar request.
+After `missing_scopes`, run `auth login` again on the server host and restart the server.
 Gmail login requests the `calendar.events.owned` scope. Without this grant, meeting commands fail with `missing_scopes` before any Google Calendar request.
-A Gmail account that logged in with the older read-only calendar grant keeps reading. Run `auth login` again on the server host and restart the server to use meeting commands.
 
 Times use the format `YYYY-MM-DD HH:MM` in the local timezone of the client.
-The client converts them to RFC 3339 with the local offset before it sends the request.
 The client refuses other formats, times that do not exist because of a DST change, and years outside 1–9999.
 The client does not refuse a time that occurs two times when clocks go back. It uses one of the two offsets, so do not use such a time.
-Go parses `--duration`, for example `30m` or `1h30m`. The duration must be more than zero.
+`--duration` takes values such as `30m` or `1h30m` and must be more than zero.
 An invite needs exactly one of `--end` and `--duration`. An update can use one of them, but not both.
 
 An invite needs one or more `--to` addresses and an explicit `--subject`, which can be empty.
@@ -686,7 +635,7 @@ The body is empty if you omit `--body`.
 The invite sends it as escaped HTML and keeps the line breaks, so the text cannot become markup or a link with hidden text.
 Every invite has an online meeting link by default: a Microsoft Teams meeting on Microsoft 365, and a Google Meet link on Gmail.
 For a Teams meeting, Microsoft adds the Teams join block to the body.
-Use `--no-online` to create a meeting without an online meeting. `--online` is accepted, and the last of `--online` and `--no-online` wins.
+Use `--no-online` to create a meeting without an online meeting.
 All invite attendees are required attendees.
 On Gmail, guests cannot invite other people to a meeting that the server creates or updates.
 
@@ -713,7 +662,6 @@ On Gmail, `calendar cancel` deletes the event and notifies the guests. Google ke
 Google sends no cancellation message. On Gmail, `calendar cancel --comment` fails with `calendar cancel refused: comments are not supported for this account`, before any credential or provider access. On Microsoft 365, the comment goes with the cancellation.
 
 Invites accept 1–100 attendee addresses, and each update attendee list accepts at most 100 addresses.
-There is no limit of 20 attendees or 8 hours, and there is no distribution-list detection.
 
 The client does not retry a meeting request, and the server sends no transaction ID.
 A meeting command can return `operation failed` after the notification was sent, for example if the audit write fails.
@@ -780,12 +728,11 @@ It does not delete pending items.
 
 Organizer dates use the server clock and UTC midnight.
 `Nd`, `Nw`, and `Nm` require `N >= 1`.
-Month subtraction clamps to the last day of the target month.
 Explicit `YYYY-MM-DD` dates cannot be in the future.
 `--until` is exclusive and must be later than `--since`.
 Calendar dates use the client's local date and timezone.
 For calendar queries, a relative `--to +Nd` starts from `--from`.
-The calendar interval must increase and cannot exceed 90 days plus one hour for DST.
+The calendar range must be at most 90 days.
 
 | Verdict | Visible mail content |
 | --- | --- |
@@ -832,11 +779,8 @@ Recipient and category lists accept at most 100 entries, and IDs and search stri
 Stats accepts 1 to 365,000 days.
 
 The server admits at most 64 concurrent calls.
-Header, request-body, idle, and response-write limits are bounded.
-There is no short whole-operation server deadline that cuts off a valid organizer scan.
+The server sets no overall deadline that would cut off a long `mail organize` scan; set the client `--timeout` instead.
 SIGINT or SIGTERM stops network admission, allows five seconds to drain, then cancels work with a ten-second shutdown limit.
-The cache closes after active calls finish.
-An adapter that ignores cancellation can delay resource cleanup and produces a shutdown failure.
 The server logs no request arguments, bodies, credentials, or panic payloads.
 There is no scheduler and no automatic mailbox work.
 
@@ -857,7 +801,6 @@ Not verified against real providers or services:
 - requests to Jev cloud, or to any screening endpoint or model other than the default;
 - migration of a real Keychain record.
 
-Earlier authorized live checks covered Gmail reads, a Microsoft 365 browser login and organize preview, and one Jev request with synthetic text only.
 Offline verification does not establish production readiness.
 
 ## License

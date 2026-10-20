@@ -5,7 +5,7 @@
 Do not include vulnerability details, credentials, or real mailbox content in a public issue or pull request.
 Use synthetic messages and fake provider endpoints for reproductions.
 
-1. Open this project's GitHub repository, not a fork or the archived hackathon project.
+1. Open this project's GitHub repository, not a fork.
 2. Open **Security → Advisories**.
 3. Select **Report a vulnerability** to submit a private report.
 
@@ -20,8 +20,6 @@ Do not attach OAuth tokens, passwords, callback URLs, provider responses, or ser
 
 The project is experimental.
 There is no published release-support schedule or guaranteed response time.
-Report issues against the current source and identify the affected commit.
-Offline checks do not establish production readiness.
 
 ## Supported deployment
 
@@ -41,6 +39,10 @@ This includes other local users who can reach a loopback listener.
 Origin refusal and absent CORS are not authentication controls.
 A public listener or untrusted shared host is outside the supported security boundary.
 
+The approval console is a second listener (default `localhost:8788`) that runs only when an approval password is set.
+It requires the password on every request and has no built-in TLS.
+Never forward its port through a tunnel that the agent can use.
+
 ## Mail and agent boundary
 
 Treat all email-derived text as untrusted, including green output.
@@ -53,7 +55,7 @@ The fake screening engine (`[screening] provider = "fake"`) judges by keywords o
 Mail is sent only by `mail send`, `mail reply`, and `mail forward`, and only when the write policy allows it. The default policy denies sends.
 Meeting invitations, updates, cancellations, and responses send notifications to attendees. The default policy denies them.
 The command set never permanently deletes mail.
-Manual mailbox operations still need the operator's or user's approval.
+Read state, flag, categorize, archive, and move have no policy key. The server runs them for anyone who can reach the listener.
 Trash is a provider move, not permanent deletion.
 
 ## Credentials and storage
@@ -62,7 +64,6 @@ Provider OAuth credentials and the screening key are stored on the server host, 
 The CLI uses the server API for data commands and does not load server credentials.
 macOS supports the native Keychain backend.
 Linux requires the password-encrypted file backend.
-Both platforms require CGO for SQLite.
 
 Keep the server home private and outside the source checkout.
 Do not commit configuration, encrypted credential files, databases, audit files, or environment files.
@@ -74,6 +75,7 @@ Another process under the same operating-system user is not an isolated trust do
 ## External screening and privacy
 
 Screening sends rendered mail content, identities, calendar metadata, and rule instructions to OpenRouter's System One endpoint, or to the endpoint that the `[screening]` table sets. The fake screening engine sends nothing.
+Before a draft, send, or meeting write runs, the action check also sends the recipients, subject, body, comment, and event fields that the agent wrote, and for a forward the subject and body of the forwarded message.
 Private-event bodies are excluded, but private-event metadata is still sent.
 Meeting join URLs can contain access secrets.
 Content hidden from the agent can still reach the screening service before a verdict exists.

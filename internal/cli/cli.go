@@ -34,8 +34,8 @@ type Options struct {
 func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "CLIOptions{redacted}") }
 
 const notes = `All data commands use the server. No automatic server start. No permanent delete.
-mail send, reply, and forward send email at once, and calendar invite, update, cancel, and respond send meeting notifications at once, when the write policy allows them (default: deny). No outbound screening.
-serve loads all credentials at start. Accounts without login start disabled; other failures refuse the start.
+mail send, reply, and forward send email at once, and calendar invite, update, cancel, and respond send meeting notifications at once, when the write policy allows them (default: deny).
+serve checks all credentials at start. An account that is not logged in, or whose sign-in fails, does not stop the start; its commands fail. Other credential failures stop the start.
 Login runs locally on the server host. Restart the server after login or account changes.
 Client/server authentication and built-in TLS are absent. Anyone who reaches the server can run every action that the write policy allows. Protect remote access with a tunnel.`
 
@@ -575,7 +575,7 @@ func mailCategorizeCmd(r *runner) *cobra.Command {
 
 func mailOrganizeCmd(r *runner) *cobra.Command {
 	since, until, apply := "7d", "", false
-	c := r.leaf("organize", "Apply organize rules to recent messages", 0, 0, func(c *cobra.Command, _ []string) error {
+	c := r.leaf("organize", "Preview organize rules on recent messages; --apply performs them", 0, 0, func(c *cobra.Command, _ []string) error {
 		if !whenSyntax(since) || (c.Flags().Changed("until") && !whenSyntax(until)) {
 			return errUsage
 		}
