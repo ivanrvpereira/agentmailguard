@@ -24,10 +24,7 @@ There is no published release-support schedule or guaranteed response time.
 ## Supported deployment
 
 The supported model is one server setup per machine, with multiple configured accounts in one server home.
-Each account has a distinct configuration name.
-Independent server homes with separate Keychain identities are not supported.
-The macOS Keychain backend stores the accounts in one item under the current operating-system user.
-A different `--home` does not create an independent Keychain namespace.
+Separate server homes do not isolate credentials: the macOS Keychain backend stores all accounts in one item per operating-system user.
 
 ## Network boundary
 
@@ -74,12 +71,8 @@ Another process under the same operating-system user is not an isolated trust do
 
 ## External screening and privacy
 
-Screening sends rendered mail content, identities, calendar metadata, and rule instructions to OpenRouter's System One endpoint, or to the endpoint that the `[screening]` table sets. The fake screening engine sends nothing.
-Before a draft, send, or meeting write runs, the action check also sends the recipients, subject, body, comment, and event fields that the agent wrote, and for a forward the subject and body of the forwarded message.
-Private-event bodies are excluded, but private-event metadata is still sent.
-Meeting join URLs can contain access secrets.
-Content hidden from the agent can still reach the screening service before a verdict exists.
-Encrypted credential storage does not prevent this transfer.
+Screening sends mail content, calendar metadata, rule instructions, and the text of agent actions to an external service, OpenRouter's System One endpoint by default. The fake screening engine sends nothing.
+Content hidden from the agent can still reach the screening service before a verdict exists, and meeting join URLs can contain access secrets.
 
 The project does not guarantee zero retention, no training, or a processing region.
 Review the applicable service and provider policies before using real or organizational mail.

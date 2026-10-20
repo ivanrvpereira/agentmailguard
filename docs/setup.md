@@ -5,17 +5,7 @@ The human operator owns every setup step. An AI agent must not perform registrat
 
 ## Build
 
-1. Install a currently supported, patched Go release. The minimum language version is Go 1.26.
-2. Provide a C compiler and CGO support. On macOS, use the Xcode Command Line Tools. On Linux, use your distribution's compiler toolchain.
-3. From the repository, run the commands:
-
-```sh
-CGO_ENABLED=1 make
-./bin/agentmailguard --help
-```
-
-`make` checks formatting, runs vet and race tests, and builds `bin/agentmailguard`.
-Both credential backends require CGO for SQLite. Windows is unsupported.
+Build the binary as described in [Build and checks](../README.md#build-and-checks).
 
 ## Choose one private home
 
@@ -30,9 +20,7 @@ chmod 700 /private/path/agentmailguard
 
 3. Choose the credential backend. macOS defaults to Keychain. Linux requires the password-encrypted file backend.
 
-The home contains the account configuration, credential lock, cache, and audit file. Separate homes are not supported deployment isolation.
-Keychain uses one item under the current operating-system user, service `agentmailguard`, account `credentials`, across configured accounts.
-The file backend stores all OAuth credentials, the screening key, and the approval password hash in `credentials.age`.
+The home contains the account configuration, credential lock, cache, and audit file. Use one home per machine: separate homes share one Keychain item. See [Credential storage](../README.md#credential-storage) for both backends.
 
 ## Register Microsoft 365
 
@@ -134,16 +122,11 @@ See [Privacy and external screening](../README.md#privacy-and-external-screening
 
 ## Operator-only login and start
 
-Local login and key commands refuse `--server` and `AGENTMAILGUARD_SERVER`. Remove that environment variable from the operator shell first.
-`auth set-screening-key` and `auth set-approval-password` also refuse `--account`.
-
-For the file backend, enter the password at the terminal prompts. New credential files require password confirmation.
-Do not put the password in command arguments, shell history, or configuration.
-A secret manager can supply one password line through stdin. For piped key setup, supply the password line first, then the key line.
-`AGENTMAILGUARD_CREDENTIALS_PASSWORD` takes precedence over stdin and can expose secrets to other processes.
+Local commands refuse `--server` and `AGENTMAILGUARD_SERVER`. Remove that environment variable from the operator shell first.
+For the file backend, enter the password at the terminal prompts. For other password sources, see [File backend and password input](../README.md#file-backend-and-password-input).
 
 1. Log in each configured account on the server host. Select the correct identity in the provider browser.
-   On Linux, add `--device-code` to the Microsoft 365 login command:
+   On Linux or a host without a browser, use the commands in [Headless login](#headless-login) instead:
 
 ```sh
 ./bin/agentmailguard --account work auth login --home /private/path/agentmailguard
@@ -202,15 +185,7 @@ The pasted address must match this login's host, port, path, and state. No callb
 
 ## Remote clients
 
-Keep the server on `127.0.0.1:8787`. Its HTTP interface has no authentication or built-in TLS.
-For remote reads, open an SSH tunnel from the client computer:
-
-```sh
-ssh -N -L 18787:127.0.0.1:8787 '<server-host>'
-./bin/agentmailguard --server http://127.0.0.1:18787 --account work auth status
-```
-
-Other users who can reach either local listener can access the server. The tunnel does not replace machine access controls.
+Keep the server on its loopback listener and use an SSH tunnel for clients on another machine. See [Local and remote clients](../README.md#local-and-remote-clients).
 
 ## Troubleshooting
 

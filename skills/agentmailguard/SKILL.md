@@ -167,7 +167,7 @@ Before you run one, show the user the account, the event ID or the new meeting, 
 - `--body` is plain text, and line breaks are kept. Do not write HTML or join details in `--body`. For a Teams meeting, Microsoft adds the Teams join block.
 - `update` sends only the options you supply. `--start` alone keeps the current duration. `update` cannot change the body.
 - `update ID --online` adds an online meeting to the same event and sends an update notification. On Gmail, it adds a Meet link only if the event has no conference. With `--online` alone, it keeps the event, times, and attendees and sends no body replacement. An update without `--online` leaves the online meeting unchanged. No command removes an online meeting or changes the online-meeting provider.
-- On Gmail, `cancel` cannot send a comment: `cancel --comment` is refused. Tell the user that Google sends the cancellation without a message.
+- On Gmail, `cancel` cannot send a comment: `cancel --comment` fails with `calendar cancel refused: comments are not supported for this account`. Ask the user whether to cancel without a comment, and tell them that Google sends the cancellation without a message.
 - Only the organizer can `update` or `cancel`. Only an attendee can `respond`. Recurring and cancelled events are refused.
 - Use `calendar availability` to find a time. An empty `calendar list` does not show that other people are free.
 - The client never retries. A timeout, transport error, or `operation failed` can occur after a notification was sent, including when the audit write fails. Treat these errors as an unknown outcome, not proof that nothing was sent. Run `calendar list` or `calendar get` before you try again. A second invite can send duplicate invitations.
@@ -200,18 +200,17 @@ Done when the applied run's `stats` (`applied`, `tagged`, `skipped`, `failed`) a
 ## Pitfalls
 
 - **Server unreachable:** report it and stop. Do not run `serve` or look for another way into the mailbox.
-- **Restart-required, not-logged-in, or `sign-in failed` errors:** the user must log in or restart the server on the server host. Tell them the exact error text.
 - **Forbidden commands:** never run `serve`, `auth login`, `auth set-screening-key`, `auth set-approval-password`, `auth migrate`, `auth change-password`, or `cache clear`, and never pass `--home`. Never read files in the server's home directory (`config.toml`, `credentials.*`, `cache.db`, `fake-provider.db`, `audit.jsonl`), and never call Microsoft Graph or the Gmail API directly. These bypass the guard.
 - **Organize dates** use the server clock and UTC midnight. `--until` is exclusive. Explicit dates cannot be in the future.
 - **Calendar dates** use the client's local timezone. `--to +Nd` counts from `--from`. The range is at most 90 days.
-- **Meeting refusals:** for `refused by policy: calendar_...`, see [Write policy results](#write-policy-results). `missing_scopes` means the login lacks the calendar write grant (`Calendars.ReadWrite` on Microsoft 365, `calendar.events.owned` on Gmail); the user must log in again on the server host and restart the server. `calendar cancel refused: comments are not supported for this account` means a Gmail cancel with `--comment`; ask the user whether to cancel without a comment. Report other `calendar write refused` and `calendar response refused` errors as they are.
+- **Meeting refusals:** for `refused by policy: calendar_...`, see [Write policy results](#write-policy-results). `missing_scopes` means the login lacks the calendar write grant (`Calendars.ReadWrite` on Microsoft 365, `calendar.events.owned` on Gmail); the user must log in again on the server host and restart the server. Report other `calendar write refused` and `calendar response refused` errors as they are.
 - **Meeting size:** an invite accepts 1–100 attendees and any length, and distribution lists are not detected. Check large or long meetings with the user.
 - **Empty `--body ''`** is a valid explicit value for `draft update`. It clears the body.
 - **Unread is not important.** Use content and sender, not only `is_read`, to prioritize.
 
 ## Sign-in problems
 
-If an account is not logged in or its sign-in failed, tell the user to log in again on the server host and restart the server. On a host without a browser, Gmail login uses `auth login --no-browser` and Microsoft 365 login uses `auth login --device-code`.
+If a command fails with `account configuration changed; restart required`, a not-logged-in error, or `sign-in failed; ...`, tell the user the exact error text. The user must log in again or restart the server on the server host. On a host without a browser, Gmail login uses `auth login --no-browser` and Microsoft 365 login uses `auth login --device-code`.
 Do not run these commands yourself. Do not ask for, read, store, or repeat a sign-in address, authorization code, password, or token.
 
 ## Verification

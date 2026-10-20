@@ -42,8 +42,7 @@ See [SECURITY.md](SECURITY.md) for supported security boundaries and vulnerabili
 
 ## Build and checks
 
-1. Install a currently supported, patched Go release with CGO support and a C compiler.
-   The minimum language version is Go 1.26.
+1. Install a currently supported, patched Go release (minimum Go 1.26) and a C compiler with CGO support: the Xcode Command Line Tools on macOS, or your distribution's compiler toolchain on Linux.
 2. Run `make` from this repository.
 3. Run `./bin/agentmailguard --help`.
 
@@ -61,12 +60,16 @@ Independent server homes with separate Keychain identities are not supported.
 The server owns configuration, OAuth credentials, the screening key, `cache.db`, and `audit.jsonl`.
 The CLI never loads these files for data commands, even with a loopback server.
 The server home is `--home`, then `AGENTMAILGUARD_HOME`, then `~/.agentmailguard`.
-`serve` and local `auth login`, `auth set-screening-key`, `auth set-approval-password`, `auth migrate`, and `auth change-password` accept `--home`.
+`serve` and the local `auth` commands (`login`, `set-screening-key`, `set-approval-password`, `migrate`, `change-password`) run on the server host and accept `--home`.
+The local `auth` commands refuse `--server` and `AGENTMAILGUARD_SERVER`. All of them except `auth login` also refuse `--account`.
+
+The server reads `config.toml` and the credential store (logins, the screening key, and the approval password hash) only at start. **After a change to any of them, restart the server.**
+Until the restart, requests for an account whose configuration or policy changed fail with `account configuration changed; restart required`, and an invalid change gives `configuration unavailable`.
+`rules.toml` is different: the server reads and validates it on every `rules list` and `mail organize` call.
 
 Create a private server-home directory and a `config.toml` file there.
 Prefer a restricted provider application that grants only the required scopes.
-Microsoft 365 login requests `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.Read`, `Calendars.ReadWrite`, `MailboxSettings.Read`, `offline_access`, `openid`, and `profile`.
-Gmail login requests `https://www.googleapis.com/auth/gmail.modify` and `https://www.googleapis.com/auth/calendar.events.owned`.
+The [setup guide](docs/setup.md) lists the exact scopes that login requests.
 Extra grants are the user's choice: a usable token with extra scopes or Microsoft 365 application roles is accepted with a warning. The server never uses the extra grants.
 These examples contain placeholders, not working credentials.
 
@@ -156,7 +159,6 @@ model = "typesafe/jev-1.13"                          # Default. Used only by "je
   - a folder or category rule is chosen when its rule name (the table name in `rules.toml`) is in the message.
 - At start, `serve` shows `screening key: not needed (fake screening)`. If a configured account is not a fake account, `serve` also prints a warning: the mail of that account is then judged by keywords, not by a decision model.
 - An absent table selects `jev` with the default endpoint and model. An unknown key or provider, an invalid endpoint, or an invalid model stops `serve` with `invalid screening: KEY_PATH`, for example `invalid screening: screening.endpoint` or `invalid screening: screening.model`. The error never shows the value.
-- The server reads `[screening]` only at start. After a change, restart the server.
 
 ## Credential storage
 
@@ -205,10 +207,8 @@ Terminal input disables echo. Non-terminal stdin supplies the key as one line.
 With the file backend and no password environment variable, piped input must contain two lines: the password first, then the key.
 With the password environment variable, piped input contains only the key line.
 The command refuses keys with spaces or control characters. It never prints the key or accepts it as an argument.
-It also refuses `--server`, `AGENTMAILGUARD_SERVER`, and `--account`.
 
 The server reads the screening key only from the credential store. It ignores `OPENROUTER_API_KEY`, so a key set for other tools is never sent to a configured endpoint.
-The server selects its screening key at start. Restart it after replacing the key.
 No remote client command transfers a provider token or screening key to the server.
 
 ### Copy credentials to the other backend
@@ -229,7 +229,6 @@ Migration copies the whole record from the configured backend to the other backe
 It leaves the source record and configuration unchanged.
 It refuses an existing target record. It also refuses a target that matches the configured backend.
 The file password comes from the normal sources. Terminal creation of the file target asks twice.
-Migration refuses `--server`, `AGENTMAILGUARD_SERVER`, and `--account`.
 
 ### Change the file password
 
@@ -242,7 +241,6 @@ Migration refuses `--server`, `AGENTMAILGUARD_SERVER`, and `--account`.
 This command works only with the file backend and re-encrypts the latest record under the same-home lock.
 The new password cannot come from an environment variable or a pipe.
 A running server retains its old password and cannot save refreshed tokens after this change.
-The command refuses `--server`, `AGENTMAILGUARD_SERVER`, and `--account`.
 
 ## Local login and server start
 
@@ -272,7 +270,7 @@ Each account has one line. Its status names the step that failed:
 - `sign-in failed; ...`: a login is saved, but the provider refused it or did not answer. The cause can be an expired or revoked login, wrong client settings in `config.toml`, or a network problem. The provider codes cannot tell these apart.
 
 An account that is not logged in, or whose sign-in failed, does not block startup.
-Its commands fail until the cause is fixed. After a new `auth login`, restart the server.
+Its commands fail until the cause is fixed.
 A login can also expire or be revoked while the server runs. Commands for that account then fail with `sign-in failed; check the network, or run auth login and restart the server`.
 Other credential failures, a missing screening key, or missing configuration refuse startup.
 Store statuses include `ok`, `access denied`, `wrong password or damaged file`, `password missing`, and `unsupported version`.
@@ -283,13 +281,7 @@ Browser login is the default.
 Microsoft 365 supports device-code login.
 Gmail refuses device-code login because that flow does not support the required scopes.
 
-On a headless host, use Gmail login with `--no-browser`. It needs no SSH tunnel:
-
-1. Run `auth login --no-browser` in an SSH session on the server host.
-2. Open the printed sign-in URL in a browser on any computer, and approve access.
-3. The browser goes to `http://127.0.0.1:PORT/?state=...&code=...` and shows a connection error. Copy the full address from the address bar.
-4. Paste the address into the SSH session and press Enter. Finish within five minutes.
-
+On a headless host, use Gmail login with `--no-browser`. It needs no SSH tunnel; the steps are in [Headless login](docs/setup.md#headless-login).
 The pasted address gets the same checks as the loopback callback: host, port, path, and `state` must match this sign-in.
 If the address does not match, login asks for it again. A provider error in a matching address ends the login.
 The PKCE verifier stays on the server host, so the code in the address cannot be exchanged anywhere else.
@@ -299,7 +291,6 @@ Without `--no-browser`, Gmail login opens the URL with `open` on macOS or `xdg-o
 
 A successful login prints a final `✓ Signed in as ...` line on stderr.
 Stdout gets the JSON result with `account`, `username`, and `scopes`.
-A supplied `--server` or `AGENTMAILGUARD_SERVER` value makes `auth login` refuse the operation instead of silently logging in locally.
 Data commands and `auth status` never open a login prompt.
 Login and `auth status` print a warning on stderr for extra grants. `auth status` lists them in `extra_scopes`; `scopes` lists only requested grants. Application roles appear with a `role:` prefix.
 Tokens that cannot work are refused: malformed tokens, and Gmail tokens without the mail and calendar scopes. Gmail refusals list `missing_scopes`.
@@ -309,10 +300,6 @@ Microsoft 365 `auth status` can use a cached token and username without a Graph 
 A successful status does not prove current Graph access, all required permissions, or provider acceptance of mailbox operations.
 Login errors are fixed texts that name the failed step. They contain no raw provider errors, token values, or callback URLs.
 
-**Restart the server after local login or account configuration changes.**
-A cached account with changed configuration returns a fixed restart-required error.
-The server does not replace its cached provider identity in place.
-Rules are different: the server reloads and validates `rules.toml` on every `rules list` and `mail organize` call.
 
 ## Local and remote clients
 
@@ -337,7 +324,6 @@ ssh -N -L 18787:127.0.0.1:8787 <server-host>
 ```
 
 An explicit remote listener is available with `serve --listen ADDRESS:PORT`.
-Do not expose it to an untrusted network.
 The tunnel protects the connection, not against other users who can already access either local listener.
 Forward only the API port (8787). Do not forward the [approval console](#approval-console) port through a tunnel that the agent can use.
 
@@ -419,10 +405,7 @@ For each key, the server uses the first value in this order: `[accounts.NAME.pol
 These commands have no key, and the policy always allows them: `mail read`, `mail unread`, `mail flag`, `mail categorize`, `mail archive`, and `mail move`.
 In `mail organize --apply`, only a rule move to `trash` has a key.
 
-The server reads the policy at start.
-After a policy change, requests for each changed account fail with `account configuration changed; restart required` until you restart the server.
-If the changed policy is invalid, requests fail with `configuration unavailable`.
-An invalid policy stops `serve`, `auth login`, `auth set-screening-key`, `auth set-approval-password`, `auth migrate`, and `auth change-password` with `invalid policy: KEY_PATH`.
+An invalid policy stops `serve` and the local `auth` commands with `invalid policy: KEY_PATH`.
 For example: `invalid policy: accounts.personal.policy.sealed.calendar_invite`. The error never shows the value.
 A policy is invalid if it has an unknown key or table, a value other than `allow`, `approve`, or `deny`, or a calendar key in a sealed table.
 
@@ -479,7 +462,6 @@ A `done` item also has `result`: the normal result of the command.
 The output never shows the stored request arguments.
 An unknown ID fails with `approval not found` and exit code `1`.
 
-Rules act only on green messages.
 A rule with `folder = "trash"` follows `mail_trash` for each message.
 In the `mail organize --apply` report, the `move.result` of such a message is `pending` or `refused by policy: mail_trash`.
 The report does not show the approval ID, and the stats count the message as `failed`.
@@ -487,7 +469,7 @@ The message stays incomplete, so each later `--apply` run makes a new pending it
 
 On Microsoft 365, `mail move` to Deleted Items or to a folder below it fails with `move refused: use mail.trash`.
 Use `mail trash` instead.
-A rule move to such a folder also fails, and the report shows `GuardError`. Use `folder = "trash"` in the rule.
+A rule move to such a folder also fails, and the report shows `GuardError`.
 On Microsoft 365, `mail folders`, `mail move`, `mail organize`, and `rules list` fail if the server cannot look up Deleted Items.
 
 ### Approvals configuration
@@ -503,8 +485,7 @@ hosts = ["my-mac.example.ts.net"]
 - `listen`: `HOST:PORT`. The default is `localhost:8788`. The console listens on this address, and the pending `url` uses it.
 - `hosts`: extra host names that the console accepts, for example a Tailscale name. Each entry is a host name or IP address with an optional `:PORT`. An entry without a port matches a request without a port. Put an IPv6 address in brackets. The default is none.
 
-The server reads `[approvals]` at start. Restart the server after a change.
-An invalid table stops `serve`, `auth login`, `auth set-screening-key`, `auth set-approval-password`, `auth migrate`, and `auth change-password` with `invalid approvals: KEY_PATH`, for example `invalid approvals: approvals.listen`. The error never shows the value.
+An invalid table stops `serve` and the local `auth` commands with `invalid approvals: KEY_PATH`, for example `invalid approvals: approvals.listen`. The error never shows the value.
 
 ### Approval password
 
@@ -516,17 +497,14 @@ Then it asks for the new password. On a terminal, echo is off and it asks for th
 Non-terminal stdin supplies the lines in the same order without a confirmation: the file backend password (if `AGENTMAILGUARD_CREDENTIALS_PASSWORD` is absent), the current approval password (if one is set), and then the new password.
 The password must be 8 to 72 bytes of valid UTF-8 without control characters.
 The command stores only a bcrypt hash of the password in the credential store (Keychain or the encrypted file). It never prints the password or the hash, and it does not accept them as arguments.
-It refuses `--server`, `AGENTMAILGUARD_SERVER`, and `--account`.
 
 The server reads the hash at start and shows `credential check: approval password: ok` or `not set`. A missing password does not stop the start.
-Restart the server after you set or change the password.
 
 ### Approval console
 
 The approval console is a small web page where you approve or deny pending items.
-To turn it on, set the [approval password](#approval-password) and restart the server.
+To turn it on, set the [approval password](#approval-password).
 At start, the server then shows `approval console listening`.
-The console listens on `[approvals].listen`, by default `http://localhost:8788`. The pending `url` opens the page of its item.
 If the console address is taken, the server does not start and shows `approval console listener unavailable`.
 
 The browser asks for a username and the password. The console ignores the username.
@@ -541,7 +519,7 @@ The browser asks for a username and the password. The console ignores the userna
 **Deny** stops the item for good. Nothing runs.
 An item that is already handled shows `already handled`, and nothing runs again.
 
-To use the console from a phone, put it behind an HTTPS tunnel, for example `tailscale serve`, and add the tunnel host name to `[approvals].hosts`, for example `hosts = ["my-mac.example.ts.net"]`.
+To use the console from a phone, put it behind an HTTPS tunnel, for example `tailscale serve`, and add the tunnel host name to `[approvals].hosts`.
 Keep `listen` on loopback. If `listen` is not `localhost` or a loopback address, the server shows a warning at start.
 
 Protections:
@@ -552,10 +530,6 @@ Protections:
 - After 5 wrong passwords in one minute, the console refuses every request with HTTP 429 until the oldest failure is more than one minute old.
 - Each wrong password adds a `console_signin` record to the audit log.
 - Pages have no scripts and no remote resources, and browsers must not cache or frame them.
-
-Known limits:
-
-- Do not forward the console port through an SSH tunnel that the agent can use. Then the agent could reach the console, and only the password would stop it.
 
 ### Storage and audit
 
@@ -584,7 +558,7 @@ The [Jev action check](#jev-action-check) can hold a command for approval, but i
 An agent must run these commands only after the user authorizes that specific send.
 
 The [write policy](#write-policy) key `mail_send` decides all three commands. The default is `deny`.
-To use them, set `mail_send` to `allow` or `approve` in `config.toml`, then restart the server.
+To use them, set `mail_send` to `allow` or `approve` in `config.toml`.
 With `approve`, each send waits in the [approval console](#approval-console) and runs only after a person approves it.
 `mail reply` and `mail forward` act on an existing message, so `[policy.sealed] mail_send` applies to them. By default, the server refuses a reply to or a forward of a `sealed` or `error` message.
 
@@ -599,7 +573,7 @@ A result of `{"ok": true}` means that the provider accepted the message. It does
 
 Microsoft 365 login requests the `Mail.Send` scope, and token refreshes request it too.
 Without this grant, send commands fail with `missing_scopes` before the policy decision and before any Graph request.
-After `missing_scopes`, run `auth login` again on the server host and restart the server.
+After `missing_scopes`, run `auth login` again on the server host.
 
 The server sends each request to the provider once. It does not retry a send, also not after a timeout or a rate limit, because a second send can deliver a duplicate message.
 A send command can return `operation failed` after the message was sent, for example if the audit write fails.
@@ -615,12 +589,12 @@ The [Jev action check](#jev-action-check) can hold a command for approval, but i
 An agent must run these commands only after the user authorizes that specific action.
 
 The [write policy](#write-policy) denies these commands by default.
-To use them, set `calendar_invite`, `calendar_update`, `calendar_cancel`, and `calendar_respond` to `allow` in `config.toml`, then restart the server.
+To use them, set `calendar_invite`, `calendar_update`, `calendar_cancel`, and `calendar_respond` to `allow` in `config.toml`.
 These commands work for Microsoft 365, Gmail, and fake accounts. On Gmail, they change the primary calendar.
 
 Microsoft 365 login requests the `Calendars.ReadWrite` scope, and token refreshes request it too.
 Without this grant, meeting commands fail with `missing_scopes` before any Graph calendar request.
-After `missing_scopes`, run `auth login` again on the server host and restart the server.
+After `missing_scopes`, run `auth login` again on the server host.
 Gmail login requests the `calendar.events.owned` scope. Without this grant, meeting commands fail with `missing_scopes` before any Google Calendar request.
 
 Times use the format `YYYY-MM-DD HH:MM` in the local timezone of the client.
@@ -716,15 +690,13 @@ instructions = "Messages about invoices or receipts."
 ```
 
 A folder target is a mailbox folder ID, `archive`, or `trash`.
-A `trash` target follows the `mail_trash` key of the [write policy](#write-policy).
 On Microsoft 365, a folder ID of Deleted Items or of a folder below it fails. Use `trash`.
 A category target must already exist in the mailbox.
 `rules list` shows resolved names and missing-target warnings, never instructions or confidence scores.
 Missing rules produce an empty organizer report without provider or Jev access.
 Invalid rules fail before provider access.
 `stats` and `cache clear` need neither account configuration nor provider authentication.
-Cache clear removes all accounts' verdicts, saved organization answers, and completion markers.
-It does not delete pending items.
+Cache clear removes all accounts' verdicts, saved organization answers, and completion markers, but not pending items.
 
 Organizer dates use the server clock and UTC midnight.
 `Nd`, `Nw`, and `Nm` require `N >= 1`.
