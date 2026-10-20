@@ -12,8 +12,6 @@ Use synthetic messages and fake provider endpoints for reproductions.
 If the button is absent, private vulnerability reporting is not enabled.
 Open a public issue requesting a private reporting channel, without vulnerability details or sensitive data.
 Wait for a private channel before sending the report.
-The maintainer must enable private reporting before announcing the public release.
-Adding this file does not enable the GitHub feature.
 
 A report can include the affected commit, operating system, synthetic reproduction, expected result, and actual result.
 Do not attach OAuth tokens, passwords, callback URLs, provider responses, or server-home files.

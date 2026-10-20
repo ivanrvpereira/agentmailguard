@@ -38,7 +38,6 @@ Obtain any required organizational approval before connecting a work mailbox.
 
 Use the [setup guide](docs/setup.md) for provider application registration, exact scopes, credential-backend selection, and the first guarded read.
 See [SECURITY.md](SECURITY.md) for supported security boundaries and vulnerability-reporting instructions.
-Maintainers can use the [GitHub publication checklist](docs/github-setup.md) for CI enforcement and repository security configuration.
 
 ## Build and checks
 
@@ -96,8 +95,6 @@ client_secret = "<desktop-application-client-secret>"
 Both account tables can exist in one file.
 The first account in file order is the default.
 Use `--account NAME` to select another account.
-The CLI refuses an explicitly empty or whitespace-only account name before any server request or local login.
-The server resolves nonempty names, not the client.
 Keep `config.toml` private because the Gmail application secret belongs on the server host.
 The optional `[policy]` tables in `config.toml` set the [write policy](#write-policy).
 
@@ -319,7 +316,6 @@ Each runtime save rereads the backend under an exclusive `<home>/credentials.loc
 A token refresh preserves other accounts' entries and the screening key from concurrent local commands.
 The running server still keeps its earlier in-memory credentials.
 Token refreshes reach the backend before memory. With Keychain "Always Allow", the reread does not need another prompt for the same build.
-A file save needs one scrypt derivation for the read and another for the write.
 An account added to `config.toml` after startup returns the restart-required error.
 
 Browser login is the default.
@@ -348,15 +344,12 @@ A supplied `--server` or `AGENTMAILGUARD_SERVER` value makes `auth login` refuse
 Data commands and `auth status` never open a login prompt.
 Login and `auth status` print a warning on stderr for extra grants. `auth status` lists them in `extra_scopes`; `scopes` lists only requested grants. Application roles appear with a `role:` prefix.
 Tokens that cannot work are refused: malformed tokens, and Gmail tokens without the mail and calendar scopes. Gmail refusals list `missing_scopes`.
-Diagnostics show at most 100 conventional scope labels of 256 bytes each. Malformed labels are omitted.
 The program does not start a server automatically.
 
 Microsoft 365 `auth status` can use a cached token and username without a Graph request.
 A successful status does not prove current Graph access, all required permissions, or provider acceptance of mailbox operations.
-Microsoft 365 login reports fixed errors for browser startup, authorization, token exchange, token validation, profile lookup, and credential storage.
-Device-code request, polling, refusal, cancellation, and timeout errors are also distinct.
+Login errors are fixed texts that name the failed step. They contain no raw provider errors, token values, or callback URLs.
 The browser callback only confirms receipt of a response. The terminal shows the final result.
-These diagnostics contain no raw provider errors, token values, or callback URLs. They do not bypass Microsoft access policies.
 
 **Restart the server after local login or account configuration changes.**
 A cached account with changed configuration returns a fixed restart-required error.
@@ -395,10 +388,8 @@ Forward only the API port (8787). Do not forward the [approval console](#approva
 ## Commands and output
 
 Run `--help` without a server to see every command and option.
-Flags can follow positional IDs, and recipient/category flags can repeat.
-`--no-pretty` and `--no-device-code` cancel their positive forms.
-The last supplied boolean option wins.
-Required text flags distinguish an omitted value from an explicit empty value, including `draft update ID --body ''`.
+Recipient and category flags can repeat.
+An explicit empty value, such as `draft update ID --body ''`, is not the same as an omitted flag.
 
 | Group | Commands |
 | --- | --- |
@@ -624,23 +615,6 @@ The audit log gets content-free records for the policy. Their `operation` is the
 - `"event": "policy"` records each decision, also `allow`. It has `time`, `account`, `operation`, `key`, `decision`, and `reasons`: `policy`; `sealed` if the sealed decision made it stricter; `jev_flag` if Jev flagged the action; `jev_error` if the Jev check failed. It can also have `id`, `rule`, and `approval_id`. It never has the Jev score.
 - `"event": "approval"` records each step of a pending item. It has `time`, `account`, `operation`, `state` (`created`, `approved`, `denied`, `done`, or `failed`), and `approval_id`.
 - `"event": "console_signin"` records each wrong approval console password. It has only `time` and `result` (`failed`). It never has the username, the password, the host name, or the address of the browser.
-
-### Upgrade notes
-
-1. Meeting commands are now denied by default. To use them, set the calendar keys to `allow`, then restart the server.
-2. `mail trash`, `draft reply`, and `draft forward` on `sealed` or `error` messages are now denied by default. To change this, set `[policy.sealed]`.
-3. The cache database gets the `pending` table (schema version 5). After the upgrade, `serve` of an older binary fails with `server state unavailable`.
-4. Pending items store request text in `cache.db`. Earlier versions kept no subject, recipient, or body text in storage.
-5. After you set an approval password, older builds refuse the credential record. Records without an approval password keep the old format.
-6. The Jev action check can make an allowed draft or meeting action wait for approval. Without an approval password, such an item stays pending. A missing screening key or a Jev outage makes every checked action wait.
-7. The new commands `mail send`, `mail reply`, and `mail forward` send mail. The `mail_send` key denies them by default. Earlier versions could not send mail.
-8. Microsoft 365 login and token refresh now request `Mail.Send`. For an account that logged in before this change, send commands fail with `missing_scopes`, and a refresh can need new consent. To fix this, run `auth login` again on the server host and restart the server.
-9. Meeting commands now work for Gmail accounts. Gmail login now requests `calendar.events.owned` instead of `calendar.events.owned.readonly`. A Gmail account that logged in before this change still reads mail and the calendar, but its meeting commands fail with `missing_scopes`. To fix this, run `auth login` again on the server host and restart the server.
-10. The `teams` option is now `online`, with no alias. On the CLI, use `--online` and `--no-online` instead of `--teams` and `--no-teams`. On the HTTP interface, use the `online` field of `calendar.invite` and `calendar.update` instead of `teams`. A request with `teams` fails with `invalid request`. Pending items that were stored with `teams` fail when they are approved; make them again.
-11. The server now ignores `OPENROUTER_API_KEY` and reads the screening key only from the credential store. If you gave the key only through `OPENROUTER_API_KEY`, run `auth set-screening-key` on the server host before you start the new version. Otherwise `serve` asks for the key on a terminal, or stops with `credential check: screening key: missing; run auth set-screening-key`.
-12. `auth set-jev-key` is now `auth set-screening-key`, with no alias. Keys that are already stored still work.
-13. The fake provider database `fake.db` is now `fake-provider.db`. The server does not read `fake.db`. To keep your fake data, rename `fake.db` to `fake-provider.db` before you start the server.
-14. The new optional [`[screening]`](#screening) table selects the screening engine. Without it, the server screens with Jev at OpenRouter, as before.
 
 ### Known limits
 
@@ -868,46 +842,22 @@ There is no scheduler and no automatic mailbox work.
 
 ## Verification and limits
 
-Offline tests use actual loopback HTTP, temporary SQLite/audit files, synthetic provider/Jev endpoints, and injected credential and clock adapters.
-The native workflow test builds the real client binary and runs remote commands against a long-lived in-process server with injected external adapters.
-It covers cached hidden reads, error retry, classification, preview/apply, concurrent completion, security tags, manual mutations, drafts, calendar, stats, rules, and separate accounts.
-A second native workflow sends meeting invites, updates, cancellations, and responses to fake Graph and Google Calendar endpoints, and reads the changed events back.
-It also covers the Gmail cancel comment, missing-scope, recurring, cancelled, and wrong-role refusals.
-Offline tests also cover the write policy: validation, defaults, sealed decisions, per-ID trash decisions, rule trash, pending items, the Jev action check, and the Deleted Items refusal.
-Offline tests cover mail send against fake Graph and Gmail endpoints: the exact requests, the `missing_scopes` refusal, and no retry after a failed send.
-Native file-backend tests also cover server startup, password refusal, terminal password changes, and SIGTERM shutdown.
-A separate combined native acceptance run used the file backend, temporary HOME, synthetic credentials, and a non-forwarding loopback HTTPS proxy.
-It passed device-code login, native server startup, an external key update while serving, token refresh, terminal password change, and restart.
-A fresh screened read after restart required the updated screening key and refreshed OAuth token at fake endpoints.
-This run did not access real providers, Keychain, or user configuration.
-Transport tests cover redirects, stale connections, cancellation, request validation, and content-free errors.
-The end-to-end tests in `internal/e2e` build the real binary and run `serve` as its own process, on a temporary home with a fake account, the fake screening engine, the file credential backend, and a `fake-provider.db` seeded from `internal/e2e/testdata/seed.sql`. The CLI runs as a separate process and the tests approve and deny items through the approval console over HTTP. They cover:
+Tests run offline: real loopback HTTP, temporary homes, the fake provider, fake Graph, Gmail, and Jev endpoints, and a fake Keychain `Platform`.
+No test needs real mailbox data, a browser, OpenRouter, or Keychain access. CI (`.github/workflows/ci.yml`) runs `make` on Linux and macOS.
 
-- triage verdicts, hidden unsafe bodies, and the retry after a failed screening;
-- a send that waits for approval, runs once after approval, and never runs after a denial;
-- default-policy refusals of sends and meetings;
-- an allowed send and draft that the screening flag makes wait for approval;
-- trash, archive, and move as folder changes that delete nothing, the refused move into the trash, and a sealed trash that waits for approval;
-- an organize preview that writes nothing, an apply with folder, category, and security tags, and a second apply that plans nothing;
-- availability, an approved invite, a response, and a cancel that keeps the event;
-- a restart that keeps cached verdicts and pending items.
+The end-to-end tests in `internal/e2e` build the real binary and run `serve` as its own process, on a temporary home with a fake account, the fake screening engine, and the file credential backend. The CLI runs as a separate process, and the tests approve and deny items through the approval console over HTTP.
+After each test, the server log, `audit.jsonl`, and every table of `cache.db` except `pending` must contain no seeded name, subject, body, or address.
 
-After each test, the server log, `audit.jsonl`, and every table of `cache.db` except `pending` must contain no seeded name, subject, body, or address. CI (`.github/workflows/ci.yml`) runs `make`, and so these tests, on Linux and macOS.
-No test needs real mailbox data, a browser, OpenRouter, or Keychain access.
-Offline tests send the configured `[screening]` endpoint, model, and stored key to a fake TLS endpoint. No request to Jev cloud or to another configured endpoint or model has been verified live.
+Not verified against real providers or services:
 
-Earlier authorized checks passed for live Gmail reads and a real Jev request containing synthetic text only.
-Earlier Microsoft 365 checks refused extra scopes. After the approved policy change, a user-authorized browser login and `auth status` succeeded with warnings.
-That status result alone does not establish live Graph mailbox access.
-A subsequent authorized Microsoft 365 organize preview succeeded with screening and no mailbox writes.
-These earlier read-only checks do not verify the credential-backend changes. This workflow adds no new live provider verification.
-Device-code login can still fail under Microsoft organization policies.
-Real device-code login and provider acceptance of generated drafts remain unverified here.
-No live mail send has been verified. Graph and Gmail acceptance of sends, replies, and forwards remains unverified.
-No live meeting write has been verified. Graph and Google Calendar acceptance of invites, updates, cancellations, and responses remains unverified.
-Native Keychain migration and the user's real credential migration also remain unverified.
-Migration tests use a fake Keychain Platform at the constructor and CLI seams, not the production Security APIs.
-Production-binary Keychain migration remains deferred; the migration evidence for this change comes from these fake-Platform tests.
+- mail sends, replies, and forwards;
+- meeting invites, updates, cancellations, and responses;
+- provider acceptance of generated drafts;
+- Microsoft 365 device-code login, which organization policies can also refuse;
+- requests to Jev cloud, or to any screening endpoint or model other than the default;
+- migration of a real Keychain record.
+
+Earlier authorized live checks covered Gmail reads, a Microsoft 365 browser login and organize preview, and one Jev request with synthetic text only.
 Offline verification does not establish production readiness.
 
 ## License

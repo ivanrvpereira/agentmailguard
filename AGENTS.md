@@ -12,15 +12,17 @@ Go with cgo (`mattn/go-sqlite3`, `keybase/go-keychain`), Cobra 1.10, charmbracel
 
 | Task | Command |
 |------|---------|
-| Format check | `gofmt -l internal/content/` |
-| Vet | `go vet ./internal/content/` |
-| Package tests | `go test -race ./internal/content/` |
-| One test | `go test -race ./internal/content/ -run TestName` |
+| Format check | `gofmt -l internal/<pkg>/` |
+| Vet | `go vet ./internal/<pkg>/` |
+| Package tests | `go test -race ./internal/<pkg>/` |
+| One test | `go test -race ./internal/<pkg>/ -run TestName` |
+
+- Read [CODING_STANDARDS.md](CODING_STANDARDS.md) before you write or review a diff.
 
 ## Testing
 
 - Show red/green evidence for each behavior change.
-- Tests use only temp homes, fake providers, and the fake Keychain platform (`internal/credentials/credentials_test.go:15`).
+- Tests use only temp homes, fake providers, and the fake Keychain platform (`fakePlatform` in `internal/credentials/credentials_test.go`).
 
 ## Safety
 
@@ -41,7 +43,7 @@ Go with cgo (`mattn/go-sqlite3`, `keybase/go-keychain`), Cobra 1.10, charmbracel
 ## Gotchas
 
 - Keychain reads from a new binary trigger a macOS GUI prompt; non-interactive runs hang. Hand Keychain steps to the user.
-- Legacy Keychain names keep the `agentmailguard-go-*` prefix (`internal/credentials/keychain.go:30`); unprefixed names belong to the retired Python version.
+- Legacy Keychain names keep the `agentmailguard-go-*` prefix (`service` in `internal/credentials/keychain.go`); unprefixed names belong to the retired Python version.
 - The global gitignore excludes `credentials` dirs; `.gitignore` re-includes only `internal/credentials/*.go`.
 
 ## Boundaries

@@ -16,7 +16,7 @@ Applies when the diff changes output, a view, the renderer, screening input, or 
 - **Views only.** Agent-facing data leaves the server only through explicit DTOs in `internal/views` or the server's `*DTO` types. `model.Message` and `model.Event` stay internal.
 - **Clean each string.** Every email-derived string in a view passes through `content.CleanSubject` or `content.RenderBody`: names, addresses, subjects, folder names, categories, attachment names, and event fields.
 - **Verdict-limited.** A new view field states which verdicts show it, and matches the verdict tables in `README.md` and `skills/agentmailguard/SKILL.md`.
-- **Under-hide.** The renderer removes text only on a specific hiding signal backed by evidence. Text it keeps reaches screening; text it removes escapes screening. When in doubt, keep the text. The evidence for the current signals (inline hides on one element) is in `docs/research`.
+- **Under-hide.** The renderer removes text only on a specific hiding signal backed by evidence. Text it keeps reaches screening; text it removes escapes screening. When in doubt, keep the text. The current signals are inline hides on one element.
 - **One tree.** The renderer decides what to hide and writes Markdown from the same parsed tree that `balancedHTML` returns. Parsing can change content, so a decision made on one parse holds only for output built from that parse ([`x/net/html` security considerations](https://pkg.go.dev/golang.org/x/net/html#hdr-Security_Considerations)).
 - **Escape into markup.** User text that a provider renders as HTML is escaped, as the M365 invite body is with `html.EscapeString`.
 - **Terminal-safe.** Server text that the CLI prints in a human format passes through `terminalSafe`. `ansi.Strip` alone keeps carriage return, backspace, BEL, and C1 controls, so the rune filter after it stays.
@@ -47,7 +47,7 @@ Applies when the diff adds a decision, a default, a lookup, or a result type.
 
 Applies when the diff adds or changes a mailbox, calendar, or draft write, or an outbound HTTP request.
 
-- **One write path.** Mail changes go through `Guard.mutationCall` with the mutation gate held (as `Guard.manual` does), drafts through `Guard.draft`, and calendar writes through `Guard.calendarWrite`. These paths validate, normalize results, and audit under the mutation gate. Put a new mail write refusal in `mutationCall` so organizer rule actions (`internal/guard/apply.go`) get it too.
+- **One write path.** Mail changes go through `Guard.mutationCall` with the mutation gate held (as `Guard.manual` does), drafts and sends through `Guard.compose`, and calendar writes through `Guard.calendarWrite`. These paths validate, normalize results, and audit under the mutation gate. Put a new mail write refusal in `mutationCall` so organizer rule actions (`internal/guard/apply.go`) get it too.
 - **Audit survives cancellation.** After a provider returns a write result, record the audit with `context.WithoutCancel(ctx)`. The mailbox has already changed by then; a client that disconnects must not leave that change without a record. An audit failure returns `AuditError`.
 - **At most once.** A write goes out once. Only reads retry, as the Gmail client retries rate-limited `GET` requests. A test checks the mechanical parts (no redirects, no rewindable body, no `Idempotency-Key`).
 

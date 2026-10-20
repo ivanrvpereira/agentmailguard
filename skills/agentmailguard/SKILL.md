@@ -30,7 +30,7 @@ Don't use for: sending a saved draft (the user sends drafts in their mail client
 - `agentmailguard` is on `PATH`. The build produces `bin/agentmailguard`. Install it or a symlink to it.
 - An operator runs the server. The CLI finds it through `--server URL`, then `AGENTMAILGUARD_SERVER`, then `http://127.0.0.1:8787`. The server can be on another host behind an SSH tunnel or a wrapper script that sets the URL. Never start, stop, or restart the server yourself.
 - The server has no client authentication or built-in TLS. Anyone who can reach its listener can run every action that the write policy allows, including mail sends and meeting notifications. Keep access protected.
-- Account names come from the server configuration. The first account is the default. Select another with `--account NAME`. Run `auth status` to see the account names. The examples below use `work`.
+- Account names come from the server configuration. The first account is the default. Select another with `--account NAME`. No command lists the account names: ask the user. `auth status` shows the sign-in state of one account. The examples below use `work`.
 
 ## How to Run
 
@@ -113,7 +113,7 @@ The user sets a write policy on the server for `mail trash`, all `draft` command
 
 ### 1. Resolve scope
 
-Decide the account, folder or date window, and message count. If the account is unclear, run `auth status` and ask. Done when every command you plan to run has an explicit `--account` or uses the known default.
+Decide the account, folder or date window, and message count. If the account is unclear, ask the user. Done when every command you plan to run has an explicit `--account` or uses the known default.
 
 ### 2. Read
 
@@ -212,21 +212,10 @@ Done when the applied run's `stats` (`applied`, `tagged`, `skipped`, `failed`) a
 - **Empty `--body ''`** is a valid explicit value for `draft update`. It clears the body.
 - **Unread is not important.** Use content and sender, not only `is_read`, to prioritize.
 
-## Operator-only Gmail login on a headless server
+## Sign-in problems
 
-If a Gmail account is not logged in and the server host has no browser, tell the user to run this on the server host, without `--server` or `AGENTMAILGUARD_SERVER`:
-
-```sh
-agentmailguard --account NAME auth login --no-browser
-```
-
-The user opens the printed sign-in URL in their own browser and approves access.
-The browser then shows a connection error for `127.0.0.1`. That is expected.
-The user copies the full address from the address bar, pastes it into the server terminal, and presses Enter. If the address does not match, login asks again.
-After a successful login, the user restarts the server.
-
-Do not run this command yourself.
-Do not ask for, read, store, or repeat the pasted address, the authorization code, the password, or tokens.
+If an account is not logged in or its sign-in failed, tell the user to log in again on the server host and restart the server. On a host without a browser, Gmail login uses `auth login --no-browser` and Microsoft 365 login uses `auth login --device-code`.
+Do not run these commands yourself. Do not ask for, read, store, or repeat a sign-in address, authorization code, password, or token.
 
 ## Verification
 
