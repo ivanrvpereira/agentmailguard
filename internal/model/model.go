@@ -13,6 +13,10 @@ import (
 )
 
 type MessageID = string
+
+// ThreadID is the provider's opaque conversation ID. Empty: the provider gave none, so the message joins no thread.
+type ThreadID = string
+
 type FolderID = string
 type EventID = string
 
@@ -70,6 +74,7 @@ func ValidateFailureText(text *string) error {
 
 type Message struct {
 	ID              MessageID
+	ThreadID        ThreadID
 	Sender          Address
 	Subject         string
 	ReceivedAt      time.Time
@@ -113,9 +118,9 @@ type Event struct {
 	ContentType *ContentType
 }
 type SearchQuery struct {
-	Text, Sender, Subject *string
-	After, Before         *time.Time
-	Folder                *FolderID
+	Text, Sender, To, Subject *string
+	After, Before             *time.Time
+	Folder                    *FolderID
 }
 type NewDraft struct {
 	To            []string
@@ -144,13 +149,17 @@ type InboxScan struct {
 }
 
 // Mailbox deliberately has no permanent-delete operation. Its send operations reach real recipients at once.
-// List/Search may return bodies already available even when body is false.
+// List/Search/Thread may return bodies already available even when body is false.
 // ScanInbox reads all pages before returning, metadata only, excluding drafts,
 // with since <= received_at < until (nil until means no upper bound).
 type Mailbox interface {
 	List(ctx context.Context, folder FolderID, count, skip int, body bool) ([]Message, error)
 	Search(ctx context.Context, query SearchQuery, count int, body bool) ([]Message, error)
 	Get(ctx context.Context, ids []MessageID, body bool) ([]Message, error)
+	// Thread returns every message of the conversation that the provider gives, newest first, from every folder
+	// (trash, spam or junk, sent, and drafts included), metadata only like List. An unknown thread is the adapter's
+	// not-found error, as for an unknown message ID.
+	Thread(ctx context.Context, thread ThreadID) ([]Message, error)
 	ScanInbox(ctx context.Context, since time.Time, until *time.Time) (InboxScan, error)
 	Folders(ctx context.Context) ([]Folder, error)
 	Archive(ctx context.Context, ids []MessageID) ([]MutationResult, error)
@@ -175,21 +184,25 @@ type Mailbox interface {
 type Calendar interface {
 	List(ctx context.Context, start, end time.Time) ([]Event, error)
 	Get(ctx context.Context, id EventID) (Event, error)
+	// Search returns the events that the provider's own search finds for text, one page in the provider's
+	// default size and order, each with every field that Get reads.
+	Search(ctx context.Context, text string) ([]Event, error)
 }
 
 type NewEvent struct {
 	Subject, Body, Location string
 	Start, End              time.Time
 	Attendees               []string
-	Online                  bool // adds the provider's online meeting: Teams on M365, Google Meet on Gmail
+	Optional                []string // optional attendees; they receive the invitation too
+	Online                  bool     // adds the provider's online meeting: Teams on M365, Google Meet on Gmail
 }
 
 // \r\n comes first so it gives one <br>.
 var htmlLineBreaks = strings.NewReplacer("\r\n", "<br>", "\r", "<br>", "\n", "<br>")
 
-// HTMLBody returns the plain-text body as escaped HTML that keeps the line breaks. Both providers render
+// HTMLBody returns a plain-text event body as escaped HTML that keeps the line breaks. Both providers render
 // event bodies as HTML, so body text never becomes markup or a disguised link.
-func (e NewEvent) HTMLBody() string { return htmlLineBreaks.Replace(html.EscapeString(e.Body)) }
+func HTMLBody(text string) string { return htmlLineBreaks.Replace(html.EscapeString(text)) }
 
 // CalendarTimeValid reports whether t has a year from 1 to 9999 in its own zone and in UTC.
 func CalendarTimeValid(t time.Time) bool {
@@ -198,6 +211,7 @@ func CalendarTimeValid(t time.Time) bool {
 
 type EventChange struct {
 	Subject, Location             *string
+	Body                          *string // plain text; replaces the whole body
 	Start, End                    *time.Time
 	AddAttendees, RemoveAttendees []string
 	Online                        bool // true adds an online meeting if none exists; false leaves it unchanged
@@ -205,13 +219,19 @@ type EventChange struct {
 
 // Empty reports a change with no field set. A duration given beside it is a change too.
 func (c EventChange) Empty() bool {
-	return c.Subject == nil && c.Location == nil && c.Start == nil && c.End == nil && len(c.AddAttendees)+len(c.RemoveAttendees) == 0 && !c.Online
+	return c.Subject == nil && c.Location == nil && c.Body == nil && c.Start == nil && c.End == nil && len(c.AddAttendees)+len(c.RemoveAttendees) == 0 && !c.Online
 }
 
 // AttendeeConflict reports an address that is both added and removed, ignoring case.
-func (c EventChange) AttendeeConflict() bool {
-	for _, add := range c.AddAttendees {
-		if slices.ContainsFunc(c.RemoveAttendees, func(remove string) bool { return strings.EqualFold(add, remove) }) {
+func (c EventChange) AttendeeConflict() bool { return overlap(c.AddAttendees, c.RemoveAttendees) }
+
+// AttendeeConflict reports an address that is both a required and an optional attendee, ignoring case.
+func (e NewEvent) AttendeeConflict() bool { return overlap(e.Attendees, e.Optional) }
+
+// overlap reports an address that is in both lists, ignoring case.
+func overlap(a, b []string) bool {
+	for _, x := range a {
+		if slices.ContainsFunc(b, func(y string) bool { return strings.EqualFold(x, y) }) {
 			return true
 		}
 	}
@@ -233,7 +253,11 @@ func (r MeetingResponse) Valid() bool {
 type EventResponse struct {
 	Response MeetingResponse
 	Comment  string
+	NoNotify bool // true records the response without notifying the organizer; zero notifies
 }
+
+// Valid refuses an unknown response, and a comment without notification, which would reach nobody.
+func (r EventResponse) Valid() bool { return r.Response.Valid() && !(r.NoNotify && r.Comment != "") }
 
 // CalendarWriter is optional; read-only calendar providers need not implement it.
 // Callers must resolve start-only changes into explicit Start and End.

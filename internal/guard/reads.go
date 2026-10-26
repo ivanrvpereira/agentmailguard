@@ -56,8 +56,8 @@ func (g *Guard) Search(ctx context.Context, q model.SearchQuery, count int) ([]v
 		return nil, err
 	}
 	nonempty := func(s *string) bool { return s != nil && *s != "" }
-	if !nonempty(q.Text) && !nonempty(q.Sender) && !nonempty(q.Subject) && q.After == nil && q.Before == nil {
-		return nil, GuardError("search needs at least one of text, from, subject, after, before")
+	if !nonempty(q.Text) && !nonempty(q.Sender) && !nonempty(q.To) && !nonempty(q.Subject) && q.After == nil && q.Before == nil {
+		return nil, GuardError("search needs at least one of text, from, to, subject, after, before")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -65,6 +65,42 @@ func (g *Guard) Search(ctx context.Context, q model.SearchQuery, count int) ([]v
 	messages, err := g.mailbox.Search(ctx, q, count, false)
 	if err != nil {
 		return nil, safeErr(ctx, err)
+	}
+	categories, err := g.Categories(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return g.summaries(ctx, messages, categories)
+}
+
+// threadValid checks a Thread result against the model.Mailbox contract: at least one message, all in the
+// requested thread, newest first. summaries refuses empty and duplicate message IDs.
+func threadValid(messages []model.Message, thread string) bool {
+	if len(messages) < 1 {
+		return false
+	}
+	for i, m := range messages {
+		if m.ThreadID != thread || i > 0 && m.ReceivedAt.After(messages[i-1].ReceivedAt) {
+			return false
+		}
+	}
+	return true
+}
+
+// Thread screens the messages of a conversation, newest first, exactly as List screens a folder.
+func (g *Guard) Thread(ctx context.Context, thread string) ([]views.MailSummary, error) {
+	if thread == "" {
+		return nil, GuardError("give a thread ID")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	messages, err := g.mailbox.Thread(ctx, thread)
+	if err != nil {
+		return nil, safeErr(ctx, err)
+	}
+	if !threadValid(messages, thread) {
+		return nil, GuardError("ValueError")
 	}
 	categories, err := g.Categories(ctx)
 	if err != nil {

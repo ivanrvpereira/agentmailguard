@@ -39,7 +39,8 @@ func TestCommandsUseHTTPWithoutLocalState(t *testing.T) {
 		{[]string{"auth", "status"}, "auth.status", `{}`},
 		{[]string{"mail", "list", "--folder", "f", "--count", "4", "--skip", "2"}, "mail.list", `{"folder":"f","count":4,"skip":2}`},
 		{[]string{"mail", "get", "m"}, "mail.get", `{"id":"m"}`},
-		{[]string{"mail", "search", "--text", "x", "--from", "alice", "--subject", "s", "--after", "2026-01-01", "--before", "2026-02-01", "--folder", "f", "--count", "9"}, "mail.search", `{"text":"x","from":"alice","subject":"s","after":"2026-01-01","before":"2026-02-01","folder":"f","count":9}`},
+		{[]string{"mail", "thread", "t"}, "mail.thread", `{"id":"t"}`},
+		{[]string{"mail", "search", "--text", "x", "--from", "alice", "--to", "bob", "--subject", "s", "--after", "2026-01-01", "--before", "2026-02-01", "--folder", "f", "--count", "9"}, "mail.search", `{"text":"x","from":"alice","to":"bob","subject":"s","after":"2026-01-01","before":"2026-02-01","folder":"f","count":9}`},
 		{[]string{"mail", "link", "m", "L1", "L2"}, "mail.link", `{"id":"m","links":["L1","L2"]}`},
 		{[]string{"mail", "link", "m", "--all"}, "mail.link", `{"id":"m","all":true}`},
 		{[]string{"mail", "folders"}, "mail.folders", `{}`},
@@ -54,6 +55,7 @@ func TestCommandsUseHTTPWithoutLocalState(t *testing.T) {
 		{[]string{"mail", "organize", "--since", "1m", "--until", "1d", "--apply"}, "mail.organize", `{"since":"1m","until":"1d","apply":true}`},
 		{[]string{"calendar", "list", "--from", "2026-03-07", "--to", "+2d"}, "calendar.list", `{"start":"2026-03-07T00:00:00-05:00","end":"2026-03-09T00:00:00-04:00"}`},
 		{[]string{"calendar", "get", "e"}, "calendar.get", `{"id":"e"}`},
+		{[]string{"calendar", "search", "budget plan"}, "calendar.search", `{"text":"budget plan"}`},
 		{[]string{"draft", "new", "--to", "a@test", "--to", "b@test", "--subject", "", "--body", "draft-canary"}, "draft.new", `{"to":["a@test","b@test"],"subject":"","body":"draft-canary"}`},
 		{[]string{"draft", "reply", "m", "--body", "reply-canary"}, "draft.reply", `{"id":"m","body":"reply-canary"}`},
 		{[]string{"draft", "forward", "m", "--to", "a@test", "--to", "b@test"}, "draft.forward", `{"id":"m","to":["a@test","b@test"]}`},
@@ -220,7 +222,7 @@ func TestPrettyAliasesUseLastOption(t *testing.T) {
 }
 
 func TestUsageAndHelpNeedNoServerOrState(t *testing.T) {
-	for _, args := range [][]string{{"mail", "send", "x"}, {"draft", "update", "x"}, {"mail", "flag", "x", "--state", "urgent"}, {"mail", "get", "x", "y"}, {"stats", "--days", "0"}, {"mail", "link", "x"}, {"mail", "link", "x", "L1", "--all"}, {"mail", "get", "x", "--secret", "canary"}, {"calendar", "list", "--from", "tomorrow"}, {"mail", "organize", "--since", "0d"}, {"mail", "get", "x", "--home", "canary"},
+	for _, args := range [][]string{{"mail", "send", "x"}, {"draft", "update", "x"}, {"mail", "flag", "x", "--state", "urgent"}, {"mail", "get", "x", "y"}, {"stats", "--days", "0"}, {"mail", "link", "x"}, {"mail", "link", "x", "L1", "--all"}, {"mail", "get", "x", "--secret", "canary"}, {"calendar", "list", "--from", "tomorrow"}, {"calendar", "list", "--text", "x"}, {"calendar", "list", "--organizer", "x"}, {"calendar", "list", "--attendee", "x"}, {"calendar", "search"}, {"calendar", "search", "a", "b"}, {"calendar", "search", "a", "--from", "today"}, {"mail", "thread", "t", "--count", "3"}, {"mail", "organize", "--since", "0d"}, {"mail", "get", "x", "--home", "canary"},
 		{"mail", "send", "--subject", "s", "--body", "b"}, {"mail", "send", "--to", "a", "--body", "b"}, {"mail", "send", "--to", "a", "--subject", "s"},
 		{"mail", "reply", "x"}, {"mail", "reply", "--body", "b"}, {"mail", "reply", "x", "y", "--body", "b"}, {"mail", "forward", "x"}, {"mail", "forward", "--to", "a"}} {
 		var out, errout bytes.Buffer

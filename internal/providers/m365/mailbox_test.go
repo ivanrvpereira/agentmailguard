@@ -6,7 +6,10 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"path"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -181,5 +184,112 @@ func TestGetPreservesBodyAbsenceAndEscapesIDs(t *testing.T) {
 	m := full[0]
 	if m.Body == nil || *m.Body != "" || m.ContentType == nil || m.Sender.Address != "fallback@example.test" || m.Auth.SPF == nil || *m.Auth.SPF != "fail" || *m.Auth.CompAuthReason != "001" || !m.ReceivedAt.Equal(time.Unix(0, 0)) {
 		t.Fatalf("bad mapping %+v", m)
+	}
+}
+func TestListSearchAndGetSelectAndCarryTheConversationID(t *testing.T) {
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if !slices.Contains(strings.Split(r.URL.Query().Get("$select"), ","), "conversationId") {
+			t.Errorf("%s selects %q", r.URL.Path, r.URL.Query().Get("$select"))
+		}
+		m := map[string]any{"id": "m", "conversationId": "conversation-" + path.Base(r.URL.Path)}
+		if r.URL.Path == "/v1.0/me/messages/m" {
+			jsonResponse(w, m)
+			return
+		}
+		jsonResponse(w, map[string]any{"value": []any{m}})
+	})
+	b := c.Mailbox()
+	ctx := t.Context()
+	text := "hello"
+	list, err := b.List(ctx, "inbox", 10, 0, false)
+	if err != nil || len(list) != 1 || list[0].ThreadID != "conversation-messages" {
+		t.Fatalf("list %+v %v", list, err)
+	}
+	search, err := b.Search(ctx, model.SearchQuery{Text: &text}, 10, false)
+	if err != nil || len(search) != 1 || search[0].ThreadID != "conversation-messages" {
+		t.Fatalf("search %+v %v", search, err)
+	}
+	get, err := b.Get(ctx, []string{"m"}, true)
+	if err != nil || len(get) != 1 || get[0].ThreadID != "conversation-m" {
+		t.Fatalf("get %+v %v", get, err)
+	}
+}
+
+func TestSearchByRecipientMatchesToOrCc(t *testing.T) {
+	var searches []string
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1.0/me/messages" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		searches = append(searches, r.URL.Query().Get("$search"))
+		jsonResponse(w, map[string]any{"value": []any{}})
+	})
+	b := c.Mailbox()
+	to, sender := "Ana Board", "bob@example.test"
+	for _, q := range []model.SearchQuery{{To: &to}, {Sender: &sender, To: &to}} {
+		if _, err := b.Search(t.Context(), q, 10, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{`"(to:\"Ana Board\" OR cc:\"Ana Board\")"`, `"from:bob@example.test (to:\"Ana Board\" OR cc:\"Ana Board\")"`}
+	if !reflect.DeepEqual(searches, want) {
+		t.Fatalf("$search=%q want %q", searches, want)
+	}
+}
+
+func TestThreadReadsEveryPageOfTheConversationFilterNewestFirst(t *testing.T) {
+	// requests holds the query of each request; the nextLink page is a token only.
+	requests := []url.Values{}
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		requests = append(requests, q)
+		if r.Method != "GET" || r.URL.Path != "/v1.0/me/messages" {
+			t.Errorf("%s %s", r.Method, r.URL.Path)
+		}
+		switch {
+		case q.Get("page") == "2":
+			jsonResponse(w, map[string]any{"value": []any{
+				map[string]any{"id": "n1", "conversationId": "c'1 &x", "receivedDateTime": "2026-03-01T09:00:00Z", "parentFolderId": "sent-id"},
+			}})
+		case strings.Contains(q.Get("$filter"), "gone"):
+			jsonResponse(w, map[string]any{"value": []any{}})
+		default:
+			jsonResponse(w, map[string]any{"value": []any{
+				map[string]any{"id": "n3", "conversationId": "c'1 &x", "receivedDateTime": "2026-03-03T09:00:00Z", "parentFolderId": "drafts-id", "isDraft": true},
+				map[string]any{"id": "n2", "conversationId": "c'1 &x", "receivedDateTime": "2026-03-02T09:00:00Z", "parentFolderId": "deleted-id"},
+			}, "@odata.nextLink": "http://" + r.Host + "/v1.0/me/messages?page=2"})
+		}
+	})
+	b := c.Mailbox()
+	ctx := t.Context()
+	ids := func(ms []model.Message) []string {
+		out := []string{}
+		for _, m := range ms {
+			out = append(out, m.ID+"@"+m.Folders[0])
+		}
+		return out
+	}
+	got, err := b.Thread(ctx, "c'1 &x")
+	if err != nil || !reflect.DeepEqual(ids(got), []string{"n3@drafts-id", "n2@deleted-id", "n1@sent-id"}) || got[0].ThreadID != "c'1 &x" || !got[0].IsDraft {
+		t.Fatalf("ids=%v err=%v", ids(got), err)
+	}
+	if got, err := b.Thread(ctx, "gone"); err != model.MailboxError("Graph error 404") || len(got) != 0 {
+		t.Fatalf("unknown thread: ids=%v err=%v", ids(got), err)
+	}
+	first := func(filter string) url.Values {
+		return url.Values{
+			"$filter":  {filter},
+			"$orderby": {"receivedDateTime desc"},
+			"$select":  {"id,from,sender,subject,receivedDateTime,toRecipients,ccRecipients,parentFolderId,conversationId,isDraft,isRead,flag,categories"},
+			"$expand":  {"attachments($select=name)"},
+		}
+	}
+	want := []url.Values{
+		first("receivedDateTime ge 1900-01-01T00:00:00Z and conversationId eq 'c''1 &x'"),
+		{"page": {"2"}},
+		first("receivedDateTime ge 1900-01-01T00:00:00Z and conversationId eq 'gone'"),
+	}
+	if !reflect.DeepEqual(requests, want) {
+		t.Fatalf("requests=%v", requests)
 	}
 }

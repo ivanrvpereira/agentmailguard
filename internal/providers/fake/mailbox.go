@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,7 +14,7 @@ import (
 
 type mailbox struct{ p *Provider }
 
-const columns = `id, folder, sender_name, sender_address, to_addresses, cc_addresses, subject, body, content_type, received_at, is_draft, is_read, flag, categories, attachments, spf, dkim, dmarc, compauth, compauth_reason`
+const columns = `id, COALESCE(thread_id, id), folder, sender_name, sender_address, to_addresses, cc_addresses, subject, body, content_type, received_at, is_draft, is_read, flag, categories, attachments, spf, dkim, dmarc, compauth, compauth_reason`
 
 // newest orders by the instant, not the text, because seeded times can have any offset.
 const newest = ` ORDER BY julianday(received_at) DESC, id`
@@ -42,7 +43,7 @@ func scan(row interface{ Scan(...any) error }, body bool) (model.Message, error)
 	var m model.Message
 	var folder, to, cc, text, kind, received, flag, categories, attachments string
 	var auth model.AuthResults
-	err := row.Scan(&m.ID, &folder, &m.Sender.Name, &m.Sender.Address, &to, &cc, &m.Subject, &text, &kind, &received, &m.IsDraft, &m.IsRead, &flag, &categories, &attachments, &auth.SPF, &auth.DKIM, &auth.DMARC, &auth.CompAuth, &auth.CompAuthReason)
+	err := row.Scan(&m.ID, &m.ThreadID, &folder, &m.Sender.Name, &m.Sender.Address, &to, &cc, &m.Subject, &text, &kind, &received, &m.IsDraft, &m.IsRead, &flag, &categories, &attachments, &auth.SPF, &auth.DKIM, &auth.DMARC, &auth.CompAuth, &auth.CompAuthReason)
 	if errors.Is(err, sql.ErrNoRows) {
 		return m, notFound
 	}
@@ -118,12 +119,24 @@ func (b *mailbox) List(ctx context.Context, folder string, count, skip int, body
 	return b.query(ctx, body, `AND folder = ?`+newest+` LIMIT ? OFFSET ?`, folder, count, skip)
 }
 
+// Thread reads the conversation from every folder by the effective thread ID: a NULL thread_id is the message ID.
+func (b *mailbox) Thread(ctx context.Context, thread string) ([]model.Message, error) {
+	out, err := b.query(ctx, false, `AND COALESCE(thread_id, id) = ?`+newest, thread)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, notFound
+	}
+	return out, nil
+}
+
 func contains(value string, part *string) bool {
 	return part == nil || strings.Contains(strings.ToLower(value), strings.ToLower(*part))
 }
 
-// Search matches case-insensitive substrings. After and Before are inclusive UTC dates, like the
-// Microsoft 365 received>= and received<= terms.
+// Search matches case-insensitive substrings; To matches any one To or Cc address. After and Before are
+// inclusive UTC dates, like the Microsoft 365 received>= and received<= terms.
 func (b *mailbox) Search(ctx context.Context, q model.SearchQuery, count int, body bool) ([]model.Message, error) {
 	if count < 1 {
 		return nil, invalid
@@ -146,7 +159,8 @@ func (b *mailbox) Search(ctx context.Context, q model.SearchQuery, count int, bo
 		}
 		day := m.ReceivedAt.UTC()
 		sender := m.Sender.Name + "\n" + m.Sender.Address
-		if !contains(m.Subject+"\n"+*m.Body+"\n"+sender, q.Text) || !contains(sender, q.Sender) || !contains(m.Subject, q.Subject) ||
+		recipient := q.To == nil || *q.To == "" || slices.ContainsFunc(slices.Concat(m.To, m.CC), func(a model.Address) bool { return contains(a.Address, q.To) })
+		if !contains(m.Subject+"\n"+*m.Body+"\n"+sender, q.Text) || !contains(sender, q.Sender) || !recipient || !contains(m.Subject, q.Subject) ||
 			q.After != nil && day.Before(*q.After) || q.Before != nil && !day.Before(q.Before.AddDate(0, 0, 1)) {
 			continue
 		}

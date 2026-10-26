@@ -127,12 +127,12 @@ var attendeeEvent = strings.Replace(organizerEvent, `"isOrganizer":true`, `"isOr
 func TestCalendarHTTPUpdateMapsParamsToSelectedFields(t *testing.T) {
 	handler, request := recordingGraph(t, organizerEvent, "")
 	s, _, home := calendarServer(t, "Calendars.ReadWrite", handler)
-	status, body := meetingRPC(t, s, "calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","start":"2026-10-09T12:00:00+01:00","duration":"30m","add":["new@example.test"],"remove":["remove@example.test"],"online":true}`)
+	status, body := meetingRPC(t, s, "calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","body":"CANARY body","start":"2026-10-09T12:00:00+01:00","duration":"30m","add":["new@example.test"],"remove":["remove@example.test"],"online":true}`)
 	if status != 200 || body != `{"id":"e1","ok":true}` {
 		t.Fatalf("response=%d %s", status, body)
 	}
 	got := request()
-	want := map[string]any{"subject": "CANARY replacement", "location": map[string]any{"displayName": ""}, "start": map[string]any{"dateTime": "2026-10-09T11:00:00", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T11:30:00", "timeZone": "UTC"}, "attendees": []any{map[string]any{"emailAddress": map[string]any{"address": "keep@example.test"}, "type": "optional"}, map[string]any{"emailAddress": map[string]any{"address": "new@example.test"}, "type": "required"}}, "isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"}
+	want := map[string]any{"subject": "CANARY replacement", "location": map[string]any{"displayName": ""}, "body": map[string]any{"contentType": "html", "content": "CANARY body"}, "start": map[string]any{"dateTime": "2026-10-09T11:00:00", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T11:30:00", "timeZone": "UTC"}, "attendees": []any{map[string]any{"emailAddress": map[string]any{"address": "keep@example.test"}, "type": "optional"}, map[string]any{"emailAddress": map[string]any{"address": "new@example.test"}, "type": "required"}}, "isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"}
 	if got.Method != "PATCH" || got.Path != "/me/events/e1" || !reflect.DeepEqual(got.Body, want) {
 		t.Fatalf("provider request=%+v", got)
 	}
@@ -170,6 +170,19 @@ func TestCalendarHTTPCancelAndRespondMapParams(t *testing.T) {
 			assertAudited(t, home, tc.audit)
 		})
 	}
+}
+
+func TestCalendarHTTPRespondNoNotifyMapsToSendResponse(t *testing.T) {
+	handler, request := recordingGraph(t, attendeeEvent, "")
+	s, _, home := calendarServer(t, "Calendars.ReadWrite", handler)
+	status, body := meetingRPC(t, s, "calendar.respond", `{"id":"e1","response":"decline","no_notify":true}`)
+	if status != 200 || body != `{"id":"e1","ok":true}` {
+		t.Fatalf("response=%d %s", status, body)
+	}
+	if got := request(); got.Path != "/me/events/e1/decline" || got.Body["sendResponse"] != false {
+		t.Fatalf("provider request=%+v, want sendResponse false", got)
+	}
+	assertAudited(t, home, "calendar_respond")
 }
 
 func TestCalendarHTTPRespondRequiresExplicitOrganizerMetadata(t *testing.T) {
@@ -245,9 +258,14 @@ func TestCalendarHTTPRejectsInvalidInputBeforeAccountAccess(t *testing.T) {
 			strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"online":"false"}`, strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"online":0}`,
 			// The old name has no alias.
 			strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"teams":true}`,
+			// An address is either required or optional.
+			strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"optional":["A@EXAMPLE.test"]}`,
+			strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"optional":[""]}`,
+			strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"optional":[` + strings.Repeat(`"b",`, 100) + `"b"]}`,
+			strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"optional":"b@example.test"}`,
 		},
 		"calendar.update": {
-			`{}`, `{"id":"e1"}`, `{"id":"e1","add":[],"remove":[]}`, `{"id":"e1","body":"forbidden"}`, `{"id":"e1","start":"bad"}`, `{"id":"e1","end":"bad"}`,
+			`{}`, `{"id":"e1"}`, `{"id":"e1","add":[],"remove":[]}`, `{"id":"e1","body":7}`, `{"id":"e1","start":"bad"}`, `{"id":"e1","end":"bad"}`,
 			`{"id":"e1","duration":"0m"}`, `{"id":"e1","duration":"-1h"}`, `{"id":"e1","duration":"1d"}`, `{"id":"e1","duration":"999999999999h"}`,
 			`{"id":"e1","end":"2026-10-09T09:00:00Z","duration":"1h"}`,
 			`{"id":"e1","start":"2026-10-09T10:00:00Z","end":"2026-10-09T09:00:00Z"}`,
@@ -260,13 +278,13 @@ func TestCalendarHTTPRejectsInvalidInputBeforeAccountAccess(t *testing.T) {
 			`{"id":"e1","online":false}`, `{"id":"e1","subject":"","online":false}`, `{"id":"e1","online":"true"}`, `{"id":"e1","teams":true}`,
 		},
 		"calendar.cancel":  {`{}`, `{"id":""}`, `{"id":"` + strings.Repeat("x", 4097) + `"}`, `{"id":"e1","response":"accept"}`},
-		"calendar.respond": {`{}`, `{"id":"e1"}`, `{"id":"e1","response":"Accept"}`, `{"id":"e1","response":"decline","comment":7}`},
+		"calendar.respond": {`{}`, `{"id":"e1"}`, `{"id":"e1","response":"Accept"}`, `{"id":"e1","response":"decline","comment":7}`, `{"id":"e1","response":"accept","no_notify":"true"}`, `{"id":"e1","response":"accept","comment":"CANARY","no_notify":true}`},
 	}
 	for op, fields := range map[string][]string{
-		"calendar.invite":  {"to", "subject", "body", "start", "end", "location", "online"},
-		"calendar.update":  {"id", "subject", "location", "start", "end", "duration", "add", "remove", "online"},
+		"calendar.invite":  {"to", "optional", "subject", "body", "start", "end", "location", "online"},
+		"calendar.update":  {"id", "subject", "location", "body", "start", "end", "duration", "add", "remove", "online"},
 		"calendar.cancel":  {"id", "comment"},
-		"calendar.respond": {"id", "response", "comment"},
+		"calendar.respond": {"id", "response", "comment", "no_notify"},
 	} {
 		for _, field := range fields {
 			var p map[string]any
@@ -411,13 +429,13 @@ func TestCalendarHTTPWriteAndAuditFailuresStaySafe(t *testing.T) {
 func TestCalendarHTTPInviteMapsParamsAndOnlyReturnsID(t *testing.T) {
 	handler, request := recordingGraph(t, "", `{"id":"new-event","subject":"CANARY raw"}`)
 	s, _, home := calendarServer(t, "User.Read cAlEnDaRs.ReAdWrItE", handler)
-	status, body := meetingRPC(t, s, "calendar.invite", `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body","location":"CANARY room","start":"2026-10-09T10:00:00+01:00","end":"2026-10-09T19:00:00+01:00"}`)
+	status, body := meetingRPC(t, s, "calendar.invite", `{"to":["CANARY@example.test"],"optional":["CANARY-optional@example.test"],"subject":"CANARY subject","body":"CANARY body","location":"CANARY room","start":"2026-10-09T10:00:00+01:00","end":"2026-10-09T19:00:00+01:00"}`)
 	if status != 200 || body != `{"id":"new-event"}` {
 		t.Fatalf("response=%d %s", status, body)
 	}
 	got := request()
 	// Teams is the default.
-	want := map[string]any{"subject": "CANARY subject", "body": map[string]any{"contentType": "html", "content": "CANARY body"}, "location": map[string]any{"displayName": "CANARY room"}, "start": map[string]any{"dateTime": "2026-10-09T09:00:00", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T18:00:00", "timeZone": "UTC"}, "attendees": []any{map[string]any{"emailAddress": map[string]any{"address": "CANARY@example.test"}, "type": "required"}}, "isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"}
+	want := map[string]any{"subject": "CANARY subject", "body": map[string]any{"contentType": "html", "content": "CANARY body"}, "location": map[string]any{"displayName": "CANARY room"}, "start": map[string]any{"dateTime": "2026-10-09T09:00:00", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T18:00:00", "timeZone": "UTC"}, "attendees": []any{map[string]any{"emailAddress": map[string]any{"address": "CANARY@example.test"}, "type": "required"}, map[string]any{"emailAddress": map[string]any{"address": "CANARY-optional@example.test"}, "type": "optional"}}, "isOnlineMeeting": true, "onlineMeetingProvider": "teamsForBusiness"}
 	if got.Method != "POST" || got.Path != "/me/events" || !reflect.DeepEqual(got.Body, want) {
 		t.Fatalf("provider request=%+v", got)
 	}

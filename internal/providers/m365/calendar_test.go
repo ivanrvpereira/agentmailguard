@@ -2,13 +2,19 @@ package m365_test
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 )
 
 func event() map[string]any {
@@ -104,5 +110,134 @@ func TestCalendarRejectsNonUTCorInvalidDates(t *testing.T) {
 		if _, err := c.Calendar().Get(context.Background(), "e"); err == nil || err.Error() != "Graph error InvalidMetadata" {
 			t.Fatalf("invalid date accepted %v", err)
 		}
+	}
+}
+
+// searchGraph answers a Microsoft Search request with hits, translates each EWS ID with translate, and serves each
+// translated event. It records each request as "METHOD path body".
+func searchGraph(t *testing.T, hits []string, translate func(ids []string) []any) (*m365.Client, *[]string) {
+	t.Helper()
+	var requests []string
+	var mu sync.Mutex
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		requests = append(requests, r.Method+" "+r.URL.EscapedPath()+" "+string(body))
+		mu.Unlock()
+		switch {
+		case r.Method == "POST" && r.URL.Path == "/v1.0/search/query":
+			var got map[string]any
+			text := map[bool]string{true: "nothing", false: "budget plan"}[len(hits) == 0]
+			if json.Unmarshal(body, &got) != nil || !reflect.DeepEqual(got, map[string]any{"requests": []any{map[string]any{"entityTypes": []any{"event"}, "query": map[string]any{"queryString": text}}}}) {
+				t.Errorf("search body %s", body)
+			}
+			list := []any{}
+			for i, id := range hits {
+				list = append(list, map[string]any{"hitId": id, "rank": i + 1, "resource": map[string]any{"subject": "partial"}})
+			}
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"hitsContainers": []any{map[string]any{"hits": list, "total": len(hits)}}}}})
+		case r.Method == "POST" && r.URL.Path == "/v1.0/me/translateExchangeIds":
+			var got struct {
+				InputIDs                   []string `json:"inputIds"`
+				SourceIDType, TargetIDType string
+			}
+			if json.Unmarshal(body, &got) != nil || got.SourceIDType != "ewsId" || got.TargetIDType != "restImmutableEntryId" || !reflect.DeepEqual(got.InputIDs, hits) {
+				t.Errorf("translate body %s", body)
+			}
+			jsonResponse(w, map[string]any{"value": translate(got.InputIDs)})
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1.0/me/events/"):
+			if r.URL.Query().Get("$select") == "" || !strings.Contains(r.Header.Get("Prefer"), `outlook.timezone="UTC"`) {
+				t.Errorf("event read %s", r.URL)
+			}
+			e := event()
+			e["id"] = strings.TrimPrefix(r.URL.Path, "/v1.0/me/events/")
+			jsonResponse(w, e)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL)
+		}
+	})
+	return c, &requests
+}
+
+// translated maps each EWS ID to a REST immutable ID, as translateExchangeIds does.
+func translated(ids []string) []any {
+	out := []any{}
+	for i, id := range ids {
+		out = append(out, map[string]any{"sourceId": id, "targetId": "imm-" + strconv.Itoa(i+1)})
+	}
+	return out
+}
+
+// Microsoft Search returns event hit IDs in the EWS format (standard base64 with + and /), which /me/events/{id}
+// refuses with 400, so each hit is translated to a REST immutable ID before it is read.
+func TestCalendarSearchTranslatesEachHitAndReadsItsEvent(t *testing.T) {
+	c, requests := searchGraph(t, []string{"AA+b/c=", "DD/e+f="}, translated)
+	events, err := c.Calendar().Search(t.Context(), "budget plan")
+	if err != nil || len(events) != 2 || events[0].ID != "imm-1" || events[1].ID != "imm-2" || events[0].Subject != "Planning" || events[0].Body == nil {
+		t.Fatalf("events=%+v err=%v", events, err)
+	}
+	got := slices.Sorted(slices.Values(*requests))
+	if len(got) != 4 || !slices.Contains(got, "GET /v1.0/me/events/imm-1 ") || !slices.Contains(got, "GET /v1.0/me/events/imm-2 ") {
+		t.Fatalf("requests=%q", got)
+	}
+	c, requests = searchGraph(t, nil, translated)
+	if events, err := c.Calendar().Search(t.Context(), "nothing"); err != nil || len(events) != 0 || len(*requests) != 1 {
+		t.Fatalf("no hits: events=%+v err=%v requests=%q", events, err, *requests)
+	}
+}
+
+func TestCalendarSearchFailsOnATranslationThatBreaksTheRequest(t *testing.T) {
+	for name, translate := range map[string]func([]string) []any{
+		"missing result": func(ids []string) []any { return translated(ids)[:1] },
+		"other source":   func(ids []string) []any { return translated([]string{ids[1], ids[0]}) },
+		"no target": func(ids []string) []any {
+			out := translated(ids)
+			out[1] = map[string]any{"sourceId": ids[1], "errorDetails": map[string]any{"code": "ErrorInvalidIdMalformed"}}
+			return out
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, requests := searchGraph(t, []string{"AA+b/c=", "DD/e+f="}, translate)
+			if events, err := c.Calendar().Search(t.Context(), "budget plan"); err == nil || events != nil {
+				t.Fatalf("events=%+v err=%v", events, err)
+			}
+			if slices.ContainsFunc(*requests, func(r string) bool { return strings.HasPrefix(r, "GET ") }) {
+				t.Fatalf("read after a bad translation: %q", *requests)
+			}
+		})
+	}
+}
+
+func TestCalendarSearchFailsOnAHitWithoutID(t *testing.T) {
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("read after a bad hit: %s %s", r.Method, r.URL)
+		}
+		jsonResponse(w, map[string]any{"value": []any{map[string]any{"hitsContainers": []any{map[string]any{"hits": []any{map[string]any{"rank": 1}}}}}}})
+	})
+	if events, err := c.Calendar().Search(t.Context(), "budget"); err == nil || events != nil {
+		t.Fatalf("events=%+v err=%v", events, err)
+	}
+}
+
+func TestCalendarSearchFailsOnAMalformedOrOversizedResponse(t *testing.T) {
+	hit := map[string]any{"hitId": "e1"}
+	for name, response := range map[string]any{
+		"no value":        map[string]any{},
+		"value not array": map[string]any{"value": map[string]any{}},
+		"hits not array":  map[string]any{"value": []any{map[string]any{"hitsContainers": []any{map[string]any{"hits": "e1"}}}}},
+		"too many hits":   map[string]any{"value": []any{map[string]any{"hitsContainers": []any{map[string]any{"hits": slices.Repeat([]any{hit}, 501)}}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "POST" {
+					t.Errorf("read after a bad response: %s %s", r.Method, r.URL)
+				}
+				jsonResponse(w, response)
+			})
+			if events, err := c.Calendar().Search(t.Context(), "budget"); err == nil || events != nil {
+				t.Fatalf("events=%d err=%v", len(events), err)
+			}
+		})
 	}
 }

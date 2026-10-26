@@ -11,6 +11,7 @@ import (
 
 type inviteParam struct {
 	To       []string `json:"to"`
+	Optional []string `json:"optional"`
 	Subject  *string  `json:"subject"`
 	Body     *string  `json:"body"`
 	Start    string   `json:"start"`
@@ -23,6 +24,7 @@ type eventChangeParam struct {
 	ID       string   `json:"id"`
 	Subject  *string  `json:"subject"`
 	Location *string  `json:"location"`
+	Body     *string  `json:"body"`
 	Start    *string  `json:"start"`
 	End      *string  `json:"end"`
 	Duration *string  `json:"duration"`
@@ -39,6 +41,7 @@ type eventRespondParam struct {
 	ID       string                `json:"id"`
 	Response model.MeetingResponse `json:"response"`
 	Comment  string                `json:"comment"`
+	NoNotify bool                  `json:"no_notify"`
 }
 
 // calendarWriteCall validates a meeting write. gmailRefusal, when not empty, refuses a valid request that
@@ -59,20 +62,28 @@ func calendarWriteCall(ctx context.Context, operation string, raw json.RawMessag
 		}, gmailRefusal, nil
 	case "calendar.respond":
 		var p eventRespondParam
-		if params(raw, &p) != nil || !idValid(p.ID) || !validString(p.Comment, MaxRequestBytes, true) || !p.Response.Valid() {
+		if params(raw, &p) != nil || !idValid(p.ID) || !validString(p.Comment, MaxRequestBytes, true) {
 			return nil, "", errInvalid
 		}
+		response := model.EventResponse{Response: p.Response, Comment: p.Comment, NoNotify: p.NoNotify}
+		if !response.Valid() {
+			return nil, "", errInvalid
+		}
+		// Google Calendar always notifies the organizer of a response.
+		if p.NoNotify {
+			gmailRefusal = guard.CalendarNoNotifyUnsupported
+		}
 		return func(a *account) (any, error) {
-			return updateDTO{p.ID, true}, a.guard.CalendarRespond(ctx, p.ID, model.EventResponse{Response: p.Response, Comment: p.Comment})
-		}, "", nil
+			return updateDTO{p.ID, true}, a.guard.CalendarRespond(ctx, p.ID, response)
+		}, gmailRefusal, nil
 	case "calendar.update":
 		var p eventChangeParam
-		if params(raw, &p) != nil || !idValid(p.ID) || p.Online != nil && !*p.Online || !listValid(p.Add, 0, 100) || !listValid(p.Remove, 0, 100) || p.Subject != nil && !validString(*p.Subject, 65536, true) || p.Location != nil && !validString(*p.Location, 4096, true) {
+		if params(raw, &p) != nil || !idValid(p.ID) || p.Online != nil && !*p.Online || !listValid(p.Add, 0, 100) || !listValid(p.Remove, 0, 100) || p.Subject != nil && !validString(*p.Subject, 65536, true) || p.Location != nil && !validString(*p.Location, 4096, true) || p.Body != nil && !validString(*p.Body, MaxRequestBytes, true) {
 			return nil, "", errInvalid
 		}
 		start, ok := optionalCalendarTime(p.Start)
 		end, ok2 := optionalCalendarTime(p.End)
-		change := model.EventChange{Subject: p.Subject, Location: p.Location, Start: start, End: end, AddAttendees: p.Add, RemoveAttendees: p.Remove, Online: p.Online != nil}
+		change := model.EventChange{Subject: p.Subject, Location: p.Location, Body: p.Body, Start: start, End: end, AddAttendees: p.Add, RemoveAttendees: p.Remove, Online: p.Online != nil}
 		if !ok || !ok2 || start != nil && end != nil && !end.After(*start) {
 			return nil, "", errInvalid
 		}
@@ -93,16 +104,17 @@ func calendarWriteCall(ctx context.Context, operation string, raw json.RawMessag
 	case "calendar.invite":
 		// An online meeting is on unless the caller sends an explicit false.
 		p := inviteParam{Online: true}
-		if params(raw, &p) != nil || !listValid(p.To, 1, 100) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) || !validString(p.Location, 4096, true) {
+		if params(raw, &p) != nil || !listValid(p.To, 1, 100) || !listValid(p.Optional, 0, 100) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) || !validString(p.Location, 4096, true) {
 			return nil, "", errInvalid
 		}
 		start, ok := calendarTime(p.Start)
 		end, ok2 := calendarTime(p.End)
-		if !ok || !ok2 || !end.After(start) {
+		event := model.NewEvent{Subject: *p.Subject, Body: *p.Body, Location: p.Location, Start: start, End: end, Attendees: p.To, Optional: p.Optional, Online: p.Online}
+		if !ok || !ok2 || !end.After(start) || event.AttendeeConflict() {
 			return nil, "", errInvalid
 		}
 		return func(a *account) (any, error) {
-			id, e := a.guard.CalendarInvite(ctx, model.NewEvent{Subject: *p.Subject, Body: *p.Body, Location: p.Location, Start: start, End: end, Attendees: p.To, Online: p.Online})
+			id, e := a.guard.CalendarInvite(ctx, event)
 			return draftDTO{id}, e
 		}, "", nil
 	}

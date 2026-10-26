@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -161,6 +162,11 @@ func (m *mailbox) Search(ctx context.Context, query model.SearchQuery, count int
 	if query.Sender != nil && *query.Sender != "" {
 		terms = append(terms, "from:"+phrase(*query.Sender))
 	}
+	// Gmail search operators (https://support.google.com/mail/answer/7190): to: and cc: match the recipient
+	// fields, and { } matches any of the terms inside.
+	if query.To != nil && *query.To != "" {
+		terms = append(terms, "{to:"+phrase(*query.To)+" cc:"+phrase(*query.To)+"}")
+	}
 	if query.Subject != nil && *query.Subject != "" {
 		terms = append(terms, "subject:"+phrase(*query.Subject))
 	}
@@ -186,6 +192,40 @@ func (m *mailbox) Search(ctx context.Context, query model.SearchQuery, count int
 		return nil, err
 	}
 	return m.Get(ctx, ids, true)
+}
+
+// Thread takes the message IDs of the whole conversation from threads.get, with every label, spam and trash
+// included (https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.threads/get), and reads them
+// as List does. The API does not document the order of the messages, so they are sorted by received time, newest
+// first; ties keep the reverse threads.get order.
+func (m *mailbox) Thread(ctx context.Context, thread string) ([]model.Message, error) {
+	v, err := m.c.get(ctx, "Gmail", m.c.options.GmailURL+"/threads/"+segment(thread), url.Values{"format": {"minimal"}})
+	if err != nil {
+		return nil, err
+	}
+	a, err := items(v, "messages", "Gmail")
+	if err != nil {
+		return nil, err
+	}
+	ids := []string{}
+	for _, raw := range a {
+		v, err := object(raw, "Gmail")
+		if err != nil {
+			return nil, err
+		}
+		id := stringField(v, "id")
+		if strings.TrimSpace(id) == "" {
+			return nil, failure("Gmail", "InvalidMetadata")
+		}
+		ids = append(ids, id)
+	}
+	slices.Reverse(ids)
+	out, err := m.Get(ctx, ids, true)
+	if err != nil {
+		return nil, err
+	}
+	slices.SortStableFunc(out, func(a, b model.Message) int { return b.ReceivedAt.Compare(a.ReceivedAt) })
+	return out, nil
 }
 
 // run limits goroutines as well as shared HTTP slots, while preserving caller order.

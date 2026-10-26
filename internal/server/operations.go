@@ -59,14 +59,14 @@ func publicError(e error) (string, bool) {
 	}
 	if e, ok := e.(guard.GuardError); ok {
 		switch e {
-		case guard.CalendarWriteUnsupported, guard.CalendarAvailabilityUnsupported, guard.CalendarCancelCommentUnsupported, "missing_scopes", "invalid request",
+		case guard.CalendarWriteUnsupported, guard.CalendarAvailabilityUnsupported, guard.CalendarCancelCommentUnsupported, guard.CalendarNoNotifyUnsupported, "missing_scopes", "invalid request",
 			guard.CalendarRecurring, guard.CalendarCancelled, guard.CalendarOrganizerOnly, guard.CalendarOrganizerCannotRespond:
 			return string(e), true
 		case "refused by policy: mail_draft", "refused by policy: mail_send", "refused by policy: calendar_invite", "refused by policy: calendar_update", "refused by policy: calendar_cancel", "refused by policy: calendar_respond":
 			return string(e), true
 		case "move refused: the destination must be a folder ID from `folders`", "move refused: use mail.trash", "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
 			"link refused: message is red, not green", "link refused: message is yellow, not green", "link refused: message is sealed, not green", "link refused: message is error, not green",
-			"search needs at least one of text, from, subject, after, before":
+			"search needs at least one of text, from, to, subject, after, before":
 			return string(e), true
 		}
 	}
@@ -148,9 +148,13 @@ type listParam struct {
 	Count  int    `json:"count"`
 	Skip   int    `json:"skip"`
 }
+type threadParam struct {
+	ID string `json:"id"`
+}
 type searchParam struct {
 	Text    *string `json:"text"`
 	Sender  *string `json:"from"`
+	To      *string `json:"to"`
 	Subject *string `json:"subject"`
 	After   *string `json:"after"`
 	Before  *string `json:"before"`
@@ -183,6 +187,9 @@ type organizeParam struct {
 type calendarParam struct {
 	Start string `json:"start"`
 	End   string `json:"end"`
+}
+type calendarSearchParam struct {
+	Text string `json:"text"`
 }
 type availabilityParam struct {
 	To    []string `json:"to"`
@@ -313,17 +320,23 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) { return a.guard.List(ctx, p.Folder, p.Count, p.Skip) }
+	case "mail.thread":
+		var p threadParam
+		if params(r.Params, &p) != nil || !idValid(p.ID) {
+			return nil, errInvalid
+		}
+		call = func(a *account) (any, error) { return a.guard.Thread(ctx, p.ID) }
 	case "mail.search":
 		p := searchParam{Count: 25}
 		if params(r.Params, &p) != nil || p.Count < 1 || p.Count > 100 {
 			return nil, errInvalid
 		}
-		for _, v := range []*string{p.Text, p.Sender, p.Subject, p.Folder} {
+		for _, v := range []*string{p.Text, p.Sender, p.To, p.Subject, p.Folder} {
 			if v != nil && !validString(*v, 4096, true) {
 				return nil, errInvalid
 			}
 		}
-		q := model.SearchQuery{Text: p.Text, Sender: p.Sender, Subject: p.Subject, Folder: p.Folder}
+		q := model.SearchQuery{Text: p.Text, Sender: p.Sender, To: p.To, Subject: p.Subject, Folder: p.Folder}
 		for _, d := range []struct {
 			v   *string
 			out **time.Time
@@ -432,6 +445,12 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) { return a.guard.CalendarList(ctx, first, last) }
+	case "calendar.search":
+		var p calendarSearchParam
+		if params(r.Params, &p) != nil || !validString(p.Text, 4096, false) {
+			return nil, errInvalid
+		}
+		call = func(a *account) (any, error) { return a.guard.CalendarSearch(ctx, p.Text) }
 	case "calendar.availability":
 		var p availabilityParam
 		if params(r.Params, &p) != nil || !listValid(p.To, 1, model.MaxAvailabilityAddresses) {

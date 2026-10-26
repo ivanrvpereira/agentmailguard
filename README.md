@@ -120,13 +120,19 @@ sqlite3 ~/.agentmailguard/fake-provider.db "SELECT id, folder, subject, origin F
 
 Trash and archive are moves to the `trash` and `archive` folders; nothing is ever deleted. Drafts go to `drafts`. `mail send`, `mail reply`, and `mail forward` store the message in `sent`, with `origin` (`new`, `reply`, or `forward`) and `source_id`. Nothing leaves the machine.
 
+To seed a conversation, give its messages the same `thread_id`. A message whose `thread_id` is NULL is its own conversation, and its `thread_id` in results is its message ID. Reply and forward drafts, and sent replies and forwards, join the conversation of their source message; new drafts and new sends are their own conversation. A `fake-provider.db` made before the `thread_id` column existed gets the column when the server first opens it. For example, a reply from Ana in the conversation of `m1`:
+
+```sh
+sqlite3 ~/.agentmailguard/fake-provider.db "INSERT INTO messages (account, id, sender_name, sender_address, subject, body, thread_id) VALUES ('demo', 'm2', 'Ana', 'ana@example.test', 'Re: Lunch on Friday?', 'Noon works.', 'm1');"
+```
+
 The calendar uses three tables. `events` holds the events, `attendees` holds the attendees of each event and their responses, and `free_busy` holds the free/busy times that `calendar availability` reads. The account organizes an event when its `organizer_address` is empty or is the account address; only then can it update or cancel the event. It can respond only to the other events. Availability comes only from `free_busy`, never from `events`. An address without `free_busy` rows is `unknown`, and a slot that no row covers is `free`. For example, an event that Ana organizes with the demo account as attendee, and Ana's busy time:
 
 ```sh
 sqlite3 ~/.agentmailguard/fake-provider.db "INSERT INTO events (account, id, subject, start_at, end_at, organizer_name, organizer_address) VALUES ('demo', 'e1', 'Planning', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z', 'Ana', 'ana@example.test'); INSERT INTO attendees (account, event_id, address, name) VALUES ('demo', 'e1', 'demo@fake.test', 'Demo'); INSERT INTO free_busy (account, address, start_at, end_at, status) VALUES ('demo', 'ana@example.test', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z', 'busy');"
 ```
 
-`calendar invite`, `update`, `cancel`, and `respond` change only `fake-provider.db`, under the write policy as for other accounts. No notification leaves the machine. A cancel sets `is_cancelled` and `cancel_comment` and deletes nothing. A response sets the account's own row in `attendees`.
+`calendar invite`, `update`, `cancel`, and `respond` change only `fake-provider.db`, under the write policy as for other accounts. No notification leaves the machine. A cancel sets `is_cancelled` and `cancel_comment` and deletes nothing. A response sets the account's own row in `attendees`; `--no-notify` changes nothing else. An invite stores `--optional` attendees with `optional` set to 1 in `attendees`. A `fake-provider.db` made before the `optional` column existed gets the column, with 0 for every existing attendee, when the server first opens it.
 
 Fake mail is untrusted like real mail. The configured [screening](#screening) engine screens it. With the fake screening engine, the server needs no screening key.
 
@@ -336,16 +342,19 @@ An explicit empty value, such as `draft update ID --body ''`, is not the same as
 | Group | Commands |
 | --- | --- |
 | State and auth | `stats --days 30`, `cache clear`, `rules list`, `approvals status ID`, `auth status`, local `auth login [--device-code] [--no-browser]`, `auth set-screening-key`, `auth set-approval-password`, `auth migrate --to file\|keychain`, `auth change-password` |
-| Mail reads | `mail list`, `mail get ID [--pretty]`, `mail search`, `mail link ID L1 L2` or `mail link ID --all`, `mail folders`, `mail categories` |
+| Mail reads | `mail list`, `mail get ID [--pretty]`, `mail thread THREAD_ID`, `mail search`, `mail link ID L1 L2` or `mail link ID --all`, `mail folders`, `mail categories` |
 | Mail changes | `mail archive IDS...`, `mail trash IDS...`, `mail move FOLDER_ID IDS...`, `mail read IDS...`, `mail unread IDS...`, `mail flag IDS... --state flagged|complete|none`, `mail categorize IDS... --add NAME --remove NAME` |
-| Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID` |
+| Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID`, `calendar search TEXT` |
 | Availability (Microsoft 365 and fake, read-only) | `calendar availability --to ADDRESS [--to ADDRESS] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'` |
-| Meetings (send notifications) | `calendar invite --to ADDRESS --subject TEXT --start 'YYYY-MM-DD HH:MM' --duration 30m\|--end 'YYYY-MM-DD HH:MM' [--body TEXT] [--location TEXT] [--no-online]`, `calendar update ID [--subject TEXT] [--location TEXT] [--start TIME] [--duration D\|--end TIME] [--add-attendee ADDRESS] [--remove-attendee ADDRESS] [--online]`, `calendar cancel ID [--comment TEXT]`, `calendar respond ID --response accept\|tentative\|decline [--comment TEXT]` |
+| Meetings (send notifications) | `calendar invite --to ADDRESS --subject TEXT --start 'YYYY-MM-DD HH:MM' --duration 30m\|--end 'YYYY-MM-DD HH:MM' [--optional ADDRESS] [--body TEXT] [--location TEXT] [--no-online]`, `calendar update ID [--subject TEXT] [--location TEXT] [--body TEXT] [--start TIME] [--duration D\|--end TIME] [--add-attendee ADDRESS] [--remove-attendee ADDRESS] [--online]`, `calendar cancel ID [--comment TEXT]`, `calendar respond ID --response accept\|tentative\|decline [--comment TEXT\|--no-notify]` |
 | Mail send (sends at once) | `mail send --to ADDRESS --subject TEXT --body TEXT`, `mail reply ID --body TEXT`, `mail forward ID --to ADDRESS` |
 | Drafts (no send) | `draft new --to ADDRESS --subject TEXT --body TEXT`, `draft reply ID --body TEXT`, `draft forward ID --to ADDRESS`, `draft update ID --body TEXT` |
 
 Successful commands print the operation's JSON result.
 `mail get --pretty` formats only the guarded view.
+`mail search` needs at least one of `--text`, `--from`, `--to`, `--subject`, `--after`, or `--before`. `--to ADDRESS` matches the To and Cc fields: the Gmail `to:` and `cc:` operators, or the Microsoft 365 `to` and `cc` search properties.
+`mail thread` prints JSON only. It returns the messages of the conversation as a list like `mail list`, newest first, from every folder, including trash, spam or junk, sent mail, and drafts. Gmail returns the whole thread (`threads.get`); on Microsoft 365 the server reads every page of the `conversationId` query. An unknown thread fails. Read bodies with `mail get`.
+`calendar search TEXT` uses the provider's own search: Google Calendar `events.list` with `q` on Gmail, and the Microsoft Search API (`POST /search/query` for events) on Microsoft 365. It returns one page in the provider's default size and order, with no date range. Each event is screened as `calendar get` screens it, and the result has the fields of a `calendar list` result. The provider matches the text on its side, so a hidden subject or body can decide whether an event is in the result. The fake provider matches the subject, body, location, organizer, and attendees, ignoring case.
 Draft update returns the resulting draft ID, which can change on Gmail.
 `mail send`, `mail reply`, and `mail forward` return `{"ok": true}`. The providers give no ID for a sent message.
 `calendar invite` returns the new event ID. The other meeting commands return the event ID and `"ok": true`.
@@ -426,9 +435,9 @@ For `green`, `yellow`, and `red` messages, only the base decision applies.
 
 Before an action runs, Jev checks the text that the agent wrote for it. The agent can be under prompt injection from mail it read, so the server does not trust this text.
 
-- Checked actions: `draft new`, `draft reply`, `draft update`, `draft forward`, `mail send`, `mail reply`, `mail forward`, `calendar invite`, and `calendar update`. `calendar respond` and `calendar cancel` are checked only when they have a comment.
+- Checked actions: `draft new`, `draft reply`, `draft update`, `draft forward`, `mail send`, `mail reply`, `mail forward`, `calendar invite`, and `calendar update`. `calendar respond` and `calendar cancel` are checked only when they have a comment, so `calendar respond --no-notify` is never checked.
 - Not checked: `mail trash`, rule moves, and the commands without a policy key.
-- Jev sees the operation name, a fixed description of what the action does, and the action fields that the agent gave: recipients, subject, body, comment, response, and event fields. It never sees a message or event ID.
+- Jev sees the operation name, a fixed description of what the action does, and the action fields that the agent gave: recipients (for `calendar invite`, also the `--optional` attendees), subject, body (for `calendar update`, the new `--body`), comment, response, and event fields. It never sees a message or event ID.
 - For `draft forward` and `mail forward`, Jev also sees the subject and body of the forwarded message, read through the screened read path. If the server cannot read this text, for example because the message is not `green`, the check fails.
 
 The check comes after the policy decision:
@@ -584,7 +593,7 @@ The audit record of a send has no content. A `mail send` record has no message I
 
 ## Meetings
 
-**Caution:** If the write policy allows them, `calendar invite`, `calendar update`, `calendar cancel`, and `calendar respond` send real meeting notifications at once.
+**Caution:** If the write policy allows them, `calendar invite`, `calendar update`, `calendar cancel`, and `calendar respond` (except `respond --no-notify` on Microsoft 365) send real meeting notifications at once.
 The [Jev action check](#jev-action-check) can hold a command for approval, but it is a statistical check: it can miss harmful text.
 An agent must run these commands only after the user authorizes that specific action.
 
@@ -610,11 +619,12 @@ The invite sends it as escaped HTML and keeps the line breaks, so the text canno
 Every invite has an online meeting link by default: a Microsoft Teams meeting on Microsoft 365, and a Google Meet link on Gmail.
 For a Teams meeting, Microsoft adds the Teams join block to the body.
 Use `--no-online` to create a meeting without an online meeting.
-All invite attendees are required attendees.
+`--to` attendees are required attendees. `--optional ADDRESS` (repeatable) adds optional attendees: a Graph attendee of type `optional` on Microsoft 365, and a Google Calendar attendee with `"optional": true` on Gmail. Optional attendees also receive the invitation. An address in both `--to` and `--optional`, ignoring case, is an invalid request.
 On Gmail, guests cannot invite other people to a meeting that the server creates or updates.
 
 An update needs at least one change and sends only the options that you supply.
-An explicit empty `--subject ''` or `--location ''` clears that field.
+An explicit empty `--subject ''`, `--location ''`, or `--body ''` clears that field.
+`--body` is plain text and replaces the whole body. As in an invite, it goes as escaped HTML that keeps the line breaks. On Microsoft 365, `--body` replaces the whole description, including the Teams join section. On Gmail, the Meet link is not part of the body and stays.
 If an update changes only `--start`, the server keeps the current duration.
 `--duration` alone or `--end` alone keeps the current start.
 Attendee changes keep the type and the response of existing attendees. Added attendees are required attendees.
@@ -622,12 +632,14 @@ Attendee changes keep the type and the response of existing attendees. Added att
 On Microsoft 365, it adds a Teams meeting, and Microsoft Graph can add Teams join details to the body.
 On Gmail, it adds a Google Meet link only if the event has no conference. If the event already has one, the update keeps it.
 With `--online` alone, the update sends only online-meeting settings. It does not replace the body or change the times or attendees.
-An update without `--online` leaves the online meeting unchanged. Updates cannot remove an online meeting, change the online-meeting provider, or change the body, so an existing Teams link stays in the body.
+An update without `--online` leaves the online meeting unchanged. Updates cannot remove an online meeting or change the online-meeting provider. Without `--body`, an existing Teams link stays in the body.
 `--online=false` on an update is invalid usage.
 
 Only the organizer can update or cancel an event.
-Only an attendee can respond, and the response always goes to the organizer.
-There is no silent response and no proposal of a new time.
+Only an attendee can respond. The response goes to the organizer unless you use `--no-notify`.
+On Microsoft 365, `calendar respond --no-notify` records your response without notifying the organizer (Graph `sendResponse` set to `false`). `--no-notify` with `--comment` is invalid usage, because the comment would reach nobody; on the HTTP interface it is `invalid request`.
+Google Calendar always notifies the organizer of a response. On Gmail, `calendar respond --no-notify` fails with `calendar response refused: responses without notification are not supported for this account`, before any credential or provider access.
+There is no proposal of a new time.
 On Gmail, a response changes only your own attendee entry, and the event must list you as an attendee.
 The server refuses recurring events and cancelled events. It does not write in these cases.
 
@@ -635,7 +647,7 @@ Every Gmail meeting command notifies all guests (`sendUpdates=all`).
 On Gmail, `calendar cancel` deletes the event and notifies the guests. Google keeps the deleted event on your calendar with the status `cancelled`, so it can be restored from the calendar trash for 30 days. The server never deletes an event permanently.
 Google sends no cancellation message. On Gmail, `calendar cancel --comment` fails with `calendar cancel refused: comments are not supported for this account`, before any credential or provider access. On Microsoft 365, the comment goes with the cancellation.
 
-Invites accept 1–100 attendee addresses, and each update attendee list accepts at most 100 addresses.
+Invites accept 1–100 required attendee addresses and at most 100 optional ones, and each update attendee list accepts at most 100 addresses.
 
 The client does not retry a meeting request, and the server sends no transaction ID.
 A meeting command can return `operation failed` after the notification was sent, for example if the audit write fails.
@@ -713,7 +725,9 @@ The calendar range must be at most 90 days.
 | red or sealed | Sender address, date, and reason, without display name or subject |
 | error | Date and safe error code, without sender, subject, or body |
 
-Every verdict also includes the message ID, verdict, authentication results, read state, flag, and mailbox-listed categories.
+Every verdict also includes the message ID, the thread ID, verdict, authentication results, read state, flag, mailbox-listed categories, and folders.
+The thread ID (`thread_id` in `mail list`, `mail search`, `mail get`, and `mail thread` results) is the provider's conversation ID: the Gmail `threadId` or the Microsoft 365 `conversationId`. Messages with the same `thread_id` belong to one conversation. It is an opaque provider ID, not message text. It is left out when the provider gives none, so an empty ID never groups unrelated messages.
+`folders` lists the folder IDs (Microsoft 365 and fake) or label IDs (Gmail) that the message is in. They are provider IDs, not message text.
 Manual mutations work at every verdict, but the [write policy](#write-policy) can refuse or hold `mail trash`, also by verdict.
 Automatic business actions remain green-only.
 `mail organize --apply` can add existing `Yellow`, `Red`, or `Sealed` security tags to matching hidden mail.
@@ -736,7 +750,9 @@ The only data endpoint is `POST /v1/call` with `Content-Type: application/json`:
 ```
 
 Operation names match CLI groups, such as `mail.get`, `mail.send`, `draft.update`, `calendar.invite`, `cache.clear`, and `approvals.status`.
+`mail.thread` takes `{"id":"THREAD_ID"}`, and `calendar.search` takes `{"text":"TEXT"}`.
 Meeting times on the HTTP interface are RFC 3339 timestamps. `calendar.update` also accepts a Go `duration` string.
+`calendar.invite` takes an optional `optional` address list, `calendar.update` an optional `body`, and `calendar.respond` an optional boolean `no_notify`.
 The `account` field is optional, and `params` must be an object.
 Unknown operations or fields, duplicate keys, malformed JSON, trailing JSON, null fields, invalid types, and oversized requests are refused.
 There is no HTTP login, token, key, raw-message, classification, rules-mutation, or approval endpoint. Only the [approval console](#approval-console), on its own address, approves or denies pending items.
@@ -746,7 +762,7 @@ A policy refusal returns HTTP 500 with `{"error":"refused by policy: KEY"}`.
 
 Requests are limited to 1 MiB and 16 JSON nesting levels.
 The client bounds responses at 64 MiB and never follows redirects or retries requests, including stale-connection write replay.
-Mail list/search counts range from 1 to 100, skip is at most 1,000,000, and manual mutations accept at most 50 IDs.
+Mail list and search counts range from 1 to 100, skip is at most 1,000,000, and manual mutations accept at most 50 IDs.
 Recipient and category lists accept at most 100 entries, and IDs and search strings are limited to 4,096 bytes.
 Stats accepts 1 to 365,000 days.
 
@@ -769,6 +785,7 @@ Not verified against real providers or services:
 - mail sends, replies, and forwards;
 - meeting invites, updates, cancellations, and responses;
 - provider acceptance of generated drafts;
+- `mail thread` on a Microsoft 365 conversation with a message in Junk Email (checked live on 2026-10-26: Gmail threads with drafts, and Microsoft 365 conversations across Inbox, Sent Items, Drafts, Deleted Items, and other folders; `calendar search` on both providers was checked the same day);
 - Microsoft 365 device-code login, which organization policies can also refuse;
 - requests to Jev cloud, or to any screening endpoint or model other than the default;
 - migration of a real Keychain record.

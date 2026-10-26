@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,5 +97,130 @@ func TestMissingMIMEBodyFailsClosed(t *testing.T) {
 				t.Fatal("missing or corrupt body accepted")
 			}
 		})
+	}
+}
+
+func TestListSearchAndGetCarryTheGmailThreadID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/labels":
+			respond(w, map[string]any{"labels": []any{map[string]string{"id": "INBOX", "type": "system", "name": "INBOX"}}})
+		case "/messages":
+			respond(w, map[string]any{"messages": []any{map[string]string{"id": "a"}, map[string]string{"id": "b"}}})
+		case "/messages/a", "/messages/b":
+			id := r.URL.Path[len("/messages/"):]
+			respond(w, map[string]any{"id": id, "threadId": "thread-" + id, "internalDate": "1788220800001", "labelIds": []string{"INBOX"}, "payload": part("text/plain", "text")})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	defer server.Close()
+	b := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), GmailURL: server.URL}).Mailbox()
+	ctx := t.Context()
+	text := "text"
+	list, err := b.List(ctx, "inbox", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	search, err := b.Search(ctx, model.SearchQuery{Text: &text}, 10, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	get, err := b.Get(ctx, []string{"b"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threads := func(ms []model.Message) []string {
+		out := []string{}
+		for _, m := range ms {
+			out = append(out, m.ThreadID)
+		}
+		return out
+	}
+	for name, got := range map[string][]string{"list": threads(list), "search": threads(search), "get": threads(get)} {
+		want := []string{"thread-a", "thread-b"}
+		if name == "get" {
+			want = want[1:]
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s threads=%q want %q", name, got, want)
+		}
+	}
+}
+
+func TestSearchByRecipientMatchesToOrCc(t *testing.T) {
+	var queries []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/messages" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		queries = append(queries, r.URL.Query().Get("q"))
+		respond(w, map[string]any{})
+	}))
+	defer server.Close()
+	b := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), GmailURL: server.URL}).Mailbox()
+	to, sender := `Ana "Board" <ana@example.test>`, "bob@example.test"
+	for _, q := range []model.SearchQuery{{To: &to}, {Sender: &sender, To: &to}} {
+		if _, err := b.Search(t.Context(), q, 10, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{`{to:"ana board ana@example.test" cc:"ana board ana@example.test"}`, `from:"bob@example.test" {to:"ana board ana@example.test" cc:"ana board ana@example.test"}`}
+	if !reflect.DeepEqual(queries, want) {
+		t.Fatalf("q=%q want %q", queries, want)
+	}
+}
+
+func TestThreadReadsEveryMessageOfThreadsGetNewestFirst(t *testing.T) {
+	var requests []string
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests = append(requests, r.Method+" "+r.URL.EscapedPath()+"?"+r.URL.RawQuery)
+		mu.Unlock()
+		switch r.URL.EscapedPath() {
+		case "/labels":
+			respond(w, map[string]any{"labels": []any{map[string]string{"id": "INBOX", "type": "system", "name": "INBOX"}}})
+		case "/threads/t%2F1%20%3F":
+			respond(w, map[string]any{"id": "t/1 ?", "messages": []any{
+				map[string]any{"id": "first", "threadId": "t/1 ?", "labelIds": []string{"SENT"}},
+				map[string]any{"id": "draft", "threadId": "t/1 ?", "labelIds": []string{"DRAFT"}},
+				map[string]any{"id": "third", "threadId": "t/1 ?", "labelIds": []string{"TRASH"}},
+			}})
+		case "/threads/gone":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(404)
+			_, _ = w.Write([]byte(`{"error":{"errors":[{"reason":"notFound"}]}}`))
+		case "/messages/first", "/messages/draft", "/messages/third":
+			id := r.URL.Path[len("/messages/"):]
+			// The draft was saved after the last message arrived, so its internalDate is the newest.
+			date := map[string]string{"first": "1788220800001", "draft": "1788220800004", "third": "1788220800003"}[id]
+			label := map[string]string{"first": "SENT", "draft": "DRAFT", "third": "TRASH"}[id]
+			respond(w, map[string]any{"id": id, "threadId": "t/1 ?", "internalDate": date, "labelIds": []string{label}, "payload": part("text/plain", "text")})
+		default:
+			t.Errorf("unexpected path %s", r.URL.EscapedPath())
+			w.WriteHeader(404)
+		}
+	}))
+	defer server.Close()
+	b := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), GmailURL: server.URL}).Mailbox()
+	ctx := t.Context()
+	ids := func(ms []model.Message) []string {
+		out := []string{}
+		for _, m := range ms {
+			out = append(out, m.ID+"@"+strings.Join(m.Folders, ","))
+		}
+		return out
+	}
+	got, err := b.Thread(ctx, "t/1 ?")
+	if err != nil || !reflect.DeepEqual(ids(got), []string{"draft@DRAFT", "third@TRASH", "first@SENT"}) || !got[0].IsDraft || got[1].ThreadID != "t/1 ?" {
+		t.Fatalf("ids=%v err=%v", ids(got), err)
+	}
+	if !slices.Contains(requests, "GET /threads/t%2F1%20%3F?format=minimal") {
+		t.Fatalf("requests=%q", requests)
+	}
+	if got, err := b.Thread(ctx, "gone"); err != model.MailboxError("Gmail error 404 notFound") || len(got) != 0 {
+		t.Fatalf("unknown thread: ids=%v err=%v", ids(got), err)
 	}
 }

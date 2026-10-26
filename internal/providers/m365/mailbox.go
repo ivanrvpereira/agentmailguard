@@ -15,7 +15,7 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
-const meta = "id,from,sender,subject,receivedDateTime,toRecipients,ccRecipients,parentFolderId,isDraft,isRead,flag,categories"
+const meta = "id,from,sender,subject,receivedDateTime,toRecipients,ccRecipients,parentFolderId,conversationId,isDraft,isRead,flag,categories"
 const attachments = "attachments($select=name)"
 
 type mailbox struct{ c *Client }
@@ -64,7 +64,7 @@ func content(d object) (*string, *model.ContentType) {
 	return value, typ
 }
 func message(d object, body bool) (model.Message, error) {
-	m := model.Message{ID: text(d, "id"), Subject: text(d, "subject"), IsDraft: boolean(d, "isDraft"), IsRead: boolean(d, "isRead"), Flag: model.NoFlag, Categories: stringsAt(d, "categories"), Attachments: names(d), To: addresses(d, "toRecipients"), CC: addresses(d, "ccRecipients"), ReceivedAt: time.Unix(0, 0).UTC(), Folders: []string{}}
+	m := model.Message{ID: text(d, "id"), ThreadID: text(d, "conversationId"), Subject: text(d, "subject"), IsDraft: boolean(d, "isDraft"), IsRead: boolean(d, "isRead"), Flag: model.NoFlag, Categories: stringsAt(d, "categories"), Attachments: names(d), To: addresses(d, "toRecipients"), CC: addresses(d, "ccRecipients"), ReceivedAt: time.Unix(0, 0).UTC(), Folders: []string{}}
 	if m.ID == "" {
 		return m, invalidMetadata
 	}
@@ -127,6 +127,35 @@ func (b *mailbox) List(ctx context.Context, folder string, count, skip int, body
 	q.Set("$orderby", "receivedDateTime desc")
 	return b.collection(ctx, b.c.endpoint("/me/mailFolders/"+escapeID(folder)+"/messages", q), body)
 }
+
+// notFound is the error of a Graph 404, which a missing message gets.
+const notFound = model.MailboxError("Graph error 404")
+
+// Thread filters /me/messages, which covers every folder, by conversationId
+// (https://learn.microsoft.com/en-us/graph/api/user-list-messages?view=graph-rest-1.0) and reads every page in
+// Graph's page size. Graph needs a property of $orderby to come first in $filter, or it answers InefficientFilter,
+// so receivedDateTime leads with a bound that keeps every message.
+func (b *mailbox) Thread(ctx context.Context, thread string) ([]model.Message, error) {
+	q := messageQuery(false)
+	q.Set("$filter", "receivedDateTime ge 1900-01-01T00:00:00Z and conversationId eq '"+strings.ReplaceAll(thread, "'", "''")+"'")
+	q.Set("$orderby", "receivedDateTime desc")
+	items, err := b.c.all(ctx, b.c.endpoint("/me/messages", q), false)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, notFound
+	}
+	out := []model.Message{}
+	for _, d := range items {
+		m, err := message(d, false)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
 func kql(q model.SearchQuery) string {
 	term := func(s string) string {
 		s = strings.ReplaceAll(s, `\`, `\\`)
@@ -139,6 +168,11 @@ func kql(q model.SearchQuery) string {
 	parts := []string{}
 	if q.Sender != nil && *q.Sender != "" {
 		parts = append(parts, "from:"+term(*q.Sender))
+	}
+	// Graph $search on messages (https://learn.microsoft.com/en-us/graph/search-query-parameter, "Use $search on
+	// message collections") searches the to and cc properties and joins terms with OR.
+	if q.To != nil && *q.To != "" {
+		parts = append(parts, "(to:"+term(*q.To)+" OR cc:"+term(*q.To)+")")
 	}
 	if q.Subject != nil && *q.Subject != "" {
 		parts = append(parts, "subject:"+term(*q.Subject))

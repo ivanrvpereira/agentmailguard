@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS categories (
 -- spf, dkim, dmarc, compauth: authentication results such as pass or fail; compauth_reason: digits.
 -- origin and source_id: how the server made the message (new, reply, or forward) and the source message ID.
 -- They are NULL for seeded mail. Only drafts with origin new can be updated.
+-- thread_id: messages with the same thread_id are one conversation. NULL means the message is its own
+-- conversation: its thread ID is its message ID. Replies and forwards join the conversation of their source.
 CREATE TABLE IF NOT EXISTS messages (
 	account TEXT NOT NULL,
 	id TEXT NOT NULL,
@@ -59,6 +61,7 @@ CREATE TABLE IF NOT EXISTS messages (
 	compauth_reason TEXT,
 	origin TEXT CHECK (origin IN ('new', 'reply', 'forward')),
 	source_id TEXT,
+	thread_id TEXT,
 	PRIMARY KEY (account, id)
 );
 
@@ -95,6 +98,7 @@ CREATE TABLE IF NOT EXISTS events (
 -- attendees lists the attendees of each event. address is compared without case.
 -- response: none, organizer, tentativelyAccepted, accepted, declined, or notResponded, as in Microsoft 365.
 -- comment: the comment of the account's own response, or NULL.
+-- optional: 1 for an optional attendee, 0 for a required one. Optional attendees are invited too.
 CREATE TABLE IF NOT EXISTS attendees (
 	account TEXT NOT NULL,
 	event_id TEXT NOT NULL,
@@ -102,6 +106,7 @@ CREATE TABLE IF NOT EXISTS attendees (
 	name TEXT NOT NULL DEFAULT '',
 	response TEXT NOT NULL DEFAULT 'none' CHECK (response IN ('none', 'organizer', 'tentativelyAccepted', 'accepted', 'declined', 'notResponded')),
 	comment TEXT,
+	optional INTEGER NOT NULL DEFAULT 0 CHECK (optional IN (0, 1)),
 	PRIMARY KEY (account, event_id, address)
 );
 

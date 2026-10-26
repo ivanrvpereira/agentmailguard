@@ -165,6 +165,18 @@ func TestMailGetPrettyKeepsTheTextViewAndColorsOnlyWhenForced(t *testing.T) {
 	}
 }
 
+func TestMailGetPrettyShowsTheThreadNextToTheID(t *testing.T) {
+	body := `{"id":"red-id","thread_id":"thread-7","verdict":"red","received_at":"` + received(t, 2026, 3, 7, 9, 30) + `","auth":{},"is_read":false,"flag":"none","categories":[],"sender":{"address":"mallory@test"},"reason":"injection"}`
+	code, out, errout := runPretty(t, body, nil, "mail", "get", "red-id", "--pretty")
+	if code != 0 || errout != "" || !strings.HasSuffix(out, "\nID:          red-id\nThread:      thread-7\n") {
+		t.Fatalf("exit=%d stderr=%q\n%s", code, errout, out)
+	}
+	code, out, errout = runPretty(t, strings.Replace(body, `"thread_id":"thread-7",`, "", 1), nil, "mail", "get", "red-id", "--pretty")
+	if code != 0 || errout != "" || strings.Contains(out, "Thread") {
+		t.Fatalf("without a thread: exit=%d stderr=%q\n%s", code, errout, out)
+	}
+}
+
 // Styling the prefix may add color, never a word: removing the sequences gives the plain line back.
 func TestErrorPrefixKeepsItsWordsOnEveryWriter(t *testing.T) {
 	const want = "error: invalid server URL\n"

@@ -294,6 +294,15 @@ func TestConsoleListShowsWaitingActionsNewestFirstThenResolved(t *testing.T) {
 	onlyConsoleLinks(t, page)
 }
 
+// Optional attendees receive the invitation, so the list shows them with the required ones.
+func TestConsoleListShowsOptionalAttendeesAsRecipients(t *testing.T) {
+	f := consoleServer(t, approveAll, true)
+	pend(t, f.s, "calendar.invite", `{"to":["required@example.test"],"optional":["optional@example.test"],"subject":"s","body":"","start":"2026-04-01T09:00:00Z","end":"2026-04-01T10:00:00Z"}`)
+	if page := f.get(t, "/", nil).Body.String(); !strings.Contains(page, "required@example.test, optional@example.test") {
+		t.Fatalf("list misses the recipients: %s", page)
+	}
+}
+
 // The item page shows the stored arguments as text and the referenced message through the guarded read,
 // without its body.
 func TestConsoleItemShowsStoredArgumentsAsTextAndTheMessageSummary(t *testing.T) {

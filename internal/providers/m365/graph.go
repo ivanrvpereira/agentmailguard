@@ -39,6 +39,9 @@ func (c *Client) endpoint(path string, q url.Values) string {
 	}
 	return u
 }
+
+// validURL allows the signed-in user's resources under /me, and the Microsoft Search endpoint, which searches only
+// the signed-in user's items.
 func (c *Client) validURL(raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -48,7 +51,7 @@ func (c *Client) validURL(raw string) bool {
 	if err != nil {
 		return false
 	}
-	return (u.Scheme == "https" || u.Scheme == "http") && u.Scheme == base.Scheme && u.Host == base.Host && u.User == nil && u.Fragment == "" && (u.EscapedPath() == base.EscapedPath()+"/me" || strings.HasPrefix(u.EscapedPath(), base.EscapedPath()+"/me/"))
+	return (u.Scheme == "https" || u.Scheme == "http") && u.Scheme == base.Scheme && u.Host == base.Host && u.User == nil && u.Fragment == "" && (u.EscapedPath() == base.EscapedPath()+"/me" || strings.HasPrefix(u.EscapedPath(), base.EscapedPath()+"/me/") || u.EscapedPath() == base.EscapedPath()+"/search/query" && u.RawQuery == "")
 }
 func (c *Client) request(ctx context.Context, method, raw string, body any, calendar bool) (object, error) {
 	if !c.validURL(raw) {

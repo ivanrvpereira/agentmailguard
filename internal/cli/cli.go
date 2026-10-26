@@ -34,7 +34,7 @@ type Options struct {
 func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "CLIOptions{redacted}") }
 
 const notes = `All data commands use the server. No automatic server start. No permanent delete.
-mail send, reply, and forward send email at once, and calendar invite, update, cancel, and respond send meeting notifications at once, when the write policy allows them (default: deny).
+mail send, reply, and forward send email at once, and calendar invite, update, cancel, and respond (unless --no-notify) send meeting notifications at once, when the write policy allows them (default: deny).
 serve checks all credentials at start. An account that is not logged in, or whose sign-in fails, does not stop the start; its commands fail. Other credential failures stop the start.
 Login runs locally on the server host. Restart the server after login or account changes.
 Client/server authentication and built-in TLS are absent. Anyone who reaches the server can run every action that the write policy allows. Protect remote access with a tunnel.`
@@ -452,7 +452,7 @@ func approvalsCmd(r *runner) *cobra.Command {
 
 func mailCmd(r *runner) *cobra.Command {
 	c := group(r, "mail", "Read, organize, and send screened mail")
-	c.AddCommand(mailListCmd(r), mailGetCmd(r), mailSearchCmd(r), mailLinkCmd(r),
+	c.AddCommand(mailListCmd(r), mailGetCmd(r), mailThreadCmd(r), mailSearchCmd(r), mailLinkCmd(r),
 		r.leaf("folders", "List mail folders", 0, 0, r.none("mail.folders")),
 		r.leaf("categories", "List mail categories", 0, 0, r.none("mail.categories")),
 		r.leaf("archive IDS...", "Move messages to the archive", 1, -1, r.ids("mail.archive")),
@@ -488,17 +488,24 @@ func mailGetCmd(r *runner) *cobra.Command {
 	return c
 }
 
+func mailThreadCmd(r *runner) *cobra.Command {
+	return r.leaf("thread THREAD_ID", "Show the screened messages of a conversation from every folder, newest first", 1, 1, func(c *cobra.Command, args []string) error {
+		return r.call(c, "mail.thread", map[string]any{"id": args[0]}, false)
+	})
+}
+
 // isDate reports whether v is a calendar date the server accepts as a search bound.
 func isDate(v string) bool { _, e := time.Parse("2006-01-02", v); return e == nil }
 
 func mailSearchCmd(r *runner) *cobra.Command {
-	var text, from, subject, after, before, folder string
+	var text, from, to, subject, after, before, folder string
 	count := 25
 	pretty := false
 	c := r.leaf("search", "Search screened messages", 0, 0, func(c *cobra.Command, _ []string) error {
 		p := map[string]any{"count": count}
 		optional(c, p, "text", &text)
 		optional(c, p, "from", &from)
+		optional(c, p, "to", &to)
 		optional(c, p, "subject", &subject)
 		optional(c, p, "after", &after)
 		optional(c, p, "before", &before)
@@ -511,6 +518,7 @@ func mailSearchCmd(r *runner) *cobra.Command {
 	negated(c, "pretty", "render the messages as a table instead of JSON", &pretty)
 	c.Flags().StringVar(&text, "text", "", "text to match")
 	c.Flags().StringVar(&from, "from", "", "sender address to match")
+	c.Flags().StringVar(&to, "to", "", "To or Cc address to match")
 	c.Flags().StringVar(&subject, "subject", "", "subject text to match")
 	c.Flags().StringVar(&after, "after", "", "earliest date YYYY-MM-DD")
 	c.Flags().StringVar(&before, "before", "", "latest date YYYY-MM-DD")
@@ -611,8 +619,11 @@ func calendarCmd(r *runner) *cobra.Command {
 	get := r.leaf("get ID", "Show one calendar event", 1, 1, func(c *cobra.Command, args []string) error {
 		return r.call(c, "calendar.get", map[string]any{"id": args[0]}, false)
 	})
+	search := r.leaf("search TEXT", "Search calendar events with the provider's own search", 1, 1, func(c *cobra.Command, args []string) error {
+		return r.call(c, "calendar.search", map[string]any{"text": args[0]}, false)
+	})
 	c := group(r, "calendar", "Read calendar events and M365 or fake availability, and send meeting notifications")
-	c.AddCommand(list, get, calendarAvailabilityCmd(r), calendarInviteCmd(r), calendarUpdateCmd(r), calendarCancelCmd(r), calendarRespondCmd(r))
+	c.AddCommand(list, get, search, calendarAvailabilityCmd(r), calendarInviteCmd(r), calendarUpdateCmd(r), calendarCancelCmd(r), calendarRespondCmd(r))
 	return c
 }
 

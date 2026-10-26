@@ -20,12 +20,14 @@ type Address struct {
 }
 type MailSummary struct {
 	ID          string             `json:"id"`
+	ThreadID    string             `json:"thread_id,omitempty"`
 	Verdict     model.Verdict      `json:"verdict"`
 	ReceivedAt  string             `json:"received_at"`
 	Auth        map[string]*string `json:"auth"`
 	IsRead      bool               `json:"is_read"`
 	Flag        model.FlagState    `json:"flag"`
 	Categories  []string           `json:"categories"`
+	Folders     []string           `json:"folders"` // folder and label IDs, not message text: shown at every verdict
 	Sender      *Address           `json:"sender,omitempty"`
 	Subject     *string            `json:"subject,omitempty"`
 	To          *[]Address         `json:"to,omitempty"`
@@ -34,6 +36,7 @@ type MailSummary struct {
 	Reason      *string            `json:"reason,omitempty"`
 	Error       *string            `json:"error,omitempty"`
 }
+
 type MailView struct {
 	MailSummary
 	Body      *string            `json:"body,omitempty"`
@@ -109,7 +112,7 @@ func iso(t time.Time) string {
 
 func Summary(m model.Message, row cache.Row, categories []string) MailSummary {
 	v := verdict(row.Verdict)
-	result := MailSummary{ID: m.ID, Verdict: v, ReceivedAt: iso(m.ReceivedAt), Auth: auth(row.Auth), IsRead: m.IsRead, Flag: m.Flag, Categories: listed(m.Categories, categories), Reason: reason(v)}
+	result := MailSummary{ID: m.ID, ThreadID: m.ThreadID, Verdict: v, ReceivedAt: iso(m.ReceivedAt), Auth: auth(row.Auth), IsRead: m.IsRead, Flag: m.Flag, Categories: listed(m.Categories, categories), Folders: append([]string{}, m.Folders...), Reason: reason(v)}
 	switch v {
 	case model.Green, model.Yellow:
 		result.Sender = new(address(m.Sender))
@@ -124,6 +127,7 @@ func Summary(m model.Message, row cache.Row, categories []string) MailSummary {
 	}
 	return result
 }
+
 func View(m model.Message, row cache.Row, categories []string, rendered *content.Rendered) (MailView, error) {
 	result := MailView{MailSummary: Summary(m, row, categories)}
 	if result.Verdict == model.Green {
@@ -211,6 +215,7 @@ func ToText(v MailView) string {
 		row("Attachments", strings.Join(*v.Attachments, ", "))
 	}
 	row("ID", v.ID)
+	row("Thread", v.ThreadID)
 	if v.Body != nil {
 		b.WriteString("\n\n" + *v.Body)
 		if v.Truncated != nil && *v.Truncated {

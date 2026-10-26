@@ -2,6 +2,7 @@ package guard_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"reflect"
@@ -9,6 +10,8 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/audit"
+	"github.com/ivanrvpereira/agentmailguard/internal/cache"
+	"github.com/ivanrvpereira/agentmailguard/internal/config"
 	"github.com/ivanrvpereira/agentmailguard/internal/guard"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
@@ -405,10 +408,104 @@ func TestCalendarWritesHoldMutationGateDuringFetchAndWrite(t *testing.T) {
 func TestCalendarInvitePreservesPayloadAndAuditsWithoutReading(t *testing.T) {
 	w := meetingWriter()
 	g, _, path := calendarGuard(t, &mailbox{}, w)
-	event := model.NewEvent{Subject: "CANARY subject", Body: "CANARY body", Location: "CANARY location", Attendees: []string{"CANARY@example.test"}, Start: now, End: now.Add(9 * time.Hour), Online: true}
+	event := model.NewEvent{Subject: "CANARY subject", Body: "CANARY body", Location: "CANARY location", Attendees: []string{"CANARY@example.test"}, Optional: []string{"optional@example.test"}, Start: now, End: now.Add(9 * time.Hour), Online: true}
 	id, err := g.CalendarInvite(context.Background(), event)
 	if err != nil || id != "created" || !reflect.DeepEqual(w.invites, []model.NewEvent{event}) || w.calls != 0 {
 		t.Fatalf("invite = %q %v, payloads=%v reads=%d", id, err, w.invites, w.calls)
 	}
 	assertCalendarAudit(t, path, "calendar_invite", "created")
+}
+
+// storedArgs decodes the request arguments of a pending item.
+func storedArgs(t *testing.T, item cache.Pending) map[string]any {
+	t.Helper()
+	var args map[string]any
+	if err := json.Unmarshal(item.Args, &args); err != nil {
+		t.Fatal(err)
+	}
+	return args
+}
+
+// Optional attendees receive the invitation, so Jev and the approval see them beside the required ones.
+func TestCalendarInviteOptionalAttendeesReachJevAndTheStoredAction(t *testing.T) {
+	s := scoring(0.08)
+	policy := allowAll
+	policy.Base.CalendarInvite = config.Approve
+	w := meetingWriter()
+	g, c, _ := policyGuard(t, &mailbox{}, w, s, policy)
+	_, err := g.CalendarInvite(t.Context(), model.NewEvent{Subject: "Plan", Start: now, End: now.Add(time.Hour), Attendees: []string{"a@example.test"}, Optional: []string{"b@example.test"}})
+	var pending guard.PendingError
+	if !errors.As(err, &pending) || len(w.invites) != 0 {
+		t.Fatalf("invite=%v writes=%v", err, w.invites)
+	}
+	if checks := s.checked(); len(checks) != 1 || !reflect.DeepEqual(checks[0].state["optional"], []any{"b@example.test"}) {
+		t.Fatalf("checks=%+v", checks)
+	}
+	item, err := c.GetPending(t.Context(), pending.ApprovalID)
+	if err != nil || !reflect.DeepEqual(storedArgs(t, item)["optional"], []any{"b@example.test"}) {
+		t.Fatalf("stored=%s err=%v", item.Args, err)
+	}
+}
+
+func TestCalendarInviteRefusesAnAddressThatIsRequiredAndOptional(t *testing.T) {
+	w := meetingWriter()
+	g, _, path := calendarGuard(t, &mailbox{}, w)
+	_, err := g.CalendarInvite(t.Context(), model.NewEvent{Start: now, End: now.Add(time.Hour), Attendees: []string{"Ana@example.test"}, Optional: []string{"bob@example.test", "ana@EXAMPLE.test"}})
+	if err == nil || err.Error() != "invalid request" || len(w.invites) != 0 || len(auditRecords(t, path)) != 0 {
+		t.Fatalf("invite=%v writes=%v", err, w.invites)
+	}
+}
+
+// A body-only update is a change. Jev and the approval see the new body.
+func TestCalendarUpdateBodyReachesJevAndTheStoredAction(t *testing.T) {
+	s := scoring(0.08)
+	policy := allowAll
+	policy.Base.CalendarUpdate = config.Approve
+	w := meetingWriter()
+	g, c, _ := policyGuard(t, &mailbox{}, w, s, policy)
+	err := g.CalendarUpdate(t.Context(), "e1", model.EventChange{Body: ptr("New agenda")}, 0)
+	var pending guard.PendingError
+	if !errors.As(err, &pending) || len(w.changes) != 0 {
+		t.Fatalf("update=%v writes=%v", err, w.changes)
+	}
+	if checks := s.checked(); len(checks) != 1 || !reflect.DeepEqual(checks[0].state, map[string]any{"body": "New agenda"}) {
+		t.Fatalf("checks=%+v", checks)
+	}
+	item, err := c.GetPending(t.Context(), pending.ApprovalID)
+	if err != nil || !reflect.DeepEqual(storedArgs(t, item), map[string]any{"id": "e1", "body": "New agenda"}) {
+		t.Fatalf("stored=%s err=%v", item.Args, err)
+	}
+}
+
+// A response without notification carries no agent text, so Jev does not check it; the approval sees no_notify.
+func TestCalendarRespondNoNotifyReachesTheStoredAction(t *testing.T) {
+	s := scoring(0.08)
+	policy := allowAll
+	policy.Base.CalendarRespond = config.Approve
+	w := meetingWriter()
+	w.event.IsOrganizer = false
+	g, c, _ := policyGuard(t, &mailbox{}, w, s, policy)
+	err := g.CalendarRespond(t.Context(), "e1", model.EventResponse{Response: model.ResponseDecline, NoNotify: true})
+	var pending guard.PendingError
+	if !errors.As(err, &pending) || len(w.responses) != 0 || len(s.checked()) != 0 {
+		t.Fatalf("respond=%v writes=%v checks=%+v", err, w.responses, s.checked())
+	}
+	item, err := c.GetPending(t.Context(), pending.ApprovalID)
+	if err != nil || !reflect.DeepEqual(storedArgs(t, item), map[string]any{"id": "e1", "response": "decline", "comment": "", "no_notify": true}) {
+		t.Fatalf("stored=%s err=%v", item.Args, err)
+	}
+}
+
+// A comment would reach nobody without a notification.
+func TestCalendarRespondRefusesACommentWithoutNotification(t *testing.T) {
+	w := meetingWriter()
+	w.event.IsOrganizer = false
+	g, _, path := calendarGuard(t, &mailbox{}, w)
+	err := g.CalendarRespond(t.Context(), "e1", model.EventResponse{Response: model.ResponseAccept, Comment: "CANARY", NoNotify: true})
+	if err == nil || err.Error() != "invalid request" || len(w.responses) != 0 || len(auditRecords(t, path)) != 0 {
+		t.Fatalf("respond=%v writes=%v", err, w.responses)
+	}
+	if err := g.CalendarRespond(t.Context(), "e1", model.EventResponse{Response: model.ResponseAccept, NoNotify: true}); err != nil || !reflect.DeepEqual(w.responses, []model.EventResponse{{Response: model.ResponseAccept, NoNotify: true}}) {
+		t.Fatalf("respond=%v writes=%v", err, w.responses)
+	}
 }

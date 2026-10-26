@@ -165,13 +165,14 @@ func (b *mailbox) Categorize(ctx context.Context, ids []string, add, remove []st
 	})
 }
 
-// outgoing is a message that the account writes: a draft, or a sent message.
+// outgoing is a message that the account writes: a draft, or a sent message. A nil thread makes it its own
+// conversation.
 type outgoing struct {
 	to                         []string
 	subject, body, contentType string
 	attachments                []string
 	origin                     string
-	source                     *string
+	source, thread             *string
 }
 
 func created(d model.NewDraft) outgoing {
@@ -185,7 +186,7 @@ func (b *mailbox) reply(ctx context.Context, id, comment string) (outgoing, erro
 		return outgoing{}, err
 	}
 	m := source[0]
-	return outgoing{to: []string{m.Sender.Address}, subject: "Re: " + m.Subject, body: comment, contentType: string(model.Text), origin: "reply", source: &id}, nil
+	return outgoing{to: []string{m.Sender.Address}, subject: "Re: " + m.Subject, body: comment, contentType: string(model.Text), origin: "reply", source: &id, thread: &m.ThreadID}, nil
 }
 
 // forward carries the source body and attachments to new recipients.
@@ -195,7 +196,7 @@ func (b *mailbox) forward(ctx context.Context, id string, to []string) (outgoing
 		return outgoing{}, err
 	}
 	m := source[0]
-	return outgoing{to: to, subject: "Fw: " + m.Subject, body: *m.Body, contentType: string(*m.ContentType), attachments: m.Attachments, origin: "forward", source: &id}, nil
+	return outgoing{to: to, subject: "Fw: " + m.Subject, body: *m.Body, contentType: string(*m.ContentType), attachments: m.Attachments, origin: "forward", source: &id, thread: &m.ThreadID}, nil
 }
 
 // insert stores o with one INSERT, as a draft in drafts or as a sent message in sent. A generated ID is
@@ -222,8 +223,8 @@ func (b *mailbox) insert(ctx context.Context, o outgoing, draft bool) (string, e
 	}
 	to, _ := json.Marshal(o.to)
 	attachments, _ := json.Marshal(o.attachments)
-	_, err = db.ExecContext(ctx, `INSERT INTO messages (account, id, folder, sender_name, sender_address, to_addresses, subject, body, content_type, received_at, is_draft, is_read, attachments, origin, source_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
-		b.p.account, id, folder, from.Name, from.Address, string(to), o.subject, o.body, o.contentType, b.p.now().UTC().Format(time.RFC3339Nano), draft, string(attachments), o.origin, o.source)
+	_, err = db.ExecContext(ctx, `INSERT INTO messages (account, id, folder, sender_name, sender_address, to_addresses, subject, body, content_type, received_at, is_draft, is_read, attachments, origin, source_id, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+		b.p.account, id, folder, from.Name, from.Address, string(to), o.subject, o.body, o.contentType, b.p.now().UTC().Format(time.RFC3339Nano), draft, string(attachments), o.origin, o.source, o.thread)
 	if err != nil {
 		return "", storageError
 	}

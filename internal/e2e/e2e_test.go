@@ -247,3 +247,31 @@ func TestPendingItemsAndVerdictsSurviveARestart(t *testing.T) {
 		t.Fatalf("sent after restart: %v", got)
 	}
 }
+
+func TestThreadShowsTheWholeConversationScreenedWithItsFolders(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_draft='allow'\n")
+	s.exec(`UPDATE messages SET thread_id = 'lunch', folder = 'trash', received_at = '2020-01-01T08:00:00Z' WHERE id = 'phish'`)
+	s.exec(`UPDATE messages SET received_at = '2020-01-01T09:00:00Z' WHERE id = 'lunch'`)
+	s.exec(`INSERT INTO messages (account, id, folder, sender_name, sender_address, to_addresses, subject, body, received_at, thread_id) VALUES
+		('demo', 'lunch-reply', 'sent', 'canary-name-me', 'me@demo.test', '["ana@example.test"]', 'canary-subject-lunch-reply', 'canary-body-lunch-reply: Friday works.', '2020-01-01T10:00:00Z', 'lunch')`)
+	draft := decode[struct{ ID string }](t, s.ok("draft", "reply", "lunch", "--body", "canary-body-draft: see you at noon")).ID
+
+	type message struct {
+		ID, Verdict string
+		Subject     *string
+		Folders     []string
+	}
+	subject := func(s string) *string { return &s }
+	got := decode[[]message](t, s.ok("mail", "thread", "lunch"))
+	want := []message{
+		{draft, "green", subject("Re: canary-subject-lunch"), []string{"drafts"}},
+		{"lunch-reply", "green", subject("canary-subject-lunch-reply"), []string{"sent"}},
+		{"lunch", "green", subject("canary-subject-lunch"), []string{"inbox"}},
+		{"phish", "red", nil, []string{"trash"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("thread=%+v", got)
+	}
+	s.refused("operation failed", "mail", "thread", "nowhere")
+}

@@ -27,13 +27,17 @@ func (c *calendar) Update(ctx context.Context, id model.EventID, change model.Ev
 	if change.Location != nil {
 		body["location"] = map[string]string{"displayName": *change.Location}
 	}
+	// The plain-text body goes as escaped HTML, as in Invite. It replaces the whole body.
+	if change.Body != nil {
+		body["body"] = map[string]string{"contentType": "html", "content": model.HTMLBody(*change.Body)}
+	}
 	if change.Start != nil {
 		body["start"] = calendarTime(*change.Start)
 	}
 	if change.End != nil {
 		body["end"] = calendarTime(*change.End)
 	}
-	// Enable only. The body is never sent, so the online-meeting details in it stay intact.
+	// Enable only. Without a body change the body is not sent, so the online-meeting details in it stay intact.
 	if change.Online {
 		body["isOnlineMeeting"] = true
 		body["onlineMeetingProvider"] = "teamsForBusiness"
@@ -89,8 +93,10 @@ func (c *calendar) Cancel(ctx context.Context, id model.EventID, comment string)
 	return err
 }
 
+// Respond notifies the organizer unless NoNotify is set: sendResponse false records the response only
+// (https://learn.microsoft.com/en-us/graph/api/event-accept).
 func (c *calendar) Respond(ctx context.Context, id model.EventID, response model.EventResponse) error {
-	if !response.Response.Valid() {
+	if !response.Valid() {
 		return invalidMetadata
 	}
 	action := string(response.Response)
@@ -101,7 +107,7 @@ func (c *calendar) Respond(ctx context.Context, id model.EventID, response model
 		return requestFailed
 	}
 	defer func() { <-c.c.mutationGate }()
-	_, err := c.c.request(ctx, http.MethodPost, c.c.endpoint("/me/events/"+escapeID(id)+"/"+action, nil), map[string]any{"comment": response.Comment, "sendResponse": true}, true)
+	_, err := c.c.request(ctx, http.MethodPost, c.c.endpoint("/me/events/"+escapeID(id)+"/"+action, nil), map[string]any{"comment": response.Comment, "sendResponse": !response.NoNotify}, true)
 	return err
 }
 
@@ -118,9 +124,14 @@ func (c *calendar) Invite(ctx context.Context, event model.NewEvent) (model.Even
 	for _, attendee := range attendees {
 		attendee["type"] = "required"
 	}
+	// Graph attendee type: required, optional, or resource (https://learn.microsoft.com/en-us/graph/api/resources/attendee).
+	for _, attendee := range recipients(event.Optional) {
+		attendee["type"] = "optional"
+		attendees = append(attendees, attendee)
+	}
 	// The plain-text body goes as escaped HTML, so Outlook shows the Teams block that Graph adds as formatted HTML.
 	body := map[string]any{
-		"subject": event.Subject, "body": map[string]string{"contentType": "html", "content": event.HTMLBody()},
+		"subject": event.Subject, "body": map[string]string{"contentType": "html", "content": model.HTMLBody(event.Body)},
 		"location": map[string]string{"displayName": event.Location},
 		"start":    calendarTime(event.Start), "end": calendarTime(event.End), "attendees": attendees,
 		"isOnlineMeeting": event.Online,

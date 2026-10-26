@@ -40,6 +40,34 @@ func (g *Guard) CalendarList(ctx context.Context, start, end time.Time) ([]views
 	if err != nil {
 		return nil, safeErr(ctx, err)
 	}
+	return g.events(ctx, events)
+}
+
+// CalendarSearch screens each event that the provider's search finds for text, as CalendarGet screens one event,
+// in the provider's order.
+func (g *Guard) CalendarSearch(ctx context.Context, text string) ([]views.CalendarView, error) {
+	if text == "" {
+		return nil, GuardError("calendar search needs text")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	events, err := g.calendar.Search(ctx, text)
+	if err != nil {
+		return nil, safeErr(ctx, err)
+	}
+	seen := map[string]bool{}
+	for _, e := range events {
+		if seen[e.ID] {
+			return nil, GuardError("ValueError")
+		}
+		seen[e.ID] = true
+	}
+	return g.events(ctx, events)
+}
+
+// events screens each event in parallel and keeps the order. An event without an ID fails the whole result.
+func (g *Guard) events(ctx context.Context, events []model.Event) ([]views.CalendarView, error) {
 	categories, err := g.Categories(ctx)
 	if err != nil {
 		return nil, err
