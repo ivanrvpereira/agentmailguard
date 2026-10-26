@@ -3,8 +3,10 @@ package m365
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
@@ -45,6 +47,42 @@ func (c *calendar) Get(ctx context.Context, id string) (model.Event, error) {
 		return model.Event{}, err
 	}
 	return toEvent(d)
+}
+
+// Search posts one Microsoft Search request for events in the primary calendar, without size, so Graph's default
+// page applies (https://learn.microsoft.com/en-us/graph/search-concept-events). A hit carries only some event
+// fields, so each hit is read again with Get.
+func (c *calendar) Search(ctx context.Context, query string) ([]model.Event, error) {
+	body := map[string]any{"requests": []any{map[string]any{"entityTypes": []string{"event"}, "query": map[string]any{"queryString": query}}}}
+	d, err := c.c.request(ctx, http.MethodPost, c.c.endpoint("/search/query", nil), body, true)
+	if err != nil {
+		return nil, err
+	}
+	ids := []string{}
+	for _, response := range array(d, "value") {
+		for _, container := range array(response, "hitsContainers") {
+			for _, hit := range array(container, "hits") {
+				id := text(hit, "hitId")
+				if id == "" {
+					return nil, invalidMetadata
+				}
+				ids = append(ids, id)
+			}
+		}
+	}
+	out := make([]model.Event, len(ids))
+	errs := make([]error, len(ids))
+	var wg sync.WaitGroup
+	for i, id := range ids {
+		wg.Go(func() { out[i], errs[i] = c.Get(ctx, id) })
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 func eventTime(d object) (time.Time, error) {
 	if text(d, "timeZone") != "UTC" {

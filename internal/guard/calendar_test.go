@@ -20,6 +20,10 @@ func (c *calendar) List(context.Context, time.Time, time.Time) ([]model.Event, e
 	c.calls++
 	return []model.Event{c.event}, nil
 }
+func (c *calendar) Search(context.Context, string) ([]model.Event, error) {
+	c.calls++
+	return []model.Event{c.event}, nil
+}
 
 type eventScreener struct {
 	model.Screener
@@ -93,5 +97,60 @@ func TestPrivateEventsScreenEveryReadWithoutBody(t *testing.T) {
 		if _, err := g.CalendarList(context.Background(), now, end); err == nil {
 			t.Fatal("invalid calendar range accepted")
 		}
+	}
+}
+
+// searchCalendar answers Search with found and counts the calls.
+type searchCalendar struct {
+	model.Calendar
+	found []model.Event
+	calls int
+}
+
+func (c *searchCalendar) Search(context.Context, string) ([]model.Event, error) {
+	c.calls++
+	return c.found, nil
+}
+
+func TestCalendarSearchScreensEachFoundEventInOrder(t *testing.T) {
+	text := model.Text
+	found := []model.Event{
+		{ID: "b", Subject: "hidden subject", Start: now, End: now.Add(time.Hour), Body: ptr("notes"), ContentType: &text},
+		{ID: "a", Subject: "Budget", Start: now, End: now.Add(time.Hour), Body: ptr("agenda"), ContentType: &text},
+	}
+	s := &subjectScreener{verdicts: map[string]model.Verdict{"hidden subject": model.Error}}
+	g, _, _ := policyGuard(t, &mailbox{}, &searchCalendar{found: found}, s, allowAll)
+	got, err := g.CalendarSearch(t.Context(), "budget")
+	if err != nil || len(got) != 2 || got[0].ID != "b" || got[1].ID != "a" || len(s.screened) != 2 {
+		t.Fatalf("got=%+v err=%v screened=%v", got, err, s.screened)
+	}
+	if got[0].Verdict != model.Error || got[0].Subject != nil || got[0].Body != nil {
+		t.Fatalf("error event exposed hidden fields: %+v", got[0])
+	}
+	if got[1].Verdict != model.Green || got[1].Subject == nil || *got[1].Subject != "Budget" || got[1].Body == nil {
+		t.Fatalf("green event: %+v", got[1])
+	}
+}
+
+func TestCalendarSearchFailsClosedOnAResultThatBreaksTheContract(t *testing.T) {
+	e := model.Event{ID: "a", Start: now, End: now.Add(time.Hour), Body: ptr(""), ContentType: ptr(model.Text)}
+	unnamed := e
+	unnamed.ID = ""
+	for name, found := range map[string][]model.Event{"empty ID": {unnamed}, "duplicate ID": {e, e}} {
+		t.Run(name, func(t *testing.T) {
+			s := &subjectScreener{}
+			g, _, _ := policyGuard(t, &mailbox{}, &searchCalendar{found: found}, s, allowAll)
+			if got, err := g.CalendarSearch(t.Context(), "budget"); err != guard.GuardError("ValueError") || got != nil || len(s.screened) != 0 {
+				t.Fatalf("got=%+v err=%v screened=%v", got, err, s.screened)
+			}
+		})
+	}
+}
+
+func TestCalendarSearchRefusesEmptyTextBeforeTheCalendar(t *testing.T) {
+	cal := &searchCalendar{}
+	g, _, _ := policyGuard(t, &mailbox{}, cal, &subjectScreener{}, allowAll)
+	if _, err := g.CalendarSearch(t.Context(), ""); err != guard.GuardError("calendar search needs text") || cal.calls != 0 {
+		t.Fatalf("err=%v calls=%d", err, cal.calls)
 	}
 }

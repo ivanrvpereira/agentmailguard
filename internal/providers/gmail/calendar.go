@@ -142,6 +142,28 @@ func (c *calendar) List(ctx context.Context, start, end time.Time) ([]model.Even
 		q.Set("pageToken", token)
 	}
 }
+
+// Search reads the first page of events.list with q only, so Google's default page size and order apply
+// (https://developers.google.com/workspace/calendar/api/v3/reference/events/list). Its items are full events.
+func (c *calendar) Search(ctx context.Context, text string) ([]model.Event, error) {
+	v, err := c.c.get(ctx, "Calendar", c.c.options.CalendarURL+"/events", url.Values{"q": {text}})
+	if err != nil {
+		return nil, err
+	}
+	a, err := items(v, "items", "Calendar")
+	if err != nil {
+		return nil, err
+	}
+	out := []model.Event{}
+	for _, raw := range a {
+		event, err := parseEvent(raw)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, event)
+	}
+	return out, nil
+}
 func (c *calendar) Get(ctx context.Context, id string) (model.Event, error) {
 	v, err := c.c.get(ctx, "Calendar", c.c.options.CalendarURL+"/events/"+segment(id), nil)
 	if err != nil {

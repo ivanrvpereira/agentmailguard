@@ -120,6 +120,23 @@ func (c *calendar) List(ctx context.Context, start, end time.Time) ([]model.Even
 	return out, nil
 }
 
+// Search matches text, ignoring case, in the subject, body, location, and the names and addresses of the
+// organizer and attendees, as Google Calendar's q does. It returns every match, ordered by start.
+func (c *calendar) Search(ctx context.Context, text string) ([]model.Event, error) {
+	all, err := c.events(ctx, `ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	text = strings.ToLower(text)
+	has := func(s string) bool { return strings.Contains(strings.ToLower(s), text) }
+	out := slices.DeleteFunc(all, func(e model.Event) bool {
+		return !has(e.Subject) && !has(*e.Body) && !has(e.Location) && !has(e.Organizer.Name) && !has(e.Organizer.Address) &&
+			!slices.ContainsFunc(e.Attendees, func(a model.Attendee) bool { return has(a.Address.Name) || has(a.Address.Address) })
+	})
+	slices.SortStableFunc(out, func(a, b model.Event) int { return a.Start.Compare(b.Start) })
+	return out, nil
+}
+
 // strength orders the statuses of free_busy rows; a slot shows its strongest row.
 var strength = map[model.AvailabilityStatus]int{model.SlotFree: 1, model.SlotTentative: 2, model.SlotBusy: 3, model.SlotOutOfOffice: 4}
 

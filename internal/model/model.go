@@ -184,6 +184,9 @@ type Mailbox interface {
 type Calendar interface {
 	List(ctx context.Context, start, end time.Time) ([]Event, error)
 	Get(ctx context.Context, id EventID) (Event, error)
+	// Search returns the events that the provider's own search finds for text, one page in the provider's
+	// default size and order, each with every field that Get reads.
+	Search(ctx context.Context, text string) ([]Event, error)
 }
 
 type NewEvent struct {

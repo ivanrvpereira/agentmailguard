@@ -188,6 +188,9 @@ type calendarParam struct {
 	Start string `json:"start"`
 	End   string `json:"end"`
 }
+type calendarSearchParam struct {
+	Text string `json:"text"`
+}
 type availabilityParam struct {
 	To    []string `json:"to"`
 	Start string   `json:"start"`
@@ -442,6 +445,12 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) { return a.guard.CalendarList(ctx, first, last) }
+	case "calendar.search":
+		var p calendarSearchParam
+		if params(r.Params, &p) != nil || !validString(p.Text, 4096, false) {
+			return nil, errInvalid
+		}
+		call = func(a *account) (any, error) { return a.guard.CalendarSearch(ctx, p.Text) }
 	case "calendar.availability":
 		var p availabilityParam
 		if params(r.Params, &p) != nil || !listValid(p.To, 1, model.MaxAvailabilityAddresses) {

@@ -2,9 +2,13 @@ package m365_test
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -104,5 +108,66 @@ func TestCalendarRejectsNonUTCorInvalidDates(t *testing.T) {
 		if _, err := c.Calendar().Get(context.Background(), "e"); err == nil || err.Error() != "Graph error InvalidMetadata" {
 			t.Fatalf("invalid date accepted %v", err)
 		}
+	}
+}
+
+func TestCalendarSearchPostsTheSearchQueryAndReadsEachHit(t *testing.T) {
+	var requests []string
+	var mu sync.Mutex
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		requests = append(requests, r.Method+" "+r.URL.EscapedPath()+" "+string(body))
+		mu.Unlock()
+		switch {
+		case r.Method == "POST" && r.URL.Path == "/v1.0/search/query":
+			var got map[string]any
+			text := map[bool]string{true: "nothing", false: "budget plan"}[strings.Contains(string(body), "nothing")]
+			if json.Unmarshal(body, &got) != nil || !reflect.DeepEqual(got, map[string]any{"requests": []any{map[string]any{"entityTypes": []any{"event"}, "query": map[string]any{"queryString": text}}}}) {
+				t.Errorf("search body %s", body)
+			}
+			if text == "nothing" {
+				jsonResponse(w, map[string]any{"value": []any{map[string]any{"searchTerms": []string{"nothing"}, "hitsContainers": []any{map[string]any{"total": 0, "moreResultsAvailable": false}}}}})
+				return
+			}
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"hitsContainers": []any{map[string]any{"hits": []any{
+				map[string]any{"hitId": "e/2", "rank": 1, "resource": map[string]any{"subject": "partial"}},
+				map[string]any{"hitId": "e1", "rank": 2, "resource": map[string]any{"subject": "partial"}},
+			}}}}}})
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1.0/me/events/"):
+			if r.URL.Query().Get("$select") == "" || !strings.Contains(r.Header.Get("Prefer"), `outlook.timezone="UTC"`) {
+				t.Errorf("event read %s", r.URL)
+			}
+			e := event()
+			e["id"] = strings.TrimPrefix(r.URL.Path, "/v1.0/me/events/")
+			jsonResponse(w, e)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL)
+		}
+	})
+	cal := c.Calendar()
+	events, err := cal.Search(t.Context(), "budget plan")
+	if err != nil || len(events) != 2 || events[0].ID != "e/2" || events[1].ID != "e1" || events[0].Subject != "Planning" || events[0].Body == nil {
+		t.Fatalf("events=%+v err=%v", events, err)
+	}
+	slices.Sort(requests)
+	if !slices.Contains(requests, "GET /v1.0/me/events/e%2F2 ") || !slices.Contains(requests, "GET /v1.0/me/events/e1 ") || len(requests) != 3 {
+		t.Fatalf("requests=%q", requests)
+	}
+	requests = nil
+	if events, err := cal.Search(t.Context(), "nothing"); err != nil || len(events) != 0 || len(requests) != 1 {
+		t.Fatalf("no hits: events=%+v err=%v requests=%q", events, err, requests)
+	}
+}
+
+func TestCalendarSearchFailsOnAHitWithoutID(t *testing.T) {
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("read after a bad hit: %s %s", r.Method, r.URL)
+		}
+		jsonResponse(w, map[string]any{"value": []any{map[string]any{"hitsContainers": []any{map[string]any{"hits": []any{map[string]any{"rank": 1}}}}}}})
+	})
+	if events, err := c.Calendar().Search(t.Context(), "budget"); err == nil || events != nil {
+		t.Fatalf("events=%+v err=%v", events, err)
 	}
 }

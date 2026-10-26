@@ -354,3 +354,27 @@ func TestUpdateStoresANewBodyAsEscapedHTML(t *testing.T) {
 		t.Fatalf("solo=%+v err=%v", got, err)
 	}
 }
+
+func TestCalendarSearchMatchesEventTextAndPeopleByStart(t *testing.T) {
+	c, _ := calendar(t)
+	ctx := context.Background()
+	for text, want := range map[string][]string{
+		"planning":         {"mine"},        // subject, ignoring case
+		"agenda":           {"mine"},        // body
+		"room 1":           {"mine"},        // location
+		"ana":              {"mine", "ana"}, // attendee name, organizer name and address
+		"BOB@example.test": {"mine"},        // attendee address
+		"o":                {"solo", "mine", "ana", "gone", "later"},
+		"theirs":           {}, // another account's event
+		"nothing":          {},
+	} {
+		got, err := c.Search(ctx, text)
+		if err != nil || !reflect.DeepEqual(eventIDs(got), want) {
+			t.Errorf("%q: ids=%v err=%v", text, eventIDs(got), err)
+		}
+	}
+	got, err := c.Search(ctx, "planning")
+	if one, _ := c.Get(ctx, "mine"); err != nil || len(got) != 1 || !reflect.DeepEqual(got[0], one) {
+		t.Fatalf("search=%+v err=%v", got, err)
+	}
+}
