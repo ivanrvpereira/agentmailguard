@@ -182,7 +182,7 @@ var odataKey = regexp.MustCompile(`^([A-Za-z]+)\('((?:[^']|'')*)'\)$`)
 func samePath(a, b *url.URL) bool {
 	segments := func(u *url.URL) ([]string, bool) {
 		var out []string
-		for _, s := range strings.Split(u.EscapedPath(), "/") {
+		for s := range strings.SplitSeq(u.EscapedPath(), "/") {
 			v, err := url.PathUnescape(s)
 			if err != nil {
 				return nil, false
