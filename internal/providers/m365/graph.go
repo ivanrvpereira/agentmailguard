@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -166,19 +167,46 @@ func (c *Client) next(d object, first string) (string, error) {
 	}
 	u, _ := url.Parse(link)
 	start, _ := url.Parse(first)
-	if u.EscapedPath() != start.EscapedPath() {
+	if !samePath(u, start) {
 		return "", invalidPage
 	}
 	return link, nil
 }
 
+// odataKey is a path segment in OData key form, name('key'). Two quotes in a row stand for one quote in the key.
+var odataKey = regexp.MustCompile(`^([A-Za-z]+)\('((?:[^']|'')*)'\)$`)
+
+// samePath reports whether a and b name the same resource. Graph gives nextLinks in key form,
+// mailFolders('inbox')/messages, for a request made as mailFolders/inbox/messages, so each segment is compared
+// unescaped, with a key segment split into its name and key.
+func samePath(a, b *url.URL) bool {
+	segments := func(u *url.URL) ([]string, bool) {
+		var out []string
+		for _, s := range strings.Split(u.EscapedPath(), "/") {
+			v, err := url.PathUnescape(s)
+			if err != nil {
+				return nil, false
+			}
+			if m := odataKey.FindStringSubmatch(v); m != nil {
+				out = append(out, m[1], strings.ReplaceAll(m[2], "''", "'"))
+				continue
+			}
+			out = append(out, v)
+		}
+		return out, true
+	}
+	x, ok := segments(a)
+	y, ok2 := segments(b)
+	return ok && ok2 && slices.Equal(x, y)
+}
+
 // pageLink reports whether raw is a nextLink that Graph can give for first: the path of first, each query value of
-// first, and otherwise only the paging keys $top, $skip, and $skiptoken, each once. request refuses another origin
+// first, and otherwise only the paging keys $top, $skip, and $skiptoken, each once. The path may use the key form (see samePath). request refuses another origin
 // with validURL before it reads a credential.
 func pageLink(raw, first string) bool {
 	u, err := url.Parse(raw)
 	start, err2 := url.Parse(first)
-	if err != nil || err2 != nil || u.EscapedPath() != start.EscapedPath() {
+	if err != nil || err2 != nil || !samePath(u, start) {
 		return false
 	}
 	got, err := url.ParseQuery(u.RawQuery)

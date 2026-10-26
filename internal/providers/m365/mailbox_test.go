@@ -513,3 +513,40 @@ func TestListAndSearchRefuseAGraphPageLargerThanAsked(t *testing.T) {
 		}
 	}
 }
+
+// Live Graph writes the folder of a nextLink in OData key form, mailFolders('inbox'), though the request used
+// mailFolders/inbox. Both name the same folder, so the page is followed; the key form of another folder is not.
+func TestListFollowsANextLinkInODataKeyForm(t *testing.T) {
+	var requests []string
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.EscapedPath())
+		next := r.URL.Query()
+		if next.Has("$skip") {
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "second"}}})
+			return
+		}
+		next.Set("$skip", "1")
+		jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "first"}}, "@odata.nextLink": "http://" + r.Host + "/v1.0/me/mailFolders('inbox')/messages?" + next.Encode()})
+	})
+	b := c.Mailbox()
+	first, err := b.List(t.Context(), "inbox", model.PageRequest{Size: 1}, false)
+	if err != nil || len(first.Messages) != 1 || first.Next == "" {
+		t.Fatalf("first page %+v %v", first, err)
+	}
+	last, err := b.List(t.Context(), "inbox", model.PageRequest{Size: 1, Page: first.Next}, false)
+	if err != nil || len(last.Messages) != 1 || last.Messages[0].ID != "second" {
+		t.Fatalf("last page %+v %v", last, err)
+	}
+	if want := []string{messagesPath, "/v1.0/me/mailFolders('inbox')/messages"}; !reflect.DeepEqual(requests, want) {
+		t.Fatalf("requests=%q want %q", requests, want)
+	}
+	for _, other := range []string{"/v1.0/me/mailFolders('sentitems')/messages", "/v1.0/me/mailFolders('inbox')/messages/x", "/v1.0/me/mailFolders('inbox'/messages"} {
+		page := strings.Replace(first.Next, "/v1.0/me/mailFolders('inbox')/messages", other, 1)
+		if _, err := b.List(t.Context(), "inbox", model.PageRequest{Size: 1, Page: page}, false); err == nil {
+			t.Fatalf("followed %s", other)
+		}
+	}
+	if len(requests) != 2 {
+		t.Fatalf("a refused page reached Graph: %q", requests)
+	}
+}
