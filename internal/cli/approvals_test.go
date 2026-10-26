@@ -41,7 +41,7 @@ func approvalsServer(t *testing.T) *httptest.Server {
 func runApprovals(t *testing.T, base string, args ...string) (int, string, string) {
 	t.Helper()
 	var out, errout bytes.Buffer
-	code := cli.Run(context.Background(), append([]string{"--server", base, "approvals"}, args...), &out, &errout, cli.Options{LookupEnv: func(string) string { return "" }})
+	code := cli.Run(context.Background(), append([]string{"--host", base, "approvals"}, args...), &out, &errout, cli.Options{LookupEnv: func(string) string { return "" }})
 	return code, out.String(), errout.String()
 }
 

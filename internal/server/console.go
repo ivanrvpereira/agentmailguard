@@ -31,32 +31,28 @@ const (
 )
 
 // console is the approval web console. It shows stored actions and approves or denies them.
-type console struct {
-	s     *Server
-	hash  []byte
-	hosts map[string]bool
+type console struct{ s *Server }
+
+// signinLimit counts wrong console passwords. It lives as long as the daemon, so a reload does not reset it.
+type signinLimit struct {
 	// mu serializes the limit check and the password check, so parallel guesses cannot pass the limit.
 	mu       sync.Mutex
 	failures []time.Time
 }
 
-// Console returns the approval console handler. It is off (false) when no approval password was loaded.
-func (s *Server) Console() (http.Handler, bool) {
-	s.mu.Lock()
-	hash := s.approvalHash
-	s.mu.Unlock()
-	if hash == "" {
-		return nil, false
-	}
-	hosts := map[string]bool{strings.ToLower(s.approvals.Listen): true}
-	for _, h := range s.approvals.Hosts {
-		hosts[strings.ToLower(h)] = true
-	}
-	return &console{s: s, hash: []byte(hash), hosts: hosts}, true
-}
+// consoleUnset is the answer to every console request while no console password exists.
+const consoleUnset = "console password not set; run amgd config set console.password"
 
-// ConsoleAddress is the [approvals].listen address of the approval console.
-func (s *Server) ConsoleAddress() string { return s.approvals.Listen }
+// Console returns the approval console handler. It is always on: without a console password in the current state,
+// it refuses every request. The password hash and the hosts come from the state of each request.
+func (s *Server) Console() http.Handler { return &console{s: s} }
+
+// ConsoleAddress is the [console].listen address that the first Load read.
+func (s *Server) ConsoleAddress() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listen
+}
 
 func (c *console) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
@@ -70,8 +66,18 @@ func (c *console) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			plain(w, 500, "operation failed")
 		}
 	}()
-	if !c.hosts[strings.ToLower(r.Host)] {
+	st := c.s.current.Load()
+	if st == nil {
+		plain(w, 503, ErrUnavailable.Error())
+		return
+	}
+	hosts := append([]string{c.s.ConsoleAddress()}, st.config.Console.Hosts...)
+	if !slices.ContainsFunc(hosts, func(h string) bool { return strings.EqualFold(h, r.Host) }) {
 		plain(w, 403, "host refused")
+		return
+	}
+	if st.consoleHash == "" {
+		plain(w, 503, consoleUnset)
 		return
 	}
 	ctx, done, err := c.s.admit(r.Context())
@@ -80,7 +86,7 @@ func (c *console) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer done()
-	if status := c.signIn(ctx, r); status != 0 {
+	if status := c.signIn(ctx, r, st.consoleHash); status != 0 {
 		if status == 401 {
 			h.Set("WWW-Authenticate", `Basic realm="agentmailguard approvals", charset="UTF-8"`)
 			plain(w, 401, "sign-in required")
@@ -94,28 +100,29 @@ func (c *console) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // signIn returns 0 for the right password, 429 while the sign-in limit holds, and 401 otherwise. Only a
 // wrong password counts as a failure; each one gets an audit record without request details.
-func (c *console) signIn(ctx context.Context, r *http.Request) int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (c *console) signIn(ctx context.Context, r *http.Request, hash string) int {
+	l := c.s.signins
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	now := c.s.options.Now()
-	recent := c.failures[:0]
-	for _, at := range c.failures {
+	recent := l.failures[:0]
+	for _, at := range l.failures {
 		if now.Sub(at) < failureWindow {
 			recent = append(recent, at)
 		}
 	}
-	c.failures = recent
-	if len(c.failures) >= maxFailures {
+	l.failures = recent
+	if len(l.failures) >= maxFailures {
 		return 429
 	}
 	_, password, ok := r.BasicAuth()
 	if !ok {
 		return 401
 	}
-	if bcrypt.CompareHashAndPassword(c.hash, []byte(password)) == nil {
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil {
 		return 0
 	}
-	c.failures = append(c.failures, now)
+	l.failures = append(l.failures, now)
 	_ = c.s.audit.ConsoleSigninFailed(context.WithoutCancel(ctx))
 	return 401
 }
@@ -305,8 +312,7 @@ func (c *console) reference(ctx context.Context, item cache.Pending, args map[st
 	if err != nil {
 		return kind, nil, true
 	}
-	account := item.Account
-	result, err := c.s.accountCall(ctx, request{Operation: op, Account: &account, Params: params})
+	result, err := c.s.runOn(ctx, op, item.Account, params)
 	if err != nil {
 		return kind, nil, true
 	}

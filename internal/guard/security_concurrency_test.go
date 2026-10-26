@@ -94,7 +94,7 @@ func TestConcurrentRedScreenBlocksStaleBusinessCategoryAndSecurityTag(t *testing
 			b := &categoryPauseBox{organizerBox: base, validating: make(chan struct{}), release: make(chan struct{})}
 			s := &pendingRedScreen{entered: make(chan struct{}), release: make(chan struct{}), verdict: original}
 			g, c, _ := setup(t, b, s)
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), bound)
 			defer cancel()
 			getDone := make(chan error, 1)
 			go func() { _, err := g.Get(ctx, "m1"); getDone <- err }()
@@ -128,7 +128,7 @@ func TestSecurityPersistenceWaitsForAuthorizedWriteAndCanCancel(t *testing.T) {
 			b.entered, b.release = make(chan struct{}), make(chan struct{})
 			s := &pendingRedScreen{entered: make(chan struct{}), release: make(chan struct{})}
 			g, c, _ := setup(t, b, s)
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), bound)
 			defer cancel()
 			readCtx, cancelGet := context.WithCancel(ctx)
 			defer cancelGet()
@@ -176,7 +176,7 @@ func TestConcurrentRedScreenCannotCompleteStaleGreenNoop(t *testing.T) {
 	b := &validationPauseBox{organizerBox: base, validating: make(chan struct{}), release: make(chan struct{})}
 	s := &pendingRedScreen{entered: make(chan struct{}), release: make(chan struct{}), noopID: "m1"}
 	g, c, _ := setup(t, b, s)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), bound)
 	defer cancel()
 	getDone := make(chan error, 1)
 	go func() { _, err := g.Get(ctx, "m1"); getDone <- err }()
@@ -206,7 +206,7 @@ func TestFinalAuthorizationRevalidatesCacheAndPreservesValidSibling(t *testing.T
 	s.result.Organization.Categories = map[string]float64{}
 	b := &validationPauseBox{organizerBox: base, validating: make(chan struct{}), release: make(chan struct{})}
 	g, c, path := setup(t, b, s)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), bound)
 	defer cancel()
 	r := rules.Rules{Rules: []rules.Rule{{Name: "route", Kind: rules.Folder, Target: "f1", Instructions: "Route"}}}
 	done := make(chan error, 1)
@@ -242,7 +242,7 @@ func TestConcurrentRedScreenDuringValidationBlocksAutomaticMove(t *testing.T) {
 	b := &validationPauseBox{organizerBox: base, validating: make(chan struct{}), release: make(chan struct{})}
 	s := &pendingRedScreen{entered: make(chan struct{}), release: make(chan struct{})}
 	g, _, path := setup(t, b, s)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), bound)
 	defer cancel()
 	getDone := make(chan error, 1)
 	go func() {

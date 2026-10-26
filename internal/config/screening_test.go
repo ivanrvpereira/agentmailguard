@@ -1,15 +1,20 @@
 package config_test
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
 )
 
+func screeningOf(t *testing.T, text string) (config.Screening, error) {
+	t.Helper()
+	c, err := parse(t, head+text)
+	return c.Screening, err
+}
+
 func TestScreeningDefaultsToJevWithoutTable(t *testing.T) {
-	got, err := config.LoadScreening(t.Context(), file(t, work))
+	got, err := screeningOf(t, work)
 	if err != nil || got != (config.Screening{Provider: "jev"}) {
 		t.Fatalf("screening=%+v error=%v", got, err)
 	}
@@ -17,23 +22,23 @@ func TestScreeningDefaultsToJevWithoutTable(t *testing.T) {
 
 func TestScreeningReadsProviderAndEndpoint(t *testing.T) {
 	for _, endpoint := range []string{"https://jev.example.test/v1/systemone", "https://jev.example.test:8443/v1/systemone?x=1", "https://[::1]:8443/v1/systemone"} {
-		got, err := config.LoadScreening(t.Context(), file(t, "[screening]\nprovider = 'jev'\nendpoint = '"+endpoint+"'\n"+work))
+		got, err := screeningOf(t, "[screening]\nprovider = 'jev'\nendpoint = '"+endpoint+"'\n"+work)
 		if err != nil || got != (config.Screening{Provider: "jev", Endpoint: endpoint}) {
 			t.Fatalf("screening=%+v error=%v", got, err)
 		}
 	}
-	got, err := config.LoadScreening(t.Context(), file(t, "[screening]\nprovider = 'fake'\n"+work))
+	got, err := screeningOf(t, "[screening]\nprovider = 'fake'\n"+work)
 	if err != nil || got != (config.Screening{Provider: "fake"}) {
 		t.Fatalf("screening=%+v error=%v", got, err)
 	}
 }
 
 func TestScreeningReadsModel(t *testing.T) {
-	got, err := config.LoadScreening(t.Context(), file(t, "[screening]\nendpoint = 'https://api.typesafe.ai/v1/systemone'\nmodel = 'jev-1.13.0'\n"+work))
+	got, err := screeningOf(t, "[screening]\nendpoint = 'https://api.typesafe.ai/v1/systemone'\nmodel = 'jev-1.13.0'\n"+work)
 	if err != nil || got != (config.Screening{Provider: "jev", Endpoint: "https://api.typesafe.ai/v1/systemone", Model: "jev-1.13.0"}) {
 		t.Fatalf("screening=%+v error=%v", got, err)
 	}
-	got, err = config.LoadScreening(t.Context(), file(t, "[screening]\nmodel = 'typesafe/jev-1.13'\n"+work))
+	got, err = screeningOf(t, "[screening]\nmodel = 'typesafe/jev-1.13'\n"+work)
 	if err != nil || got != (config.Screening{Provider: "jev", Model: "typesafe/jev-1.13"}) {
 		t.Fatalf("screening=%+v error=%v", got, err)
 	}
@@ -65,11 +70,8 @@ func TestInvalidScreeningNamesKeyPathWithoutValue(t *testing.T) {
 		{"model with leading slash", "[screening]\nmodel = '/SECRET-CANARY'\n", "screening.model"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := config.LoadScreening(t.Context(), file(t, tc.text+work))
-			var fail config.ScreeningError
-			if !errors.As(err, &fail) || fail.Path != tc.path || err.Error() != "invalid screening: "+tc.path || strings.Contains(err.Error(), "SECRET") {
-				t.Fatalf("error=%v", err)
-			}
+			_, err := screeningOf(t, tc.text+work)
+			refusal(t, err, tc.path)
 		})
 	}
 }

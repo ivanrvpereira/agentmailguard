@@ -134,7 +134,7 @@ func (c *Client) credential(ctx context.Context) (credentials.OAuth, error) {
 	if c.store == nil {
 		return credentials.OAuth{}, authError
 	}
-	v, err := c.store.LoadOAuth(ctx, "m365", c.account.Name)
+	v, err := c.store.LoadOAuth(ctx, "m365", c.account.Email)
 	if err != nil {
 		return credentials.OAuth{}, authError
 	}
@@ -231,7 +231,7 @@ func (c *Client) acceptToken(ctx context.Context, r tokenResponse, old credentia
 	if r.RefreshToken != "" {
 		old.RefreshToken = r.RefreshToken
 	}
-	if c.store == nil || c.store.SaveOAuth(ctx, "m365", c.account.Name, old) != nil {
+	if c.store == nil || c.store.SaveOAuth(ctx, "m365", c.account.Email, old) != nil {
 		return credentials.OAuth{}, credentialSaveError{}
 	}
 	return old, nil

@@ -3,13 +3,10 @@ package server_test
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -19,34 +16,10 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/cli"
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
-	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
 
-type statusStore struct {
-	credentials.Store
-	token   credentials.OAuth
-	missing bool
-	saves   atomic.Int32
-}
-
-func (s *statusStore) LoadOAuth(context.Context, string, string) (credentials.OAuth, error) {
-	if s.missing {
-		return credentials.OAuth{}, credentials.ErrNotFound
-	}
-	return s.token, nil
-}
-func (s *statusStore) SaveOAuth(context.Context, string, string, credentials.OAuth) error {
-	s.saves.Add(1)
-	return nil
-}
-
-func statusJWT(scopes string) string {
-	b, _ := json.Marshal(map[string]string{"scp": scopes})
-	return "x." + base64.RawURLEncoding.EncodeToString(b) + ".x"
-}
-
-func TestAuthStatusSafeDiagnostics(t *testing.T) {
+func TestAccountStatusSafeDiagnostics(t *testing.T) {
 	for _, provider := range []string{"m365", "gmail"} {
 		for _, refreshed := range []bool{false, true} {
 			for _, kind := range []string{"scope", "scope-limit", "malformed-labels", "missing-scopes", "other-error", "missing-login", "success"} {
@@ -94,10 +67,17 @@ func TestAuthStatusSafeDiagnostics(t *testing.T) {
 							token = "private-malformed-token-canary"
 						}
 					}
-					creds := &statusStore{token: credentials.OAuth{AccessToken: token, RefreshToken: "private-refresh-canary", Scopes: strings.Fields(grant), ExpiresAt: now.Add(time.Hour), Username: "synthetic@example.test"}, missing: kind == "missing-login"}
+					login := credentials.OAuth{AccessToken: token, RefreshToken: "private-refresh-canary", Scopes: strings.Fields(grant), ExpiresAt: now.Add(time.Hour)}
 					if refreshed {
-						creds.token.ExpiresAt = now.Add(-time.Second)
-						creds.token.Scopes = []string{"Stale.Scope"}
+						login.ExpiresAt = now.Add(-time.Second)
+						login.Scopes = []string{"Stale.Scope"}
+					}
+					email, logins := workEmail, map[string]credentials.OAuth{}
+					if provider == "gmail" {
+						email = gmailEmail
+					}
+					if kind != "missing-login" {
+						logins[provider+"/"+email] = login
 					}
 					var exchanges, uses atomic.Int32
 					api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,20 +95,15 @@ func TestAuthStatusSafeDiagnostics(t *testing.T) {
 						response(w, map[string]string{"emailAddress": "synthetic@example.test"})
 					}))
 					defer api.Close()
-					home := t.TempDir()
-					configuration := "[accounts.work]\nprovider='" + provider + "'\nclient_id='synthetic'\ntenant_id='synthetic'\nclient_secret='synthetic'\n"
-					if e := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configuration), 0600); e != nil {
-						t.Fatal(e)
+					config := workConfig
+					if provider == "gmail" {
+						config = gmailConfig
 					}
-					s, err := server.New(context.Background(), home, server.Options{Credentials: creds, M365: m365.Options{BaseURL: api.URL, AuthorityURL: api.URL}, Gmail: gmail.Options{GmailURL: api.URL, TokenURL: api.URL + "/token", ProfileURL: api.URL + "/profile"}, Now: func() time.Time { return now }})
-					if err != nil {
-						t.Fatal(err)
-					}
-					defer s.Close()
-					h := httptest.NewServer(s)
+					d := startDaemon(t, daemonSetup{config: config + fakeScreen, record: record(logins), options: server.Options{M365: m365Options(api.URL), Gmail: gmail.Options{GmailURL: api.URL, TokenURL: api.URL + "/token", ProfileURL: api.URL + "/profile"}, Now: func() time.Time { return now }}})
+					h := httptest.NewServer(d.s)
 					defer h.Close()
 					var out, stderr bytes.Buffer
-					code := cli.Run(context.Background(), []string{"--server", h.URL, "auth", "status"}, &out, &stderr, cli.Options{LookupEnv: func(string) string { return "" }})
+					code := cli.Run(context.Background(), []string{"-H", h.URL, "account", "status"}, &out, &stderr, cli.Options{LookupEnv: func(string) string { return "" }})
 					ok := kind == "success" || extraGrant
 					wantCode, wantError := 1, ""
 					if kind == "missing-scopes" {
@@ -143,15 +118,15 @@ func TestAuthStatusSafeDiagnostics(t *testing.T) {
 						for i, s := range extra {
 							quoted[i] = fmt.Sprintf("%q", s)
 						}
-						wantError = "warning: token grants extra scopes the server does not use: " + strings.Join(quoted, ", ") + ". Remove the extra consent to reduce exposure.\n"
+						wantError = "warning: token grants extra scopes the daemon does not use: " + strings.Join(quoted, ", ") + ". Remove the extra consent to reduce exposure.\n"
 					}
 					var got map[string]any
 					if code != wantCode || stderr.String() != wantError || json.Unmarshal(out.Bytes(), &got) != nil {
 						t.Fatalf("exit=%d stderr=%q output=%s", code, stderr.String(), out.String())
 					}
-					want := map[string]any{"account": "work", "ok": ok, "logged_in": kind != "missing-login"}
-					if kind != "missing-login" {
-						want["username"] = "synthetic@example.test"
+					want := map[string]any{"account": provider, "email": email, "ok": ok, "logged_in": kind != "missing-login"}
+					if provider == "m365" {
+						want["account"] = "work"
 					}
 					if ok {
 						want["scopes"] = strings.Fields(good)
@@ -161,11 +136,11 @@ func TestAuthStatusSafeDiagnostics(t *testing.T) {
 					}
 					if kind == "missing-scopes" {
 						want["missing_scopes"] = []string{"https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/calendar.events.owned"}
-						if uses.Load() != 0 || creds.saves.Load() != 0 {
+						if stored, err := d.store.LoadOAuth(context.Background(), provider, email); uses.Load() != 0 || err != nil || !credentials.SameOAuth(stored, login) {
 							t.Fatal("refused token was used or saved")
 						}
 					}
-					if ok && refreshed && (exchanges.Load() != 1 || creds.saves.Load() != 1) {
+					if stored, err := d.store.LoadOAuth(context.Background(), provider, email); ok && refreshed && (exchanges.Load() != 1 || err != nil || !stored.ExpiresAt.After(now)) {
 						t.Fatal("usable refreshed token was not saved once")
 					}
 					encoded, _ := json.Marshal(want)

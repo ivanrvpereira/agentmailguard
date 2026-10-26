@@ -46,6 +46,12 @@ func checkResponseDeadline(t *testing.T, s http.Handler, req *http.Request, stat
 	}
 }
 
+// emptyDaemon starts a daemon without accounts, with fake screening and the clock now.
+func emptyDaemon(t *testing.T, now func() time.Time) *daemon {
+	t.Helper()
+	return startDaemon(t, daemonSetup{config: fakeScreen, options: server.Options{Now: now}})
+}
+
 func TestResponsesHaveWriteDeadlineBeforeEmission(t *testing.T) {
 	for _, tc := range []struct {
 		name, method, path, body, contentType string
@@ -58,22 +64,18 @@ func TestResponsesHaveWriteDeadlineBeforeEmission(t *testing.T) {
 		{"type", "POST", "/v1/call", `{}`, "text/plain", 415},
 		{"schema", "POST", "/v1/call", `{}`, "application/json", 400},
 		{"operation", "POST", "/v1/call", `{"operation":"mail.delete","params":{}}`, "application/json", 400},
-		{"config", "POST", "/v1/call", `{"operation":"auth.status","params":{}}`, "application/json", 500},
+		{"no accounts", "POST", "/v1/call", `{"operation":"account.status","params":{}}`, "application/json", 500},
 		{"panic", "POST", "/v1/call", `{"operation":"stats","params":{}}`, "application/json", 500},
 		{"closed", "POST", "/v1/call", `{"operation":"stats","params":{}}`, "application/json", 503},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			opts := server.Options{Credentials: &hostileStore{}}
+			now := time.Now
 			if tc.name == "panic" {
-				opts.Now = func() time.Time { panic("private-clock-canary") }
+				now = func() time.Time { panic("private-clock-canary") }
 			}
-			s, err := server.New(context.Background(), t.TempDir(), opts)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer s.Close()
+			d := emptyDaemon(t, now)
 			if tc.name == "closed" {
-				if err := s.Close(); err != nil {
+				if err := d.s.Close(); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -82,7 +84,7 @@ func TestResponsesHaveWriteDeadlineBeforeEmission(t *testing.T) {
 			if tc.name == "origin" {
 				req.Header.Set("Origin", "https://example.test")
 			}
-			checkResponseDeadline(t, s, req, tc.status)
+			checkResponseDeadline(t, d.s, req, tc.status)
 		})
 	}
 }
@@ -90,11 +92,7 @@ func TestResponsesHaveWriteDeadlineBeforeEmission(t *testing.T) {
 func TestBusyResponseHasWriteDeadline(t *testing.T) {
 	started := make(chan struct{}, 64)
 	release := make(chan struct{})
-	s, err := server.New(context.Background(), t.TempDir(), server.Options{Credentials: &hostileStore{}, Now: func() time.Time { started <- struct{}{}; <-release; return time.Now() }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
+	d := emptyDaemon(t, func() time.Time { started <- struct{}{}; <-release; return time.Now() })
 	var wg sync.WaitGroup
 	defer func() { close(release); wg.Wait() }()
 	request := func() *http.Request {
@@ -103,7 +101,7 @@ func TestBusyResponseHasWriteDeadline(t *testing.T) {
 		return r
 	}
 	for range 64 {
-		wg.Go(func() { s.ServeHTTP(httptest.NewRecorder(), request()) })
+		wg.Go(func() { d.s.ServeHTTP(httptest.NewRecorder(), request()) })
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -114,24 +112,20 @@ func TestBusyResponseHasWriteDeadline(t *testing.T) {
 			t.Fatal("requests did not reach clock seam")
 		}
 	}
-	checkResponseDeadline(t, s, request(), 503)
+	checkResponseDeadline(t, d.s, request(), 503)
 }
 
 func TestResponseDeadlineDoesNotLimitOperation(t *testing.T) {
 	w := &deadlineWriter{ResponseRecorder: httptest.NewRecorder()}
-	s, err := server.New(context.Background(), t.TempDir(), server.Options{Credentials: &hostileStore{}, Now: func() time.Time {
+	d := emptyDaemon(t, func() time.Time {
 		if !w.deadline.IsZero() {
 			t.Error("response write deadline started before operation completed")
 		}
 		return time.Now()
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
+	})
 	req := httptest.NewRequest("POST", "/v1/call", strings.NewReader(`{"operation":"stats","params":{}}`))
 	req.Header.Set("Content-Type", "application/json")
-	s.ServeHTTP(w, req)
+	d.s.ServeHTTP(w, req)
 	if w.Code != 200 || w.emittedDeadline.IsZero() {
 		t.Fatal("operation did not finish with a bounded response")
 	}

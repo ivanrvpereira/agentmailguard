@@ -1,12 +1,10 @@
 package server_test
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,32 +15,13 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
-	"github.com/ivanrvpereira/agentmailguard/internal/model"
-	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
-	"github.com/ivanrvpereira/agentmailguard/internal/screening"
 	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
-
-type nativeStore struct{ store }
-
-func (s *nativeStore) LoadOAuth(ctx context.Context, p, a string) (credentials.OAuth, error) {
-	if p == "gmail" {
-		s.loads.Add(1)
-		return credentials.OAuth{AccessToken: "synthetic-gmail", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Scopes: []string{"https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/calendar.events.owned.readonly"}, Username: "gmail@example.test"}, nil
-	}
-	return s.store.LoadOAuth(ctx, p, a)
-}
-
-// keyed supplies the screening key over s.
-type keyed struct{ credentials.Store }
-
-func (keyed) LoadScreeningKey(context.Context) (string, error) { return "synthetic-key", nil }
 
 type externalWrite struct {
 	path, method string
@@ -70,17 +49,6 @@ func (a *nativeAPI) checks() []map[string]any {
 	return append([]map[string]any{}, a.actionChecks...)
 }
 
-// screener is a Jev client for the fake Jev of a.
-func (a *nativeAPI) screener(t *testing.T) model.Screener {
-	t.Helper()
-	jev := httptest.NewServer(http.HandlerFunc(a.jev))
-	t.Cleanup(jev.Close)
-	return screening.New(screening.Options{Endpoint: jev.URL, Credentials: keyed{}})
-}
-func response(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
-}
 func messageJSON(id string, body bool, cats []string) map[string]any {
 	if cats == nil {
 		cats = []string{}
@@ -120,7 +88,7 @@ func (a *nativeAPI) graph(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.URL.Path {
 	case "/me":
-		response(w, map[string]string{"userPrincipalName": "work@example.test"})
+		response(w, map[string]string{"userPrincipalName": workEmail})
 	case "/me/mailFolders/deleteditems":
 		response(w, map[string]any{"id": "deleted"})
 	case "/me/mailFolders":
@@ -226,7 +194,7 @@ func (a *nativeAPI) jev(w http.ResponseWriter, r *http.Request) {
 func (a *nativeAPI) gmail(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/gmail/profile":
-		response(w, map[string]string{"emailAddress": "gmail@example.test"})
+		response(w, map[string]string{"emailAddress": gmailEmail})
 	case "/gmail/labels":
 		response(w, map[string]any{"labels": []any{map[string]string{"id": "INBOX", "name": "INBOX", "type": "system"}, map[string]string{"id": "Label_1", "name": "Work", "type": "user"}}})
 	case "/gmail/messages/g":
@@ -239,14 +207,16 @@ func (a *nativeAPI) gmail(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(404)
 	}
 }
+
+// buildNative builds the agent client amg.
 func buildNative(t *testing.T) string {
 	t.Helper()
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
 	}
-	binary := filepath.Join(t.TempDir(), "agentmailguard")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/agentmailguard")
+	binary := filepath.Join(t.TempDir(), "amg")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/amg")
 	build.Dir = root
 	if b, e := build.CombinedOutput(); e != nil {
 		t.Fatalf("build: %v %s", e, b)
@@ -254,55 +224,41 @@ func buildNative(t *testing.T) string {
 	return binary
 }
 
-// nativeFakes are the external services and client settings behind startNative.
+// nativeFakes are the logins, extra configuration, external services, and client settings behind startNative.
+// jev is the fake Jev engine.
 type nativeFakes struct {
-	creds              credentials.Store
-	graph, google, jev http.HandlerFunc
-	now                time.Time
-	clientEnv          []string
+	logins        map[string]credentials.OAuth
+	config        string
+	jev           *nativeAPI
+	graph, google http.HandlerFunc
+	now           time.Time
+	clientEnv     []string
 }
 
-// startNative serves a real server for the work, other, and gmail accounts against fakes. It returns the server,
-// its home, and a runner for the compiled client. The client home must stay empty until the test ends.
-func startNative(t *testing.T, binary string, f nativeFakes) (*server.Server, string, func(args ...string) (string, string, int)) {
+// startNative serves a daemon for the work, other, and gmail accounts against fakes, with config appended. It returns
+// the daemon and a runner for the compiled client. The client home must stay empty until the test ends.
+func startNative(t *testing.T, binary string, f nativeFakes) (*daemon, func(args ...string) (string, string, int)) {
 	t.Helper()
-	home := t.TempDir()
-	configFile(t, home)
-	config, err := os.OpenFile(filepath.Join(home, "config.toml"), os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = config.WriteString("[accounts.gmail]\nprovider='gmail'\nclient_id='synthetic'\nclient_secret='private-config-canary'\n")
-	config.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
 	graph := httptest.NewServer(f.graph)
 	t.Cleanup(graph.Close)
 	google := httptest.NewServer(f.google)
 	t.Cleanup(google.Close)
-	jev := httptest.NewServer(f.jev)
-	t.Cleanup(jev.Close)
-	screen := screening.New(screening.Options{Endpoint: jev.URL, Credentials: keyed{f.creds}})
-	s, err := server.New(context.Background(), home, server.Options{Credentials: f.creds, Screener: screen, M365: m365.Options{BaseURL: graph.URL}, Gmail: gmail.Options{GmailURL: google.URL + "/gmail", ProfileURL: google.URL + "/gmail/profile", CalendarURL: google.URL + "/calendar"}, Now: func() time.Time { return f.now }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s.Close() })
-	h := httptest.NewServer(s)
+	d := startDaemon(t, daemonSetup{config: workConfig + gmailTable + f.config, record: record(f.logins), jev: f.jev,
+		options: server.Options{M365: m365.Options{BaseURL: graph.URL}, Gmail: googleOptions(google.URL), Now: func() time.Time { return f.now }}})
+	h := httptest.NewServer(d.s)
 	t.Cleanup(h.Close)
-	// Child clients receive only a remote URL and an empty temporary home. They cannot see the server's configuration or credentials.
+	// Child clients receive only a remote URL and an empty temporary home. They cannot see the daemon's configuration or credentials.
 	clientHome := t.TempDir()
 	t.Cleanup(func() {
 		if entries, err := os.ReadDir(clientHome); err != nil || len(entries) != 0 {
 			t.Error("remote client created local state")
 		}
 	})
-	env := append([]string{"HOME=" + clientHome, "AGENTMAILGUARD_HOME=" + filepath.Join(clientHome, "does-not-exist")}, f.clientEnv...)
+	env := append([]string{"HOME=" + clientHome}, f.clientEnv...)
 	run := func(args ...string) (string, string, int) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, binary, append([]string{"--server", h.URL}, args...)...)
+		cmd := exec.CommandContext(ctx, binary, append([]string{"-H", h.URL}, args...)...)
 		cmd.Env = env
 		var out, errout bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &out, &errout
@@ -315,18 +271,18 @@ func startNative(t *testing.T, binary string, f nativeFakes) (*server.Server, st
 		}
 		return out.String(), errout.String(), code
 	}
-	return s, home, run
+	return d, run
 }
 
 func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 	binary := buildNative(t)
-	verifyNativeRefusal(t, binary)
-	verifyNativeFileServe(t, binary)
 	api := newNativeAPI()
-	s, home, run := startNative(t, binary, nativeFakes{creds: &nativeStore{}, graph: api.graph, google: api.gmail, jev: api.jev, now: time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC)})
-	if e := os.WriteFile(filepath.Join(home, "rules.toml"), []byte("[accounts.work.archive]\nfolder='archive'\ninstructions='private-rule-canary'\n[accounts.work.work]\ncategory='Work'\ninstructions='private-rule-canary'\n"), 0600); e != nil {
+	logins := map[string]credentials.OAuth{"m365/" + workEmail: m365Login(m365Grant), "m365/" + otherEmail: m365Login(m365Grant), "gmail/" + gmailEmail: gmailLogin(gmailReadGrant)}
+	d, run := startNative(t, binary, nativeFakes{logins: logins, jev: api, graph: api.graph, google: api.gmail, now: time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC)})
+	if e := os.WriteFile(filepath.Join(d.home, "rules.toml"), []byte("[accounts.\""+workEmail+"\".archive]\nfolder='archive'\ninstructions='private-rule-canary'\n[accounts.\""+workEmail+"\".work]\ncategory='Work'\ninstructions='private-rule-canary'\n"), 0600); e != nil {
 		t.Fatal(e)
 	}
+	d.reload(t)
 	ok := func(args ...string) string {
 		t.Helper()
 		out, errout, code := run(args...)
@@ -343,7 +299,7 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 	if strings.Contains(hidden, "private-") || !strings.Contains(hidden, "Verdict:     red") {
 		t.Fatal("pretty hidden view leak")
 	}
-	verifyNativeOutputFailure(t, binary, s)
+	verifyNativeOutputFailure(t, binary, d.s)
 	refused, refusal, exit := run("mail", "link", "r", "--all")
 	if exit != 1 || refused != "" || refusal != "error: link refused: message is red, not green\n" {
 		t.Fatal("guarded link refusal text lost")
@@ -487,7 +443,7 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 	}
 	ok("calendar", "list", "--from", "2026-03-31", "--to", "+1d")
 	ok("calendar", "get", "e")
-	ok("auth", "status")
+	ok("account", "status")
 	rules := ok("rules", "list")
 	if strings.Contains(rules, "private-rule") {
 		t.Fatal("rules instructions exposed")
@@ -502,11 +458,11 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 	if !strings.Contains(gmailView, "private-body-gmail") {
 		t.Fatal("Gmail route not used")
 	}
-	ok("--account", "gmail", "auth", "status")
+	ok("--account", "gmail", "account", "status")
 	ok("--account", "gmail", "mail", "folders")
 	ok("--account", "gmail", "calendar", "list", "--from", "2026-03-31", "--to", "+1d")
 	stats := ok("stats")
-	for _, account := range []string{"work", "other", "gmail"} {
+	for _, account := range []string{workEmail, otherEmail, gmailEmail} {
 		if !strings.Contains(stats, `"`+account+`":`) {
 			t.Errorf("stats missing %s", account)
 		}
@@ -515,21 +471,14 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 	if code != 1 || out != "" || strings.Contains(errout, "private-") {
 		t.Fatal("whole-call error leakage or exit mismatch")
 	}
-	log, e := os.ReadFile(filepath.Join(home, "audit.jsonl"))
+	log, e := os.ReadFile(filepath.Join(d.home, "audit.jsonl"))
 	if e != nil {
 		t.Fatal(e)
 	}
-	for _, canary := range []string{"private-body", "private-name", "private-subject", "private-draft", "private-reply", "private-replacement", "private-rule", "synthetic-key", "private-config", "sender@example.test"} {
+	for _, canary := range []string{"private-body", "private-name", "private-subject", "private-draft", "private-reply", "private-replacement", "private-rule", "synthetic-screening-key", "private-gmail-canary", "private-refresh-canary", "private-config", "sender@example.test"} {
 		if bytes.Contains(log, []byte(canary)) {
 			t.Fatalf("audit contains %s", canary)
 		}
-	}
-	clear := ok("cache", "clear")
-	if !strings.Contains(clear, `"deleted": 7`) {
-		t.Errorf("clear count: %s", clear)
-	}
-	if strings.TrimSpace(ok("stats")) != "{}" {
-		t.Fatal("cache did not clear")
 	}
 }
 
@@ -553,7 +502,7 @@ func verifyNativeOutputFailure(t *testing.T, binary string, handler http.Handler
 				t.Fatal(e)
 			}
 			defer out.Close()
-			args := []string{"--server", h.URL, "mail", "get", "r"}
+			args := []string{"-H", h.URL, "mail", "get", "r"}
 			if format == "pretty" {
 				args = append(args, "--pretty")
 			}
@@ -569,101 +518,5 @@ func verifyNativeOutputFailure(t *testing.T, binary string, handler http.Handler
 				t.Fatalf("error=%v stderr=%q HTTP attempts=%d", e, errout.String(), calls.Load())
 			}
 		})
-	}
-}
-
-// Missing configuration must be refused before any credential backend is accessed.
-func verifyNativeFileServe(t *testing.T, binary string) {
-	t.Helper()
-	for _, source := range []string{"environment", "pipe"} {
-		t.Run("native_file_"+source, func(t *testing.T) {
-			home := t.TempDir()
-			configFile(t, home)
-			f, err := os.OpenFile(filepath.Join(home, "config.toml"), os.O_APPEND|os.O_WRONLY, 0600)
-			if err != nil {
-				t.Fatal(err)
-			}
-			// Fake screening needs no key, so the file backend holds no secret the test must enter.
-			_, err = f.WriteString("\n[credentials]\nbackend='file'\n[screening]\nprovider='fake'\n")
-			f.Close()
-			if err != nil {
-				t.Fatal(err)
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			defer cancel()
-			cmd := exec.CommandContext(ctx, binary, "serve", "--home", home, "--listen", "127.0.0.1:0")
-			cmd.Env = []string{"HOME=" + home}
-			if source == "environment" {
-				cmd.Env = append(cmd.Env, credentials.PasswordEnvironment+"=synthetic-password")
-			} else {
-				cmd.Stdin = strings.NewReader("synthetic-password\n")
-			}
-			pipe, err := cmd.StderrPipe()
-			if err != nil {
-				t.Fatal(err)
-			}
-			cmd.Stdout = io.Discard
-			if cmd.Start() != nil {
-				t.Fatal("native serve start failed")
-			}
-			listening := make(chan struct{}, 1)
-			done := make(chan error, 1)
-			var output strings.Builder
-			go func() {
-				scanner := bufio.NewScanner(pipe)
-				for scanner.Scan() {
-					line := scanner.Text()
-					output.WriteString(line + "\n")
-					if line == "server listening" {
-						listening <- struct{}{}
-					}
-				}
-				done <- cmd.Wait()
-			}()
-			select {
-			case <-listening:
-				if cmd.Process.Signal(syscall.SIGTERM) != nil {
-					t.Fatal("native SIGTERM failed")
-				}
-			case <-done:
-				t.Fatal("native file serve refused start")
-			case <-ctx.Done():
-				t.Fatal("native file serve did not listen")
-			}
-			if err := <-done; err != nil {
-				t.Fatal("native file serve did not shut down cleanly")
-			}
-			text := output.String()
-			if !strings.Contains(text, "credential check: credentials (file): ok") || !strings.Contains(text, "not logged in;") || strings.Contains(text, "synthetic-") || strings.Contains(text, "Keychain") {
-				t.Fatal("native file preload output incorrect")
-			}
-			data, err := os.ReadFile(filepath.Join(home, "credentials.age"))
-			if err != nil || !bytes.Contains(data, []byte(" 18\n")) {
-				t.Fatal("native writer did not use production work factor")
-			}
-			bad := exec.CommandContext(ctx, binary, "serve", "--home", home, "--listen", "127.0.0.1:0")
-			bad.Env = []string{"HOME=" + home, credentials.PasswordEnvironment + "=wrong-password"}
-			var stderr bytes.Buffer
-			bad.Stderr = &stderr
-			if bad.Run() == nil || !strings.Contains(stderr.String(), "credentials (file): wrong password or damaged file") || strings.Contains(stderr.String(), "server listening") {
-				t.Fatal("native wrong password did not fail closed")
-			}
-		})
-	}
-}
-
-func verifyNativeRefusal(t *testing.T, binary string) {
-	t.Helper()
-	home := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, "serve", "--home", home, "--listen", "127.0.0.1:0")
-	cmd.Env = []string{"HOME=" + home}
-	var stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = io.Discard, &stderr
-	err := cmd.Run()
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() != 1 || stderr.String() != "error: configuration unavailable\n" {
-		t.Fatalf("native serve without configuration: %v %q", err, stderr.String())
 	}
 }

@@ -41,7 +41,8 @@ type Options struct {
 	OpenBrowser                                                                    func(context.Context, string) error
 	Sleep                                                                          func(context.Context, time.Duration) error
 	// ReadRedirect returns the browser's redirected address, pasted on hosts the loopback callback cannot reach.
-	// Login calls it again with retry set after an address that does not belong to this sign-in.
+	// Login calls it again with retry set after an address that does not belong to this sign-in. It must return
+	// when ctx ends: Login cancels ctx and waits for it before Login returns.
 	ReadRedirect func(ctx context.Context, retry bool) (string, error)
 }
 

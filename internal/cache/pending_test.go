@@ -331,3 +331,37 @@ func TestCancelledPendingIOReturnsCancellation(t *testing.T) {
 		}
 	}
 }
+
+func TestRemovingAnAccountDeniesItsWaitingActionsAndDeletesItsVerdicts(t *testing.T) {
+	c, _ := open(t)
+	waiting, _ := c.AddPending(ctx, "work@example.test", "mail.send", json.RawMessage(`{}`), nil, queued)
+	running, _ := c.AddPending(ctx, "work@example.test", "mail.send", json.RawMessage(`{}`), nil, queued)
+	other, _ := c.AddPending(ctx, "home@example.test", "mail.send", json.RawMessage(`{}`), nil, queued)
+	if _, err := c.ClaimPending(ctx, running, queued); err != nil {
+		t.Fatal(err)
+	}
+	for _, account := range []string{"work@example.test", "home@example.test"} {
+		if err := c.Put(ctx, account, row("m1")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	later := queued.Add(time.Hour)
+	denied, err := c.DenyAccount(ctx, "work@example.test", later)
+	if err != nil || len(denied) != 1 || denied[0].ID != waiting || denied[0].State != cache.StateDenied || *denied[0].Result != "account_removed" || !denied[0].Updated.Equal(later) {
+		t.Fatalf("denied=%+v error=%v", denied, err)
+	}
+	for id, want := range map[string]cache.PendingState{waiting: cache.StateDenied, running: cache.StateRunning, other: cache.StatePending} {
+		if p, err := c.GetPending(ctx, id); err != nil || p.State != want {
+			t.Errorf("%s: state=%s error=%v, want %s", id, p.State, err, want)
+		}
+	}
+	if n, err := c.DeleteAccount(ctx, "work@example.test"); err != nil || n != 1 {
+		t.Fatalf("deleted=%d error=%v", n, err)
+	}
+	if got, _ := c.Get(ctx, "work@example.test", []string{"m1"}); len(got) != 0 {
+		t.Fatalf("verdict kept: %v", got)
+	}
+	if got, _ := c.Get(ctx, "home@example.test", []string{"m1"}); len(got) != 1 {
+		t.Fatalf("other account's verdict lost: %v", got)
+	}
+}

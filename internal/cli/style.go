@@ -2,26 +2,16 @@ package cli
 
 import (
 	"image/color"
-	"io"
 	"strings"
 	"time"
-	"unicode"
 
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/table"
-	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/term"
 	"github.com/ivanrvpereira/agentmailguard/internal/views"
-)
-
-// Basic ANSI colors survive every profile above NoTTY, so a 16-color terminal shows the same meaning.
-var (
-	labelStyle   = lipgloss.NewStyle().Bold(true)
-	errorStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1"))
-	warningStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3"))
-	successStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("2"))
 )
 
 // verdictColor maps a verdict to its meaning: safe, caution, refused, account security, or failure.
@@ -38,49 +28,11 @@ func verdictColor(v model.Verdict) color.Color {
 	}
 }
 
-// colorEnv lists the display-only variables colorprofile reads for a profile. TMUX is left out on
-// purpose: colorprofile runs `tmux info` when it is set, and this client starts no subprocess.
-// TTY_FORCE is left out too: it would claim a terminal for a pipe or a file.
-var colorEnv = []string{"TERM", "COLORTERM", "CLICOLOR"}
-
-// colorized returns w with color kept, downgraded, or removed. NO_COLOR with any value removes color,
-// ahead of every other variable; CLICOLOR_FORCE with any value except 0 keeps it even when w is not a
-// terminal. Otherwise the writer decides, so pipes and buffers receive plain text. Both rules are
-// spelled out here because colorprofile reads these two variables as booleans instead.
-func colorized(w io.Writer, lookup func(string) string) io.Writer {
-	profile := colorprofile.NoTTY
-	if lookup("NO_COLOR") == "" {
-		env := make([]string, 0, len(colorEnv)+1)
-		for _, name := range colorEnv {
-			if value := lookup(name); value != "" {
-				env = append(env, name+"="+value)
-			}
-		}
-		if value := lookup("CLICOLOR_FORCE"); value != "" && value != "0" {
-			env = append(env, "CLICOLOR_FORCE=1")
-		}
-		profile = colorprofile.Detect(w, env)
-	}
-	return &colorprofile.Writer{Forward: w, Profile: profile}
-}
-
-// terminalSafe removes escape sequences and control characters from server text before it reaches a
-// terminal that honors them. The server strips them from mail already; this guards the client against
-// a different server on an unprotected remote listener. Line breaks and tabs stay.
-func terminalSafe(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\t' || !unicode.Is(unicode.Cc, r) {
-			return r
-		}
-		return -1
-	}, ansi.Strip(s))
-}
-
 // styleText colors the label column and the verdict word of the text view. views.ToText stays the
 // source of truth for the content: only the labels above the body change, so removing the sequences
 // restores the text byte for byte. The body and the links are never styled; they come from mail.
 func styleText(text string, v model.Verdict) string {
-	lines := strings.Split(terminalSafe(text), "\n")
+	lines := strings.Split(term.Safe(text), "\n")
 	for i, line := range lines {
 		if line == "" {
 			break // the body and the link list follow the first blank line
@@ -92,7 +44,7 @@ func styleText(text string, v model.Verdict) string {
 		if name == "Verdict" {
 			value = strings.Replace(value, string(v), lipgloss.NewStyle().Foreground(verdictColor(v)).Render(string(v)), 1)
 		}
-		lines[i] = labelStyle.Render(name+":") + value
+		lines[i] = term.Label.Render(name+":") + value
 	}
 	return strings.Join(lines, "\n")
 }
@@ -101,7 +53,7 @@ func styleText(text string, v model.Verdict) string {
 const senderWidth, subjectWidth = 24, 48
 
 // cell makes server text safe for the terminal and cuts it to width with an ellipsis.
-func cell(s string, width int) string { return ansi.Truncate(terminalSafe(s), width, "\u2026") }
+func cell(s string, width int) string { return ansi.Truncate(term.Safe(s), width, "\u2026") }
 
 // summaryTable renders the verdict view of a message list. It reads no field the verdict view omits,
 // so a red, sealed, or error row has no sender name and no subject to show.
@@ -118,7 +70,7 @@ func summaryTable(items []views.MailSummary) string {
 		return style
 	})
 	for _, m := range items {
-		t.Row(localTime(m.ReceivedAt), string(m.Verdict), markers(m), cell(sender(m), senderWidth), cell(subject(m), subjectWidth), terminalSafe(m.ID))
+		t.Row(localTime(m.ReceivedAt), string(m.Verdict), markers(m), cell(sender(m), senderWidth), cell(subject(m), subjectWidth), term.Safe(m.ID))
 	}
 	return t.Render()
 }

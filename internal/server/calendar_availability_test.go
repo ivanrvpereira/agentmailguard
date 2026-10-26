@@ -3,8 +3,6 @@ package server_test
 import (
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -18,8 +16,8 @@ func TestCalendarHTTPAvailabilityReturnsOnlyRequestedSlotMetadata(t *testing.T) 
 		{"scheduleId":"me@example.test","availabilityView":"02","scheduleItems":[{"subject":"CANARY subject","location":"CANARY room","status":"busy"}],"workingHours":{"timeZone":{"name":"CANARY zone"}}},
 		{"scheduleId":"colleague@example.test","availabilityView":"00","error":{"message":"CANARY error","responseCode":"ErrorAccessDenied"}},
 		{"scheduleId":"CANARY@example.test","availabilityView":"00"}]}`)
-	s, _, home := calendarServer(t, "User.Read Calendars.ReadBasic", handler)
-	status, body := meetingRPC(t, s, "calendar.availability", availabilityParams)
+	d := calendarDaemon(t, "User.Read Calendars.ReadBasic", handler)
+	status, body := accountRPC(t, d.s, "calendar.availability", "", availabilityParams)
 	want := `{"start":"2026-10-09T09:00:00+01:00","end":"2026-10-09T10:00:00+01:00","interval_minutes":30,"schedules":[{"address":"Me@example.test","slots":["free","busy"]},{"address":"colleague@example.test","slots":["unknown","unknown"]}]}`
 	if status != 200 || body != want {
 		t.Fatalf("response=%d %s", status, body)
@@ -29,29 +27,23 @@ func TestCalendarHTTPAvailabilityReturnsOnlyRequestedSlotMetadata(t *testing.T) 
 	if got.Method != "POST" || got.Path != "/me/calendar/getSchedule" || !reflect.DeepEqual(got.Body, wantBody) {
 		t.Fatalf("provider request=%+v", got)
 	}
-	if _, err := os.Stat(filepath.Join(home, "audit.jsonl")); !os.IsNotExist(err) {
-		t.Fatal("availability wrote audit")
-	}
+	assertNoAudit(t, d.home)
 }
 
 func TestCalendarHTTPAvailabilityNeedsAnM365CalendarReadGrant(t *testing.T) {
-	for _, tc := range []struct{ provider, scopes, want string }{
-		{"m365", "User.Read calendars.readbasic", ""},
-		{"m365", "User.Read Calendars.Read", ""},
-		{"m365", "User.Read CALENDARS.READWRITE", ""},
-		{"m365", "User.Read Mail.ReadWrite role:Calendars.Read Calendars.Read.Shared Calendars.ReadBasic.All", "missing_scopes"},
-		{"gmail", "Calendars.Read", "calendar availability is not supported for this account"},
+	for _, tc := range []struct{ scopes, want string }{
+		{"User.Read calendars.readbasic", ""},
+		{"User.Read Calendars.Read", ""},
+		{"User.Read CALENDARS.READWRITE", ""},
+		{"User.Read Mail.ReadWrite role:Calendars.Read Calendars.Read.Shared Calendars.ReadBasic.All", "missing_scopes"},
 	} {
-		t.Run(tc.provider+"/"+tc.scopes, func(t *testing.T) {
+		t.Run(tc.scopes, func(t *testing.T) {
 			var requests atomic.Int32
-			s, creds, home := calendarServer(t, tc.scopes, func(w http.ResponseWriter, r *http.Request) {
+			d := calendarDaemon(t, tc.scopes, func(w http.ResponseWriter, r *http.Request) {
 				requests.Add(1)
 				io.WriteString(w, `{"value":[{"scheduleId":"me@example.test","availabilityView":"00"},{"scheduleId":"colleague@example.test","availabilityView":"00"}]}`)
 			})
-			if tc.provider == "gmail" {
-				useGmail(t, home)
-			}
-			status, body := meetingRPC(t, s, "calendar.availability", availabilityParams)
+			status, body := accountRPC(t, d.s, "calendar.availability", "", availabilityParams)
 			if tc.want == "" {
 				if status != 200 || !strings.Contains(body, `"slots":["free","free"]`) || requests.Load() != 1 {
 					t.Fatalf("response=%d %s requests=%d", status, body, requests.Load())
@@ -61,19 +53,23 @@ func TestCalendarHTTPAvailabilityNeedsAnM365CalendarReadGrant(t *testing.T) {
 			if status != 500 || body != `{"error":"`+tc.want+`"}` || requests.Load() != 0 {
 				t.Fatalf("response=%d %s requests=%d", status, body, requests.Load())
 			}
-			if tc.provider == "gmail" && creds.loads.Load() != 0 {
-				t.Fatal("Gmail accessed credentials")
-			}
 		})
+	}
+}
+
+// Gmail has no availability read. The refusal comes before any provider access.
+func TestCalendarHTTPAvailabilityIsRefusedForGmail(t *testing.T) {
+	d, google := gmailDaemon(t, gmailWriteGrant, "")
+	before := google.requests.Load()
+	status, body := accountRPC(t, d.s, "calendar.availability", "", availabilityParams)
+	if status != 500 || body != `{"error":"calendar availability is not supported for this account"}` || google.requests.Load() != before {
+		t.Fatalf("response=%d %s requests=%d", status, body, google.requests.Load()-before)
 	}
 }
 
 func TestCalendarHTTPAvailabilityRejectsInvalidInputBeforeAccountAccess(t *testing.T) {
 	var requests atomic.Int32
-	s, creds, home := calendarServer(t, "Calendars.Read", func(w http.ResponseWriter, r *http.Request) { requests.Add(1); w.WriteHeader(500) })
-	if err := os.Remove(filepath.Join(home, "config.toml")); err != nil {
-		t.Fatal(err)
-	}
+	d := calendarDaemon(t, "Calendars.Read", func(w http.ResponseWriter, r *http.Request) { requests.Add(1); w.WriteHeader(500) })
 	with := func(old, replacement string) string { return strings.Replace(availabilityParams, old, replacement, 1) }
 	addresses := make([]string, 21)
 	for i := range addresses {
@@ -103,12 +99,12 @@ func TestCalendarHTTPAvailabilityRejectsInvalidInputBeforeAccountAccess(t *testi
 		strings.TrimSuffix(availabilityParams, "}") + `,"subject":null}`,
 		with(`"start"`, `"start":"2026-10-09T08:00:00Z","start"`),
 	} {
-		status, body := meetingRPC(t, s, "calendar.availability", params)
+		status, body := accountRPC(t, d.s, "calendar.availability", "", params)
 		if status != 400 || body != `{"error":"invalid request"}` {
 			t.Errorf("%.160s: %d %s", params, status, body)
 		}
 	}
-	if requests.Load() != 0 || creds.loads.Load() != 0 {
+	if requests.Load() != 0 {
 		t.Fatal("invalid input accessed provider")
 	}
 }
@@ -122,8 +118,8 @@ func TestCalendarHTTPAvailabilityGraphFailuresStaySafe(t *testing.T) {
 		"malformed": func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{"value":"CANARY"}`) },
 	} {
 		t.Run(name, func(t *testing.T) {
-			s, _, _ := calendarServer(t, "Calendars.Read", handler)
-			status, body := meetingRPC(t, s, "calendar.availability", availabilityParams)
+			d := calendarDaemon(t, "Calendars.Read", handler)
+			status, body := accountRPC(t, d.s, "calendar.availability", "", availabilityParams)
 			if status != 500 || body != `{"error":"operation failed"}` {
 				t.Fatalf("response=%d %s", status, body)
 			}
@@ -132,10 +128,10 @@ func TestCalendarHTTPAvailabilityGraphFailuresStaySafe(t *testing.T) {
 }
 
 func TestCalendarHTTPAvailabilityEchoesTheQueriedAnchors(t *testing.T) {
-	s, _, _ := calendarServer(t, "Calendars.Read", func(w http.ResponseWriter, r *http.Request) {
+	d := calendarDaemon(t, "Calendars.Read", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"value":[{"scheduleId":"me@example.test","availabilityView":"00"}]}`)
 	})
-	status, body := meetingRPC(t, s, "calendar.availability", `{"to":["me@example.test"],"start":"2026-10-09T09:00:00.25+01:00","end":"2026-10-09T09:45:00.25+01:00"}`)
+	status, body := accountRPC(t, d.s, "calendar.availability", "", `{"to":["me@example.test"],"start":"2026-10-09T09:00:00.25+01:00","end":"2026-10-09T09:45:00.25+01:00"}`)
 	if want := `{"start":"2026-10-09T09:00:00.25+01:00","end":"2026-10-09T09:45:00.25+01:00","interval_minutes":30,"schedules":[{"address":"me@example.test","slots":["free","free"]}]}`; status != 200 || body != want {
 		t.Fatalf("response=%d %s", status, body)
 	}

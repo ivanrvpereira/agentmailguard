@@ -99,7 +99,7 @@ func TestClientDisplaysOnlyExactFixedRefusals(t *testing.T) {
 				_, err = c.Call(context.Background(), "calendar.update", "work", map[string]any{"id": "e1", "subject": ""})
 				want := fixed
 				if suffix != "" {
-					want = "server request failed"
+					want = "daemon request failed"
 				}
 				if err == nil || err.Error() != want {
 					t.Fatalf("error=%v want=%q", err, want)

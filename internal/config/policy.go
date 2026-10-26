@@ -66,11 +66,6 @@ func (s *SealedDecisions) field(key string) *Decision {
 	return nil
 }
 
-// PolicyError names the invalid policy key path. It never contains the configured value.
-type PolicyError struct{ Path string }
-
-func (e PolicyError) Error() string { return "invalid policy: " + e.Path }
-
 const bareKey = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
 
 // keyPath renders a TOML key path. Other key names are quoted, so file text cannot
@@ -86,31 +81,21 @@ func keyPath(keys ...string) string {
 	return strings.Join(parts, ".")
 }
 
-func policyError(keys ...string) error { return PolicyError{keyPath(keys...)} }
+const invalidDecision = "must be allow, approve, or deny"
 
-// resolvePolicies resolves every account's policy: defaults, then [policy], then the account table.
-// It validates every table, so an invalid policy fails the load of any account.
-func resolvePolicies(document, tables map[string]any, names []string) (map[string]Policy, error) {
-	global := Policy{
-		Base: Decisions{
-			MailTrash: Allow, MailDraft: Allow, MailSend: Deny,
-			CalendarInvite: Deny, CalendarUpdate: Deny, CalendarCancel: Deny, CalendarRespond: Deny,
-		},
-		Sealed: SealedDecisions{MailTrash: Deny, MailDraft: Deny, MailSend: Deny},
-	}
-	if err := global.apply(document, "policy"); err != nil {
-		return nil, err
-	}
-	result := make(map[string]Policy, len(names))
-	for _, name := range names {
-		p := global
-		table, _ := tables[name].(map[string]any)
-		if err := p.apply(table, "accounts", name, "policy"); err != nil {
-			return nil, err
-		}
-		result[name] = p
-	}
-	return result, nil
+// DefaultPolicy is the policy without any [policy] table.
+var DefaultPolicy = Policy{
+	Base: Decisions{
+		MailTrash: Allow, MailDraft: Allow, MailSend: Deny,
+		CalendarInvite: Deny, CalendarUpdate: Deny, CalendarCancel: Deny, CalendarRespond: Deny,
+	},
+	Sealed: SealedDecisions{MailTrash: Deny, MailDraft: Deny, MailSend: Deny},
+}
+
+// globalPolicy is the default policy with the [policy] table applied. Each account table applies on top of it.
+func globalPolicy(document map[string]any) (Policy, error) {
+	p := DefaultPolicy
+	return p, p.apply(document, "policy")
 }
 
 // apply overrides p with the optional policy table that parent holds under the last key of path.
@@ -121,22 +106,28 @@ func (p *Policy) apply(parent map[string]any, path ...string) error {
 	}
 	table, ok := value.(map[string]any)
 	if !ok {
-		return policyError(path...)
+		return fail("must be a table", path...)
 	}
 	for _, key := range slices.Sorted(maps.Keys(table)) {
 		if key != "sealed" {
+			if p.Base.field(key) == nil {
+				return fail("unknown key", append(path, key)...)
+			}
 			if !set(p.Base.field(key), table[key]) {
-				return policyError(append(path, key)...)
+				return fail(invalidDecision, append(path, key)...)
 			}
 			continue
 		}
 		sealed, ok := table[key].(map[string]any)
 		if !ok {
-			return policyError(append(path, key)...)
+			return fail("must be a table", append(path, key)...)
 		}
 		for _, k := range slices.Sorted(maps.Keys(sealed)) {
+			if p.Sealed.field(k) == nil {
+				return fail("unknown key", append(path, key, k)...)
+			}
 			if !set(p.Sealed.field(k), sealed[k]) {
-				return policyError(append(path, key, k)...)
+				return fail(invalidDecision, append(path, key, k)...)
 			}
 		}
 	}

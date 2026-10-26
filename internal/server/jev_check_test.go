@@ -5,28 +5,24 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/ivanrvpereira/agentmailguard/internal/model"
-	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
 
 const draftNewParams = `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body"}`
 
-// jevServer is an approvalServer whose fake Jev answers each action check with score.
-func jevServer(t *testing.T, policy string, score float64) (*server.Server, string, *approvalGraph, *nativeAPI) {
+// jevDaemon is an approvalDaemon whose fake Jev answers each action check with score.
+func jevDaemon(t *testing.T, policy string, score float64) (*daemon, *approvalGraph, *nativeAPI) {
 	t.Helper()
 	api := newNativeAPI()
 	api.actionScore = score
 	graph := &approvalGraph{}
 	event := organizerEvent
 	graph.event.Store(&event)
-	s, home := graphJevServer(t, policy, graph, api)
-	return s, home, graph, api
+	return graphDaemon(t, policy, writeGrant, graph, api), graph, api
 }
 
 func TestJevGetsTheActionFieldsOnly(t *testing.T) {
-	s, _, graph, api := jevServer(t, allowAll, 0.08)
-	if status, body := accountRPC(t, s, "draft.new", "work", draftNewParams); status != 200 || approvalID.MatchString(body) || len(graph.recorded()) != 1 {
+	d, graph, api := jevDaemon(t, allowAll, 0.08)
+	if status, body := accountRPC(t, d.s, "draft.new", "work", draftNewParams); status != 200 || approvalID.MatchString(body) || len(graph.recorded()) != 1 {
 		t.Fatalf("%d %s writes=%v", status, body, graph.recorded())
 	}
 	checks := api.checks()
@@ -43,25 +39,23 @@ func TestJevGetsTheActionFieldsOnly(t *testing.T) {
 	}
 }
 
-// The agent gets the normal pending result, never the score or the flag. The approved run asks Jev no second time.
+// The agent gets the normal pending result, never the score or the flag; TestConsoleItemShowsTheJevCheck shows where
+// the operator sees them. The approved run asks Jev no second time.
 func TestJevFlagHoldsAnAllowedActionUntilApproval(t *testing.T) {
-	s, home, graph, api := jevServer(t, allowAll, 0.62)
-	status, body := accountRPC(t, s, "draft.new", "work", draftNewParams)
+	d, graph, api := jevDaemon(t, allowAll, 0.62)
+	status, body := accountRPC(t, d.s, "draft.new", "work", draftNewParams)
 	match := approvalID.FindStringSubmatch(body)
 	if status != 200 || match == nil || strings.Contains(body, "0.62") || strings.Contains(strings.ToLower(body), "jev") || len(graph.recorded()) != 0 {
 		t.Fatalf("%d %s writes=%v", status, body, graph.recorded())
 	}
-	if item := storedArgs(t, home, match[1]); !reflect.DeepEqual(item.Jev, &model.ActionCheck{Flag: true, Score: new(0.62)}) {
-		t.Fatalf("stored jev=%+v", item.Jev)
-	}
-	text, records := auditOf(t, home)
+	text, records := auditOf(t, d.home)
 	if strings.Contains(text, "CANARY") || strings.Contains(text, "0.62") || !reflect.DeepEqual(records[0]["reasons"], []any{"policy", "jev_flag"}) {
 		t.Fatalf("audit=%s", text)
 	}
-	if status, body := approvalStatus(t, s, match[1]); status != 200 || body != `{"state":"pending"}` {
+	if status, body := approvalStatus(t, d.s, match[1]); status != 200 || body != `{"state":"pending"}` {
 		t.Fatalf("status: %d %s", status, body)
 	}
-	if err := s.Approve(context.Background(), match[1]); err != nil {
+	if err := d.s.Approve(context.Background(), match[1]); err != nil {
 		t.Fatal(err)
 	}
 	if len(api.checks()) != 1 || len(graph.recorded()) != 1 {

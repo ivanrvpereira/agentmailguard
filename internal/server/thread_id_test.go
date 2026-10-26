@@ -38,24 +38,22 @@ func threadIDs(t *testing.T, body string) map[string][2]string {
 }
 
 func TestMailReadsShowTheThreadIDForEveryVerdict(t *testing.T) {
-	home := fakeHome(t, "")
-	if _, err := fakeDB(t, home).Exec(`INSERT INTO messages (account, id, sender_address, subject, received_at, thread_id) VALUES
-		('demo', 'y', 'sender@example.test', 'private-subject-y', '2026-10-06T08:00:00Z', 'thread-1'),
-		('demo', 's', 'sender@example.test', 'private-subject-s', '2026-10-06T07:00:00Z', 'thread-1'),
-		('demo', 'r', 'sender@example.test', 'private-subject-r', '2026-10-06T06:00:00Z', 'thread-2'),
-		('demo', 'down', 'sender@example.test', 'private-subject-down', '2026-10-06T05:00:00Z', 'thread-2')`); err != nil {
-		t.Fatal(err)
-	}
-	s, _ := fakeServer(t, home)
+	home := fakeHome(t)
+	fakeSQL(t, home, `INSERT INTO messages (account, id, sender_address, subject, received_at, thread_id) VALUES
+		(?1, 'y', 'sender@example.test', 'private-subject-y', '2026-10-06T08:00:00Z', 'thread-1'),
+		(?1, 's', 'sender@example.test', 'private-subject-s', '2026-10-06T07:00:00Z', 'thread-1'),
+		(?1, 'r', 'sender@example.test', 'private-subject-r', '2026-10-06T06:00:00Z', 'thread-2'),
+		(?1, 'down', 'sender@example.test', 'private-subject-down', '2026-10-06T05:00:00Z', 'thread-2')`)
+	d := fakeDaemon(t, home, "")
 	want := map[string][2]string{"g": {"green", "g"}, "y": {"yellow", "thread-1"}, "s": {"sealed", "thread-1"}, "r": {"red", "thread-2"}, "down": {"error", "thread-2"}}
 	for _, call := range []struct{ op, params string }{{"mail.list", `{}`}, {"mail.search", `{"text":"private"}`}} {
-		status, body := accountRPC(t, s, call.op, "demo", call.params)
+		status, body := accountRPC(t, d.s, call.op, "demo", call.params)
 		if got := threadIDs(t, body); status != 200 || !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: %d %v", call.op, status, got)
 		}
 	}
 	for id, w := range want {
-		status, body := accountRPC(t, s, "mail.get", "demo", `{"id":"`+id+`"}`)
+		status, body := accountRPC(t, d.s, "mail.get", "demo", `{"id":"`+id+`"}`)
 		if got := threadIDs(t, body); status != 200 || !reflect.DeepEqual(got, map[string][2]string{id: w}) {
 			t.Errorf("mail.get %s: %d %v", id, status, got)
 		}
@@ -63,8 +61,9 @@ func TestMailReadsShowTheThreadIDForEveryVerdict(t *testing.T) {
 }
 
 func TestMailReadsOmitTheThreadIDThatTheProviderDoesNotGive(t *testing.T) {
-	s, _ := graphServer(t, "", http.HandlerFunc(newNativeAPI().graph))
-	status, body := accountRPC(t, s, "mail.list", "work", `{}`)
+	api := newNativeAPI()
+	d := graphDaemon(t, "", m365Grant, http.HandlerFunc(api.graph), api)
+	status, body := accountRPC(t, d.s, "mail.list", "work", `{}`)
 	want := map[string][2]string{"g": {"green", "absent"}, "y": {"yellow", "absent"}, "s": {"sealed", "absent"}, "r": {"red", "absent"}}
 	if got := threadIDs(t, body); status != 200 || !reflect.DeepEqual(got, want) {
 		t.Fatalf("mail.list: %d %v", status, got)
@@ -89,26 +88,24 @@ func folders(t *testing.T, body string) map[string][2]string {
 }
 
 func TestMailReadsShowTheFoldersForEveryVerdict(t *testing.T) {
-	home := fakeHome(t, "")
-	if _, err := fakeDB(t, home).Exec(`INSERT INTO messages (account, id, folder, sender_address, subject, received_at) VALUES
-		('demo', 'y', 'sent', 'sender@example.test', 'private-subject-y', '2026-10-06T08:00:00Z'),
-		('demo', 's', 'trash', 'sender@example.test', 'private-subject-s', '2026-10-06T07:00:00Z'),
-		('demo', 'r', 'archive', 'sender@example.test', 'private-subject-r', '2026-10-06T06:00:00Z'),
-		('demo', 'down', 'inbox', 'sender@example.test', 'private-subject-down', '2026-10-06T05:00:00Z')`); err != nil {
-		t.Fatal(err)
-	}
-	s, _ := fakeServer(t, home)
+	home := fakeHome(t)
+	fakeSQL(t, home, `INSERT INTO messages (account, id, folder, sender_address, subject, received_at) VALUES
+		(?1, 'y', 'sent', 'sender@example.test', 'private-subject-y', '2026-10-06T08:00:00Z'),
+		(?1, 's', 'trash', 'sender@example.test', 'private-subject-s', '2026-10-06T07:00:00Z'),
+		(?1, 'r', 'archive', 'sender@example.test', 'private-subject-r', '2026-10-06T06:00:00Z'),
+		(?1, 'down', 'inbox', 'sender@example.test', 'private-subject-down', '2026-10-06T05:00:00Z')`)
+	d := fakeDaemon(t, home, "")
 	want := map[string][2]string{"g": {"green", `["inbox"]`}, "y": {"yellow", `["sent"]`}, "s": {"sealed", `["trash"]`}, "r": {"red", `["archive"]`}, "down": {"error", `["inbox"]`}}
-	status, body := accountRPC(t, s, "mail.search", "demo", `{"text":"private"}`)
+	status, body := accountRPC(t, d.s, "mail.search", "demo", `{"text":"private"}`)
 	if got := folders(t, body); status != 200 || !reflect.DeepEqual(got, want) {
 		t.Errorf("mail.search: %d %v", status, got)
 	}
-	status, body = accountRPC(t, s, "mail.list", "demo", `{}`)
+	status, body = accountRPC(t, d.s, "mail.list", "demo", `{}`)
 	if got := folders(t, body); status != 200 || !reflect.DeepEqual(got, map[string][2]string{"g": want["g"], "down": want["down"]}) {
 		t.Errorf("mail.list: %d %v", status, got)
 	}
 	for id, w := range want {
-		status, body := accountRPC(t, s, "mail.get", "demo", `{"id":"`+id+`"}`)
+		status, body := accountRPC(t, d.s, "mail.get", "demo", `{"id":"`+id+`"}`)
 		if got := folders(t, body); status != 200 || !reflect.DeepEqual(got, map[string][2]string{id: w}) {
 			t.Errorf("mail.get %s: %d %v", id, status, got)
 		}

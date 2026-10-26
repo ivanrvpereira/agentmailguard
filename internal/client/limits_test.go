@@ -45,7 +45,7 @@ func TestLongOrganizerDeadlineAndBoundedResponses(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, e := c.Call(context.Background(), "stats", "", nil); e == nil || e.Error() != "invalid server response" {
+	if _, e := c.Call(context.Background(), "stats", "", nil); e == nil || e.Error() != "invalid daemon response" {
 		t.Fatal("unbounded response accepted")
 	}
 }

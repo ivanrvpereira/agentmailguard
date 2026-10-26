@@ -99,12 +99,17 @@ type keyStore struct{ credentials.Store }
 
 func (keyStore) LoadScreeningKey(context.Context) (string, error) { return "synthetic", nil }
 
+// bound only stops a hung test. It is not a speed check: under -race on a loaded CI runner, work that takes 0.2s
+// alone can take more than 3s.
+const bound = 30 * time.Second
+
+// receive waits for one value from ch, at most bound.
 func receive[T any](t *testing.T, ch <-chan T) T {
 	t.Helper()
 	select {
 	case result := <-ch:
 		return result
-	case <-time.After(3 * time.Second):
+	case <-time.After(bound):
 		t.Fatal("timed out waiting for independent work to enter or drain")
 	}
 	var zero T

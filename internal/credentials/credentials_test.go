@@ -59,7 +59,7 @@ func (f *fakePlatform) Write(ctx context.Context, service, account string, value
 }
 func TestCredentialFailuresAreSafeAndNeverFallBack(t *testing.T) {
 	platform := &fakePlatform{values: map[[2]string][]byte{}}
-	store := credentials.New(platform, t.TempDir(), nil)
+	store := credentials.New(platform, t.TempDir())
 	ctx := context.Background()
 	token := credentials.OAuth{RefreshToken: "SAVED-CANARY"}
 	if err := store.SaveOAuth(ctx, "m365", "work", token); err != nil {
@@ -103,7 +103,7 @@ func TestCredentialFailuresAreSafeAndNeverFallBack(t *testing.T) {
 	if platform.writes != 1 {
 		t.Fatalf("unsafe writes reached platform: %d", platform.writes)
 	}
-	if _, err := credentials.New(nil, t.TempDir(), nil).LoadScreeningKey(ctx); !errors.Is(err, credentials.ErrUnavailable) {
+	if _, err := credentials.New(nil, t.TempDir()).LoadScreeningKey(ctx); !errors.Is(err, credentials.ErrUnavailable) {
 		t.Fatalf("nil backend=%v", err)
 	}
 }
@@ -114,7 +114,7 @@ func TestBackendPanicsAndFailureChainsStayPrivate(t *testing.T) {
 			p := &fakePlatform{values: map[[2]string][]byte{
 				{"agentmailguard", "credentials"}: []byte(`{"version":1,"oauth":{},"openrouter_key":"original"}`),
 			}}
-			store := credentials.New(p, t.TempDir(), nil)
+			store := credentials.New(p, t.TempDir())
 			failure := fmt.Errorf("private-wrapper-canary: %w", errors.New("private-cause-canary"))
 			switch mode {
 			case "read panic":
@@ -148,7 +148,7 @@ func TestBackendPanicsAndFailureChainsStayPrivate(t *testing.T) {
 
 func TestCredentialsRoundTripInSingleRecord(t *testing.T) {
 	platform := &fakePlatform{values: map[[2]string][]byte{}}
-	var store credentials.Store = credentials.New(platform, t.TempDir(), nil)
+	var store credentials.Store = credentials.New(platform, t.TempDir())
 	ctx := context.Background()
 	token := credentials.OAuth{AccessToken: "ACCESS-CANARY", RefreshToken: "REFRESH-CANARY", ExpiresAt: time.Date(2026, 9, 25, 9, 0, 0, 0, time.UTC), Scopes: []string{"Mail.ReadWrite"}, Username: "synthetic@example.test"}
 	for _, provider := range []string{"m365", "gmail"} {

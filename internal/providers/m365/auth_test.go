@@ -43,7 +43,7 @@ func (s *store) LoadOAuth(_ context.Context, p, a string) (credentials.OAuth, er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.loads++
-	if p != "m365" || a != "work" {
+	if p != "m365" || a != "work@example.test" {
 		panic("wrong namespace")
 	}
 	return s.token, s.err
@@ -61,7 +61,7 @@ func (s *store) SaveOAuth(_ context.Context, p, a string, v credentials.OAuth) e
 func (*store) LoadScreeningKey(context.Context) (string, error) { panic("unexpected key access") }
 func (*store) SaveScreeningKey(context.Context, string) error   { panic("unexpected key access") }
 func account() config.Account {
-	return config.Account{Name: "work", Provider: "m365", ClientID: "client", TenantID: "tenant"}
+	return config.Account{Alias: "work", Email: "work@example.test", Provider: "m365", ClientID: "client", TenantID: "tenant"}
 }
 func validStore() *store {
 	return &store{token: credentials.OAuth{AccessToken: goodToken(), RefreshToken: "refresh", ExpiresAt: now.Add(time.Hour), Username: "user@example.test"}}

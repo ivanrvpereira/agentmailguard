@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard/internal/cache"
 	"github.com/ivanrvpereira/agentmailguard/internal/content"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
@@ -117,7 +116,15 @@ func iso(t time.Time) string {
 	return t.Format(layout)
 }
 
-func Summary(m model.Message, row cache.Row, categories []string) MailSummary {
+// Screen is the stored screening result that a view shows: the verdict, the authentication results, and the safe
+// error code of a failed screening.
+type Screen struct {
+	Verdict model.Verdict
+	Auth    model.AuthResults
+	Error   *string
+}
+
+func Summary(m model.Message, row Screen, categories []string) MailSummary {
 	v := verdict(row.Verdict)
 	result := MailSummary{ID: m.ID, ThreadID: m.ThreadID, Verdict: v, ReceivedAt: iso(m.ReceivedAt), Auth: auth(row.Auth), IsRead: m.IsRead, Flag: m.Flag, Categories: listed(m.Categories, categories), Folders: append([]string{}, m.Folders...), Reason: reason(v)}
 	switch v {
@@ -135,7 +142,7 @@ func Summary(m model.Message, row cache.Row, categories []string) MailSummary {
 	return result
 }
 
-func View(m model.Message, row cache.Row, categories []string, rendered *content.Rendered) (MailView, error) {
+func View(m model.Message, row Screen, categories []string, rendered *content.Rendered) (MailView, error) {
 	result := MailView{MailSummary: Summary(m, row, categories)}
 	if result.Verdict == model.Green {
 		if rendered == nil {

@@ -19,8 +19,8 @@ Applies when the diff changes output, a view, the renderer, screening input, or 
 - **Under-hide.** The renderer removes text only on a specific hiding signal backed by evidence. Text it keeps reaches screening; text it removes escapes screening. When in doubt, keep the text. The current signals are inline hides on one element.
 - **One tree.** The renderer decides what to hide and writes Markdown from the same parsed tree that `balancedHTML` returns. Parsing can change content, so a decision made on one parse holds only for output built from that parse ([`x/net/html` security considerations](https://pkg.go.dev/golang.org/x/net/html#hdr-Security_Considerations)).
 - **Escape into markup.** User text that a provider renders as HTML is escaped, as `model.NewEvent.HTMLBody` escapes the invite body with `html.EscapeString`.
-- **Terminal-safe.** Server text that the CLI prints in a human format passes through `terminalSafe`. `ansi.Strip` alone keeps carriage return, backspace, BEL, and C1 controls, so the rune filter after it stays.
-- **Confined paths.** Files under the server home have fixed names. A path built from request or mail data opens through `os.Root`.
+- **Terminal-safe.** Daemon text that `amg` or `amgd` prints in a human format passes through `term.Safe`. `ansi.Strip` alone keeps carriage return, backspace, BEL, and C1 controls, so the rune filter after it stays.
+- **Confined paths.** Files under the daemon home have fixed names. A path built from request or mail data opens through `os.Root`.
 - **Provider data is untrusted.** Adapters limit response size (`io.LimitReader`), page count, and loop count, and follow a next-page link only on the configured origin and path. The guard checks adapter results against the interface contract (requested IDs only, no duplicates, expected order and count) and turns a mismatch into `ValueError`, `failed`, or `unknown`.
 
 ## Errors and records (hard)

@@ -100,15 +100,17 @@ func (c *Client) credential(ctx context.Context) (credentials.OAuth, error) {
 	if c.store == nil {
 		return credentials.OAuth{}, failure("Gmail", "CredentialError")
 	}
+	// An expired token is refreshed from the store, never from the cache: a save can keep a newer login that
+	// amgd account login stored instead of this client's refresh, and that login's refresh token must be used.
 	var token credentials.OAuth
-	if c.token == nil {
+	if c.token != nil && c.token.AccessToken != "" && c.options.Now().Before(c.token.ExpiresAt) {
+		token = *c.token
+	} else {
 		var err error
-		token, err = c.store.LoadOAuth(ctx, "gmail", c.account.Name)
+		token, err = c.store.LoadOAuth(ctx, "gmail", c.account.Email)
 		if err != nil {
 			return credentials.OAuth{}, safeContext(ctx, "Gmail")
 		}
-	} else {
-		token = *c.token
 	}
 	if token.AccessToken == "" || !c.options.Now().Before(token.ExpiresAt) {
 		var err error
@@ -116,7 +118,7 @@ func (c *Client) credential(ctx context.Context) (credentials.OAuth, error) {
 		if err != nil {
 			return credentials.OAuth{}, err
 		}
-		if err = c.store.SaveOAuth(ctx, "gmail", c.account.Name, token); err != nil {
+		if err = c.store.SaveOAuth(ctx, "gmail", c.account.Email, token); err != nil {
 			return credentials.OAuth{}, safeContext(ctx, "Gmail")
 		}
 	} else if _, err := scopes(strings.Join(token.Scopes, " ")); err != nil {

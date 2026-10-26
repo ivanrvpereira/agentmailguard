@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
-	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
 
@@ -27,7 +27,7 @@ func (panicScreener) CheckAction(context.Context, string, string, map[string]any
 	panic("private-adapter-panic-canary")
 }
 func TestExternalAdapterPanicsDoNotEscapeHTTP(t *testing.T) {
-	for _, mode := range []string{"credential", "screening", "transport", "action check"} {
+	for _, mode := range []string{"screening", "transport", "action check"} {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestExternalPanicChild$")
 		cmd.Env = append(os.Environ(), "AGENTMAILGUARD_PANIC_CHILD="+mode)
 		b, e := cmd.CombinedOutput()
@@ -41,31 +41,22 @@ func TestExternalPanicChild(t *testing.T) {
 	if mode == "" {
 		t.Skip("subprocess only")
 	}
-	home := t.TempDir()
-	configFile(t, home)
 	api := newNativeAPI()
 	graph := httptest.NewServer(http.HandlerFunc(api.graph))
 	defer graph.Close()
-	opts := server.Options{Credentials: &nativeStore{}, Screener: panicScreener{}, M365: m365.Options{BaseURL: graph.URL}}
-	if mode == "credential" {
-		opts.Credentials = &hostileStore{mode: "panic"}
-	}
+	opts := server.Options{Screener: panicScreener{}, M365: m365Options(graph.URL)}
 	if mode == "transport" {
 		opts.M365.HTTPClient = &http.Client{Transport: panicTransport{}}
 	}
-	s, e := server.New(context.Background(), home, opts)
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer s.Close()
-	h := httptest.NewServer(s)
+	d := startDaemon(t, daemonSetup{config: workConfig, record: record(map[string]credentials.OAuth{"m365/" + workEmail: m365Login(writeGrant)}), options: opts})
+	h := httptest.NewServer(d.s)
 	defer h.Close()
 	body := `{"operation":"mail.list","params":{}}`
 	switch mode {
 	case "action check":
 		// A failed action check holds the draft for approval.
 		body = `{"operation":"draft.new","params":{"to":["a@example.test"],"subject":"private-subject","body":"private-body"}}`
-	case "credential", "transport":
+	case "transport":
 		body = `{"operation":"mail.get","params":{"id":"g"}}`
 	}
 	status, b := rpc(t, h.URL, body)

@@ -35,11 +35,8 @@ func TestInvalidRecordsFailClosedWithoutFallbackOrOverwrite(t *testing.T) {
 		{"bad utf8", "{\"version\":1,\"oauth\":{},\"openrouter_key\":\"\xff\"}", credentials.ErrInvalidRecord},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := &fakePlatform{values: map[[2]string][]byte{
-				{"agentmailguard", "credentials"}:                     []byte(tc.raw),
-				{"agentmailguard-go-openrouter", "agentmailguard-go"}: []byte("legacy-canary"),
-			}}
-			s := credentials.New(p, t.TempDir(), nil)
+			p := &fakePlatform{values: map[[2]string][]byte{{"agentmailguard", "credentials"}: []byte(tc.raw)}}
+			s := credentials.New(p, t.TempDir())
 			for _, op := range []func() error{
 				func() error { _, e := s.LoadScreeningKey(context.Background()); return e },
 				func() error { return s.SaveScreeningKey(context.Background(), "replacement-canary") },

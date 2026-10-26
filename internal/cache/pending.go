@@ -190,3 +190,32 @@ func (c *Cache) FinishPending(ctx context.Context, id string, state PendingState
 	_, err := c.transition(ctx, id, StateRunning, state, &result, now)
 	return err
 }
+
+// AccountRemoved is the result code of the pending actions that DenyAccount denies.
+const AccountRemoved = "account_removed"
+
+// DenyAccount denies every waiting action of the account with the result code AccountRemoved, and returns them.
+// Actions that already run finish as they are.
+func (c *Cache) DenyAccount(ctx context.Context, account string, now time.Time) ([]Pending, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	rows, err := c.db.QueryContext(ctx, `UPDATE pending SET state = ?, result = ?, updated = ? WHERE account = ? AND state = ? RETURNING `+pendingColumns,
+		StateDenied, AccountRemoved, iso(now), account, StatePending)
+	if err != nil {
+		return nil, errors.New("pending action write failed")
+	}
+	defer rows.Close()
+	out := []Pending{}
+	for rows.Next() {
+		p, err := scanPending(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	if rows.Err() != nil {
+		return nil, errors.New("pending action write failed")
+	}
+	return out, nil
+}

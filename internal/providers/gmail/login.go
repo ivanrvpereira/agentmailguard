@@ -113,9 +113,14 @@ func (c *Client) Login(ctx context.Context, deviceCode bool, prompt func(uri, co
 	// Login does not wait: xdg-open can run a browser in the foreground until it exits.
 	go func() { _ = c.options.OpenBrowser(ctx, uri.String()) }()
 	if read := c.options.ReadRedirect; read != nil {
+		// Login stops the reader and waits for it, so the reader never writes after Login returns.
+		readCtx, stopReading := context.WithCancel(ctx)
+		reading := make(chan struct{})
+		defer func() { stopReading(); <-reading }()
 		go func() {
-			for retry := false; ; retry = true {
-				line, err := read(ctx, retry)
+			defer close(reading)
+			for retry := false; readCtx.Err() == nil; retry = true {
+				line, err := read(readCtx, retry)
 				if err != nil {
 					return // Closed input leaves the loopback callback.
 				}
@@ -147,7 +152,7 @@ func (c *Client) Login(ctx context.Context, deviceCode bool, prompt func(uri, co
 	if err != nil {
 		return "", nil, err
 	}
-	if err = c.store.SaveOAuth(ctx, "gmail", c.account.Name, token); err != nil {
+	if err = c.store.SaveOAuth(ctx, "gmail", c.account.Email, token); err != nil {
 		return "", nil, safeContext(ctx, "Gmail")
 	}
 	c.token = &token

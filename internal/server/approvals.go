@@ -15,7 +15,7 @@ import (
 var (
 	ErrApprovalNotFound = errors.New("approval not found")
 	ErrAlreadyHandled   = errors.New("already handled")
-	ErrUnavailable      = errors.New("server unavailable")
+	ErrUnavailable      = errors.New("daemon unavailable")
 )
 
 // Approve claims a stored action and runs it once through the handler of the original call, without a
@@ -35,8 +35,28 @@ func (s *Server) Approve(ctx context.Context, id string) error {
 	if err := s.audit.Approval(context.WithoutCancel(ctx), item.Account, item.Op, "approved", item.ID); err != nil {
 		return s.finish(ctx, item, nil, guard.GuardError("AuditError"))
 	}
-	result, err := s.accountCall(guard.WithApproval(ctx), request{Operation: item.Op, Account: &item.Account, Params: item.Args})
+	result, err := s.runOn(guard.WithApproval(ctx), item.Op, item.Account, item.Args)
 	return s.finish(ctx, item, result, err)
+}
+
+// errAccountGone is the code of an approved action whose account is no longer configured. It never runs on
+// another account: actions are stored with the account key, the email.
+const errAccountGone = guard.GuardError("UnknownAccountError")
+
+// runOn runs an account operation on the account with the key, on the current state.
+func (s *Server) runOn(ctx context.Context, op, key string, params json.RawMessage) (any, error) {
+	st := s.current.Load()
+	if st == nil {
+		return nil, ErrUnavailable
+	}
+	o, ok := operations[op]
+	if !ok || o.decode == nil {
+		return nil, errInvalid
+	}
+	if st.accounts[key] == nil {
+		return nil, errAccountGone
+	}
+	return s.accountCall(ctx, st, o, request{Operation: op, key: key, Params: params})
 }
 
 // finish stores the outcome of a run: done with the JSON result, or failed with a safe code. The run is over,
@@ -112,7 +132,7 @@ type approvalStatusDTO struct {
 }
 
 // approvalStatus reports the state of one stored action. It is not account-scoped.
-func (s *Server) approvalStatus(ctx context.Context, params json.RawMessage) (any, error) {
+func approvalStatus(ctx context.Context, s *Server, _ *state, params json.RawMessage) (any, error) {
 	var p struct {
 		ID string `json:"id"`
 	}

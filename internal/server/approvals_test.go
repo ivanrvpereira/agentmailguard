@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard/internal/cache"
 	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
 
@@ -61,22 +60,21 @@ func (g *approvalGraph) recorded() []meetingRequest {
 	return append([]meetingRequest{}, g.writes...)
 }
 
-// approvalServer is a graphServer whose Graph API returns the organizer event e1 to every GET.
-func approvalServer(t *testing.T, policy string) (*server.Server, string, *approvalGraph) {
+// approvalDaemon is a graphDaemon with the write grant whose Graph API returns the organizer event e1 to every GET.
+func approvalDaemon(t *testing.T, policy string) (*daemon, *approvalGraph) {
 	t.Helper()
 	graph := &approvalGraph{}
 	event := organizerEvent
 	graph.event.Store(&event)
-	s, home := graphServer(t, policy, graph)
-	return s, home, graph
+	return graphDaemon(t, policy, writeGrant, graph, newNativeAPI()), graph
 }
 
 var approvalIDs = regexp.MustCompile(`"approval_id":"([0-9a-f]{32})"`)
 
-// pend makes a call of the work account that the policy holds and returns the approval ID of each held action.
+// pend makes a call of the default account that the policy holds and returns the approval ID of each held action.
 func pend(t *testing.T, s *server.Server, op, params string) []string {
 	t.Helper()
-	status, body := accountRPC(t, s, op, "work", params)
+	status, body := accountRPC(t, s, op, "", params)
 	matches := approvalIDs.FindAllStringSubmatch(body, -1)
 	if status != 200 || matches == nil {
 		t.Fatalf("%s: %d %s", op, status, body)
@@ -88,47 +86,39 @@ func pend(t *testing.T, s *server.Server, op, params string) []string {
 	return ids
 }
 
-// auditOf returns the audit log of home as text and as records.
-func auditOf(t *testing.T, home string) (string, []map[string]any) {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join(home, "audit.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out []map[string]any
-	for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
-		var record map[string]any
-		if err := json.Unmarshal([]byte(line), &record); err != nil {
-			t.Fatal(err)
-		}
-		out = append(out, record)
-	}
-	return string(data), out
-}
-
 // trashApprove holds every trash. The sealed decision is approve too: the fake API serves no messages, so
 // each message counts as sealed, and an approved run must skip the sealed decision to run.
 const trashApprove = "[policy]\nmail_trash='approve'\n[policy.sealed]\nmail_trash='approve'\n"
 const allowAll = "[policy]\nmail_draft='allow'\ncalendar_invite='allow'\ncalendar_update='allow'\ncalendar_cancel='allow'\ncalendar_respond='allow'\n[policy.sealed]\nmail_draft='allow'\n"
 const approveAll = "[policy]\nmail_draft='approve'\ncalendar_invite='approve'\ncalendar_update='approve'\ncalendar_cancel='approve'\ncalendar_respond='approve'\n[policy.sealed]\nmail_draft='approve'\n"
 
+// approvalStatus asks for the state of an item. The call names an account that does not exist: the
+// operation is not account-scoped and ignores it.
+func approvalStatus(t *testing.T, s *server.Server, id string) (int, string) {
+	t.Helper()
+	return accountRPC(t, s, "approvals.status", "nobody", `{"id":"`+id+`"}`)
+}
+
+// assertState checks the approvals.status answer of an item: its state, and the stored result of a done item.
+func assertState(t *testing.T, s *server.Server, id, want string) {
+	t.Helper()
+	if status, body := approvalStatus(t, s, id); status != 200 || !sameJSON(t, body, want) {
+		t.Fatalf("item %s: %d %s; want %s", id, status, body, want)
+	}
+}
+
 func TestApproveTrashMovesOnlyThatMessageAndStoresTheResult(t *testing.T) {
-	s, home, graph := approvalServer(t, trashApprove)
-	ids := pend(t, s, "mail.trash", `{"ids":["m1","m2"]}`)
-	if err := s.Approve(context.Background(), ids[0]); err != nil {
+	d, graph := approvalDaemon(t, trashApprove)
+	ids := pend(t, d.s, "mail.trash", `{"ids":["m1","m2"]}`)
+	if err := d.s.Approve(context.Background(), ids[0]); err != nil {
 		t.Fatal(err)
 	}
 	want := meetingRequest{"POST", "/me/messages/m1/move", map[string]any{"destinationId": "deleteditems"}}
 	if got := graph.recorded(); len(got) != 1 || !reflect.DeepEqual(got[0], want) {
 		t.Fatalf("provider writes=%+v", got)
 	}
-	item := storedArgs(t, home, ids[0])
-	if item.State != cache.StateDone || item.Result == nil || !sameJSON(t, *item.Result, `[{"id":"m1","ok":true,"error":null}]`) {
-		t.Fatalf("approved item %+v result=%v", item, item.Result)
-	}
-	if other := storedArgs(t, home, ids[1]); other.State != cache.StatePending {
-		t.Fatalf("other item state=%s", other.State)
-	}
+	assertState(t, d.s, ids[0], `{"state":"done","result":[{"id":"m1","ok":true,"error":null}]}`)
+	assertState(t, d.s, ids[1], `{"state":"pending"}`)
 }
 
 // greenMessage is the Graph JSON of message id with a body, which the fake Jev of nativeAPI screens green.
@@ -156,30 +146,28 @@ func TestApprovedActionMakesTheSameWriteAsTheAllowedCall(t *testing.T) {
 		{"calendar.respond", "calendar.respond", `{"id":"e1","response":"tentative","comment":"CANARY comment"}`, attendeeEvent},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			allowed, _, allowedGraph := approvalServer(t, allowAll)
+			allowed, allowedGraph := approvalDaemon(t, allowAll)
 			allowedGraph.event.Store(&tc.event)
-			status, want := accountRPC(t, allowed, tc.op, "work", tc.params)
+			status, want := accountRPC(t, allowed.s, tc.op, "work", tc.params)
 			if status != 200 || len(allowedGraph.recorded()) != 1 {
 				t.Fatalf("allowed call: %d %s writes=%+v", status, want, allowedGraph.recorded())
 			}
-			s, home, graph := approvalServer(t, approveAll)
+			d, graph := approvalDaemon(t, approveAll)
 			graph.event.Store(&tc.event)
-			id := pend(t, s, tc.op, tc.params)[0]
-			if err := s.Approve(context.Background(), id); err != nil {
+			id := pend(t, d.s, tc.op, tc.params)[0]
+			if err := d.s.Approve(context.Background(), id); err != nil {
 				t.Fatal(err)
 			}
 			if got := graph.recorded(); len(got) != 1 || !reflect.DeepEqual(got[0], allowedGraph.recorded()[0]) {
 				t.Fatalf("approved writes=%+v; allowed=%+v", got, allowedGraph.recorded())
 			}
-			if item := storedArgs(t, home, id); item.State != cache.StateDone || item.Result == nil || !sameJSON(t, *item.Result, want) {
-				t.Fatalf("item %+v result=%v; want %s", item, item.Result, want)
-			}
+			assertState(t, d.s, id, `{"state":"done","result":`+want+`}`)
 		})
 	}
 }
 
 // An approved run adds the approved and done records and its normal operation record, and no policy
-// record or new pending item. Records hold IDs and codes only.
+// record or new pending item. Records hold IDs, codes, and the account key only.
 func TestApprovedRunAuditsTheApprovalAndNoNewDecision(t *testing.T) {
 	for _, tc := range []struct{ policy, op, params, operation string }{
 		{approveAll, "draft.new", `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body"}`, "draft_new"},
@@ -187,21 +175,21 @@ func TestApprovedRunAuditsTheApprovalAndNoNewDecision(t *testing.T) {
 		{trashApprove, "mail.trash", `{"ids":["m1"]}`, "trash"},
 	} {
 		t.Run(tc.op, func(t *testing.T) {
-			s, home, _ := approvalServer(t, tc.policy)
-			id := pend(t, s, tc.op, tc.params)[0]
-			_, before := auditOf(t, home)
-			if err := s.Approve(context.Background(), id); err != nil {
+			d, _ := approvalDaemon(t, tc.policy)
+			id := pend(t, d.s, tc.op, tc.params)[0]
+			_, before := auditOf(t, d.home)
+			if err := d.s.Approve(context.Background(), id); err != nil {
 				t.Fatal(err)
 			}
-			text, after := auditOf(t, home)
+			text, after := auditOf(t, d.home)
 			added := after[len(before):]
 			if len(added) != 3 || strings.Contains(text, "CANARY") || strings.Contains(text, "example.test") {
 				t.Fatalf("records added=%v audit=%s", added, text)
 			}
 			want := []map[string]any{
-				{"event": "approval", "account": "work", "operation": tc.op, "state": "approved", "approval_id": id},
-				{"account": "work", "operation": tc.operation},
-				{"event": "approval", "account": "work", "operation": tc.op, "state": "done", "approval_id": id},
+				{"event": "approval", "account": workEmail, "operation": tc.op, "state": "approved", "approval_id": id},
+				{"account": workEmail, "operation": tc.operation},
+				{"event": "approval", "account": workEmail, "operation": tc.op, "state": "done", "approval_id": id},
 			}
 			for i, w := range want {
 				for k, v := range w {
@@ -218,8 +206,8 @@ func TestApprovedRunAuditsTheApprovalAndNoNewDecision(t *testing.T) {
 }
 
 func TestApproveAndDenyRefuseAnUnknownID(t *testing.T) {
-	s, _, _ := approvalServer(t, trashApprove)
-	for name, call := range map[string]func(context.Context, string) error{"approve": s.Approve, "deny": s.Deny} {
+	d, _ := approvalDaemon(t, trashApprove)
+	for name, call := range map[string]func(context.Context, string) error{"approve": d.s.Approve, "deny": d.s.Deny} {
 		if err := call(context.Background(), "0123456789abcdef0123456789abcdef"); err != server.ErrApprovalNotFound {
 			t.Fatalf("%s=%v", name, err)
 		}
@@ -227,37 +215,35 @@ func TestApproveAndDenyRefuseAnUnknownID(t *testing.T) {
 }
 
 func TestDenyStopsTheActionForGood(t *testing.T) {
-	s, home, graph := approvalServer(t, approveAll)
-	id := pend(t, s, "draft.new", `{"to":["CANARY@example.test"],"subject":"CANARY","body":"CANARY"}`)[0]
-	if err := s.Deny(context.Background(), id); err != nil {
+	d, graph := approvalDaemon(t, approveAll)
+	id := pend(t, d.s, "draft.new", `{"to":["CANARY@example.test"],"subject":"CANARY","body":"CANARY"}`)[0]
+	if err := d.s.Deny(context.Background(), id); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Approve(context.Background(), id); err != server.ErrAlreadyHandled {
+	if err := d.s.Approve(context.Background(), id); err != server.ErrAlreadyHandled {
 		t.Fatalf("approve after deny=%v", err)
 	}
-	if err := s.Deny(context.Background(), id); err != server.ErrAlreadyHandled {
+	if err := d.s.Deny(context.Background(), id); err != server.ErrAlreadyHandled {
 		t.Fatalf("second deny=%v", err)
 	}
 	if got := len(graph.recorded()); got != 0 {
 		t.Fatalf("provider writes=%d", got)
 	}
-	if item := storedArgs(t, home, id); item.State != cache.StateDenied || item.Result != nil {
-		t.Fatalf("item %+v", item)
-	}
-	text, records := auditOf(t, home)
+	assertState(t, d.s, id, `{"state":"denied"}`)
+	text, records := auditOf(t, d.home)
 	last := records[len(records)-1]
-	if strings.Contains(text, "CANARY") || len(records) != 3 || last["event"] != "approval" || last["state"] != "denied" || last["operation"] != "draft.new" || last["account"] != "work" || last["approval_id"] != id {
+	if strings.Contains(text, "CANARY") || len(records) != 3 || last["event"] != "approval" || last["state"] != "denied" || last["operation"] != "draft.new" || last["account"] != workEmail || last["approval_id"] != id {
 		t.Fatalf("audit=%s", text)
 	}
 }
 
 func TestConcurrentApprovalsRunTheActionOnce(t *testing.T) {
-	s, home, graph := approvalServer(t, trashApprove)
-	id := pend(t, s, "mail.trash", `{"ids":["m1"]}`)[0]
+	d, graph := approvalDaemon(t, trashApprove)
+	id := pend(t, d.s, "mail.trash", `{"ids":["m1"]}`)[0]
 	errs := make(chan error, 8)
 	var wg sync.WaitGroup
 	for range 8 {
-		wg.Go(func() { errs <- s.Approve(context.Background(), id) })
+		wg.Go(func() { errs <- d.s.Approve(context.Background(), id) })
 	}
 	wg.Wait()
 	close(errs)
@@ -269,12 +255,13 @@ func TestConcurrentApprovalsRunTheActionOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if won != 1 || len(graph.recorded()) != 1 || storedArgs(t, home, id).State != cache.StateDone {
+	if won != 1 || len(graph.recorded()) != 1 {
 		t.Fatalf("won=%d writes=%d", won, len(graph.recorded()))
 	}
+	assertState(t, d.s, id, `{"state":"done","result":[{"id":"m1","ok":true,"error":null}]}`)
 }
 
-// A run that fails stores a safe code, is audited as failed, and never runs again.
+// A run that fails returns a safe code, is stored and audited as failed, and never runs again.
 func TestFailedApprovalStoresASafeCodeAndDoesNotRetry(t *testing.T) {
 	cancelled := strings.Replace(organizerEvent, `"isOrganizer":true`, `"isOrganizer":true,"isCancelled":true`, 1)
 	for _, tc := range []struct {
@@ -288,22 +275,20 @@ func TestFailedApprovalStoresASafeCodeAndDoesNotRetry(t *testing.T) {
 		{"event now cancelled", approveAll, "calendar.update", `{"id":"e1","duration":"30m"}`, func(g *approvalGraph) { g.event.Store(&cancelled) }, "GuardError", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, home, graph := approvalServer(t, tc.policy)
-			id := pend(t, s, tc.op, tc.params)[0]
+			d, graph := approvalDaemon(t, tc.policy)
+			id := pend(t, d.s, tc.op, tc.params)[0]
 			tc.breakIt(graph)
-			if err := s.Approve(context.Background(), id); err == nil || err.Error() != tc.code {
+			if err := d.s.Approve(context.Background(), id); err == nil || err.Error() != tc.code {
 				t.Fatalf("approve=%v; want %s", err, tc.code)
 			}
-			if err := s.Approve(context.Background(), id); err != server.ErrAlreadyHandled {
+			if err := d.s.Approve(context.Background(), id); err != server.ErrAlreadyHandled {
 				t.Fatalf("second approve=%v", err)
 			}
 			if got := len(graph.recorded()); got != tc.writes {
 				t.Fatalf("provider writes=%d; want %d", got, tc.writes)
 			}
-			if item := storedArgs(t, home, id); item.State != cache.StateFailed || item.Result == nil || *item.Result != tc.code {
-				t.Fatalf("item %+v result=%v", item, item.Result)
-			}
-			text, records := auditOf(t, home)
+			assertState(t, d.s, id, `{"state":"failed"}`)
+			text, records := auditOf(t, d.home)
 			last := records[len(records)-1]
 			if strings.Contains(text, "CANARY") || last["event"] != "approval" || last["state"] != "failed" || last["approval_id"] != id || strings.Count(text, `"state":"failed"`) != 1 {
 				t.Fatalf("audit=%s", text)
@@ -312,47 +297,62 @@ func TestFailedApprovalStoresASafeCodeAndDoesNotRetry(t *testing.T) {
 	}
 }
 
+// An action waits under the account key. When a reload removes its account, approving it runs nothing and fails with
+// a fixed code; the action never runs on another account.
+func TestApprovalOfARemovedAccountFailsWithoutAWrite(t *testing.T) {
+	d, graph := approvalDaemon(t, trashApprove)
+	id := pend(t, d.s, "mail.trash", `{"ids":["m1"]}`)[0]
+	d.writeConfig(t, "default_account = 'other'\n"+otherTable+trashApprove)
+	d.reload(t)
+	if err := d.s.Approve(context.Background(), id); err == nil || err.Error() != "UnknownAccountError" {
+		t.Fatalf("approve=%v", err)
+	}
+	if len(graph.recorded()) != 0 {
+		t.Fatalf("provider writes=%v", graph.recorded())
+	}
+	assertState(t, d.s, id, `{"state":"failed"}`)
+}
+
 // blockedApproval starts an approval of a trash item whose provider write blocks until its request ends,
 // and returns once the write has reached the provider.
-func blockedApproval(t *testing.T, ctx context.Context) (*server.Server, string, string, chan error) {
+func blockedApproval(t *testing.T, ctx context.Context) (*daemon, string, chan error) {
 	t.Helper()
-	s, home, graph := approvalServer(t, trashApprove)
-	id := pend(t, s, "mail.trash", `{"ids":["m1"]}`)[0]
+	d, graph := approvalDaemon(t, trashApprove)
+	id := pend(t, d.s, "mail.trash", `{"ids":["m1"]}`)[0]
 	graph.block = make(chan struct{}, 1)
 	done := make(chan error, 1)
-	go func() { done <- s.Approve(ctx, id) }()
+	go func() { done <- d.s.Approve(ctx, id) }()
 	select {
 	case <-graph.block:
 	case <-time.After(5 * time.Second):
 		t.Fatal("write did not reach the provider")
 	}
-	return s, home, id, done
+	return d, id, done
 }
 
 // The ended request is a failed provider request, which the trash result reports with its fixed code.
 func TestApprovalFinishesWhenTheCallerGoesAway(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	_, home, id, done := blockedApproval(t, ctx)
+	d, id, done := blockedApproval(t, ctx)
 	cancel()
 	if err := <-done; err == nil || err.Error() != "Graph error RequestFailed" {
 		t.Fatalf("approve=%v", err)
 	}
-	if item := storedArgs(t, home, id); item.State != cache.StateFailed || item.Result == nil || *item.Result != "Graph error RequestFailed" {
-		t.Fatalf("item %+v result=%v", item, item.Result)
-	}
-	if _, records := auditOf(t, home); records[len(records)-1]["state"] != "failed" {
+	assertState(t, d.s, id, `{"state":"failed"}`)
+	if _, records := auditOf(t, d.home); records[len(records)-1]["state"] != "failed" {
 		t.Fatalf("last record=%v", records[len(records)-1])
 	}
 }
 
+// Approve returns after its work ends, so only the audit record of the failed run shows that Close waited: the
+// closed daemon answers no status call.
 func TestCloseWaitsForARunningApproval(t *testing.T) {
-	s, home, id, done := blockedApproval(t, context.Background())
-	if err := s.Close(); err != nil {
+	d, id, done := blockedApproval(t, context.Background())
+	if err := d.s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// Approve returns after its work ends, so only the stored state shows that Close waited.
-	if item := storedArgs(t, home, id); item.State != cache.StateFailed {
-		t.Fatalf("state=%s", item.State)
+	if _, records := auditOf(t, d.home); records[len(records)-1]["state"] != "failed" || records[len(records)-1]["approval_id"] != id {
+		t.Fatalf("last record=%v", records[len(records)-1])
 	}
 	if err := <-done; err == nil || err.Error() != "Graph error RequestFailed" {
 		t.Fatalf("approve=%v", err)
@@ -360,72 +360,63 @@ func TestCloseWaitsForARunningApproval(t *testing.T) {
 }
 
 func TestApproveAndDenyAfterCloseAreRefused(t *testing.T) {
-	s, home, graph := approvalServer(t, trashApprove)
-	ids := pend(t, s, "mail.trash", `{"ids":["m1","m2"]}`)
-	s.Close()
-	if err := s.Approve(context.Background(), ids[0]); err != server.ErrUnavailable {
+	d, graph := approvalDaemon(t, trashApprove)
+	ids := pend(t, d.s, "mail.trash", `{"ids":["m1","m2"]}`)
+	d.s.Close()
+	if err := d.s.Approve(context.Background(), ids[0]); err != server.ErrUnavailable {
 		t.Fatalf("approve=%v", err)
 	}
-	if err := s.Deny(context.Background(), ids[1]); err != server.ErrUnavailable {
+	if err := d.s.Deny(context.Background(), ids[1]); err != server.ErrUnavailable {
 		t.Fatalf("deny=%v", err)
-	}
-	for _, id := range ids {
-		if item := storedArgs(t, home, id); item.State != cache.StatePending {
-			t.Fatalf("state=%s", item.State)
-		}
 	}
 	if len(graph.recorded()) != 0 {
 		t.Fatal("provider write after close")
+	}
+	// A restart on the same home finds both items still waiting.
+	restarted := startDaemon(t, daemonSetup{home: d.home, config: workConfig + trashApprove + fakeScreen, record: record(nil)})
+	for _, id := range ids {
+		assertState(t, restarted.s, id, `{"state":"pending"}`)
 	}
 }
 
 // Without its approved record the action does not run, and it can never run later.
 func TestApprovalDoesNotRunWithoutItsAuditRecord(t *testing.T) {
-	s, home, graph := approvalServer(t, trashApprove)
-	id := pend(t, s, "mail.trash", `{"ids":["m1"]}`)[0]
+	d, graph := approvalDaemon(t, trashApprove)
+	id := pend(t, d.s, "mail.trash", `{"ids":["m1"]}`)[0]
 	// A folder in place of the log makes every write fail, also for root, which ignores file permissions.
-	log := filepath.Join(home, "audit.jsonl")
+	log := filepath.Join(d.home, "audit.jsonl")
 	if err := errors.Join(os.Remove(log), os.Mkdir(log, 0700)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Approve(context.Background(), id); err == nil {
-		t.Fatal("approve succeeded")
+	if err := d.s.Approve(context.Background(), id); err == nil || err.Error() != "AuditError" {
+		t.Fatalf("approve=%v", err)
 	}
 	if len(graph.recorded()) != 0 {
 		t.Fatal("provider write without an audit record")
 	}
-	if item := storedArgs(t, home, id); item.State != cache.StateFailed || item.Result == nil || *item.Result != "AuditError" {
-		t.Fatalf("item %+v result=%v", item, item.Result)
-	}
-}
-
-// approvalStatus asks for the state of an item. The call names an account that does not exist: the
-// operation is not account-scoped and ignores it.
-func approvalStatus(t *testing.T, s *server.Server, id string) (int, string) {
-	t.Helper()
-	return accountRPC(t, s, "approvals.status", "nobody", `{"id":"`+id+`"}`)
+	assertState(t, d.s, id, `{"state":"failed"}`)
 }
 
 // The status shows the state of an item and, once done, its stored result. It never shows the stored
 // arguments, the account, or a failure code.
 func TestApprovalStatusFollowsTheItemWithoutItsArguments(t *testing.T) {
-	s, _, graph := approvalServer(t, "[policy]\nmail_draft='approve'\nmail_trash='approve'\n[policy.sealed]\nmail_trash='approve'\n")
+	d, graph := approvalDaemon(t, "[policy]\nmail_draft='approve'\nmail_trash='approve'\n[policy.sealed]\nmail_trash='approve'\n")
 	draft := `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body"}`
-	approved, denied := pend(t, s, "draft.new", draft)[0], pend(t, s, "draft.new", draft)[0]
-	failed := pend(t, s, "mail.trash", `{"ids":["m2"]}`)[0]
+	approved, denied := pend(t, d.s, "draft.new", draft)[0], pend(t, d.s, "draft.new", draft)[0]
+	failed := pend(t, d.s, "mail.trash", `{"ids":["m2"]}`)[0]
 	for _, id := range []string{approved, denied, failed} {
-		if status, body := approvalStatus(t, s, id); status != 200 || body != `{"state":"pending"}` {
+		if status, body := approvalStatus(t, d.s, id); status != 200 || body != `{"state":"pending"}` {
 			t.Fatalf("pending %s: %d %s", id, status, body)
 		}
 	}
-	if err := s.Approve(context.Background(), approved); err != nil {
+	if err := d.s.Approve(context.Background(), approved); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Deny(context.Background(), denied); err != nil {
+	if err := d.s.Deny(context.Background(), denied); err != nil {
 		t.Fatal(err)
 	}
 	graph.failStatus.Store(403)
-	if err := s.Approve(context.Background(), failed); err == nil {
+	if err := d.s.Approve(context.Background(), failed); err == nil {
 		t.Fatal("approve of a failing write succeeded")
 	}
 	for _, tc := range []struct{ id, want string }{
@@ -433,18 +424,18 @@ func TestApprovalStatusFollowsTheItemWithoutItsArguments(t *testing.T) {
 		{denied, `{"state":"denied"}`},
 		{failed, `{"state":"failed"}`},
 	} {
-		if status, body := approvalStatus(t, s, tc.id); status != 200 || body != tc.want {
+		if status, body := approvalStatus(t, d.s, tc.id); status != 200 || body != tc.want {
 			t.Errorf("%s: %d %s; want %s", tc.id, status, body, tc.want)
 		}
 	}
 }
 
 func TestApprovalStatusRefusesUnknownAndMalformedIDs(t *testing.T) {
-	s, _, _ := approvalServer(t, trashApprove)
-	if status, body := approvalStatus(t, s, "0123456789abcdef0123456789abcdef"); status != 404 || body != `{"error":"approval not found"}` {
+	d, _ := approvalDaemon(t, trashApprove)
+	if status, body := approvalStatus(t, d.s, "0123456789abcdef0123456789abcdef"); status != 404 || body != `{"error":"approval not found"}` {
 		t.Fatalf("unknown: %d %s", status, body)
 	}
-	id := pend(t, s, "mail.trash", `{"ids":["m1"]}`)[0]
+	id := pend(t, d.s, "mail.trash", `{"ids":["m1"]}`)[0]
 	for _, params := range []string{
 		`{"id":"` + strings.ToUpper(id) + `"}`,
 		`{"id":"` + id[1:] + `"}`,
@@ -454,7 +445,7 @@ func TestApprovalStatusRefusesUnknownAndMalformedIDs(t *testing.T) {
 		`{}`,
 		`{"id":"` + id + `","account":"work"}`,
 	} {
-		if status, body := meetingRPC(t, s, "approvals.status", params); status != 400 || body != `{"error":"invalid request"}` {
+		if status, body := accountRPC(t, d.s, "approvals.status", "", params); status != 400 || body != `{"error":"invalid request"}` {
 			t.Errorf("%s: %d %s", params, status, body)
 		}
 	}

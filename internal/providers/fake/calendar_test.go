@@ -19,12 +19,12 @@ func calendar(t *testing.T) (model.Calendar, string) {
 	t.Helper()
 	home := t.TempDir()
 	seed(t, home, `INSERT INTO events (account, id, subject, body, content_type, location, start_at, end_at, organizer_name, organizer_address, join_url, is_private, show_as, categories, attachments) VALUES
-		('demo', 'mine', 'Planning', '<p>Agenda</p>', 'html', 'Room 1', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z', 'Demo', 'DEMO@fake.test', 'https://meet.example.test/x', 1, 'tentative', '["Work"]', '["agenda.pdf"]')`,
-		`INSERT INTO events (account, id, subject, start_at, end_at) VALUES ('demo', 'solo', 'Focus', '2026-04-01T08:00:00Z', '2026-04-01T09:00:00Z'), ('demo', 'later', 'Later', '2026-04-20T08:00:00Z', '2026-04-20T09:00:00Z'), ('other', 'theirs', 'Theirs', '2026-04-02T08:00:00Z', '2026-04-02T09:00:00Z')`,
-		`INSERT INTO events (account, id, subject, start_at, end_at, organizer_name, organizer_address, recurrence) VALUES ('demo', 'ana', 'Lunch', '2026-04-03T13:00:00+02:00', '2026-04-03T14:00:00+02:00', 'Ana', 'ana@example.test', 'weekly')`,
-		`INSERT INTO events (account, id, subject, start_at, end_at, is_cancelled, cancel_comment) VALUES ('demo', 'gone', 'Old', '2026-04-04T08:00:00Z', '2026-04-04T09:00:00Z', 1, 'Sorry')`,
-		`INSERT INTO attendees (account, event_id, address, name, response) VALUES ('demo', 'mine', 'ana@example.test', 'Ana', 'accepted'), ('demo', 'mine', 'bob@example.test', '', 'none'), ('demo', 'ana', 'demo@fake.test', '', 'tentativelyAccepted')`)
-	return fake.New("demo", home, func() time.Time { return now }).Calendar(), home
+		('demo@fake.test', 'mine', 'Planning', '<p>Agenda</p>', 'html', 'Room 1', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z', 'Demo', 'DEMO@fake.test', 'https://meet.example.test/x', 1, 'tentative', '["Work"]', '["agenda.pdf"]')`,
+		`INSERT INTO events (account, id, subject, start_at, end_at) VALUES ('demo@fake.test', 'solo', 'Focus', '2026-04-01T08:00:00Z', '2026-04-01T09:00:00Z'), ('demo@fake.test', 'later', 'Later', '2026-04-20T08:00:00Z', '2026-04-20T09:00:00Z'), ('other', 'theirs', 'Theirs', '2026-04-02T08:00:00Z', '2026-04-02T09:00:00Z')`,
+		`INSERT INTO events (account, id, subject, start_at, end_at, organizer_name, organizer_address, recurrence) VALUES ('demo@fake.test', 'ana', 'Lunch', '2026-04-03T13:00:00+02:00', '2026-04-03T14:00:00+02:00', 'Ana', 'ana@example.test', 'weekly')`,
+		`INSERT INTO events (account, id, subject, start_at, end_at, is_cancelled, cancel_comment) VALUES ('demo@fake.test', 'gone', 'Old', '2026-04-04T08:00:00Z', '2026-04-04T09:00:00Z', 1, 'Sorry')`,
+		`INSERT INTO attendees (account, event_id, address, name, response) VALUES ('demo@fake.test', 'mine', 'ana@example.test', 'Ana', 'accepted'), ('demo@fake.test', 'mine', 'bob@example.test', '', 'none'), ('demo@fake.test', 'ana', 'demo@fake.test', '', 'tentativelyAccepted')`)
+	return fake.New("demo@fake.test", home, func() time.Time { return now }).Calendar(), home
 }
 
 func eventIDs(events []model.Event) []string {
@@ -167,7 +167,7 @@ func TestCancelMarksTheEventCancelledAndKeepsItsRows(t *testing.T) {
 		t.Fatalf("event=%+v err=%v", got, err)
 	}
 	var comment string
-	if err := open(t, home).QueryRow(`SELECT cancel_comment FROM events WHERE account = 'demo' AND id = 'mine'`).Scan(&comment); err != nil || comment != "Moved to next week" {
+	if err := open(t, home).QueryRow(`SELECT cancel_comment FROM events WHERE account = 'demo@fake.test' AND id = 'mine'`).Scan(&comment); err != nil || comment != "Moved to next week" {
 		t.Fatalf("comment=%q err=%v", comment, err)
 	}
 	for _, id := range []string{"mine", "ana", "missing", "theirs"} {
@@ -184,9 +184,8 @@ func TestRespondRecordsTheAccountsOwnResponseOnOthersEvents(t *testing.T) {
 	c, home := calendar(t)
 	ctx := context.Background()
 	w := writer(t, c)
-	seed(t, home, `INSERT INTO identities (account, address, name) VALUES ('demo', 'Demo@Fake.Test', 'Demo User')`,
-		`INSERT INTO events (account, id, subject, start_at, end_at, organizer_address) VALUES ('demo', 'bob', 'Sync', '2026-04-05T08:00:00Z', '2026-04-05T09:00:00Z', 'bob@example.test')`,
-		`INSERT INTO events (account, id, subject, start_at, end_at, organizer_address, is_cancelled) VALUES ('demo', 'dead', 'Dead', '2026-04-05T08:00:00Z', '2026-04-05T09:00:00Z', 'bob@example.test', 1)`)
+	seed(t, home, `INSERT INTO events (account, id, subject, start_at, end_at, organizer_address) VALUES ('demo@fake.test', 'bob', 'Sync', '2026-04-05T08:00:00Z', '2026-04-05T09:00:00Z', 'bob@example.test')`,
+		`INSERT INTO events (account, id, subject, start_at, end_at, organizer_address, is_cancelled) VALUES ('demo@fake.test', 'dead', 'Dead', '2026-04-05T08:00:00Z', '2026-04-05T09:00:00Z', 'bob@example.test', 1)`)
 	if err := w.Respond(ctx, "ana", model.EventResponse{Response: model.ResponseDecline, Comment: "Out that day"}); err != nil {
 		t.Fatal(err)
 	}
@@ -196,13 +195,13 @@ func TestRespondRecordsTheAccountsOwnResponseOnOthersEvents(t *testing.T) {
 	if got, err := c.Get(ctx, "ana"); err != nil || !reflect.DeepEqual(got.Attendees, []model.Attendee{{Address: model.Address{Address: "demo@fake.test"}, Response: "declined"}}) {
 		t.Fatalf("ana=%+v err=%v", got, err)
 	}
-	if got, err := c.Get(ctx, "bob"); err != nil || !reflect.DeepEqual(got.Attendees, []model.Attendee{{Address: model.Address{Name: "Demo User", Address: "Demo@Fake.Test"}, Response: "tentativelyAccepted"}}) {
+	if got, err := c.Get(ctx, "bob"); err != nil || !reflect.DeepEqual(got.Attendees, []model.Attendee{{Address: model.Address{Address: "demo@fake.test"}, Response: "tentativelyAccepted"}}) {
 		t.Fatalf("bob=%+v err=%v", got, err)
 	}
 	if err := w.Respond(ctx, "bob", model.EventResponse{Response: model.ResponseAccept, Comment: "See you"}); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := open(t, home).Query(`SELECT event_id, response, coalesce(comment, '-') FROM attendees WHERE account = 'demo' AND event_id IN ('ana', 'bob') ORDER BY event_id`)
+	rows, err := open(t, home).Query(`SELECT event_id, response, coalesce(comment, '-') FROM attendees WHERE account = 'demo@fake.test' AND event_id IN ('ana', 'bob') ORDER BY event_id`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,17 +228,17 @@ func TestAvailabilityComesOnlyFromFreeBusyRows(t *testing.T) {
 	c, home := calendar(t)
 	ctx := context.Background()
 	seed(t, home, `INSERT INTO free_busy (account, address, start_at, end_at, status) VALUES
-		('demo', 'ana@example.test', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z', 'busy'),
-		('demo', 'ana@example.test', '2026-04-02T11:15:00+02:00', '2026-04-02T11:45:00+02:00', 'tentative'),
-		('demo', 'ana@example.test', '2026-04-02T10:15:00Z', '2026-04-02T10:20:00Z', 'tentative'),
-		('demo', 'ana@example.test', '2026-04-02T10:00:00Z', '2026-04-02T11:15:00Z', 'free'),
-		('demo', 'ana@example.test', '2026-04-02T10:45:00Z', '2026-04-02T11:00:00Z', 'out_of_office'),
-		('demo', 'bob@example.test', '2026-04-03T09:00:00Z', '2026-04-03T10:00:00Z', 'busy'),
-		('demo', 'bob@example.test', '2026-04-02T11:15:00Z', '2026-04-02T11:30:00Z', 'busy'),
+		('demo@fake.test', 'ana@example.test', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z', 'busy'),
+		('demo@fake.test', 'ana@example.test', '2026-04-02T11:15:00+02:00', '2026-04-02T11:45:00+02:00', 'tentative'),
+		('demo@fake.test', 'ana@example.test', '2026-04-02T10:15:00Z', '2026-04-02T10:20:00Z', 'tentative'),
+		('demo@fake.test', 'ana@example.test', '2026-04-02T10:00:00Z', '2026-04-02T11:15:00Z', 'free'),
+		('demo@fake.test', 'ana@example.test', '2026-04-02T10:45:00Z', '2026-04-02T11:00:00Z', 'out_of_office'),
+		('demo@fake.test', 'bob@example.test', '2026-04-03T09:00:00Z', '2026-04-03T10:00:00Z', 'busy'),
+		('demo@fake.test', 'bob@example.test', '2026-04-02T11:15:00Z', '2026-04-02T11:30:00Z', 'busy'),
 		('other', 'bob@example.test', '2026-04-02T09:00:00Z', '2026-04-02T12:00:00Z', 'busy'),
-		('demo', 'carla@example.test', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z', 'busy'),
-		('demo', 'carla@example.test', 'soon', '2026-04-02T10:00:00Z', 'busy'),
-		('demo', 'dave@example.test', '2026-04-02T10:00:00Z', '2026-04-02T09:00:00Z', 'busy')`)
+		('demo@fake.test', 'carla@example.test', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z', 'busy'),
+		('demo@fake.test', 'carla@example.test', 'soon', '2026-04-02T10:00:00Z', 'busy'),
+		('demo@fake.test', 'dave@example.test', '2026-04-02T10:00:00Z', '2026-04-02T09:00:00Z', 'busy')`)
 	reader, ok := c.(model.CalendarAvailability)
 	if !ok {
 		t.Fatal("the fake calendar has no availability")
@@ -269,7 +268,7 @@ func TestAvailabilityComesOnlyFromFreeBusyRows(t *testing.T) {
 // optionalFlags maps each attendee address of event id to its optional column.
 func optionalFlags(t *testing.T, home, id string) map[string]bool {
 	t.Helper()
-	rows, err := open(t, home).Query(`SELECT address, optional FROM attendees WHERE account = 'demo' AND event_id = ?`, id)
+	rows, err := open(t, home).Query(`SELECT address, optional FROM attendees WHERE account = 'demo@fake.test' AND event_id = ?`, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,13 +316,13 @@ func TestDatabaseFromBeforeOptionalAttendeesOpensAndKeepsItsAttendees(t *testing
 	}
 	db := open(t, home)
 	for _, s := range []string{before,
-		`INSERT INTO events (account, id, subject, start_at, end_at) VALUES ('demo', 'old', 'Old', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z')`,
-		`INSERT INTO attendees (account, event_id, address) VALUES ('demo', 'old', 'ana@example.test')`} {
+		`INSERT INTO events (account, id, subject, start_at, end_at) VALUES ('demo@fake.test', 'old', 'Old', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z')`,
+		`INSERT INTO attendees (account, event_id, address) VALUES ('demo@fake.test', 'old', 'ana@example.test')`} {
 		if _, err := db.Exec(s); err != nil {
 			t.Fatal(err)
 		}
 	}
-	c := fake.New("demo", home, func() time.Time { return now }).Calendar()
+	c := fake.New("demo@fake.test", home, func() time.Time { return now }).Calendar()
 	ctx := t.Context()
 	if got, err := c.Get(ctx, "old"); err != nil || len(got.Attendees) != 1 {
 		t.Fatalf("old=%+v err=%v", got, err)

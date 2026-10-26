@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -45,9 +46,9 @@ type Record struct {
 	OAuth   map[string]OAuth `json:"oauth"`
 	// ScreeningKey keeps its first JSON name so that existing records still load.
 	ScreeningKey string `json:"openrouter_key"`
-	// ApprovalHash is the bcrypt hash of the approval console password. Empty means not set;
-	// omitempty keeps such a record in the shape that older builds read.
-	ApprovalHash string `json:"approval_hash,omitempty"`
+	// ConsoleHash is the bcrypt hash of the console password. Empty means not set. The JSON name stays from
+	// when it was called the approval password.
+	ConsoleHash string `json:"approval_hash,omitempty"`
 }
 
 func (Record) String() string                   { return "Record{redacted}" }
@@ -98,8 +99,8 @@ func (s *RecordStore) readExistingLocked(ctx context.Context) (Record, error) {
 	return r, nil
 }
 
-// transact locks reads too, because the first read can migrate legacy credentials.
-// Each update reads again under this same cross-process lock; no stale snapshot is saved.
+// transact reads under the cross-process lock. Each update reads again under the same lock; no stale
+// snapshot is saved.
 func (s *RecordStore) transact(ctx context.Context, change func(*Record)) (Record, error) {
 	return s.withLock(ctx, func() (Record, error) {
 		r, err := s.readLocked(ctx)
@@ -156,6 +157,11 @@ func (s *RecordStore) Preload(ctx context.Context) (Record, error) {
 	return s.transact(ctx, func(*Record) {})
 }
 
+// Read returns the whole record without writing it. A missing record is an empty one.
+func (s *RecordStore) Read(ctx context.Context) (Record, error) {
+	return s.transact(ctx, nil)
+}
+
 func entry(provider, account string) (string, error) {
 	if !utf8.ValidString(account) {
 		return "", ErrInvalidRecord
@@ -194,6 +200,71 @@ func (s *RecordStore) SaveOAuth(ctx context.Context, provider, account string, v
 	_, err = s.transact(ctx, func(r *Record) { r.OAuth[key] = v })
 	return err
 }
+
+// SwapOAuth saves next only if the stored entry still equals expected (nil: no entry). Otherwise it keeps
+// the stored entry and returns it, so a token refresh never overwrites a newer login. It returns the entry
+// that is stored afterwards; a missing entry returns ErrNotFound.
+func (s *RecordStore) SwapOAuth(ctx context.Context, provider, account string, expected *OAuth, next OAuth) (OAuth, error) {
+	key, err := entry(provider, account)
+	if err != nil {
+		return OAuth{}, err
+	}
+	if next.AccessToken == "" && next.RefreshToken == "" {
+		return OAuth{}, errors.New("OAuth credential is empty")
+	}
+	var stored OAuth
+	var found bool
+	_, err = s.withLock(ctx, func() (Record, error) {
+		r, err := s.readLocked(ctx)
+		if err != nil {
+			return Record{}, err
+		}
+		stored, found = r.OAuth[key]
+		if found != (expected != nil) || found && !SameOAuth(stored, *expected) {
+			return r, nil
+		}
+		r.OAuth[key], stored, found = next, next, true
+		if err := s.backend.Write(ctx, r); err != nil {
+			return Record{}, safeError(ctx, err)
+		}
+		return r, nil
+	})
+	if err != nil {
+		return OAuth{}, err
+	}
+	if !found {
+		return OAuth{}, ErrNotFound
+	}
+	return stored, nil
+}
+
+// SameOAuth compares two entries; times compare by instant, so a stored copy equals its original.
+func SameOAuth(a, b OAuth) bool {
+	return a.AccessToken == b.AccessToken && a.RefreshToken == b.RefreshToken && a.ExpiresAt.Equal(b.ExpiresAt) && a.Username == b.Username && slices.Equal(a.Scopes, b.Scopes)
+}
+
+// DeleteOAuth removes the login of an account. A missing entry is not an error.
+func (s *RecordStore) DeleteOAuth(ctx context.Context, provider, account string) error {
+	key, err := entry(provider, account)
+	if err != nil {
+		return err
+	}
+	_, err = s.withLock(ctx, func() (Record, error) {
+		r, err := s.readLocked(ctx)
+		if err != nil {
+			return Record{}, err
+		}
+		if _, found := r.OAuth[key]; !found {
+			return r, nil
+		}
+		delete(r.OAuth, key)
+		if err := s.backend.Write(ctx, r); err != nil {
+			return Record{}, safeError(ctx, err)
+		}
+		return r, nil
+	})
+	return err
+}
 func (s *RecordStore) LoadScreeningKey(ctx context.Context) (string, error) {
 	r, err := s.transact(ctx, nil)
 	if err != nil {
@@ -212,23 +283,24 @@ func (s *RecordStore) SaveScreeningKey(ctx context.Context, key string) error {
 	_, err := s.transact(ctx, func(r *Record) { r.ScreeningKey = key })
 	return err
 }
-func (s *RecordStore) LoadApprovalHash(ctx context.Context) (string, error) {
+func (s *RecordStore) LoadConsoleHash(ctx context.Context) (string, error) {
 	r, err := s.transact(ctx, nil)
 	if err != nil {
 		return "", err
 	}
-	if r.ApprovalHash == "" {
+	if r.ConsoleHash == "" {
 		return "", ErrNotFound
 	}
-	return r.ApprovalHash, nil
+	return r.ConsoleHash, nil
 }
 
-// SaveApprovalHash stores a bcrypt hash; it refuses any other value so a plain password is never stored.
-func (s *RecordStore) SaveApprovalHash(ctx context.Context, hash string) error {
-	if !validApprovalHash(hash) {
+// SaveConsoleHash stores a bcrypt hash of the console password; it refuses any other value so a plain
+// password is never stored.
+func (s *RecordStore) SaveConsoleHash(ctx context.Context, hash string) error {
+	if !validConsoleHash(hash) {
 		return ErrInvalidRecord
 	}
-	_, err := s.transact(ctx, func(r *Record) { r.ApprovalHash = hash })
+	_, err := s.transact(ctx, func(r *Record) { r.ConsoleHash = hash })
 	return err
 }
 func safeError(ctx context.Context, err error) error {

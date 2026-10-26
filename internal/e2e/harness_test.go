@@ -1,7 +1,8 @@
-// Package e2e drives the real agentmailguard binary: one process runs serve on a temporary home with a fake
-// account and fake screening, and the CLI talks to it as a separate process, as an agent would. The tests
-// observe only what a user or the mail provider can see: CLI output, the approval console, the rows of
-// fake-provider.db, the server log, and audit.jsonl. The check for leaked mail content also reads cache.db.
+// Package e2e drives the real binaries: one process runs amgd serve on a temporary home with a fake account and
+// fake screening, amg talks to it as a separate process, as an agent would, and amgd commands manage it as the
+// operator would. The tests observe only what a user, an agent, or the mail provider can see: command output and
+// exit codes, the approval console, the rows of fake-provider.db, the daemon log, config.toml, and audit.jsonl.
+// The check for leaked mail content also reads cache.db.
 package e2e_test
 
 import (
@@ -11,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net"
 	"net/http"
@@ -37,9 +39,9 @@ const (
 	processTimeout = 60 * time.Second
 )
 
-// binary is the agentmailguard binary that TestMain builds once for every test. When the tests run with the
-// race detector, the binary has it too (buildFlags), so a data race in serve or the CLI fails the test.
-var binary string
+// amgBinary and amgdBinary are the binaries that TestMain builds once for every test. When the tests run with
+// the race detector, the binaries have it too (buildFlags), so a data race in serve or a command fails the test.
+var amgBinary, amgdBinary string
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "agentmailguard-e2e")
@@ -47,58 +49,101 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	binary = filepath.Join(dir, "agentmailguard")
-	build := exec.Command("go", append(append([]string{"build"}, buildFlags...), "-o", binary, "./cmd/agentmailguard")...)
-	build.Dir = "../.."
-	if out, err := build.CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "build: %v\n%s", err, out)
-		os.Exit(1)
+	amgBinary, amgdBinary = filepath.Join(dir, "amg"), filepath.Join(dir, "amgd")
+	for binary, pkg := range map[string]string{amgBinary: "./cmd/amg", amgdBinary: "./cmd/amgd"} {
+		build := exec.Command("go", append(append([]string{"build"}, buildFlags...), "-o", binary, pkg)...)
+		build.Dir = "../.."
+		if out, err := build.CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "build: %v\n%s", err, out)
+			os.Exit(1)
+		}
 	}
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
 }
 
-// server is the home of one serve process, the process while it runs, and the client side of it.
+// server is the home of one daemon, the daemon process while it runs, and the client side of it.
 type server struct {
 	t                *testing.T
 	home, clientHome string
 	api, console     string
+	pid              int
 	stop             func()
 	mu               sync.Mutex
 	log              bytes.Buffer
 }
 
-// start writes a home with the fake account demo, fake screening, the file credential backend, an approval
+// demo is the key of the fake account demo: the email that amgd account add gives a fake account.
+const demo = "demo@fake.invalid"
+
+// start writes a home with the fake account demo, fake screening, the file credential backend, a console
 // password, and the extra config text (for example a [policy] table), seeds fake-provider.db from
-// testdata/seed.sql, and runs serve until the test ends. When the test ends, it checks that serve stopped
-// cleanly and that no seeded text reached the server log, audit.jsonl, or cache.db.
+// testdata/seed.sql, and runs the daemon until the test ends. When the test ends, it checks that the daemon
+// stopped cleanly and that no seeded text reached the daemon log, audit.jsonl, or cache.db.
 func start(t *testing.T, extra string) *server {
 	t.Helper()
-	s := &server{t: t, home: t.TempDir(), clientHome: t.TempDir(), api: freeAddress(t), console: freeAddress(t)}
-	t.Cleanup(s.assertNoMailContent) // registered first, so it runs after serve stopped
-	config := fmt.Sprintf("[credentials]\nbackend='file'\n[screening]\nprovider='fake'\n[approvals]\nlisten='%s'\n%s\n[accounts.demo]\nprovider='fake'\n", s.console, extra)
-	if err := os.WriteFile(filepath.Join(s.home, "config.toml"), []byte(config), 0600); err != nil {
-		t.Fatal(err)
-	}
+	s := home(t, extra)
 	s.seed()
-	set := exec.Command(binary, "auth", "set-approval-password", "--home", s.home)
-	set.Env = s.serverEnv()
-	set.Stdin = strings.NewReader(consolePassword + "\n")
-	if out, err := set.CombinedOutput(); err != nil {
-		t.Fatalf("set-approval-password: %v %s", err, out)
-	}
+	s.amgdOK(strings.NewReader(consolePassword+"\n"), "config", "set", "console.password")
 	s.serve()
 	return s
 }
 
-// serve runs serve on the home and waits until it listens. All that serve writes to stderr goes to the server
-// log, with no line limit. Wait returns an error when serve fails, also when the race detector found a data
-// race (exit code 66), or when the copy of stderr fails; stop reports it.
+// home writes the home of start without a console password, a seed, or a daemon.
+func home(t *testing.T, extra string) *server {
+	t.Helper()
+	s := &server{t: t, home: t.TempDir(), clientHome: t.TempDir(), api: freeAddress(t), console: freeAddress(t)}
+	t.Cleanup(s.assertNoMailContent) // registered first, so it runs after the daemon stopped
+	config := fmt.Sprintf("version = 1\ndefault_account = 'demo'\n[credentials]\nbackend='file'\n[screening]\nprovider='fake'\n[console]\nlisten='%s'\n%s\n[accounts.demo]\nprovider='fake'\nemail='%s'\n", s.console, extra, demo)
+	if err := os.WriteFile(filepath.Join(s.home, "config.toml"), []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// amgd runs an amgd command on the home with stdin, as the operator on the daemon host would.
+func (s *server) amgd(stdin io.Reader, args ...string) (string, string, int) {
+	s.t.Helper()
+	ctx, cancel := context.WithTimeout(s.t.Context(), processTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, amgdBinary, append([]string{"--home", s.home}, args...)...)
+	cmd.Env = append(s.serverEnv(), "GORACE=atexit_sleep_ms=0")
+	cmd.Stdin = stdin
+	var out, errout bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errout
+	code := exitCode(cmd.Run())
+	return out.String(), errout.String(), code
+}
+
+// amgdOK runs an amgd command and fails the test unless it exits 0.
+func (s *server) amgdOK(stdin io.Reader, args ...string) (string, string) {
+	s.t.Helper()
+	out, errout, code := s.amgd(stdin, args...)
+	if code != 0 {
+		s.t.Fatalf("amgd %v: exit %d stdout %q stderr %q", args, code, out, errout)
+	}
+	return out, errout
+}
+
+// exitCode is the exit code of a finished command: -1 when it did not run.
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	if exit, ok := err.(*exec.ExitError); ok {
+		return exit.ExitCode()
+	}
+	return -1
+}
+
+// serve runs amgd serve on the home and waits until it listens. All that the daemon writes to stderr goes to the
+// daemon log, with no line limit. Wait returns an error when the daemon fails, also when the race detector found
+// a data race (exit code 66), or when the copy of stderr fails; stop reports it.
 func (s *server) serve() {
 	s.t.Helper()
 	listening, done := make(chan struct{}), make(chan error, 1)
-	cmd := exec.Command(binary, "serve", "--home", s.home, "--listen", s.api)
+	cmd := exec.Command(amgdBinary, "--home", s.home, "serve", "--listen", s.api)
 	cmd.Env = s.serverEnv()
 	cmd.Stderr = &logWriter{s: s, listening: listening}
 	if err := cmd.Start(); err != nil {
@@ -108,11 +153,12 @@ func (s *server) serve() {
 	select {
 	case <-listening:
 	case err := <-done:
-		s.t.Fatalf("serve stopped: %v\n%s", err, s.logText())
+		s.t.Fatalf("daemon stopped: %v\n%s", err, s.logText())
 	case <-time.After(processTimeout):
 		_ = cmd.Process.Kill()
-		s.t.Fatalf("serve did not listen\n%s", s.logText())
+		s.t.Fatalf("daemon did not listen\n%s", s.logText())
 	}
+	s.pid = cmd.Process.Pid
 	var once sync.Once
 	s.stop = func() {
 		once.Do(func() {
@@ -120,19 +166,19 @@ func (s *server) serve() {
 			select {
 			case err := <-done:
 				if err != nil {
-					s.t.Errorf("serve shutdown: %v\n%s", err, s.logText())
+					s.t.Errorf("daemon shutdown: %v\n%s", err, s.logText())
 				}
 			case <-time.After(processTimeout):
 				_ = cmd.Process.Kill()
-				s.t.Error("serve did not stop")
+				s.t.Error("daemon did not stop")
 			}
 		})
 	}
 	s.t.Cleanup(s.stop)
 }
 
-// logWriter appends all that serve writes to stderr to the server log, and closes listening when serve writes
-// the line "server listening". exec calls Write from one goroutine.
+// logWriter appends all that the daemon writes to stderr to the daemon log, and closes listening when the daemon
+// writes the line "daemon listening". exec calls Write from one goroutine.
 type logWriter struct {
 	s         *server
 	line      []byte // the part of the current line that serve wrote, until serve listens
@@ -152,7 +198,7 @@ func (w *logWriter) Write(p []byte) (int, error) {
 		if end < 0 {
 			return len(p), nil
 		}
-		if string(w.line[:end]) == "server listening" {
+		if string(w.line[:end]) == "daemon listening" {
 			close(w.listening)
 			w.line, w.listening = nil, nil
 			return len(p), nil
@@ -161,7 +207,7 @@ func (w *logWriter) Write(p []byte) (int, error) {
 	}
 }
 
-// restart stops serve with SIGTERM and runs it again on the same home.
+// restart stops the daemon with SIGTERM and runs it again on the same home.
 func (s *server) restart() {
 	s.t.Helper()
 	s.stop()
@@ -169,7 +215,7 @@ func (s *server) restart() {
 }
 
 func (s *server) serverEnv() []string {
-	return []string{"HOME=" + s.home, "AGENTMAILGUARD_CREDENTIALS_PASSWORD=" + filePassword}
+	return []string{"HOME=" + s.home, "AMG_CREDENTIALS_PASSWORD=" + filePassword}
 }
 
 func (s *server) seed() {
@@ -310,7 +356,7 @@ func (s *server) assertTables(want tables) {
 // value returns the text of one column of one message.
 func (s *server) value(column, id string) string {
 	s.t.Helper()
-	got := s.column(`SELECT `+column+` FROM messages WHERE account = 'demo' AND id = ?`, id)
+	got := s.column(`SELECT `+column+` FROM messages WHERE account = ? AND id = ?`, demo, id)
 	if len(got) != 1 {
 		s.t.Fatalf("message %s: %d rows", id, len(got))
 	}
@@ -327,30 +373,68 @@ func (s *server) db() *sql.DB {
 	return db
 }
 
+// reload runs amgd reload, which sends the signal and returns at once, then waits until the daemon log shows one
+// more reload result. It returns that line: "reload ok" or "reload refused: CODE; old settings kept".
+func (s *server) reload() string {
+	s.t.Helper()
+	before := s.reloads()
+	if out, errout, code := s.amgd(nil, "reload"); code != 0 || out != "" || errout != fmt.Sprintf("reload sent to daemon (PID %d); see the daemon log\n", s.pid) {
+		s.t.Fatalf("amgd reload: exit %d stdout %q stderr %q", code, out, errout)
+	}
+	return s.awaitReload(before)
+}
+
+// awaitReload waits until the daemon log has more reload results than before, and returns the newest.
+func (s *server) awaitReload(before int) string {
+	s.t.Helper()
+	deadline := time.Now().Add(processTimeout)
+	for time.Now().Before(deadline) {
+		if lines := s.reloadLines(); len(lines) > before {
+			return lines[len(lines)-1]
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	s.t.Fatalf("no reload result\n%s", s.logText())
+	return ""
+}
+
+func (s *server) reloads() int { return len(s.reloadLines()) }
+
+// reloadLines are the reload results in the daemon log, in order.
+func (s *server) reloadLines() []string {
+	var out []string
+	for line := range strings.Lines(s.logText()) {
+		if line = strings.TrimSuffix(line, "\n"); line == "reload ok" || strings.HasPrefix(line, "reload refused: ") {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
 func (s *server) logText() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.log.String()
 }
 
-// amg runs the CLI against the server with an empty client home, as an agent on another host would. Times
-// in meeting commands are in UTC. A CLI with the race detector does not wait 1 s before it exits
-// (GORACE atexit_sleep_ms); it still exits with code 66 when it found a data race.
+// amg runs the agent's client against the daemon with an empty client home, as an agent on another host would.
+// AMG_HOST names the daemon. Times in meeting commands are in UTC. A binary with the race detector does not wait
+// 1 s before it exits (GORACE atexit_sleep_ms); it still exits with code 66 when it found a data race.
 func (s *server) amg(args ...string) (string, string, int) {
+	s.t.Helper()
+	return s.amgEnv([]string{"AMG_HOST=http://" + s.api}, args...)
+}
+
+// amgEnv runs amg with extra environment variables.
+func (s *server) amgEnv(env []string, args ...string) (string, string, int) {
 	s.t.Helper()
 	ctx, cancel := context.WithTimeout(s.t.Context(), processTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, append([]string{"--server", "http://" + s.api}, args...)...)
-	cmd.Env = []string{"HOME=" + s.clientHome, "AGENTMAILGUARD_HOME=" + filepath.Join(s.clientHome, "none"), "TZ=UTC", "GORACE=atexit_sleep_ms=0"}
+	cmd := exec.CommandContext(ctx, amgBinary, args...)
+	cmd.Env = append([]string{"HOME=" + s.clientHome, "TZ=UTC", "GORACE=atexit_sleep_ms=0"}, env...)
 	var out, errout bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errout
-	code := 0
-	if err := cmd.Run(); err != nil {
-		code = -1
-		if exit, ok := err.(*exec.ExitError); ok {
-			code = exit.ExitCode()
-		}
-	}
+	code := exitCode(cmd.Run())
 	return out.String(), errout.String(), code
 }
 
@@ -380,7 +464,7 @@ type pending struct {
 	URL        string `json:"url"`
 }
 
-// held runs a write command and fails the test unless the server stored it as a pending item.
+// held runs a write command and fails the test unless the daemon stored it as a pending item.
 func (s *server) held(args ...string) pending {
 	s.t.Helper()
 	p := decode[pending](s.t, s.ok(args...))
@@ -425,15 +509,15 @@ func (s *server) approve(approvalID string) {
 }
 
 // assertNoMailContent checks that no name, subject, body, address, or code from the seed or the tests reached
-// the server log, audit.jsonl, or a table of cache.db other than pending. Every name, subject, and body starts
-// with canary-, and every address is in one of the domains below. It runs after serve stopped.
+// the daemon log, audit.jsonl, or a table of cache.db other than pending. Every name, subject, and body starts
+// with canary-, and every address is in one of the domains below. It runs after the daemon stopped.
 func (s *server) assertNoMailContent() {
 	s.t.Helper()
 	audit, err := os.ReadFile(filepath.Join(s.home, "audit.jsonl"))
 	if err != nil && !os.IsNotExist(err) {
 		s.t.Fatal(err)
 	}
-	texts := map[string]string{"server log": s.logText(), "audit.jsonl": string(audit)}
+	texts := map[string]string{"daemon log": s.logText(), "audit.jsonl": string(audit)}
 	maps.Copy(texts, s.cacheText())
 	for name, text := range texts {
 		for _, canary := range []string{"canary-", "example.test", "evil.test", "demo.test", "482913", "hunter2"} {
@@ -446,7 +530,7 @@ func (s *server) assertNoMailContent() {
 
 // cacheText opens cache.db read-only and returns, for each column of each table except pending, the non-NULL
 // values one per line, keyed "cache.db TABLE.COLUMN". pending is the one table that may hold mail content: the
-// request arguments of writes that wait for approval. cacheText returns nothing when serve made no cache.db.
+// request arguments of writes that wait for approval. cacheText returns nothing when the daemon made no cache.db.
 func (s *server) cacheText() map[string]string {
 	s.t.Helper()
 	path := filepath.Join(s.home, "cache.db")

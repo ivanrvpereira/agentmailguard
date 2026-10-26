@@ -2,7 +2,6 @@ package server_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"maps"
 	"net/http"
@@ -18,24 +17,6 @@ import (
 
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 )
-
-// meetingNativeStore grants the M365 write scope to "work" only, so "other" proves the missing-scope refusal.
-// The Gmail account has the calendar write grant.
-type meetingNativeStore struct{ nativeStore }
-
-func (s *meetingNativeStore) LoadOAuth(ctx context.Context, p, a string) (credentials.OAuth, error) {
-	if p == "gmail" {
-		return credentials.OAuth{AccessToken: "synthetic-gmail", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Scopes: strings.Fields(gmailWriteGrant), Username: "gmail@example.test"}, nil
-	}
-	if p != "m365" {
-		return s.nativeStore.LoadOAuth(ctx, p, a)
-	}
-	scopes := "User.Read Mail.ReadWrite Calendars.Read Calendars.ReadWrite MailboxSettings.Read"
-	if a == "other" {
-		scopes = "User.Read Mail.ReadWrite Calendars.Read MailboxSettings.Read"
-	}
-	return credentials.OAuth{AccessToken: statusJWT(scopes), ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Username: "work@example.test"}, nil
-}
 
 // meetingGraph is a stateful fake of the Graph event endpoints. Created events keep every posted field.
 type meetingGraph struct {
@@ -114,7 +95,7 @@ func syntheticEvent(id string, organizer bool, extra map[string]any) map[string]
 	return e
 }
 
-// The compiled client only knows the server URL and its own time zone; it never sees configuration or credentials.
+// The compiled client only knows the daemon URL and its own time zone; it never sees configuration or credentials.
 func TestNativeBinaryMeetingWorkflow(t *testing.T) {
 	g := &meetingGraph{events: map[string]map[string]any{"recurring-1": syntheticEvent("recurring-1", true, map[string]any{"type": "occurrence"})}}
 	for _, r := range []string{"accept", "tentative", "decline"} {
@@ -125,13 +106,17 @@ func TestNativeBinaryMeetingWorkflow(t *testing.T) {
 		"g-recurring": googleEvent("g-recurring", true, map[string]any{"recurrence": []string{"RRULE:FREQ=WEEKLY"}}),
 	}}
 	api := newNativeAPI()
+	// The M365 write grant is the login of work only, so other proves the missing-scope refusal.
+	logins := map[string]credentials.OAuth{
+		"m365/" + workEmail:   m365Login(m365Grant + " Calendars.ReadWrite"),
+		"m365/" + otherEmail:  m365Login(m365Grant),
+		"gmail/" + gmailEmail: gmailLogin(gmailWriteGrant),
+	}
 	// Lisbon leaves summer time on 2026-10-25, between the invite and the update below.
-	_, home, run := startNative(t, buildNative(t), nativeFakes{
-		creds: &meetingNativeStore{}, graph: g.handle, jev: api.jev,
-		google: google.handle,
-		now:    time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC), clientEnv: []string{"TZ=Europe/Lisbon"},
+	d, run := startNative(t, buildNative(t), nativeFakes{
+		logins: logins, config: calendarAllow, jev: api, graph: g.handle, google: google.handle,
+		now: time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC), clientEnv: []string{"TZ=Europe/Lisbon"},
 	})
-	enableCalendarWrites(t, home)
 	// write runs one successful command and returns its stdout and the Graph writes it caused.
 	write := func(args ...string) (string, []externalWrite) {
 		t.Helper()
@@ -290,7 +275,7 @@ func TestNativeBinaryMeetingWorkflow(t *testing.T) {
 
 	verifyNativeGmailMeetings(t, google, run)
 
-	log, err := os.ReadFile(filepath.Join(home, "audit.jsonl"))
+	log, err := os.ReadFile(filepath.Join(d.home, "audit.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +285,7 @@ func TestNativeBinaryMeetingWorkflow(t *testing.T) {
 			t.Errorf("audit has %d %s records, want %d", n, operation, count)
 		}
 	}
-	for _, canary := range []string{"private-", "example.test", "synthetic-key", "availability"} {
+	for _, canary := range []string{"private-", "example.test", "screening-key", "availability"} {
 		if bytes.Contains(log, []byte(canary)) {
 			t.Fatalf("audit contains %s", canary)
 		}
