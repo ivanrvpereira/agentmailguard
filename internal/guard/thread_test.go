@@ -58,11 +58,11 @@ func TestThreadScreensEachMessageAsListDoesAndShowsItsFolders(t *testing.T) {
 	}
 	for _, m := range got.Messages {
 		if m.Verdict != model.Red || m.Subject != nil || m.Sender == nil || m.Sender.Name != nil || m.To != nil || m.Attachments != nil {
-			t.Fatalf("red message exposed hidden fields: %+v", m.MailSummary)
+			t.Fatalf("red message exposed hidden fields: %+v", m)
 		}
 	}
 	list, err := g.List(ctx, "inbox", 25, 0)
-	if err != nil || len(list) != 2 || !reflect.DeepEqual(list[0], got.Messages[0].MailSummary) || !reflect.DeepEqual(list[1], got.Messages[1].MailSummary) {
+	if err != nil || len(list) != 2 || !reflect.DeepEqual(list[0], got.Messages[0]) || !reflect.DeepEqual(list[1], got.Messages[1]) {
 		t.Fatalf("list=%+v thread=%+v err=%v", list, got.Messages, err)
 	}
 }
