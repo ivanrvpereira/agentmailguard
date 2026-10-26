@@ -126,7 +126,7 @@ func TestSearchMatchesCaseInsensitiveSubstringsAcrossTheAccount(t *testing.T) {
 	m, _ := mailbox(t)
 	ctx := context.Background()
 	text := func(s string) *string { return &s }
-	day := func(s string) *time.Time { d, _ := time.Parse("2006-01-02", s); return &d }
+	at := func(s string) *time.Time { d, _ := time.Parse(time.RFC3339, s); return &d }
 	archive := "archive"
 	for _, tc := range []struct {
 		name  string
@@ -139,7 +139,8 @@ func TestSearchMatchesCaseInsensitiveSubstringsAcrossTheAccount(t *testing.T) {
 		{"text over sender", model.SearchQuery{Text: text("carla@")}, 25, []string{"arc"}},
 		{"sender name", model.SearchQuery{Sender: text("ana")}, 25, []string{"mid", "old"}},
 		{"subject only", model.SearchQuery{Subject: text("friday")}, 25, []string{}},
-		{"after and before are inclusive dates", model.SearchQuery{After: day("2026-03-15"), Before: day("2026-03-20")}, 25, []string{"arc", "mid"}},
+		{"after is inclusive and before exclusive", model.SearchQuery{After: at("2026-03-15T09:00:00Z"), Before: at("2026-03-20T09:00:00Z")}, 25, []string{"mid"}},
+		{"bounds are exact instants in any zone", model.SearchQuery{After: at("2026-03-15T10:00:01+01:00"), Before: at("2026-03-20T10:00:01+01:00")}, 25, []string{"arc"}},
 		{"folder", model.SearchQuery{Text: text("invoice"), Folder: &archive}, 25, []string{"arc"}},
 		{"size", model.SearchQuery{Text: text("invoice")}, 2, []string{"draft", "arc"}},
 	} {

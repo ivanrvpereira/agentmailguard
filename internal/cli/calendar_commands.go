@@ -9,7 +9,7 @@ import (
 
 const wallClock = "2006-01-02 15:04"
 
-// now is the client clock; its location is the client time zone for every calendar command.
+// now is the client clock; its location is the client time zone for every date option and calendar command.
 func (r *runner) now() time.Time {
 	if r.opts.Now == nil {
 		return time.Now()

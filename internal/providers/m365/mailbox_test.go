@@ -69,10 +69,10 @@ func TestReadCollectionsSearchAndCurrentNestedFolders(t *testing.T) {
 			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "listed", "body": map[string]string{"content": "unrequested"}}}})
 		case "/v1.0/me/messages":
 			q := r.URL.Query()
-			if q.Get("$search") != `"from:bob subject:\"hello world\" received>=2026-09-21 received<=2026-09-21 back\\slash"` || !strings.Contains(q.Get("$select"), "internetMessageHeaders") {
+			if q.Get("$search") != `"from:bob subject:\"hello world\" received>=2026-09-20 received<=2026-09-22 back\\slash"` || !strings.Contains(q.Get("$select"), "internetMessageHeaders") {
 				t.Errorf("bad search %s", q.Get("$search"))
 			}
-			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "searched"}}})
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "searched", "receivedDateTime": "2026-09-21T00:00:00Z"}}})
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
@@ -93,8 +93,8 @@ func TestReadCollectionsSearchAndCurrentNestedFolders(t *testing.T) {
 	if err != nil || len(list) != 1 || list[0].Body != nil {
 		t.Fatalf("list %v %v", list, err)
 	}
-	sender, subject, term := "bob", "hello world", `back\slash`
-	page, err = b.Search(ctx, model.SearchQuery{Sender: &sender, Subject: &subject, Text: &term, After: &now, Before: &now}, model.PageRequest{Size: 10}, true)
+	sender, subject, term, later := "bob", "hello world", `back\slash`, now.Add(time.Hour)
+	page, err = b.Search(ctx, model.SearchQuery{Sender: &sender, Subject: &subject, Text: &term, After: &now, Before: &later}, model.PageRequest{Size: 10}, true)
 	search := page.Messages
 	if err != nil || len(search) != 1 || search[0].ID != "searched" || search[0].Body != nil {
 		t.Fatalf("search %v %v", search, err)
@@ -239,6 +239,46 @@ func TestSearchByRecipientMatchesToOrCc(t *testing.T) {
 	}
 	want := []string{`"(to:\"Ana Board\" OR cc:\"Ana Board\")"`, `"from:bob@example.test (to:\"Ana Board\" OR cc:\"Ana Board\")"`}
 	if !reflect.DeepEqual(searches, want) {
+		t.Fatalf("$search=%q want %q", searches, want)
+	}
+}
+
+// KQL received reads only a day, so Search asks for one more UTC day on each side and keeps the messages received
+// in [After, Before). The page keeps Graph's nextLink even when the filter leaves fewer messages than $top. A message
+// without receivedDateTime is outside any bound.
+func TestSearchWidensReceivedDaysAndKeepsExactTimes(t *testing.T) {
+	var searches []string
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		searches = append(searches, r.URL.Query().Get("$search"))
+		next := r.URL.Query()
+		next.Set("$skiptoken", "opaque-token")
+		jsonResponse(w, map[string]any{"value": []any{
+			map[string]any{"id": "at-before", "receivedDateTime": "2026-03-09T07:00:00Z"},
+			map[string]any{"id": "last-second", "receivedDateTime": "2026-03-09T06:59:59Z"},
+			map[string]any{"id": "at-after", "receivedDateTime": "2026-03-07T07:00:00Z"},
+			map[string]any{"id": "day-before", "receivedDateTime": "2026-03-07T06:59:59Z"},
+			map[string]any{"id": "no-time"},
+		}, "@odata.nextLink": "http://" + r.Host + r.URL.Path + "?" + next.Encode()})
+	})
+	zone := time.FixedZone("UTC-7", -7*60*60)
+	after, before := time.Date(2026, 3, 7, 0, 0, 0, 0, zone), time.Date(2026, 3, 9, 0, 0, 0, 0, zone)
+	for _, tc := range []struct {
+		query model.SearchQuery
+		want  []string
+	}{
+		{model.SearchQuery{After: &after, Before: &before}, []string{"last-second", "at-after"}},
+		{model.SearchQuery{Before: &before}, []string{"last-second", "at-after", "day-before"}},
+	} {
+		page, err := c.Mailbox().Search(t.Context(), tc.query, model.PageRequest{Size: 5}, false)
+		got := []string{}
+		for _, m := range page.Messages {
+			got = append(got, m.ID)
+		}
+		if err != nil || !reflect.DeepEqual(got, tc.want) || !strings.Contains(page.Next, "opaque-token") {
+			t.Fatalf("ids=%v next=%q err=%v", got, page.Next, err)
+		}
+	}
+	if want := []string{`"received>=2026-03-06 received<=2026-03-10"`, `"received<=2026-03-10"`}; !reflect.DeepEqual(searches, want) {
 		t.Fatalf("$search=%q want %q", searches, want)
 	}
 }

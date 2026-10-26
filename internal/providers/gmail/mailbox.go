@@ -180,11 +180,18 @@ func (m *mailbox) Search(ctx context.Context, query model.SearchQuery, page mode
 	if query.Subject != nil && *query.Subject != "" {
 		terms = append(terms, "subject:"+phrase(*query.Subject))
 	}
+	// Gmail reads a date in after: and before: as midnight Pacific time; a value in seconds is an exact time
+	// (https://developers.google.com/workspace/gmail/api/guides/filtering). The guide does not say whether the
+	// boundary second matches, so the query reaches one second past each bound, and Search keeps exact times.
 	if query.After != nil {
-		terms = append(terms, "after:"+query.After.Format("2006/01/02"))
+		terms = append(terms, "after:"+strconv.FormatInt(query.After.Unix()-1, 10))
 	}
 	if query.Before != nil {
-		terms = append(terms, "before:"+query.Before.Format("2006/01/02"))
+		end := query.Before.Unix()
+		if query.Before.Nanosecond() > 0 {
+			end++
+		}
+		terms = append(terms, "before:"+strconv.FormatInt(end+1, 10))
 	}
 	if query.Text != nil && *query.Text != "" {
 		terms = append(terms, phrase(*query.Text))
@@ -197,7 +204,14 @@ func (m *mailbox) Search(ctx context.Context, query model.SearchQuery, page mode
 		}
 		q.Set("labelIds", id)
 	}
-	return m.messages(ctx, q, page)
+	found, err := m.messages(ctx, q, page)
+	if err != nil {
+		return found, err
+	}
+	// ReceivedAt is internalDate. The wider query can leave fewer messages than the page size; Next still continues
+	// the same Gmail search.
+	found.Messages = slices.DeleteFunc(found.Messages, func(msg model.Message) bool { return !query.Received(msg.ReceivedAt) })
+	return found, nil
 }
 
 // Thread takes the message IDs of the whole conversation from threads.get, with every label, spam and trash

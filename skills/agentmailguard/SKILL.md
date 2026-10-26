@@ -56,7 +56,7 @@ agentmailguard mail get ID
 agentmailguard mail thread THREAD_ID
 agentmailguard mail link ID L1 [L2 ...]
 agentmailguard mail link ID --all
-agentmailguard calendar list [--from today|+Nd|YYYY-MM-DD] [--to +7d|YYYY-MM-DD]
+agentmailguard calendar list [--from today|+Nd|YYYY-MM-DD] [--to today|+Nd|YYYY-MM-DD]
 agentmailguard calendar get ID
 agentmailguard calendar search TEXT [--page NEXT_PAGE]
 agentmailguard calendar availability --to ADDR [--to ADDR] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'
@@ -86,6 +86,8 @@ agentmailguard stats --days 30
 ```
 
 `mail search` needs at least one of `--text`, `--from`, `--to`, `--subject`, `--after`, or `--before`. `--to` matches the To and Cc addresses.
+
+Dates: a day runs from 00:00 to the end of the day on the machine where you run the CLI, and the last day is included. `mail search --after DAY --before DAY` includes both days, `mail organize --until DAY` includes that day, and `calendar list --to DAY` includes that whole day (default: today through seven days from today). `--to +Nd` counts from `--from`; `Nd`, `Nw`, and `Nm` for `organize` count back from today. `calendar availability` and meeting commands take exact local times, not days. A `mail search` with dates can return fewer messages than `--count` on a page and still have `next_page`.
 
 `mail list`, `mail search`, and `calendar search` return one page: `{"messages": [...], "next_page": "..."}` (`"events"` for `calendar search`). `next_page` is there only when there are more results. For the next page, always run the same command with the same options and add `--page VALUE`; on Microsoft 365 mail, a value from other options is refused, and elsewhere it is passed to the provider as is. Without `--count` the provider's default page size applies: 100 messages on Gmail, 10 on Microsoft 365. `mail list` without `--folder` reads the Inbox; this is our choice, because the providers differ without a folder.
 
@@ -216,8 +218,7 @@ Done when the applied run's `stats` (`applied`, `tagged`, `skipped`, `failed`) a
 
 - **Server unreachable:** report it and stop. Do not run `serve` or look for another way into the mailbox.
 - **Forbidden commands:** never run `serve`, `auth login`, `auth set-screening-key`, `auth set-approval-password`, `auth migrate`, `auth change-password`, or `cache clear`, and never pass `--home`. Never read files in the server's home directory (`config.toml`, `credentials.*`, `cache.db`, `fake-provider.db`, `audit.jsonl`), and never call Microsoft Graph or the Gmail API directly. These bypass the guard.
-- **Organize dates** use the server clock and UTC midnight. `--until` is exclusive. Explicit dates cannot be in the future.
-- **Calendar dates** use the client's local timezone. `--to +Nd` counts from `--from`.
+- **Dates** are local days on your machine, and the last day is included (see Dates above). `organize --since` cannot be in the future.
 - **Meeting refusals:** for `refused by policy: calendar_...`, see [Write policy results](#write-policy-results). `missing_scopes` means the login lacks the calendar write grant (`Calendars.ReadWrite` on Microsoft 365, `calendar.events.owned` on Gmail); the user must log in again on the server host and restart the server. Report other `calendar write refused` and `calendar response refused` errors as they are.
 - **Meeting size:** an invite accepts any number of `--to` and `--optional` attendees, up to the provider's limit, and any length, and distribution lists are not detected. Check large or long meetings with the user.
 - **Empty `--body ''`** is a valid explicit value for `draft update`. It clears the body.

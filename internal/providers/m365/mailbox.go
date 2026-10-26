@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -65,7 +66,7 @@ func content(d object) (*string, *model.ContentType) {
 	return value, typ
 }
 func message(d object, body bool) (model.Message, error) {
-	m := model.Message{ID: text(d, "id"), ThreadID: text(d, "conversationId"), Subject: text(d, "subject"), IsDraft: boolean(d, "isDraft"), IsRead: boolean(d, "isRead"), Flag: model.NoFlag, Categories: stringsAt(d, "categories"), Attachments: names(d), To: addresses(d, "toRecipients"), CC: addresses(d, "ccRecipients"), ReceivedAt: time.Unix(0, 0).UTC(), Folders: []string{}}
+	m := model.Message{ID: text(d, "id"), ThreadID: text(d, "conversationId"), Subject: text(d, "subject"), IsDraft: boolean(d, "isDraft"), IsRead: boolean(d, "isRead"), Flag: model.NoFlag, Categories: stringsAt(d, "categories"), Attachments: names(d), To: addresses(d, "toRecipients"), CC: addresses(d, "ccRecipients"), ReceivedAt: model.UnknownReceived, Folders: []string{}}
 	if m.ID == "" {
 		return m, invalidMetadata
 	}
@@ -155,6 +156,11 @@ func (b *mailbox) Thread(ctx context.Context, thread string) ([]model.Message, e
 	}
 	return out, nil
 }
+
+// kql builds the $search value. KQL received takes a day and ignores any time, in the search time zone or UTC
+// without one (MS-KQL Date Tokens,
+// https://learn.microsoft.com/en-us/openspecs/sharepoint_protocols/ms-kql/21b23dbb-6c49-4d35-86e4-80fb1d66b301),
+// so the days reach one UTC day past each bound, which covers any time zone; Search then keeps exact times.
 func kql(q model.SearchQuery) string {
 	term := func(s string) string {
 		s = strings.ReplaceAll(s, `\`, `\\`)
@@ -177,10 +183,10 @@ func kql(q model.SearchQuery) string {
 		parts = append(parts, "subject:"+term(*q.Subject))
 	}
 	if q.After != nil {
-		parts = append(parts, "received>="+q.After.Format("2006-01-02"))
+		parts = append(parts, "received>="+q.After.UTC().AddDate(0, 0, -1).Format("2006-01-02"))
 	}
 	if q.Before != nil {
-		parts = append(parts, "received<="+q.Before.Format("2006-01-02"))
+		parts = append(parts, "received<="+q.Before.UTC().AddDate(0, 0, 1).Format("2006-01-02"))
 	}
 	if q.Text != nil && *q.Text != "" {
 		parts = append(parts, term(*q.Text))
@@ -194,7 +200,14 @@ func (b *mailbox) Search(ctx context.Context, query model.SearchQuery, page mode
 	}
 	q := messageQuery(body)
 	q.Set("$search", kql(query))
-	return b.page(ctx, path, q, page, body)
+	found, err := b.page(ctx, path, q, page, body)
+	if err != nil {
+		return found, err
+	}
+	// The KQL days are wider than [After, Before), so a page can hold fewer messages than its size; Next still
+	// continues the same Graph search.
+	found.Messages = slices.DeleteFunc(found.Messages, func(m model.Message) bool { return !query.Received(m.ReceivedAt) })
+	return found, nil
 }
 
 // maxTop is the largest $top that Graph documents for messages

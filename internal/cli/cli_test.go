@@ -42,7 +42,7 @@ func TestCommandsUseHTTPWithoutLocalState(t *testing.T) {
 		{[]string{"mail", "get", "m"}, "mail.get", `{"id":"m"}`},
 		{[]string{"mail", "thread", "t"}, "mail.thread", `{"id":"t"}`},
 		{[]string{"mail", "search", "--text", "x"}, "mail.search", `{"text":"x"}`},
-		{[]string{"mail", "search", "--text", "x", "--from", "alice", "--to", "bob", "--subject", "s", "--after", "2026-01-01", "--before", "2026-02-01", "--folder", "f", "--count", "9", "--page", "next-9"}, "mail.search", `{"text":"x","from":"alice","to":"bob","subject":"s","after":"2026-01-01","before":"2026-02-01","folder":"f","count":9,"page":"next-9"}`},
+		{[]string{"mail", "search", "--text", "x", "--from", "alice", "--to", "bob", "--subject", "s", "--after", "2026-01-01", "--before", "2026-02-01", "--folder", "f", "--count", "9", "--page", "next-9"}, "mail.search", `{"text":"x","from":"alice","to":"bob","subject":"s","after":"2026-01-01T00:00:00-05:00","before":"2026-02-02T00:00:00-05:00","folder":"f","count":9,"page":"next-9"}`},
 		{[]string{"mail", "link", "m", "L1", "L2"}, "mail.link", `{"id":"m","links":["L1","L2"]}`},
 		{[]string{"mail", "link", "m", "--all"}, "mail.link", `{"id":"m","all":true}`},
 		{[]string{"mail", "folders"}, "mail.folders", `{}`},
@@ -54,8 +54,11 @@ func TestCommandsUseHTTPWithoutLocalState(t *testing.T) {
 		{[]string{"mail", "unread", "a"}, "mail.unread", `{"ids":["a"]}`},
 		{[]string{"mail", "flag", "a", "--state", "complete", "b"}, "mail.flag", `{"ids":["a","b"],"state":"complete"}`},
 		{[]string{"mail", "categorize", "a", "--add", "One", "--add", "Two", "--remove", "Old"}, "mail.categorize", `{"ids":["a"],"add":["One","Two"],"remove":["Old"]}`},
-		{[]string{"mail", "organize", "--since", "1m", "--until", "1d", "--apply"}, "mail.organize", `{"since":"1m","until":"1d","apply":true}`},
-		{[]string{"calendar", "list", "--from", "2026-03-07", "--to", "+2d"}, "calendar.list", `{"start":"2026-03-07T00:00:00-05:00","end":"2026-03-09T00:00:00-04:00"}`},
+		{[]string{"mail", "organize", "--since", "1m", "--until", "1d", "--apply"}, "mail.organize", `{"since":"2026-02-28T00:00:00-05:00","until":"2026-03-31T00:00:00-04:00","apply":true}`},
+		{[]string{"mail", "organize"}, "mail.organize", `{"since":"2026-03-24T00:00:00-04:00"}`},
+		{[]string{"calendar", "list", "--from", "2026-03-07", "--to", "+1d"}, "calendar.list", `{"start":"2026-03-07T00:00:00-05:00","end":"2026-03-09T00:00:00-04:00"}`},
+		{[]string{"calendar", "list"}, "calendar.list", `{"start":"2026-03-31T00:00:00-04:00","end":"2026-04-08T00:00:00-04:00"}`},
+		{[]string{"calendar", "list", "--from", "2026-03-07", "--to", "2026-03-07"}, "calendar.list", `{"start":"2026-03-07T00:00:00-05:00","end":"2026-03-08T00:00:00-05:00"}`},
 		{[]string{"calendar", "get", "e"}, "calendar.get", `{"id":"e"}`},
 		{[]string{"calendar", "search", "budget plan"}, "calendar.search", `{"text":"budget plan"}`},
 		{[]string{"calendar", "search", "budget plan", "--page", "25"}, "calendar.search", `{"text":"budget plan","page":"25"}`},
@@ -225,7 +228,7 @@ func TestPrettyAliasesUseLastOption(t *testing.T) {
 }
 
 func TestUsageAndHelpNeedNoServerOrState(t *testing.T) {
-	for _, args := range [][]string{{"mail", "send", "x"}, {"draft", "update", "x"}, {"mail", "flag", "x", "--state", "urgent"}, {"mail", "get", "x", "y"}, {"stats", "--days", "0"}, {"mail", "link", "x"}, {"mail", "link", "x", "L1", "--all"}, {"mail", "get", "x", "--secret", "canary"}, {"calendar", "list", "--from", "tomorrow"}, {"calendar", "list", "--text", "x"}, {"calendar", "list", "--organizer", "x"}, {"calendar", "list", "--attendee", "x"}, {"calendar", "search"}, {"calendar", "search", "a", "b"}, {"calendar", "search", "a", "--from", "today"}, {"mail", "thread", "t", "--count", "3"}, {"mail", "list", "--skip", "2"}, {"mail", "thread", "t", "--page", "2"}, {"calendar", "search", "a", "--count", "3"}, {"mail", "organize", "--since", "0d"}, {"mail", "get", "x", "--home", "canary"},
+	for _, args := range [][]string{{"mail", "send", "x"}, {"draft", "update", "x"}, {"mail", "flag", "x", "--state", "urgent"}, {"mail", "get", "x", "y"}, {"stats", "--days", "0"}, {"mail", "link", "x"}, {"mail", "link", "x", "L1", "--all"}, {"mail", "get", "x", "--secret", "canary"}, {"calendar", "list", "--from", "tomorrow"}, {"calendar", "list", "--from", "2026-03-07", "--to", "2026-03-06"}, {"calendar", "list", "--text", "x"}, {"calendar", "list", "--organizer", "x"}, {"calendar", "list", "--attendee", "x"}, {"calendar", "search"}, {"calendar", "search", "a", "b"}, {"calendar", "search", "a", "--from", "today"}, {"mail", "thread", "t", "--count", "3"}, {"mail", "list", "--skip", "2"}, {"mail", "thread", "t", "--page", "2"}, {"calendar", "search", "a", "--count", "3"}, {"mail", "organize", "--since", "0d"}, {"mail", "get", "x", "--home", "canary"},
 		{"mail", "send", "--subject", "s", "--body", "b"}, {"mail", "send", "--to", "a", "--body", "b"}, {"mail", "send", "--to", "a", "--subject", "s"},
 		{"mail", "reply", "x"}, {"mail", "reply", "--body", "b"}, {"mail", "reply", "x", "y", "--body", "b"}, {"mail", "forward", "x"}, {"mail", "forward", "--to", "a"}} {
 		var out, errout bytes.Buffer
@@ -262,6 +265,61 @@ func TestOptionsFormattingIsRedacted(t *testing.T) {
 			if printed := fmt.Sprintf(verb, value); printed != "CLIOptions{redacted}" {
 				t.Errorf("%s bypasses redaction for %T: %s", verb, value, printed)
 			}
+		}
+	}
+}
+
+// Date options are client days: the first day starts at its local midnight and the last day ends at the next
+// local midnight. Relative organize units count back from today. Where a midnight falls in a DST gap
+// (America/Santiago on 2024-09-08), the day starts at its first instant, 01:00.
+func TestDateOptionsResolveToLocalMidnightsOnTheClientClock(t *testing.T) {
+	zone := func(name string) *time.Location {
+		loc, e := time.LoadLocation(name)
+		if e != nil {
+			t.Fatal(e)
+		}
+		return loc
+	}
+	lisbon, newYork, santiago := zone("Europe/Lisbon"), zone("America/New_York"), zone("America/Santiago")
+	utcMinus7 := time.FixedZone("UTC-7", -7*60*60)
+	for _, tc := range []struct {
+		now    time.Time
+		args   []string
+		params string
+	}{
+		{time.Date(2024, 3, 31, 23, 0, 0, 0, utcMinus7), []string{"mail", "organize", "--since", "1m"}, `{"since":"2024-02-29T00:00:00-07:00"}`},
+		{time.Date(2023, 3, 31, 12, 0, 0, 0, lisbon), []string{"mail", "organize", "--since", "1m"}, `{"since":"2023-02-28T00:00:00Z"}`},
+		{time.Date(2026, 3, 8, 21, 0, 0, 0, newYork), []string{"mail", "organize", "--since", "1d"}, `{"since":"2026-03-07T00:00:00-05:00"}`},
+		{time.Date(2026, 3, 31, 12, 0, 0, 0, lisbon), []string{"mail", "organize", "--since", "1w", "--until", "1d"}, `{"since":"2026-03-24T00:00:00Z","until":"2026-03-31T00:00:00+01:00"}`},
+		{time.Date(2026, 3, 31, 12, 0, 0, 0, lisbon), []string{"mail", "organize", "--since", "2026-03-31", "--until", "2026-03-31"}, `{"since":"2026-03-31T00:00:00+01:00","until":"2026-04-01T00:00:00+01:00"}`},
+		{time.Date(2024, 9, 8, 12, 0, 0, 0, santiago), []string{"mail", "organize", "--since", "1d", "--until", "2024-09-07"}, `{"since":"2024-09-07T00:00:00-04:00","until":"2024-09-08T01:00:00-03:00"}`},
+		{time.Date(2024, 9, 10, 12, 0, 0, 0, santiago), []string{"mail", "organize", "--since", "2d", "--until", "2024-09-08"}, `{"since":"2024-09-08T01:00:00-03:00","until":"2024-09-09T00:00:00-03:00"}`},
+		{time.Date(2024, 10, 8, 12, 0, 0, 0, santiago), []string{"mail", "organize", "--since", "1m"}, `{"since":"2024-09-08T01:00:00-03:00"}`},
+		{time.Date(2024, 9, 10, 12, 0, 0, 0, santiago), []string{"mail", "search", "--after", "2024-09-08", "--before", "2024-09-08"}, `{"after":"2024-09-08T01:00:00-03:00","before":"2024-09-09T00:00:00-03:00"}`},
+		{time.Date(2024, 9, 10, 12, 0, 0, 0, santiago), []string{"mail", "search", "--after", "2024-09-07", "--before", "2024-09-07"}, `{"after":"2024-09-07T00:00:00-04:00","before":"2024-09-08T01:00:00-03:00"}`},
+		{time.Date(2024, 9, 1, 12, 0, 0, 0, santiago), []string{"calendar", "list"}, `{"end":"2024-09-09T00:00:00-03:00","start":"2024-09-01T00:00:00-04:00"}`},
+		{time.Date(2024, 9, 8, 12, 0, 0, 0, santiago), []string{"calendar", "list", "--from", "today", "--to", "+1d"}, `{"end":"2024-09-10T00:00:00-03:00","start":"2024-09-08T01:00:00-03:00"}`},
+		{time.Date(2024, 9, 1, 12, 0, 0, 0, santiago), []string{"calendar", "list", "--from", "2024-09-06", "--to", "2024-09-07"}, `{"end":"2024-09-08T01:00:00-03:00","start":"2024-09-06T00:00:00-04:00"}`},
+	} {
+		var got string
+		h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req struct{ Params json.RawMessage }
+			json.NewDecoder(r.Body).Decode(&req)
+			got = string(req.Params)
+			io.WriteString(w, `{}`)
+		}))
+		var out, errout bytes.Buffer
+		code := cli.Run(context.Background(), append([]string{"--server", h.URL}, tc.args...), &out, &errout, cli.Options{Now: func() time.Time { return tc.now }, LookupEnv: func(string) string { return "" }})
+		h.Close()
+		if code != 0 || got != tc.params {
+			t.Errorf("%v at %v: exit %d params %s want %s", tc.args, tc.now, code, got, tc.params)
+		}
+	}
+	for _, args := range [][]string{{"mail", "organize", "--since", "999999999999999999999m"}, {"mail", "organize", "--since", "0d"}, {"mail", "organize", "--since", "7d", "--until", "2026-02-30"},
+		{"mail", "search", "--after", "2026-03-07", "--before", "2026-03-06"}} {
+		var out, errout bytes.Buffer
+		if code := cli.Run(context.Background(), append([]string{"--server", "http://127.0.0.1:1"}, args...), &out, &errout, cli.Options{LookupEnv: func(string) string { return "" }}); code != 2 {
+			t.Errorf("%v: exit %d stderr %s", args, code, errout.String())
 		}
 	}
 }

@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -352,7 +351,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 			out **time.Time
 		}{{p.After, &q.After}, {p.Before, &q.Before}} {
 			if d.v != nil {
-				t, e := time.Parse("2006-01-02", *d.v)
+				t, e := time.Parse(time.RFC3339, *d.v)
 				if e != nil {
 					return nil, errInvalid
 				}
@@ -422,18 +421,19 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		}
 		call = func(a *account) (any, error) { return mutations(a.guard.Categorize(ctx, p.IDs, p.Add, p.Remove)) }
 	case "mail.organize":
-		p := organizeParam{Since: "7d"}
+		var p organizeParam
 		if params(r.Params, &p) != nil {
 			return nil, errInvalid
 		}
+		// The client resolves days: since and until are exact times, and until may be in the future.
 		now := s.options.Now().UTC()
-		since, e := parseWhen(p.Since, now)
-		if e != nil {
+		since, e := time.Parse(time.RFC3339, p.Since)
+		if e != nil || since.Year() < 1 || since.After(now) {
 			return nil, errInvalid
 		}
 		var until *time.Time
 		if p.Until != nil {
-			u, e := parseWhen(*p.Until, now)
+			u, e := time.Parse(time.RFC3339, *p.Until)
 			if e != nil || !u.After(since) {
 				return nil, errInvalid
 			}
@@ -682,42 +682,4 @@ func (s *Server) ruleList(ctx context.Context, a config.Account) (any, error) {
 		}
 	}
 	return out, nil
-}
-
-var relativePattern = regexp.MustCompile(`^([0-9]+)([dwm])$`)
-
-func parseWhen(value string, now time.Time) (time.Time, error) {
-	today := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC)
-	if match := relativePattern.FindStringSubmatch(value); match != nil {
-		n, e := strconv.Atoi(match[1])
-		if e != nil || n < 1 || n > 3650000 {
-			return time.Time{}, errInvalid
-		}
-		var t time.Time
-		switch match[2] {
-		case "d":
-			t = today.AddDate(0, 0, -n)
-		case "w":
-			if n > 521428 {
-				return t, errInvalid
-			}
-			t = today.AddDate(0, 0, -7*n)
-		case "m":
-			if n > 119987 {
-				return t, errInvalid
-			}
-			first := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, -n, 0)
-			last := first.AddDate(0, 1, -1).Day()
-			t = time.Date(first.Year(), first.Month(), min(today.Day(), last), 0, 0, 0, 0, time.UTC)
-		}
-		if t.Year() < 1 || t.Year() > 9999 {
-			return time.Time{}, errInvalid
-		}
-		return t, nil
-	}
-	t, e := time.Parse("2006-01-02", value)
-	if e != nil || t.Year() < 1 || t.After(today) {
-		return time.Time{}, errInvalid
-	}
-	return t, nil
 }

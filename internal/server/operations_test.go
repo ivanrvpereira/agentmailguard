@@ -78,8 +78,8 @@ func TestValidatedAccountOperationsAndReload(t *testing.T) {
 	defer s.Close()
 	h := httptest.NewServer(s)
 	defer h.Close()
-	for _, op := range []string{"rules.list", "mail.organize"} {
-		status, b := rpc(t, h.URL, `{"operation":"`+op+`","params":{}}`)
+	for op, params := range map[string]string{"rules.list": `{}`, "mail.organize": `{"since":"2026-03-24T00:00:00Z"}`} {
+		status, b := rpc(t, h.URL, `{"operation":"`+op+`","params":`+params+`}`)
 		if status != 200 {
 			t.Fatalf("%s: %d %s", op, status, b)
 		}

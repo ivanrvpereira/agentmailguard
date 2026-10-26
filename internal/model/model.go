@@ -117,11 +117,27 @@ type Event struct {
 	Body        *string
 	ContentType *ContentType
 }
+
+// SearchQuery selects messages. After and Before are exact instants: a message matches when After <= received
+// time < Before. Nil means no bound.
 type SearchQuery struct {
 	Text, Sender, To, Subject *string
 	After, Before             *time.Time
 	Folder                    *FolderID
 }
+
+// UnknownReceived is the ReceivedAt that adapters set when the provider gives no received time.
+var UnknownReceived = time.Unix(0, 0).UTC()
+
+// Received reports whether a message received at t is inside [After, Before). An unknown received time is outside
+// any bound.
+func (q SearchQuery) Received(t time.Time) bool {
+	if q.After == nil && q.Before == nil {
+		return true
+	}
+	return !t.Equal(UnknownReceived) && (q.After == nil || !t.Before(*q.After)) && (q.Before == nil || t.Before(*q.Before))
+}
+
 type NewDraft struct {
 	To            []string
 	Subject, Body string

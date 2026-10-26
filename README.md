@@ -357,6 +357,10 @@ Without `--count`, the provider's default page size applies, so the same command
 `mail list --pretty` and `mail search --pretty` print the table and then, when there is a next page, one `next_page: VALUE` line.
 `mail get --pretty` formats only the guarded view.
 `mail search` needs at least one of `--text`, `--from`, `--to`, `--subject`, `--after`, or `--before`. `--to ADDRESS` matches the To and Cc fields: the Gmail `to:` and `cc:` operators, or the Microsoft 365 `to` and `cc` search properties.
+Dates follow one rule: a day runs from 00:00 to the end of the day on the clock and in the time zone of the machine where the CLI runs, and the last day is included. Where a clock change skips 00:00, the day starts at its first instant. This holds for `mail search --after DAY --before DAY`, `mail organize --since --until`, and `calendar list --from --to`. The CLI turns the days into exact times, from the first day's local midnight up to, not including, the local midnight after the last day; the server and the providers use only these exact times. `calendar availability` and the meeting commands take exact local times (`YYYY-MM-DD HH:MM`), not days.
+`calendar list` reads from today 00:00 to the end of the day seven days from today by default. `--to +Nd` counts from `--from`, and a `--to` day before the `--from` day is invalid usage.
+`mail organize` uses `--since 7d` by default. `Nd`, `Nw`, and `Nm` count back from today and need `N >= 1`. `--since` cannot be later than the server clock, and an `--until` day before the `--since` day is invalid usage.
+On Gmail, `mail search` sends the times in Unix seconds (`after:` and `before:`), because Gmail reads a date there as midnight Pacific time ([Gmail API filtering](https://developers.google.com/workspace/gmail/api/guides/filtering)); the guide does not say whether the boundary second matches, so the server asks for one more second on each side. On Microsoft 365, KQL `received` takes only a day, in UTC when no time zone is set ([MS-KQL Date Tokens](https://learn.microsoft.com/en-us/openspecs/sharepoint_protocols/ms-kql/21b23dbb-6c49-4d35-86e4-80fb1d66b301)), so the server asks for one more UTC day on each side. On both, the server then drops the messages received outside the exact times, and messages without a received time, so a page can hold fewer messages than `--count`, and `next_page` still continues the same search.
 `mail thread` prints JSON only. It returns the messages of the conversation as a plain list of `mail list` messages, without pages, newest first, from every folder, including trash, spam or junk, sent mail, and drafts. Gmail returns the whole thread (`threads.get`); on Microsoft 365 the server reads every page of the `conversationId` query. An unknown thread fails. Read bodies with `mail get`.
 `calendar search TEXT` uses the provider's own search: Google Calendar `events.list` with `q` on Gmail, and the Microsoft Search API (`POST /search/query` for events) on Microsoft 365. It returns one page in the provider's default size and order, with `next_page` as above, and has no date range. Each event is screened as `calendar get` screens it, and the result has the fields of a `calendar list` result. The provider matches the text on its side, so a hidden subject or body can decide whether an event is in the result. The fake provider matches the subject, body, location, organizer, and attendees, ignoring case.
 Draft update returns the resulting draft ID, which can change on Gmail.
@@ -714,12 +718,7 @@ Invalid rules fail before provider access.
 `stats` and `cache clear` need neither account configuration nor provider authentication.
 Cache clear removes all accounts' verdicts, saved organization answers, and completion markers, but not pending items.
 
-Organizer dates use the server clock and UTC midnight.
-`Nd`, `Nw`, and `Nm` require `N >= 1`.
-Explicit `YYYY-MM-DD` dates cannot be in the future.
-`--until` is exclusive and must be later than `--since`.
-Calendar dates use the client's local date and timezone.
-For calendar queries, a relative `--to +Nd` starts from `--from`.
+`mail organize --since` and `--until` follow the date rule in [Commands and output](#commands-and-output): days on the CLI machine, `--until` day included.
 The calendar range has no maximum: Microsoft Graph `calendarView` needs a start and an end but sets no maximum range.
 
 | Verdict | Visible mail content |
@@ -756,6 +755,7 @@ The only data endpoint is `POST /v1/call` with `Content-Type: application/json`:
 Operation names match CLI groups, such as `mail.get`, `mail.send`, `draft.update`, `calendar.invite`, `cache.clear`, and `approvals.status`.
 `mail.thread` takes `{"id":"THREAD_ID"}`, and `calendar.search` takes `{"text":"TEXT"}` and an optional `page`.
 Meeting times on the HTTP interface are RFC 3339 timestamps. `calendar.update` also accepts a Go `duration` string.
+Date bounds on the HTTP interface are exact RFC 3339 times, never days: `mail.search` `after` (included) and `before` (excluded), `mail.organize` `since` (required, not later than the server clock) and `until` (excluded, later than `since`), and `calendar.list` `start` (included) and `end` (excluded, later than `start`). A date without a time is refused. The CLI computes these times from days, as [Commands and output](#commands-and-output) describes.
 `calendar.invite` takes an optional `optional` address list, `calendar.update` an optional `body`, and `calendar.respond` an optional boolean `no_notify`.
 The `account` field is optional, and `params` must be an object.
 Unknown operations or fields, duplicate keys, malformed JSON, trailing JSON, null fields, invalid types, and oversized requests are refused.
@@ -793,6 +793,7 @@ Not verified against real providers or services:
 - `mail thread` on a Microsoft 365 conversation with a message in Junk Email (checked live on 2026-10-26: Gmail threads with drafts, and Microsoft 365 conversations across Inbox, Sent Items, Drafts, Deleted Items, and other folders; `calendar search` on both providers was checked the same day);
 - Microsoft 365 device-code login, which organization policies can also refuse;
 - paging with `--page` and `next_page`, and the default page sizes, on `mail list`, `mail search`, and `calendar search`;
+- `mail search` date bounds: the Gmail `after:` and `before:` query in Unix seconds one second wider on each side, and the Microsoft 365 KQL `received` days one day wider on each side, each with exact times filtered by the server;
 - requests to Jev cloud, or to any screening endpoint or model other than the default;
 - migration of a real Keychain record.
 

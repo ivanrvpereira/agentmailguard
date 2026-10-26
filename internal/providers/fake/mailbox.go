@@ -177,8 +177,8 @@ func contains(value string, part *string) bool {
 	return part == nil || strings.Contains(strings.ToLower(value), strings.ToLower(*part))
 }
 
-// Search matches case-insensitive substrings; To matches any one To or Cc address. After and Before are
-// inclusive UTC dates, like the Microsoft 365 received>= and received<= terms.
+// Search matches case-insensitive substrings; To matches any one To or Cc address. After and Before are exact
+// instants, matched with model.SearchQuery.Received.
 func (b *mailbox) Search(ctx context.Context, q model.SearchQuery, page model.PageRequest, body bool) (model.MessagePage, error) {
 	offset, size, err := window(page)
 	if err != nil {
@@ -197,11 +197,10 @@ func (b *mailbox) Search(ctx context.Context, q model.SearchQuery, page model.Pa
 	}
 	found := []model.Message{}
 	for _, m := range all {
-		day := m.ReceivedAt.UTC()
 		sender := m.Sender.Name + "\n" + m.Sender.Address
 		recipient := q.To == nil || *q.To == "" || slices.ContainsFunc(slices.Concat(m.To, m.CC), func(a model.Address) bool { return contains(a.Address, q.To) })
 		if !contains(m.Subject+"\n"+*m.Body+"\n"+sender, q.Text) || !contains(sender, q.Sender) || !recipient || !contains(m.Subject, q.Subject) ||
-			q.After != nil && day.Before(*q.After) || q.Before != nil && !day.Before(q.Before.AddDate(0, 0, 1)) {
+			!q.Received(m.ReceivedAt) {
 			continue
 		}
 		if !body {
