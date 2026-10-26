@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -184,6 +185,54 @@ func TestPastedRedirectCompletesLoginWithoutBrowser(t *testing.T) {
 		})
 	}
 }
+
+// When the browser callback wins, Login stops the paste reader and waits for it, so the reader never writes to
+// the terminal after Login has returned.
+func TestBrowserCallbackStopsThePasteReaderBeforeLoginReturns(t *testing.T) {
+	store := validStore()
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/profile" {
+			respond(w, map[string]string{"emailAddress": "browser@example.test"})
+			return
+		}
+		respond(w, map[string]any{"access_token": "refreshed", "refresh_token": "initial-refresh", "expires_in": 3600, "scope": granted})
+	}))
+	defer api.Close()
+	var stopped atomic.Bool
+	opts := gmail.Options{HTTPClient: api.Client(), TokenURL: api.URL + "/token", AuthURL: api.URL + "/auth", ProfileURL: api.URL + "/profile",
+		OpenBrowser: func(ctx context.Context, uri string) error {
+			u, err := url.Parse(uri)
+			if err != nil {
+				return err
+			}
+			q := u.Query()
+			req, err := http.NewRequestWithContext(ctx, "GET", q.Get("redirect_uri")+"?state="+url.QueryEscape(q.Get("state"))+"&code=one-time", nil)
+			if err != nil {
+				return err
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return err
+			}
+			return resp.Body.Close()
+		},
+		// The user never pastes: the reader waits until Login stops it.
+		ReadRedirect: func(ctx context.Context, _ bool) (string, error) {
+			<-ctx.Done()
+			stopped.Store(true)
+			return "", ctx.Err()
+		}}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	name, _, err := gmail.New(account, store, opts).Login(ctx, false, nil)
+	if err != nil || name != "browser@example.test" {
+		t.Fatal(name, err)
+	}
+	if !stopped.Load() {
+		t.Fatal("Login returned while the paste reader still ran")
+	}
+}
+
 func TestLoginDeviceCodeAndCancellation(t *testing.T) {
 	store := validStore()
 	calls := 0
