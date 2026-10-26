@@ -44,8 +44,8 @@ func (c *calendar) Invite(ctx context.Context, event model.NewEvent) (model.Even
 	for _, address := range event.Optional {
 		attendees = append(attendees, map[string]any{"email": address, "optional": true})
 	}
-	// Google renders the description as HTML, so the plain-text body goes escaped.
-	body := map[string]any{"summary": event.Subject, "description": model.HTMLBody(event.Body), "location": event.Location, "start": eventDateTime(event.Start), "end": eventDateTime(event.End), "attendees": attendees, "guestsCanInviteOthers": false}
+	// Google renders the description as HTML, so the agent's HTML goes unchanged and plain text goes escaped.
+	body := map[string]any{"summary": event.Subject, "description": model.EventBodyHTML(event.Body, event.HTML), "location": event.Location, "start": eventDateTime(event.Start), "end": eventDateTime(event.End), "attendees": attendees, "guestsCanInviteOthers": false}
 	q := notifyAll()
 	if event.Online {
 		addMeet(body, q)
@@ -94,9 +94,9 @@ func (c *calendar) Update(ctx context.Context, id model.EventID, change model.Ev
 	if change.Location != nil {
 		body["location"] = *change.Location
 	}
-	// Google renders the description as HTML, so the plain-text body goes escaped, as in Invite.
+	// The description is HTML, as in Invite.
 	if change.Body != nil {
-		body["description"] = model.HTMLBody(*change.Body)
+		body["description"] = model.EventBodyHTML(*change.Body, change.HTML)
 	}
 	if change.Start != nil {
 		body["start"] = eventDateTime(*change.Start)

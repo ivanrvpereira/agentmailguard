@@ -192,6 +192,7 @@ func TestCalendarHTTPRejectsInvalidInputBeforeAccountAccess(t *testing.T) {
 			strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"optional":["A@EXAMPLE.test"]}`,
 			strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"optional":[""]}`,
 			strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"optional":"b@example.test"}`,
+			strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"html":"true"}`,
 		},
 		"calendar.update": {
 			`{}`, `{"id":"e1"}`, `{"id":"e1","add":[],"remove":[]}`, `{"id":"e1","body":7}`, `{"id":"e1","start":"bad"}`, `{"id":"e1","end":"bad"}`,
@@ -205,13 +206,15 @@ func TestCalendarHTTPRejectsInvalidInputBeforeAccountAccess(t *testing.T) {
 			`{"id":"e1","subject":"` + strings.Repeat("s", 65537) + `"}`, `{"id":"e1","location":"` + strings.Repeat("s", 4097) + `"}`,
 			// Updates can add an online meeting but never remove it.
 			`{"id":"e1","online":false}`, `{"id":"e1","subject":"","online":false}`, `{"id":"e1","online":"true"}`, `{"id":"e1","teams":true}`,
+			// The body type goes only with a body.
+			`{"id":"e1","html":true}`, `{"id":"e1","subject":"","html":true}`, `{"id":"e1","body":"","html":"true"}`,
 		},
 		"calendar.cancel":  {`{}`, `{"id":""}`, `{"id":"` + strings.Repeat("x", 4097) + `"}`, `{"id":"e1","response":"accept"}`},
 		"calendar.respond": {`{}`, `{"id":"e1"}`, `{"id":"e1","response":"Accept"}`, `{"id":"e1","response":"decline","comment":7}`, `{"id":"e1","response":"accept","no_notify":"true"}`, `{"id":"e1","response":"accept","comment":"CANARY","no_notify":true}`},
 	}
 	for op, fields := range map[string][]string{
-		"calendar.invite":  {"to", "optional", "subject", "body", "start", "end", "location", "online"},
-		"calendar.update":  {"id", "subject", "location", "body", "start", "end", "duration", "add", "remove", "online"},
+		"calendar.invite":  {"to", "optional", "subject", "body", "html", "start", "end", "location", "online"},
+		"calendar.update":  {"id", "subject", "location", "body", "html", "start", "end", "duration", "add", "remove", "online"},
 		"calendar.cancel":  {"id", "comment"},
 		"calendar.respond": {"id", "response", "comment", "no_notify"},
 	} {

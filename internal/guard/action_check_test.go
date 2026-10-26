@@ -74,10 +74,17 @@ func TestJevSeesOnlyTheAgentFieldsOfEachAction(t *testing.T) {
 		{"calendar.invite", func(ctx context.Context, g *guard.Guard) error {
 			_, err := g.CalendarInvite(ctx, model.NewEvent{Subject: "Plan", Body: "Agenda", Location: "Room 1", Start: start, End: start.Add(time.Hour), Attendees: []string{"a@example.test"}, Online: true})
 			return err
-		}, actionCall{"calendar.invite", "sends meeting invitations to the attendees", map[string]any{"to": []any{"a@example.test"}, "subject": "Plan", "body": "Agenda", "location": "Room 1", "start": "2026-09-29T15:30:00Z", "end": "2026-09-29T16:30:00Z", "online": true}}},
+		}, actionCall{"calendar.invite", "sends meeting invitations to the attendees", map[string]any{"to": []any{"a@example.test"}, "subject": "Plan", "body": "Agenda", "html": false, "location": "Room 1", "start": "2026-09-29T15:30:00Z", "end": "2026-09-29T16:30:00Z", "online": true}}},
+		{"calendar.invite html body", func(ctx context.Context, g *guard.Guard) error {
+			_, err := g.CalendarInvite(ctx, model.NewEvent{Subject: "Plan", Body: "<p>Agenda <a href=\"https://example.test/x\">here</a></p>", HTML: true, Location: "Room 1", Start: start, End: start.Add(time.Hour), Attendees: []string{"a@example.test"}, Online: true})
+			return err
+		}, actionCall{"calendar.invite", "sends meeting invitations to the attendees", map[string]any{"to": []any{"a@example.test"}, "subject": "Plan", "body": "<p>Agenda <a href=\"https://example.test/x\">here</a></p>", "html": true, "location": "Room 1", "start": "2026-09-29T15:30:00Z", "end": "2026-09-29T16:30:00Z", "online": true}}},
 		{"calendar.update", func(ctx context.Context, g *guard.Guard) error {
 			return g.CalendarUpdate(ctx, "e1", model.EventChange{Subject: new("Moved"), Start: &start, AddAttendees: []string{"c@example.test"}}, 30*time.Minute)
 		}, actionCall{"calendar.update", "changes a meeting and notifies the attendees", map[string]any{"subject": "Moved", "start": "2026-09-29T15:30:00Z", "duration": "30m0s", "add": []any{"c@example.test"}}}},
+		{"calendar.update html body", func(ctx context.Context, g *guard.Guard) error {
+			return g.CalendarUpdate(ctx, "e1", model.EventChange{Body: new("<b>New</b> agenda"), HTML: true}, 0)
+		}, actionCall{"calendar.update", "changes a meeting and notifies the attendees", map[string]any{"body": "<b>New</b> agenda", "html": true}}},
 		{"calendar.respond", func(ctx context.Context, g *guard.Guard) error {
 			return g.CalendarRespond(ctx, "e1", model.EventResponse{Response: model.ResponseDecline, Comment: "Running late"})
 		}, actionCall{"calendar.respond", "sends a response to the meeting organizer", map[string]any{"response": "decline", "comment": "Running late"}}},

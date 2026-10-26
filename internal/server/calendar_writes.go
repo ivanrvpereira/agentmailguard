@@ -14,6 +14,7 @@ type inviteParam struct {
 	Optional []string `json:"optional"`
 	Subject  *string  `json:"subject"`
 	Body     *string  `json:"body"`
+	HTML     bool     `json:"html"`
 	Start    string   `json:"start"`
 	End      string   `json:"end"`
 	Location string   `json:"location"`
@@ -25,6 +26,7 @@ type eventChangeParam struct {
 	Subject  *string  `json:"subject"`
 	Location *string  `json:"location"`
 	Body     *string  `json:"body"`
+	HTML     bool     `json:"html"` // only with body
 	Start    *string  `json:"start"`
 	End      *string  `json:"end"`
 	Duration *string  `json:"duration"`
@@ -85,8 +87,8 @@ func calendarUpdate(ctx context.Context, _ *Server, raw json.RawMessage) (call, 
 	}
 	start, ok := optionalCalendarTime(p.Start)
 	end, ok2 := optionalCalendarTime(p.End)
-	change := model.EventChange{Subject: p.Subject, Location: p.Location, Body: p.Body, Start: start, End: end, AddAttendees: p.Add, RemoveAttendees: p.Remove, Online: p.Online != nil}
-	if !ok || !ok2 || start != nil && end != nil && !end.After(*start) {
+	change := model.EventChange{Subject: p.Subject, Location: p.Location, Body: p.Body, HTML: p.HTML, Start: start, End: end, AddAttendees: p.Add, RemoveAttendees: p.Remove, Online: p.Online != nil}
+	if !ok || !ok2 || change.HTMLWithoutBody() || start != nil && end != nil && !end.After(*start) {
 		return nil, "", errInvalid
 	}
 	var duration time.Duration // 0: not given
@@ -113,7 +115,7 @@ func calendarInvite(ctx context.Context, _ *Server, raw json.RawMessage) (call, 
 	}
 	start, ok := calendarTime(p.Start)
 	end, ok2 := calendarTime(p.End)
-	event := model.NewEvent{Subject: *p.Subject, Body: *p.Body, Location: p.Location, Start: start, End: end, Attendees: p.To, Optional: p.Optional, Online: p.Online}
+	event := model.NewEvent{Subject: *p.Subject, Body: *p.Body, HTML: p.HTML, Location: p.Location, Start: start, End: end, Attendees: p.To, Optional: p.Optional, Online: p.Online}
 	if !ok || !ok2 || !end.After(start) || event.AttendeeConflict() {
 		return nil, "", errInvalid
 	}

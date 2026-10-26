@@ -247,6 +247,8 @@ func TestCalendarUpdateSelectedFields(t *testing.T) {
 		{"clear-location", model.EventChange{Location: &location}, map[string]any{"location": map[string]any{"displayName": ""}}},
 		// The plain-text body goes as escaped HTML, as in an invitation.
 		{"body", model.EventChange{Body: &body}, map[string]any{"body": map[string]any{"contentType": "html", "content": "&lt;b&gt;New&lt;/b&gt; &amp; more<br>next"}}},
+		// An HTML body goes unchanged.
+		{"html-body", model.EventChange{Body: &body, HTML: true}, map[string]any{"body": map[string]any{"contentType": "html", "content": "<b>New</b> & more\nnext"}}},
 		{"resolved-time", model.EventChange{Start: &start, End: &end}, map[string]any{"start": map[string]any{"dateTime": "2026-10-09T08:00:00", "timeZone": "UTC"}, "end": map[string]any{"dateTime": "2026-10-09T08:30:00", "timeZone": "UTC"}}},
 		{"end-only", model.EventChange{End: &end}, map[string]any{"end": map[string]any{"dateTime": "2026-10-09T08:30:00", "timeZone": "UTC"}}},
 		// Graph keeps omitted fields, so the body with its join blob, times, and attendees stay as they are.
@@ -313,6 +315,29 @@ func TestCalendarInvitePayload(t *testing.T) {
 		if err != nil || id != "immutable-event" {
 			t.Fatalf("invite = %q, %v", id, err)
 		}
+	}
+}
+
+// An HTML invitation body goes unchanged as the event's HTML content
+// (https://learn.microsoft.com/en-us/graph/api/user-post-events).
+func TestCalendarInviteSendsAnHTMLBodyUnchanged(t *testing.T) {
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Body map[string]any `json:"body"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil || !reflect.DeepEqual(body.Body, map[string]any{"contentType": "html", "content": "<p>Agenda</p>\n<a href=\"https://example.test\">one</a>"}) {
+			t.Errorf("invite body = %#v", body.Body)
+		}
+		w.WriteHeader(http.StatusCreated)
+		jsonResponse(w, map[string]string{"id": "immutable-event"})
+	})
+	writer, ok := c.Calendar().(model.CalendarWriter)
+	if !ok {
+		t.Fatal("calendar cannot invite")
+	}
+	id, err := writer.Invite(t.Context(), model.NewEvent{Subject: "Planning", Body: "<p>Agenda</p>\n<a href=\"https://example.test\">one</a>", HTML: true, Start: now, End: now.Add(time.Hour), Attendees: []string{"a@example.test"}})
+	if err != nil || id != "immutable-event" {
+		t.Fatalf("invite = %q, %v", id, err)
 	}
 }
 

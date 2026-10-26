@@ -407,6 +407,49 @@ func TestMeetingsFromAvailabilityToCancel(t *testing.T) {
 	}
 }
 
+// calendar invite and calendar update take an HTML body with --html, and the event keeps it as is; without --html
+// the body is escaped plain text. --html without --body is invalid usage and changes nothing.
+func TestMeetingBodiesAreHTMLOnlyWithTheHTMLOption(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\ncalendar_invite='allow'\ncalendar_update='allow'\n")
+	id := decode[struct{ ID string }](t, s.ok("calendar", "invite", "--to", "ana@example.test", "--subject", "canary-subject-html-meeting", "--body", "<p>canary-body-agenda</p>", "--html",
+		"--start", "2030-01-02 09:00", "--duration", "30m", "--no-online")).ID
+	body := func(want string) {
+		t.Helper()
+		if got := s.column(`SELECT content_type || ' ' || body FROM events WHERE id = ?`, id); !reflect.DeepEqual(got, []string{want}) {
+			t.Fatalf("event body %q, want %q", got, want)
+		}
+	}
+	body("html <p>canary-body-agenda</p>")
+	s.ok("calendar", "update", id, "--body", "<b>canary-body-update</b>\nnext", "--html")
+	body("html <b>canary-body-update</b>\nnext")
+	s.ok("calendar", "update", id, "--body", "<b>canary-body-plain</b>\nnext")
+	body("html &lt;b&gt;canary-body-plain&lt;/b&gt;<br>next")
+
+	before := s.dump()
+	if out, errout, code := s.amg("calendar", "update", id, "--subject", "canary-subject-no-body", "--html"); code != 2 || out != "" || errout == "" {
+		t.Fatalf("--html without --body: exit %d stdout %q stderr %q", code, out, errout)
+	}
+	s.assertTables(before)
+}
+
+// An invitation that waits for approval shows its HTML body as source text on the approval page, and the
+// approved run keeps the HTML as is.
+func TestApprovalPageShowsAnHTMLMeetingBodyAsSource(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\ncalendar_invite='approve'\n")
+	p := s.held("calendar", "invite", "--to", "ana@example.test", "--subject", "canary-subject-html-console", "--body", "<i>canary-body-console</i>", "--html",
+		"--start", "2030-01-02 09:00", "--duration", "30m", "--no-online")
+	_, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID)
+	if want := "<dt>body (HTML source, not rendered)</dt><dd><pre>&lt;i&gt;canary-body-console&lt;/i&gt;</pre></dd>"; !strings.Contains(item, want) {
+		t.Fatalf("item page misses %q:\n%s", want, item)
+	}
+	s.approve(p.ApprovalID)
+	if got := s.column(`SELECT content_type || ' ' || body FROM events WHERE subject = 'canary-subject-html-console'`); !reflect.DeepEqual(got, []string{"html <i>canary-body-console</i>"}) {
+		t.Fatalf("approved invite body %q", got)
+	}
+}
+
 func TestPendingItemsAndVerdictsSurviveARestart(t *testing.T) {
 	t.Parallel()
 	s := start(t, "[policy]\nmail_send='approve'\n")

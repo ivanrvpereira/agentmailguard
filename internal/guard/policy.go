@@ -380,6 +380,7 @@ type inviteArgs struct {
 	Optional []string `json:"optional,omitempty"`
 	Subject  string   `json:"subject"`
 	Body     string   `json:"body"`
+	HTML     bool     `json:"html"`
 	Start    string   `json:"start"`
 	End      string   `json:"end"`
 	Location string   `json:"location"`
@@ -390,6 +391,7 @@ type changeArgs struct {
 	Subject  *string  `json:"subject,omitempty"`
 	Location *string  `json:"location,omitempty"`
 	Body     *string  `json:"body,omitempty"`
+	HTML     bool     `json:"html,omitempty"`
 	Start    *string  `json:"start,omitempty"`
 	End      *string  `json:"end,omitempty"`
 	Duration *string  `json:"duration,omitempty"`
@@ -417,7 +419,7 @@ func stamp3339(t *time.Time) *string {
 
 // updateArgs gives only the fields of the original request: optional fields that were not given stay out.
 func updateArgs(id string, change model.EventChange, duration time.Duration) changeArgs {
-	args := changeArgs{ID: id, Subject: change.Subject, Location: change.Location, Body: change.Body, Start: stamp3339(change.Start), End: stamp3339(change.End)}
+	args := changeArgs{ID: id, Subject: change.Subject, Location: change.Location, Body: change.Body, HTML: change.HTML, Start: stamp3339(change.Start), End: stamp3339(change.End)}
 	if duration > 0 {
 		args.Duration = new(duration.String())
 	}

@@ -34,7 +34,7 @@ func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "CLIOption
 const notes = `amg talks to the agentmailguard daemon (amgd serve) over HTTP: -H or AMG_HOST, default http://127.0.0.1:8787.
 It never starts the daemon and never changes accounts, credentials, or settings: amgd does that on the daemon host. No permanent delete.
 mail send, reply, and forward send email at once, and calendar invite, update, cancel, and respond (unless --no-notify) send meeting notifications at once, when the write policy allows them (default: deny).
---bcc recipients are hidden: the other recipients do not see them. draft new and mail send bodies are plain text unless --html; HTML goes unchanged, without cleaning.
+--bcc recipients are hidden: the other recipients do not see them. draft new, mail send, calendar invite, and calendar update bodies are plain text unless --html; HTML goes unchanged, without cleaning.
 Days in date options run from 00:00 to the end of the day on this machine's clock and time zone; the last day is included.
 Client authentication and built-in TLS are absent. Anyone who reaches the daemon can run every action that the write policy allows. Protect remote access with a tunnel.`
 

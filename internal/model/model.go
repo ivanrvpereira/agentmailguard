@@ -259,6 +259,7 @@ type Calendar interface {
 
 type NewEvent struct {
 	Subject, Body, Location string
+	HTML                    bool // Body is HTML source, sent unchanged; otherwise plain text (EventBodyHTML)
 	Start, End              time.Time
 	Attendees               []string
 	Optional                []string // optional attendees; they receive the invitation too
@@ -272,6 +273,15 @@ var htmlLineBreaks = strings.NewReplacer("\r\n", "<br>", "\r", "<br>", "\n", "<b
 // event bodies as HTML, so body text never becomes markup or a disguised link.
 func HTMLBody(text string) string { return htmlLineBreaks.Replace(html.EscapeString(text)) }
 
+// EventBodyHTML is the HTML that a provider gets as an event body: HTML source unchanged when isHTML, plain
+// text escaped by HTMLBody otherwise.
+func EventBodyHTML(body string, isHTML bool) string {
+	if isHTML {
+		return body
+	}
+	return HTMLBody(body)
+}
+
 // CalendarTimeValid reports whether t has a year from 1 to 9999 in its own zone and in UTC.
 func CalendarTimeValid(t time.Time) bool {
 	return t.Year() >= 1 && t.Year() <= 9999 && t.UTC().Year() >= 1 && t.UTC().Year() <= 9999
@@ -279,7 +289,8 @@ func CalendarTimeValid(t time.Time) bool {
 
 type EventChange struct {
 	Subject, Location             *string
-	Body                          *string // plain text; replaces the whole body
+	Body                          *string // replaces the whole body; plain text unless HTML
+	HTML                          bool    // Body is HTML source, sent unchanged; valid only with Body (HTMLWithoutBody)
 	Start, End                    *time.Time
 	AddAttendees, RemoveAttendees []string
 	Online                        bool // true adds an online meeting if none exists; false leaves it unchanged
@@ -289,6 +300,9 @@ type EventChange struct {
 func (c EventChange) Empty() bool {
 	return c.Subject == nil && c.Location == nil && c.Body == nil && c.Start == nil && c.End == nil && len(c.AddAttendees)+len(c.RemoveAttendees) == 0 && !c.Online
 }
+
+// HTMLWithoutBody reports an HTML flag without a body: the body type goes only with a body.
+func (c EventChange) HTMLWithoutBody() bool { return c.HTML && c.Body == nil }
 
 // AttendeeConflict reports an address that is both added and removed, ignoring case.
 func (c EventChange) AttendeeConflict() bool { return overlap(c.AddAttendees, c.RemoveAttendees) }

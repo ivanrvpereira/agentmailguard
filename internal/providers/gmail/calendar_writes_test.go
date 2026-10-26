@@ -158,6 +158,26 @@ func TestCalendarUpdatePatchesOnlyTheChangedFields(t *testing.T) {
 	}
 }
 
+// An HTML body goes as the description unchanged, on an invitation and on an update.
+func TestCalendarWritesSendAnHTMLBodyAsTheDescriptionUnchanged(t *testing.T) {
+	body := "<p>Agenda</p>\r\n<a href=\"https://example.test\">one</a>"
+	invite := &calendarAPI{reply: map[string]any{"id": "created"}}
+	start := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	if _, err := calendarWriter(t, invite).Invite(t.Context(), model.NewEvent{Subject: "Plan", Body: body, HTML: true, Start: start, End: start.Add(time.Hour), Attendees: []string{"a@example.test"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := invite.only(t).Body["description"]; got != body {
+		t.Fatalf("invite description %q", got)
+	}
+	update := &calendarAPI{reply: map[string]any{"id": "ev"}, event: calendarEvent()}
+	if err := calendarWriter(t, update).Update(t.Context(), "ev", model.EventChange{Body: &body, HTML: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := update.only(t).Body; !reflect.DeepEqual(got, map[string]any{"description": body, "guestsCanInviteOthers": false}) {
+		t.Fatalf("update body %v", got)
+	}
+}
+
 // PATCH replaces the attendee list as a whole, so the update sends every attendee it keeps, unchanged.
 func TestCalendarUpdateAttendeesKeepsTheOthersUnchanged(t *testing.T) {
 	keep := map[string]any{"email": "keep@example.test", "displayName": "Keep", "optional": true, "responseStatus": "accepted", "comment": "see you"}

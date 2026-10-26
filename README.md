@@ -238,7 +238,7 @@ The calendar uses three tables. `events` holds the events, `attendees` holds the
 sqlite3 ~/.agentmailguard/fake-provider.db "INSERT INTO events (account, id, subject, start_at, end_at, organizer_name, organizer_address) VALUES ('demo@fake.invalid', 'e1', 'Planning', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z', 'Ana', 'ana@example.test'); INSERT INTO attendees (account, event_id, address, name) VALUES ('demo@fake.invalid', 'e1', 'demo@fake.invalid', 'Demo'); INSERT INTO free_busy (account, address, start_at, end_at, status) VALUES ('demo@fake.invalid', 'ana@example.test', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z', 'busy');"
 ```
 
-`calendar invite`, `update`, `cancel`, and `respond` change only `fake-provider.db`, under the write policy as for other accounts. No notification leaves the machine. A cancel sets `is_cancelled` and `cancel_comment` and deletes nothing. A response sets the account's own row in `attendees`; `--no-notify` changes nothing else. An invite stores `--optional` attendees with `optional` set to 1 in `attendees`. A `fake-provider.db` made before the `optional` column existed gets the column, with 0 for every existing attendee, when the daemon first opens it.
+`calendar invite`, `update`, `cancel`, and `respond` change only `fake-provider.db`, under the write policy as for other accounts. No notification leaves the machine. A cancel sets `is_cancelled` and `cancel_comment` and deletes nothing. A response sets the account's own row in `attendees`; `--no-notify` changes nothing else. An invite stores `--optional` attendees with `optional` set to 1 in `attendees`. An event `body` is HTML (`content_type` `html`): an `--html` body as given, plain text escaped. A `fake-provider.db` made before the `optional` column existed gets the column, with 0 for every existing attendee, when the daemon first opens it.
 
 Fake mail is untrusted like real mail. The configured [screening](#screening) engine screens it. With the fake screening engine, the daemon needs no screening key.
 
@@ -483,7 +483,7 @@ An explicit empty value, such as `draft update ID --body ''`, is not the same as
 | Mail changes | `mail archive IDS...`, `mail trash IDS...`, `mail move FOLDER_ID IDS...`, `mail read IDS...`, `mail unread IDS...`, `mail flag IDS... --state flagged|complete|none`, `mail categorize IDS... --add NAME --remove NAME` |
 | Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID`, `calendar search TEXT [--page NEXT_PAGE]` |
 | Availability (Microsoft 365 and fake, read-only) | `calendar availability --to ADDRESS [--to ADDRESS] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'` |
-| Meetings (send notifications) | `calendar invite --to ADDRESS --subject TEXT --start 'YYYY-MM-DD HH:MM' --duration 30m\|--end 'YYYY-MM-DD HH:MM' [--optional ADDRESS] [--body TEXT] [--location TEXT] [--no-online]`, `calendar update ID [--subject TEXT] [--location TEXT] [--body TEXT] [--start TIME] [--duration D\|--end TIME] [--add-attendee ADDRESS] [--remove-attendee ADDRESS] [--online]`, `calendar cancel ID [--comment TEXT]`, `calendar respond ID --response accept\|tentative\|decline [--comment TEXT\|--no-notify]` |
+| Meetings (send notifications) | `calendar invite --to ADDRESS --subject TEXT --start 'YYYY-MM-DD HH:MM' --duration 30m\|--end 'YYYY-MM-DD HH:MM' [--optional ADDRESS] [--body TEXT] [--html] [--location TEXT] [--no-online]`, `calendar update ID [--subject TEXT] [--location TEXT] [--body TEXT [--html]] [--start TIME] [--duration D\|--end TIME] [--add-attendee ADDRESS] [--remove-attendee ADDRESS] [--online]`, `calendar cancel ID [--comment TEXT]`, `calendar respond ID --response accept\|tentative\|decline [--comment TEXT\|--no-notify]` |
 | Mail send (sends at once) | `mail send [--to ADDRESS] [--cc ADDRESS] [--bcc ADDRESS] [--subject TEXT] [--body TEXT] [--html]`, `mail reply ID --body TEXT`, `mail forward ID --to ADDRESS` |
 | Drafts (no send) | `draft new [--to ADDRESS] [--cc ADDRESS] [--bcc ADDRESS] [--subject TEXT] [--body TEXT] [--html]`, `draft reply ID --body TEXT`, `draft forward ID --to ADDRESS`, `draft update ID --body TEXT` |
 
@@ -589,7 +589,7 @@ Before an action runs, Jev checks the text that the agent wrote for it. The agen
 
 - Checked actions: `draft new`, `draft reply`, `draft update`, `draft forward`, `mail send`, `mail reply`, `mail forward`, `calendar invite`, and `calendar update`. `calendar respond` and `calendar cancel` are checked only when they have a comment, so `calendar respond --no-notify` is never checked.
 - Not checked: `mail trash`, rule moves, and the commands without a policy key.
-- Jev sees the operation name, a fixed description of what the action does, and the action fields that the agent gave: recipients (for `draft new` and `mail send`, To, Cc, and Bcc; for `calendar invite`, also the `--optional` attendees), subject, body (for `calendar update`, the new `--body`; an `--html` body as its HTML source, not rendered), the HTML flag, comment, response, and event fields. It never sees a message or event ID.
+- Jev sees the operation name, a fixed description of what the action does, and the action fields that the agent gave: recipients (for `draft new` and `mail send`, To, Cc, and Bcc; for `calendar invite`, also the `--optional` attendees), subject, body (for `calendar update`, the new `--body`; an `--html` body, on mail or meetings, as its HTML source, not rendered), the HTML flag, comment, response, and event fields. It never sees a message or event ID.
 - For `draft forward` and `mail forward`, Jev also sees the subject and body of the forwarded message, read through the screened read path. If the daemon cannot read this text, for example because the message is not `green`, the check fails.
 
 The check comes after the policy decision:
@@ -778,8 +778,9 @@ An invite needs exactly one of `--end` and `--duration`. An update can use one o
 
 An invite needs one or more `--to` addresses and an explicit `--subject`, which can be empty.
 The body is empty if you omit `--body`.
-`--body` is plain text.
-The invite sends it as escaped HTML and keeps the line breaks, so the text cannot become markup or a link with hidden text.
+`--body` is plain text unless `--html` is given.
+The invite sends plain text as escaped HTML and keeps the line breaks, so the text cannot become markup or a link with hidden text.
+With `--html`, `--body` is HTML that the daemon sends unchanged, without cleaning or checking it: as the Graph event body with content type `html` on Microsoft 365, and as the event description on Gmail.
 Every invite has an online meeting link by default: a Microsoft Teams meeting on Microsoft 365, and a Google Meet link on Gmail.
 For a Teams meeting, Microsoft adds the Teams join block to the body.
 Use `--no-online` to create a meeting without an online meeting.
@@ -788,7 +789,7 @@ On Gmail, guests cannot invite other people to a meeting that the daemon creates
 
 An update needs at least one change and sends only the options that you supply.
 An explicit empty `--subject ''`, `--location ''`, or `--body ''` clears that field.
-`--body` is plain text and replaces the whole body. As in an invite, it goes as escaped HTML that keeps the line breaks. On Microsoft 365, `--body` replaces the whole description, including the Teams join section. On Gmail, the Meet link is not part of the body and stays.
+`--body` replaces the whole body. As in an invite, plain text goes as escaped HTML that keeps the line breaks, and an `--html` body goes unchanged. `--html` without `--body` is invalid usage. On Microsoft 365, `--body` replaces the whole description, including the Teams join section. On Gmail, the Meet link is not part of the body and stays.
 If an update changes only `--start`, the daemon keeps the current duration.
 `--duration` alone or `--end` alone keeps the current start.
 Attendee changes keep the type and the response of existing attendees. Added attendees are required attendees.
@@ -921,6 +922,7 @@ The API has no operation that changes credentials, the console password, account
 Meeting times on the HTTP interface are RFC 3339 timestamps. `calendar.update` also accepts a Go `duration` string.
 Date bounds on the HTTP interface are exact RFC 3339 times, never days: `mail.search` `after` (included) and `before` (excluded, later than `after` when both are given), `mail.organize` `since` (required, not later than the daemon clock) and `until` (excluded, later than `since`), and `calendar.list` `start` (included) and `end` (excluded, later than `start`). A date without a time is refused. The CLI computes these times from days, as [Commands and output](#commands-and-output) describes.
 `calendar.invite` takes an optional `optional` address list, `calendar.update` an optional `body`, and `calendar.respond` an optional boolean `no_notify`.
+`calendar.invite` and `calendar.update` take an optional boolean `html` that marks `body` as HTML; a `calendar.update` with `html` and without `body` is refused as `invalid request`.
 `draft.new` and `mail.send` take the optional address lists `to`, `cc`, and `bcc`, the optional strings `subject` and `body` (empty when absent), and the optional boolean `html`. `mail.send` without an address in `to`, `cc`, or `bcc` is refused as `invalid request` before any policy decision.
 The `account` field is optional, and `params` must be an object.
 Unknown operations or fields, duplicate keys, malformed JSON, trailing JSON, null fields, invalid types, and oversized requests are refused.
@@ -954,7 +956,7 @@ Not verified against real providers or services:
 
 - mail sends, replies, and forwards, including Cc, Bcc, and `--html` bodies on new drafts and sends;
 - the Bcc that `mail get` reads from drafts and sent mail (Graph `bccRecipients`, the Gmail `Bcc` header);
-- meeting invites, updates, cancellations, and responses;
+- meeting invites, updates, cancellations, and responses, including `--html` event bodies (verified only against fake Graph and Google Calendar endpoints and the fake provider);
 - provider acceptance of generated drafts;
 - `mail thread` on a Microsoft 365 conversation with a message in Junk Email (checked live on 2026-10-26: Gmail threads with drafts, and Microsoft 365 conversations across Inbox, Sent Items, Drafts, Deleted Items, and other folders; `calendar search` on both providers was checked the same day);
 - Microsoft 365 device-code login, which organization policies can also refuse;

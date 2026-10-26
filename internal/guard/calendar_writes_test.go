@@ -178,6 +178,7 @@ func TestCalendarWritesRejectInvalidRangesAndChanges(t *testing.T) {
 		{name: "bad old duration", change: model.EventChange{Start: new(now)}, oldEnd: new(now.Add(-time.Hour))},
 		{name: "duration saturation", change: model.EventChange{Start: new(now)}, oldStart: new(time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)), oldEnd: new(time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC))},
 		{name: "overlapping attendee identities", change: model.EventChange{AddAttendees: []string{"CANARY@example.test"}, RemoveAttendees: []string{"canary@EXAMPLE.test"}}},
+		{name: "html without body", change: model.EventChange{Subject: new("CANARY"), HTML: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := meetingWriter()

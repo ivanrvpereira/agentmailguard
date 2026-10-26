@@ -96,12 +96,22 @@ func calendarUpdateCmd(r *runner) *cobra.Command {
 	var add, remove []string
 	var subject, location, body, start, end string
 	var duration time.Duration
-	online := false
+	online, html := false, false
 	c := r.leaf("update ID", "Change your own meeting and send the update (write policy applies)", 1, 1, func(c *cobra.Command, args []string) error {
 		p := map[string]any{"id": args[0]}
 		optional(c, p, "subject", &subject)
 		optional(c, p, "location", &location)
 		optional(c, p, "body", &body)
+		var given *string
+		if c.Flags().Changed("body") {
+			given = &body
+		}
+		if (model.EventChange{Body: given, HTML: html}).HTMLWithoutBody() {
+			return errUsage
+		}
+		if html {
+			p["html"] = true
+		}
 		loc, startSet, endSet, durationSet := r.now().Location(), c.Flags().Changed("start"), c.Flags().Changed("end"), c.Flags().Changed("duration")
 		if endSet && durationSet {
 			return errUsage
@@ -148,7 +158,8 @@ func calendarUpdateCmd(r *runner) *cobra.Command {
 	})
 	c.Flags().StringVar(&subject, "subject", "", "new meeting subject")
 	c.Flags().StringVar(&location, "location", "", "new meeting location")
-	c.Flags().StringVar(&body, "body", "", "new meeting body text; replaces the whole body")
+	c.Flags().StringVar(&body, "body", "", "new meeting body, plain text unless --html; replaces the whole body")
+	c.Flags().BoolVar(&html, "html", false, "--body is HTML, used unchanged; only with --body; default plain text")
 	c.Flags().StringVar(&start, "start", "", "new local start as 'YYYY-MM-DD HH:MM'; keeps the duration without --end or --duration")
 	c.Flags().StringVar(&end, "end", "", "new local end as 'YYYY-MM-DD HH:MM'")
 	c.Flags().DurationVar(&duration, "duration", 0, "new meeting length, for example 30m or 1h30m")
@@ -162,7 +173,7 @@ func calendarInviteCmd(r *runner) *cobra.Command {
 	var to, optionalTo []string
 	var subject, body, location, start, end string
 	var duration time.Duration
-	online := true
+	online, html := true, false
 	c := r.leaf("invite", "Create a meeting, with an online meeting link by default, and send the invitation (write policy applies)", 0, 0, func(c *cobra.Command, _ []string) error {
 		if len(to) == 0 || !c.Flags().Changed("subject") || !c.Flags().Changed("start") {
 			return errUsage
@@ -182,12 +193,16 @@ func calendarInviteCmd(r *runner) *cobra.Command {
 		}
 		optional(c, p, "location", &location)
 		p["online"] = online
+		if html {
+			p["html"] = true
+		}
 		return r.call(c, "calendar.invite", p, false)
 	})
 	c.Flags().StringArrayVar(&to, "to", nil, "attendee address; repeatable")
 	c.Flags().StringArrayVar(&optionalTo, "optional", nil, "optional attendee address, who also gets the invitation; repeatable, not also in --to")
 	c.Flags().StringVar(&subject, "subject", "", "meeting subject")
-	c.Flags().StringVar(&body, "body", "", "meeting body text")
+	c.Flags().StringVar(&body, "body", "", "meeting body, plain text unless --html")
+	c.Flags().BoolVar(&html, "html", false, "--body is HTML, used unchanged; default plain text")
 	c.Flags().StringVar(&location, "location", "", "meeting location")
 	c.Flags().StringVar(&start, "start", "", "local start as 'YYYY-MM-DD HH:MM'")
 	c.Flags().StringVar(&end, "end", "", "local end as 'YYYY-MM-DD HH:MM'")

@@ -16,7 +16,7 @@ func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
 
 // Invite stores an event that the account organizes, with an empty organizer_address, and one attendee
 // row with response none per address, optional for the optional ones. An address listed twice keeps its first
-// row. The body is escaped HTML, as with both real providers.
+// row. The body is HTML, as with both real providers: the agent's HTML as is, or plain text escaped.
 func (c *calendar) Invite(ctx context.Context, event model.NewEvent) (model.EventID, error) {
 	db, err := c.p.conn(ctx)
 	if err != nil {
@@ -34,7 +34,7 @@ func (c *calendar) Invite(ctx context.Context, event model.NewEvent) (model.Even
 	}
 	defer tx.Rollback()
 	_, err = tx.ExecContext(ctx, `INSERT INTO events (account, id, subject, body, content_type, location, start_at, end_at, join_url) VALUES (?, ?, ?, ?, 'html', ?, ?, ?, ?)`,
-		c.p.account, id, event.Subject, model.HTMLBody(event.Body), event.Location, stamp(event.Start), stamp(event.End), join)
+		c.p.account, id, event.Subject, model.EventBodyHTML(event.Body, event.HTML), event.Location, stamp(event.Start), stamp(event.End), join)
 	if err != nil {
 		return "", storageError
 	}
@@ -107,9 +107,9 @@ func (c *calendar) Update(ctx context.Context, id model.EventID, change model.Ev
 	if change.Location != nil {
 		add("location = ?", *change.Location)
 	}
-	// A new body is escaped HTML, as in Invite.
+	// A new body is HTML, as in Invite.
 	if change.Body != nil {
-		add("body = ?", model.HTMLBody(*change.Body))
+		add("body = ?", model.EventBodyHTML(*change.Body, change.HTML))
 		add("content_type = ?", "html")
 	}
 	if change.Start != nil {

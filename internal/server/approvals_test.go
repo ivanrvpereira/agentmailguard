@@ -144,6 +144,7 @@ func TestApprovedActionMakesTheSameWriteAsTheAllowedCall(t *testing.T) {
 		{"calendar.update duration and attendees", "calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","start":"2026-10-09T12:00:00+01:00","duration":"30m","add":["new@example.test"],"remove":["remove@example.test"],"online":true}`, organizerEvent, ""},
 		{"calendar.update start keeps duration", "calendar.update", `{"id":"e1","start":"2026-10-09T12:00:00+01:00"}`, organizerEvent, ""},
 		{"calendar.update end", "calendar.update", `{"id":"e1","end":"2026-10-09T11:30:00+01:00"}`, organizerEvent, ""},
+		{"calendar.update html body", "calendar.update", `{"id":"e1","body":"<b>CANARY</b> body","html":true}`, organizerEvent, ""},
 		{"calendar.cancel", "calendar.cancel", `{"id":"e1","comment":"CANARY comment"}`, organizerEvent, ""},
 		{"calendar.respond", "calendar.respond", `{"id":"e1","response":"tentative","comment":"CANARY comment"}`, attendeeEvent, ""},
 	} {
