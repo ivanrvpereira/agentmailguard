@@ -144,7 +144,8 @@ func (c *calendar) List(ctx context.Context, start, end time.Time) ([]model.Even
 }
 
 // Search reads the first page of events.list with q only, so Google's default page size and order apply
-// (https://developers.google.com/workspace/calendar/api/v3/reference/events/list). Its items are full events.
+// (https://developers.google.com/workspace/calendar/api/v3/reference/events/list). Its items are full events,
+// except that a deleted instance of a recurring event comes as a cancelled entry without a start; it is skipped.
 func (c *calendar) Search(ctx context.Context, text string) ([]model.Event, error) {
 	v, err := c.c.get(ctx, "Calendar", c.c.options.CalendarURL+"/events", url.Values{"q": {text}})
 	if err != nil {
@@ -156,6 +157,13 @@ func (c *calendar) Search(ctx context.Context, text string) ([]model.Event, erro
 	}
 	out := []model.Event{}
 	for _, raw := range a {
+		var deleted struct {
+			Status string
+			Start  *eventTime
+		}
+		if json.Unmarshal(raw, &deleted) == nil && deleted.Status == "cancelled" && deleted.Start == nil {
+			continue
+		}
 		event, err := parseEvent(raw)
 		if err != nil {
 			return nil, err

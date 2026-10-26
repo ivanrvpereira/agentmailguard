@@ -95,3 +95,16 @@ func TestCalendarSearchSendsOnlyTheTextAsQAndReadsOnePage(t *testing.T) {
 		t.Fatalf("queries=%q", queries)
 	}
 }
+func TestCalendarSearchSkipsDeletedRecurringInstances(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// With singleEvents and showDeleted false, Google lists a deleted instance of a recurring event as a
+		// cancelled entry without start or end.
+		respond(w, map[string]any{"items": []any{calendarEvent(), map[string]any{"id": "series_20260903", "status": "cancelled", "recurringEventId": "series", "originalStartTime": map[string]string{"dateTime": "2026-09-03T10:00:00Z"}}}})
+	}))
+	defer server.Close()
+	c := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), CalendarURL: server.URL}).Calendar()
+	events, err := c.Search(context.Background(), "agenda")
+	if err != nil || len(events) != 1 || events[0].ID != "ev" {
+		t.Fatalf("events=%+v err=%v", events, err)
+	}
+}

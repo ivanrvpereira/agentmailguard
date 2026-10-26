@@ -171,3 +171,25 @@ func TestCalendarSearchFailsOnAHitWithoutID(t *testing.T) {
 		t.Fatalf("events=%+v err=%v", events, err)
 	}
 }
+
+func TestCalendarSearchFailsOnAMalformedOrOversizedResponse(t *testing.T) {
+	hit := map[string]any{"hitId": "e1"}
+	for name, response := range map[string]any{
+		"no value":        map[string]any{},
+		"value not array": map[string]any{"value": map[string]any{}},
+		"hits not array":  map[string]any{"value": []any{map[string]any{"hitsContainers": []any{map[string]any{"hits": "e1"}}}}},
+		"too many hits":   map[string]any{"value": []any{map[string]any{"hitsContainers": []any{map[string]any{"hits": slices.Repeat([]any{hit}, 501)}}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "POST" {
+					t.Errorf("read after a bad response: %s %s", r.Method, r.URL)
+				}
+				jsonResponse(w, response)
+			})
+			if events, err := c.Calendar().Search(t.Context(), "budget"); err == nil || events != nil {
+				t.Fatalf("events=%d err=%v", len(events), err)
+			}
+		})
+	}
+}

@@ -121,7 +121,8 @@ func (c *calendar) List(ctx context.Context, start, end time.Time) ([]model.Even
 }
 
 // Search matches text, ignoring case, in the subject, body, location, and the names and addresses of the
-// organizer and attendees, as Google Calendar's q does. It returns every match, ordered by start.
+// organizer and attendees, as Google Calendar's q does. The fake has no pages: it returns every match, ordered by
+// start.
 func (c *calendar) Search(ctx context.Context, text string) ([]model.Event, error) {
 	all, err := c.events(ctx, `ORDER BY id`)
 	if err != nil {

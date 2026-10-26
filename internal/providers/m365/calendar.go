@@ -58,16 +58,27 @@ func (c *calendar) Search(ctx context.Context, query string) ([]model.Event, err
 	if err != nil {
 		return nil, err
 	}
+	responses, err := pageItems(d)
+	if err != nil {
+		return nil, err
+	}
 	ids := []string{}
-	for _, response := range array(d, "value") {
-		for _, container := range array(response, "hitsContainers") {
-			for _, hit := range array(container, "hits") {
+	for _, response := range responses {
+		containers, ok := optionalArray(response, "hitsContainers")
+		for _, container := range containers {
+			hits, ok2 := optionalArray(container, "hits")
+			ok = ok && ok2
+			for _, hit := range hits {
 				id := text(hit, "hitId")
 				if id == "" {
 					return nil, invalidMetadata
 				}
 				ids = append(ids, id)
 			}
+		}
+		// 500 is the largest page that a Microsoft Search request can ask for.
+		if !ok || len(ids) > 500 {
+			return nil, invalidMetadata
 		}
 	}
 	out := make([]model.Event, len(ids))
@@ -83,6 +94,13 @@ func (c *calendar) Search(ctx context.Context, query string) ([]model.Event, err
 		}
 	}
 	return out, nil
+}
+
+// optionalArray reads d[k] as an array of objects. A missing or null field is empty; any other type is not ok.
+func optionalArray(d object, k string) ([]object, bool) {
+	var a []object
+	raw, found := d[k]
+	return a, !found || string(raw) == "null" || json.Unmarshal(raw, &a) == nil
 }
 func eventTime(d object) (time.Time, error) {
 	if text(d, "timeZone") != "UTC" {
