@@ -61,7 +61,7 @@ func TestHTTPBoundsBrowserAndDeniedSurface(t *testing.T) {
 		{"POST", "/v1/call", "application/json", "", `{"operation":"mail.get","params":{"id":123}}`, 400},
 		{"POST", "/v1/call", "application/json", "", `{"operation":"mail.get","params":{"id":null}}`, 400},
 		{"POST", "/v1/call", "application/json", "", `{"operation":"stats","account":null,"params":{}}`, 400},
-		{"POST", "/v1/call", "application/json", "", `{"operation":"mail.list","params":{"skip":2147483647}}`, 400},
+		{"POST", "/v1/call", "application/json", "", `{"operation":"mail.list","params":{"count":9223372036854775808}}`, 400},
 	} {
 		req, _ := http.NewRequest(tc.method, h.URL+tc.path, strings.NewReader(tc.body))
 		req.Header.Set("Content-Type", tc.typ)
@@ -147,36 +147,38 @@ func TestPanicCancellationAndSafeFormatting(t *testing.T) {
 		})
 	}
 }
-func TestOrganizeCalendarMonthsAndServerClock(t *testing.T) {
+
+// The CLI resolves organize days; the server takes exact RFC 3339 times, refuses a since after its clock and an
+// until that is not after since, and computes no days.
+func TestOrganizeTakesExactTimesAndRefusesDays(t *testing.T) {
+	now := time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
-		now, since, until, want string
-		status                  int
+		params, want string
+		status       int
 	}{
-		{"2024-03-31T23:00:00-07:00", "1m", "", "2024-03-01T00:00:00Z", 200},
-		{"2024-03-31T12:00:00Z", "1m", "", "2024-02-29T00:00:00Z", 200},
-		{"2023-03-31T12:00:00Z", "1m", "", "2023-02-28T00:00:00Z", 200},
-		{"2026-03-09T01:00:00Z", "1d", "", "2026-03-08T00:00:00Z", 200},
-		{"2026-03-31T12:00:00Z", "1w", "1d", "2026-03-24T00:00:00Z", 200},
-		{"2026-03-31T12:00:00Z", "2026-03-31", "2026-03-31", "", 400},
-		{"2026-03-31T12:00:00Z", "1d", "2d", "", 400},
-		{"2026-03-31T12:00:00Z", "2026-04-01", "", "", 400},
-		{"2026-03-31T12:00:00Z", "999999999999999999999m", "", "", 400},
+		{`{"since":"2026-03-24T00:00:00-04:00"}`, "2026-03-24T04:00:00Z", 200},
+		{`{"since":"2026-03-31T12:00:00Z"}`, "2026-03-31T12:00:00Z", 200},
+		{`{"since":"2026-03-30T00:00:00+01:00","until":"2026-04-02T00:00:00+01:00"}`, "2026-03-29T23:00:00Z", 200},
+		{`{"since":"2026-03-31T12:00:01Z"}`, "", 400},
+		{`{"since":"2026-03-30T00:00:00Z","until":"2026-03-30T00:00:00Z"}`, "", 400},
+		{`{"since":"2026-03-30T00:00:00Z","until":"2026-03-29T00:00:00Z"}`, "", 400},
+		{`{"since":"0000-12-31T00:00:00Z"}`, "", 400},
+		{`{}`, "", 400},
+		{`{"since":"7d"}`, "", 400},
+		{`{"since":"2026-03-24"}`, "", 400},
+		{`{"since":"2026-03-24T00:00:00Z","until":"1d"}`, "", 400},
+		{`{"since":"2026-03-24T00:00:00Z","until":"2026-03-30"}`, "", 400},
 	} {
 		home := t.TempDir()
 		configFile(t, home)
-		now, _ := time.Parse(time.RFC3339, tc.now)
 		s, e := server.New(context.Background(), home, server.Options{Credentials: &hostileStore{}, Now: func() time.Time { return now }})
 		if e != nil {
 			t.Fatal(e)
 		}
 		h := httptest.NewServer(s)
-		body := `{"operation":"mail.organize","params":{"since":"` + tc.since + `"`
-		if tc.until != "" {
-			body += `,"until":"` + tc.until + `"`
-		}
-		status, b := rpc(t, h.URL, body+`}}`)
+		status, b := rpc(t, h.URL, `{"operation":"mail.organize","params":`+tc.params+`}`)
 		if status != tc.status || (tc.want != "" && !strings.Contains(b, `"since":"`+tc.want+`"`)) {
-			t.Errorf("%+v: %d %s", tc, status, b)
+			t.Errorf("%s: %d %s", tc.params, status, b)
 		}
 		h.Close()
 		s.Close()
@@ -196,8 +198,8 @@ func TestRulesFailBeforeCredentialsAndMissingAuthStatus(t *testing.T) {
 	if e := os.WriteFile(filepath.Join(home, "rules.toml"), []byte("[accounts.unknown.x]\ncategory='X'\ninstructions='private-canary'\n"), 0600); e != nil {
 		t.Fatal(e)
 	}
-	for _, op := range []string{"rules.list", "mail.organize"} {
-		status, b := rpc(t, h.URL, `{"operation":"`+op+`","params":{}}`)
+	for op, params := range map[string]string{"rules.list": `{}`, "mail.organize": `{"since":"2020-01-01T00:00:00Z"}`} {
+		status, b := rpc(t, h.URL, `{"operation":"`+op+`","params":`+params+`}`)
 		if status != 500 || b != `{"error":"rules unavailable"}` {
 			t.Fatalf("rules error %d %s", status, b)
 		}

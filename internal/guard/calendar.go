@@ -30,9 +30,6 @@ func (g *Guard) CalendarList(ctx context.Context, start, end time.Time) ([]views
 	if !end.After(start) {
 		return nil, GuardError("calendar range: the end must be after the start")
 	}
-	if end.Sub(start) > 90*24*time.Hour+time.Hour {
-		return nil, GuardError("calendar range: at most 90 days")
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -43,27 +40,37 @@ func (g *Guard) CalendarList(ctx context.Context, start, end time.Time) ([]views
 	return g.events(ctx, events)
 }
 
-// CalendarSearch screens each event that the provider's search finds for text, as CalendarGet screens one event,
-// in the provider's order.
-func (g *Guard) CalendarSearch(ctx context.Context, text string) ([]views.CalendarView, error) {
+// CalendarSearch screens each event of one page that the provider's search finds for text, as CalendarGet screens
+// one event, in the provider's order. The next-page marker is checked as in List.
+func (g *Guard) CalendarSearch(ctx context.Context, text, page string) (views.CalendarPage, error) {
 	if text == "" {
-		return nil, GuardError("calendar search needs text")
+		return views.CalendarPage{}, GuardError("calendar search needs text")
+	}
+	if !model.ValidPage(page) {
+		return views.CalendarPage{}, GuardError("invalid request")
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return views.CalendarPage{}, err
 	}
-	events, err := g.calendar.Search(ctx, text)
+	found, err := g.calendar.Search(ctx, text, page)
 	if err != nil {
-		return nil, safeErr(ctx, err)
+		return views.CalendarPage{}, safeErr(ctx, err)
 	}
 	seen := map[string]bool{}
-	for _, e := range events {
+	for _, e := range found.Events {
 		if seen[e.ID] {
-			return nil, GuardError("ValueError")
+			return views.CalendarPage{}, GuardError("ValueError")
 		}
 		seen[e.ID] = true
 	}
-	return g.events(ctx, events)
+	if !model.ValidPage(found.Next) {
+		return views.CalendarPage{}, GuardError("ValueError")
+	}
+	out, err := g.events(ctx, found.Events)
+	if err != nil {
+		return views.CalendarPage{}, err
+	}
+	return views.CalendarPage{Events: out, NextPage: found.Next}, nil
 }
 
 // events screens each event in parallel and keeps the order. An event without an ID fails the whole result.

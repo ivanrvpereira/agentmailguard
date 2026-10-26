@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -172,7 +174,8 @@ func translated(ids []string) []any {
 // refuses with 400, so each hit is translated to a REST immutable ID before it is read.
 func TestCalendarSearchTranslatesEachHitAndReadsItsEvent(t *testing.T) {
 	c, requests := searchGraph(t, []string{"AA+b/c=", "DD/e+f="}, translated)
-	events, err := c.Calendar().Search(t.Context(), "budget plan")
+	page, err := c.Calendar().Search(t.Context(), "budget plan", "")
+	events := page.Events
 	if err != nil || len(events) != 2 || events[0].ID != "imm-1" || events[1].ID != "imm-2" || events[0].Subject != "Planning" || events[0].Body == nil {
 		t.Fatalf("events=%+v err=%v", events, err)
 	}
@@ -181,8 +184,8 @@ func TestCalendarSearchTranslatesEachHitAndReadsItsEvent(t *testing.T) {
 		t.Fatalf("requests=%q", got)
 	}
 	c, requests = searchGraph(t, nil, translated)
-	if events, err := c.Calendar().Search(t.Context(), "nothing"); err != nil || len(events) != 0 || len(*requests) != 1 {
-		t.Fatalf("no hits: events=%+v err=%v requests=%q", events, err, *requests)
+	if page, err := c.Calendar().Search(t.Context(), "nothing", ""); err != nil || len(page.Events) != 0 || len(*requests) != 1 {
+		t.Fatalf("no hits: events=%+v err=%v requests=%q", page, err, *requests)
 	}
 }
 
@@ -198,8 +201,8 @@ func TestCalendarSearchFailsOnATranslationThatBreaksTheRequest(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, requests := searchGraph(t, []string{"AA+b/c=", "DD/e+f="}, translate)
-			if events, err := c.Calendar().Search(t.Context(), "budget plan"); err == nil || events != nil {
-				t.Fatalf("events=%+v err=%v", events, err)
+			if page, err := c.Calendar().Search(t.Context(), "budget plan", ""); err == nil || page.Events != nil {
+				t.Fatalf("events=%+v err=%v", page, err)
 			}
 			if slices.ContainsFunc(*requests, func(r string) bool { return strings.HasPrefix(r, "GET ") }) {
 				t.Fatalf("read after a bad translation: %q", *requests)
@@ -215,8 +218,8 @@ func TestCalendarSearchFailsOnAHitWithoutID(t *testing.T) {
 		}
 		jsonResponse(w, map[string]any{"value": []any{map[string]any{"hitsContainers": []any{map[string]any{"hits": []any{map[string]any{"rank": 1}}}}}}})
 	})
-	if events, err := c.Calendar().Search(t.Context(), "budget"); err == nil || events != nil {
-		t.Fatalf("events=%+v err=%v", events, err)
+	if page, err := c.Calendar().Search(t.Context(), "budget", ""); err == nil || page.Events != nil {
+		t.Fatalf("events=%+v err=%v", page, err)
 	}
 }
 
@@ -226,18 +229,93 @@ func TestCalendarSearchFailsOnAMalformedOrOversizedResponse(t *testing.T) {
 		"no value":        map[string]any{},
 		"value not array": map[string]any{"value": map[string]any{}},
 		"hits not array":  map[string]any{"value": []any{map[string]any{"hitsContainers": []any{map[string]any{"hits": "e1"}}}}},
-		"too many hits":   map[string]any{"value": []any{map[string]any{"hitsContainers": []any{map[string]any{"hits": slices.Repeat([]any{hit}, 501)}}}}},
+		"too many hits":   map[string]any{"value": []any{map[string]any{"hitsContainers": []any{map[string]any{"hits": slices.Repeat([]any{hit}, 26)}}}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != "POST" {
-					t.Errorf("read after a bad response: %s %s", r.Method, r.URL)
+				if r.URL.Path != "/v1.0/search/query" {
+					t.Errorf("request after a bad response: %s %s", r.Method, r.URL)
 				}
 				jsonResponse(w, response)
 			})
-			if events, err := c.Calendar().Search(t.Context(), "budget"); err == nil || events != nil {
-				t.Fatalf("events=%d err=%v", len(events), err)
+			if page, err := c.Calendar().Search(t.Context(), "budget", ""); err == nil || page.Events != nil {
+				t.Fatalf("events=%d err=%v", len(page.Events), err)
 			}
 		})
+	}
+}
+
+// Microsoft Search pages events by from and size, at most 25 a page
+// (https://learn.microsoft.com/en-us/graph/api/resources/search-api-overview?view=graph-rest-1.0, "Page search
+// results"). Search sends no size; the page is the from, and the next page is from plus this page's hits while
+// moreResultsAvailable is true.
+func TestCalendarSearchPagesByFromAndReturnsTheNextFrom(t *testing.T) {
+	var bodies []string
+	hits, more := 2, true
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		switch r.URL.Path {
+		case "/v1.0/search/query":
+			bodies = append(bodies, string(body))
+			list := []any{}
+			for i := range hits {
+				list = append(list, map[string]any{"hitId": "ews-" + strconv.Itoa(i)})
+			}
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"hitsContainers": []any{map[string]any{"hits": list, "moreResultsAvailable": more}}}}})
+		case "/v1.0/me/translateExchangeIds":
+			var got struct{ InputIDs []string }
+			_ = json.Unmarshal(body, &got)
+			jsonResponse(w, map[string]any{"value": translated(got.InputIDs)})
+		default:
+			e := event()
+			e["id"] = strings.TrimPrefix(r.URL.Path, "/v1.0/me/events/")
+			jsonResponse(w, e)
+		}
+	})
+	search := func(page string) model.EventPage {
+		t.Helper()
+		got, err := c.Calendar().Search(t.Context(), "budget", page)
+		if err != nil {
+			t.Fatalf("page %q: %v", page, err)
+		}
+		return got
+	}
+	if got := search(""); len(got.Events) != 2 || got.Next != "2" {
+		t.Fatalf("first page: %+v", got)
+	}
+	hits = 25
+	if got := search("2"); len(got.Events) != 25 || got.Next != "27" {
+		t.Fatalf("second page: %d next %q", len(got.Events), got.Next)
+	}
+	hits, more = 1, false
+	if got := search("27"); len(got.Events) != 1 || got.Next != "" {
+		t.Fatalf("last page: %+v", got)
+	}
+	want := []string{
+		`{"requests":[{"entityTypes":["event"],"query":{"queryString":"budget"}}]}`,
+		`{"requests":[{"entityTypes":["event"],"from":2,"query":{"queryString":"budget"}}]}`,
+		`{"requests":[{"entityTypes":["event"],"from":27,"query":{"queryString":"budget"}}]}`,
+	}
+	if !reflect.DeepEqual(bodies, want) {
+		t.Fatalf("bodies=%q", bodies)
+	}
+	// More results without a hit would give the same page again.
+	hits, more = 0, true
+	if got, err := c.Calendar().Search(t.Context(), "budget", "27"); err == nil || got.Events != nil {
+		t.Fatalf("empty page with more results: %+v %v", got, err)
+	}
+}
+
+// The page is agent input: anything but a decimal from is refused before a credential read or a request.
+func TestCalendarSearchRefusesAPageThatIsNotAFrom(t *testing.T) {
+	var calls atomic.Int64
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
+	t.Cleanup(s.Close)
+	store := validStore()
+	c := m365.New(account(), store, m365.Options{HTTPClient: s.Client(), BaseURL: s.URL + "/v1.0", Now: func() time.Time { return now }}).Calendar()
+	for _, page := range []string{"-1", "x", "01", "+1", " 1", "1e3", "99999999999999999999", "https://graph.microsoft.com/v1.0/search/query"} {
+		if got, err := c.Search(t.Context(), "budget", page); err != model.MailboxError("Graph error InvalidPage") || got.Events != nil || calls.Load() != 0 || store.loads != 0 {
+			t.Errorf("page %q: err=%v calls=%d loads=%d", page, err, calls.Load(), store.loads)
+		}
 	}
 }

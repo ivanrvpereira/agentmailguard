@@ -1,6 +1,7 @@
 package gmail
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"net/url"
@@ -90,60 +91,69 @@ func (m *mailbox) Categories(ctx context.Context) ([]string, error) {
 	}
 	return out, nil
 }
-func (m *mailbox) ids(ctx context.Context, q url.Values, count int) ([]string, error) {
+
+// maxPage is the largest messages.list page that Gmail documents (maxResults at most 500).
+const maxPage = 500
+
+// ids reads one messages.list page (https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list).
+// maxResults goes only with a size, as given, so Gmail's default and maximum apply. A page with more IDs than the
+// size or than maxPage is refused before any message is read. The page is a pageToken that only Gmail
+// reads, sent as a query value; a nextPageToken equal to it is refused, as it would never end.
+func (m *mailbox) ids(ctx context.Context, q url.Values, page model.PageRequest) ([]string, string, error) {
+	if page.Size > 0 {
+		q.Set("maxResults", strconv.Itoa(page.Size))
+	}
+	if page.Page != "" {
+		q.Set("pageToken", page.Page)
+	}
+	v, err := m.c.get(ctx, "Gmail", m.c.options.GmailURL+"/messages", q)
+	if err != nil {
+		return nil, "", err
+	}
+	a, err := items(v, "messages", "Gmail")
+	if err != nil {
+		return nil, "", err
+	}
+	if len(a) > min(cmp.Or(page.Size, maxPage), maxPage) {
+		return nil, "", failure("Gmail", "InvalidPage")
+	}
 	out := []string{}
-	if count <= 0 {
-		return out, nil
+	for _, raw := range a {
+		v, err := object(raw, "Gmail")
+		if err != nil {
+			return nil, "", err
+		}
+		id := stringField(v, "id")
+		if strings.TrimSpace(id) == "" {
+			return nil, "", failure("Gmail", "InvalidMetadata")
+		}
+		out = append(out, id)
 	}
-	q.Set("maxResults", strconv.Itoa(min(count, 500)))
-	seen := map[string]bool{}
-	for len(out) < count {
-		v, err := m.c.get(ctx, "Gmail", m.c.options.GmailURL+"/messages", q)
-		if err != nil {
-			return nil, err
-		}
-		a, err := items(v, "messages", "Gmail")
-		if err != nil {
-			return nil, err
-		}
-		for _, raw := range a {
-			v, err := object(raw, "Gmail")
-			if err != nil {
-				return nil, err
-			}
-			id := stringField(v, "id")
-			if strings.TrimSpace(id) == "" {
-				return nil, failure("Gmail", "InvalidMetadata")
-			}
-			out = append(out, id)
-		}
-		token, err := pageToken(v, seen, "Gmail")
-		if err != nil {
-			return nil, err
-		}
-		if token == "" {
-			break
-		}
-		q.Set("pageToken", token)
-	}
-	return out[:min(len(out), count)], nil
+	next, err := pageToken(v, map[string]bool{page.Page: true}, "Gmail")
+	return out, next, err
 }
-func (m *mailbox) List(ctx context.Context, folder string, count, skip int, _ bool) ([]model.Message, error) {
-	if count < 0 || skip < 0 || count > int(^uint(0)>>1)-skip {
-		return nil, failure("Gmail", "ValueError")
+
+// messages reads the page that q and page select, each message in full.
+func (m *mailbox) messages(ctx context.Context, q url.Values, page model.PageRequest) (model.MessagePage, error) {
+	ids, next, err := m.ids(ctx, q, page)
+	if err != nil {
+		return model.MessagePage{}, err
 	}
-	if count == 0 {
-		return []model.Message{}, nil
+	out, err := m.Get(ctx, ids, true)
+	if err != nil {
+		return model.MessagePage{}, err
+	}
+	return model.MessagePage{Messages: out, Next: next}, nil
+}
+func (m *mailbox) List(ctx context.Context, folder string, page model.PageRequest, _ bool) (model.MessagePage, error) {
+	if page.Size < 0 {
+		return model.MessagePage{}, failure("Gmail", "ValueError")
 	}
 	id, err := m.labelID(ctx, folder)
 	if err != nil {
-		return nil, err
+		return model.MessagePage{}, err
 	}
-	ids, err := m.ids(ctx, url.Values{"labelIds": {id}}, count+skip)
-	if err != nil {
-		return nil, err
-	}
-	return m.Get(ctx, ids[min(skip, len(ids)):], true)
+	return m.messages(ctx, url.Values{"labelIds": {id}}, page)
 }
 func phrase(s string) string {
 	s = strings.Map(func(r rune) rune {
@@ -154,9 +164,9 @@ func phrase(s string) string {
 	}, s)
 	return `"` + strings.Join(strings.Fields(s), " ") + `"`
 }
-func (m *mailbox) Search(ctx context.Context, query model.SearchQuery, count int, _ bool) ([]model.Message, error) {
-	if count < 0 {
-		return nil, failure("Gmail", "ValueError")
+func (m *mailbox) Search(ctx context.Context, query model.SearchQuery, page model.PageRequest, _ bool) (model.MessagePage, error) {
+	if page.Size < 0 {
+		return model.MessagePage{}, failure("Gmail", "ValueError")
 	}
 	terms := []string{}
 	if query.Sender != nil && *query.Sender != "" {
@@ -170,11 +180,18 @@ func (m *mailbox) Search(ctx context.Context, query model.SearchQuery, count int
 	if query.Subject != nil && *query.Subject != "" {
 		terms = append(terms, "subject:"+phrase(*query.Subject))
 	}
+	// Gmail reads a date in after: and before: as midnight Pacific time; a value in seconds is an exact time
+	// (https://developers.google.com/workspace/gmail/api/guides/filtering). The guide does not say whether the
+	// boundary second matches, so the query reaches one second past each bound, and Search keeps exact times.
 	if query.After != nil {
-		terms = append(terms, "after:"+query.After.Format("2006/01/02"))
+		terms = append(terms, "after:"+strconv.FormatInt(query.After.Unix()-1, 10))
 	}
 	if query.Before != nil {
-		terms = append(terms, "before:"+query.Before.Format("2006/01/02"))
+		end := query.Before.Unix()
+		if query.Before.Nanosecond() > 0 {
+			end++
+		}
+		terms = append(terms, "before:"+strconv.FormatInt(end+1, 10))
 	}
 	if query.Text != nil && *query.Text != "" {
 		terms = append(terms, phrase(*query.Text))
@@ -183,15 +200,18 @@ func (m *mailbox) Search(ctx context.Context, query model.SearchQuery, count int
 	if query.Folder != nil {
 		id, err := m.labelID(ctx, *query.Folder)
 		if err != nil {
-			return nil, err
+			return model.MessagePage{}, err
 		}
 		q.Set("labelIds", id)
 	}
-	ids, err := m.ids(ctx, q, count)
+	found, err := m.messages(ctx, q, page)
 	if err != nil {
-		return nil, err
+		return found, err
 	}
-	return m.Get(ctx, ids, true)
+	// ReceivedAt is internalDate. The wider query can leave fewer messages than the page size; Next still continues
+	// the same Gmail search.
+	found.Messages = slices.DeleteFunc(found.Messages, func(msg model.Message) bool { return !query.Received(msg.ReceivedAt) })
+	return found, nil
 }
 
 // Thread takes the message IDs of the whole conversation from threads.get, with every label, spam and trash

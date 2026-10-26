@@ -117,14 +117,64 @@ type Event struct {
 	Body        *string
 	ContentType *ContentType
 }
+
+// SearchQuery selects messages. After and Before are exact instants: a message matches when After <= received
+// time < Before. Nil means no bound.
 type SearchQuery struct {
 	Text, Sender, To, Subject *string
 	After, Before             *time.Time
 	Folder                    *FolderID
 }
+
+// RangeValid reports whether the bounds leave time for a match: Before, when both are set, is after After.
+func (q SearchQuery) RangeValid() bool {
+	return q.After == nil || q.Before == nil || q.Before.After(*q.After)
+}
+
+// UnknownReceived is the ReceivedAt that adapters set when the provider gives no received time.
+var UnknownReceived = time.Unix(0, 0).UTC()
+
+// Received reports whether a message received at t is inside [After, Before). An unknown received time is outside
+// any bound.
+func (q SearchQuery) Received(t time.Time) bool {
+	if q.After == nil && q.Before == nil {
+		return true
+	}
+	return !t.Equal(UnknownReceived) && (q.After == nil || !t.Before(*q.After)) && (q.Before == nil || t.Before(*q.Before))
+}
+
 type NewDraft struct {
 	To            []string
 	Subject, Body string
+}
+
+// PageRequest asks for one page of a list or search. Size 0 sends no size, so the provider's default page size
+// applies. Page "" is the first page; otherwise it is the Next of an earlier result for the same request: untrusted
+// agent input that the adapter checks for form; the Microsoft 365 mail adapter also refuses one from another request.
+type PageRequest struct {
+	Size int
+	Page string
+}
+
+// MessagePage is one page of messages. Next is "" on the last page, else the provider's marker for the next page.
+type MessagePage struct {
+	Messages []Message
+	Next     string
+}
+
+// EventPage is one page of events. Next is "" on the last page, else the provider's marker for the next page.
+type EventPage struct {
+	Events []Event
+	Next   string
+}
+
+// MaxPage bounds the length of a page marker, from the agent and from the provider.
+const MaxPage = 16 << 10
+
+// ValidPage reports whether s can be a page marker: at most MaxPage bytes of printable ASCII without spaces. "" is
+// no marker.
+func ValidPage(s string) bool {
+	return len(s) <= MaxPage && !strings.ContainsFunc(s, func(r rune) bool { return r <= ' ' || r > '~' })
 }
 
 // Error must contain only a safe error code/status, never a provider response body.
@@ -153,8 +203,8 @@ type InboxScan struct {
 // ScanInbox reads all pages before returning, metadata only, excluding drafts,
 // with since <= received_at < until (nil until means no upper bound).
 type Mailbox interface {
-	List(ctx context.Context, folder FolderID, count, skip int, body bool) ([]Message, error)
-	Search(ctx context.Context, query SearchQuery, count int, body bool) ([]Message, error)
+	List(ctx context.Context, folder FolderID, page PageRequest, body bool) (MessagePage, error)
+	Search(ctx context.Context, query SearchQuery, page PageRequest, body bool) (MessagePage, error)
 	Get(ctx context.Context, ids []MessageID, body bool) ([]Message, error)
 	// Thread returns every message of the conversation that the provider gives, newest first, from every folder
 	// (trash, spam or junk, sent, and drafts included), metadata only like List. An unknown thread is the adapter's
@@ -184,9 +234,10 @@ type Mailbox interface {
 type Calendar interface {
 	List(ctx context.Context, start, end time.Time) ([]Event, error)
 	Get(ctx context.Context, id EventID) (Event, error)
-	// Search returns the events that the provider's own search finds for text, one page in the provider's
-	// default size and order, each with every field that Get reads.
-	Search(ctx context.Context, text string) ([]Event, error)
+	// Search returns one page of the events that the provider's own search finds for text, in the provider's
+	// default size and order, each with every field that Get reads. page is "" for the first page, else the Next
+	// of an earlier result for the same text: untrusted, so the adapter refuses a marker of the wrong form.
+	Search(ctx context.Context, text, page string) (EventPage, error)
 }
 
 type NewEvent struct {
@@ -301,6 +352,8 @@ func AvailabilitySlots(start, end time.Time) int {
 }
 
 // Availability requests name 1 to MaxAvailabilityAddresses addresses for a range shorter than MaxAvailabilityRange.
+// These are Microsoft Graph getSchedule limits for one query
+// (https://learn.microsoft.com/en-us/graph/outlook-get-free-busy-schedule, "Limits and error conditions").
 const (
 	MaxAvailabilityAddresses = 20
 	MaxAvailabilityRange     = 62 * 24 * time.Hour

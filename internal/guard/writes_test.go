@@ -224,7 +224,7 @@ func TestEveryManualRouteAndDraftHasContentFreeAudit(t *testing.T) {
 		t.Fatal("writes screened content")
 	}
 	before := len(w.calls)
-	refusals := []func() error{func() error { _, e := g.Archive(ctx, nil); return e }, func() error { _, e := g.Trash(ctx, make([]string, 51)); return e }, func() error { _, e := g.Move(ctx, ids, "archive"); return e }, func() error { _, e := g.Flag(ctx, ids, "urgent"); return e }, func() error { _, e := g.Categorize(ctx, ids, []string{"Planted"}, nil); return e }, func() error { _, e := g.Categorize(ctx, ids, nil, nil); return e }}
+	refusals := []func() error{func() error { _, e := g.Archive(ctx, nil); return e }, func() error { _, e := g.Trash(ctx, []string{}); return e }, func() error { _, e := g.Move(ctx, ids, "archive"); return e }, func() error { _, e := g.Flag(ctx, ids, "urgent"); return e }, func() error { _, e := g.Categorize(ctx, ids, []string{"Planted"}, nil); return e }, func() error { _, e := g.Categorize(ctx, ids, nil, nil); return e }}
 	for _, call := range refusals {
 		if call() == nil {
 			t.Fatal("invalid mutation allowed")

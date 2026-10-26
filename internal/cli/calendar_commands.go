@@ -9,7 +9,7 @@ import (
 
 const wallClock = "2006-01-02 15:04"
 
-// now is the client clock; its location is the client time zone for every calendar command.
+// now is the client clock; its location is the client time zone for every date option and calendar command.
 func (r *runner) now() time.Time {
 	if r.opts.Now == nil {
 		return time.Now()
@@ -36,7 +36,8 @@ func meetingEnd(c *cobra.Command, start time.Time, end string, duration time.Dur
 	return until, ok && until.After(start)
 }
 
-// calendarAvailabilityCmd mirrors the server limits: 1-20 distinct addresses and a window shorter than 62 days.
+// calendarAvailabilityCmd mirrors the server limits, which are Microsoft Graph's: 1-20 distinct addresses and a window
+// shorter than 62 days.
 func calendarAvailabilityCmd(r *runner) *cobra.Command {
 	var to []string
 	var start, end string

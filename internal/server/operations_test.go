@@ -78,8 +78,8 @@ func TestValidatedAccountOperationsAndReload(t *testing.T) {
 	defer s.Close()
 	h := httptest.NewServer(s)
 	defer h.Close()
-	for _, op := range []string{"rules.list", "mail.organize"} {
-		status, b := rpc(t, h.URL, `{"operation":"`+op+`","params":{}}`)
+	for op, params := range map[string]string{"rules.list": `{}`, "mail.organize": `{"since":"2026-03-24T00:00:00Z"}`} {
+		status, b := rpc(t, h.URL, `{"operation":"`+op+`","params":`+params+`}`)
 		if status != 200 {
 			t.Fatalf("%s: %d %s", op, status, b)
 		}
@@ -90,9 +90,9 @@ func TestValidatedAccountOperationsAndReload(t *testing.T) {
 	for _, body := range []string{
 		`{"operation":"mail.get","params":{}}`, `{"operation":"mail.get","params":{"id":""}}`,
 		`{"operation":"draft.update","params":{"id":"x"}}`, `{"operation":"mail.archive","params":{"ids":[]}}`,
-		`{"operation":"mail.list","params":{"count":101}}`, `{"operation":"mail.flag","params":{"ids":["x"],"state":"urgent"}}`,
+		`{"operation":"mail.list","params":{"count":-1}}`, `{"operation":"mail.list","params":{"page":"a b"}}`, `{"operation":"mail.search","params":{"text":"x","page":"a\u0000"}}`, `{"operation":"calendar.search","params":{"text":"x","page":"\u00e9"}}`, `{"operation":"mail.flag","params":{"ids":["x"],"state":"urgent"}}`,
 		`{"operation":"mail.organize","params":{"since":"0d"}}`, `{"operation":"mail.organize","params":{"since":"2026-04-01"}}`,
-		`{"operation":"calendar.list","params":{"start":"2026-01-01T00:00:00Z","end":"2027-01-01T00:00:00Z"}}`,
+		`{"operation":"calendar.list","params":{"start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:00:00Z"}}`,
 	} {
 		status, _ := rpc(t, h.URL, body)
 		if status != 400 {

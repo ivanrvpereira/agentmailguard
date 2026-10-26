@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
@@ -169,6 +170,33 @@ func (c *Client) next(d object, first string) (string, error) {
 		return "", invalidPage
 	}
 	return link, nil
+}
+
+// pageLink reports whether raw is a nextLink that Graph can give for first: the path of first, each query value of
+// first, and otherwise only the paging keys $top, $skip, and $skiptoken, each once. request refuses another origin
+// with validURL before it reads a credential.
+func pageLink(raw, first string) bool {
+	u, err := url.Parse(raw)
+	start, err2 := url.Parse(first)
+	if err != nil || err2 != nil || u.EscapedPath() != start.EscapedPath() {
+		return false
+	}
+	got, err := url.ParseQuery(u.RawQuery)
+	want, err2 := url.ParseQuery(start.RawQuery)
+	if err != nil || err2 != nil {
+		return false
+	}
+	for k, v := range want {
+		if !slices.Equal(got[k], v) {
+			return false
+		}
+	}
+	for k, v := range got {
+		if _, ours := want[k]; !ours && (len(v) != 1 || k != "$top" && k != "$skip" && k != "$skiptoken") {
+			return false
+		}
+	}
+	return true
 }
 func (c *Client) all(ctx context.Context, first string, calendar bool) ([]object, error) {
 	var found []object

@@ -3,8 +3,10 @@ package m365
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -50,44 +52,65 @@ func (c *calendar) Get(ctx context.Context, id string) (model.Event, error) {
 }
 
 // Search posts one Microsoft Search request for events in the primary calendar, without size, so Graph's default
-// page applies (https://learn.microsoft.com/en-us/graph/search-concept-events). A hit carries only some event
-// fields, so each hit is read again with Get. Hit IDs come in the EWS format, which /me/events/{id} refuses (checked
-// live on 2026-10-26), so they are first translated to REST immutable IDs, the IDs that List and Get return.
-func (c *calendar) Search(ctx context.Context, query string) ([]model.Event, error) {
-	body := map[string]any{"requests": []any{map[string]any{"entityTypes": []string{"event"}, "query": map[string]any{"queryString": query}}}}
-	d, err := c.c.request(ctx, http.MethodPost, c.c.endpoint("/search/query", nil), body, true)
+// page applies (https://learn.microsoft.com/en-us/graph/search-concept-events). Microsoft Search pages by from and
+// size, at most 25 events a page
+// (https://learn.microsoft.com/en-us/graph/api/resources/search-api-overview?view=graph-rest-1.0, "Page search
+// results"): the page is the decimal from, and the next page is from plus the hits of this page while
+// moreResultsAvailable is true. A hit carries only some event fields, so each hit is read again with Get. Hit IDs
+// come in the EWS format, which /me/events/{id} refuses (checked live on 2026-10-26), so they are first translated
+// to REST immutable IDs, the IDs that List and Get return.
+func (c *calendar) Search(ctx context.Context, query, page string) (model.EventPage, error) {
+	request := map[string]any{"entityTypes": []string{"event"}, "query": map[string]any{"queryString": query}}
+	from := 0
+	if page != "" {
+		n, err := strconv.Atoi(page)
+		if err != nil || n < 0 || strconv.Itoa(n) != page {
+			return model.EventPage{}, invalidPage
+		}
+		from, request["from"] = n, n
+	}
+	d, err := c.c.request(ctx, http.MethodPost, c.c.endpoint("/search/query", nil), map[string]any{"requests": []any{request}}, true)
 	if err != nil {
-		return nil, err
+		return model.EventPage{}, err
 	}
 	responses, err := pageItems(d)
 	if err != nil {
-		return nil, err
+		return model.EventPage{}, err
 	}
-	ids := []string{}
+	ids, more := []string{}, false
 	for _, response := range responses {
 		containers, ok := optionalArray(response, "hitsContainers")
 		for _, container := range containers {
 			hits, ok2 := optionalArray(container, "hits")
 			ok = ok && ok2
+			more = more || boolean(container, "moreResultsAvailable")
 			for _, hit := range hits {
 				id := text(hit, "hitId")
 				if id == "" {
-					return nil, invalidMetadata
+					return model.EventPage{}, invalidMetadata
 				}
 				ids = append(ids, id)
 			}
 		}
-		// 500 is the largest page that a Microsoft Search request can ask for.
-		if !ok || len(ids) > 500 {
-			return nil, invalidMetadata
+		// 25 is the largest page of events ("Page search results" above).
+		if !ok || len(ids) > 25 {
+			return model.EventPage{}, invalidMetadata
 		}
 	}
+	next := ""
+	if more {
+		// No hit with more results would give the same page again.
+		if len(ids) == 0 || from > math.MaxInt-len(ids) {
+			return model.EventPage{}, invalidPage
+		}
+		next = strconv.Itoa(from + len(ids))
+	}
 	if len(ids) == 0 {
-		return []model.Event{}, nil
+		return model.EventPage{Events: []model.Event{}}, nil
 	}
 	ids, err = c.translate(ctx, ids)
 	if err != nil {
-		return nil, err
+		return model.EventPage{}, err
 	}
 	out := make([]model.Event, len(ids))
 	errs := make([]error, len(ids))
@@ -98,10 +121,10 @@ func (c *calendar) Search(ctx context.Context, query string) ([]model.Event, err
 	wg.Wait()
 	for _, err := range errs {
 		if err != nil {
-			return nil, err
+			return model.EventPage{}, err
 		}
 	}
-	return out, nil
+	return model.EventPage{Events: out, Next: next}, nil
 }
 
 // translate turns EWS IDs into REST immutable IDs with one translateExchangeIds request

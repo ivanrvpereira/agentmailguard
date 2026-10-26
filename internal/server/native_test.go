@@ -380,7 +380,7 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 	}
 	ok("mail", "folders")
 	ok("mail", "categories")
-	preview := ok("mail", "organize", "--since", "7d")
+	preview := ok("mail", "organize", "--since", "2026-03-24")
 	if !strings.Contains(preview, `"rule": "archive"`) {
 		t.Fatal("classification preview missing")
 	}
@@ -392,7 +392,7 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 5 {
 		wg.Go(func() {
-			out, errout, code := run("mail", "organize", "--since", "7d", "--apply")
+			out, errout, code := run("mail", "organize", "--since", "2026-03-24", "--apply")
 			if code != 0 || errout != "" || !json.Valid([]byte(out)) {
 				t.Error("concurrent apply failed")
 			}
@@ -407,7 +407,7 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 		t.Error("business/security tags differ")
 	}
 	api.mu.Unlock()
-	again := ok("mail", "organize", "--apply")
+	again := ok("mail", "organize", "--since", "2026-03-24", "--apply")
 	if !strings.Contains(again, `"planned": []`) {
 		t.Fatal("completion not reused")
 	}

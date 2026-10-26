@@ -50,15 +50,15 @@ agentmailguard --account work mail list --count 10
 agentmailguard auth status
 agentmailguard mail folders
 agentmailguard mail categories
-agentmailguard mail list [--folder inbox] [--count 25] [--skip 0]
-agentmailguard mail search [--text T] [--from ADDR] [--to ADDR] [--subject T] [--after YYYY-MM-DD] [--before YYYY-MM-DD] [--folder FOLDER_ID] [--count 25]
+agentmailguard mail list [--folder inbox] [--count N] [--page NEXT_PAGE]
+agentmailguard mail search [--text T] [--from ADDR] [--to ADDR] [--subject T] [--after YYYY-MM-DD] [--before YYYY-MM-DD] [--folder FOLDER_ID] [--count N] [--page NEXT_PAGE]
 agentmailguard mail get ID
 agentmailguard mail thread THREAD_ID
 agentmailguard mail link ID L1 [L2 ...]
 agentmailguard mail link ID --all
-agentmailguard calendar list [--from today|+Nd|YYYY-MM-DD] [--to +7d|YYYY-MM-DD]
+agentmailguard calendar list [--from today|+Nd|YYYY-MM-DD] [--to today|+Nd|YYYY-MM-DD]
 agentmailguard calendar get ID
-agentmailguard calendar search TEXT
+agentmailguard calendar search TEXT [--page NEXT_PAGE]
 agentmailguard calendar availability --to ADDR [--to ADDR] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'
 agentmailguard calendar invite --to ADDR [--to ADDR] --subject TEXT --start 'YYYY-MM-DD HH:MM' (--duration 30m | --end 'YYYY-MM-DD HH:MM') [--optional ADDR] [--body TEXT] [--location TEXT] [--no-online]
 agentmailguard calendar update ID [--subject TEXT] [--location TEXT] [--body TEXT] [--start 'YYYY-MM-DD HH:MM'] [--duration 30m | --end 'YYYY-MM-DD HH:MM'] [--add-attendee ADDR] [--remove-attendee ADDR] [--online]
@@ -87,9 +87,13 @@ agentmailguard stats --days 30
 
 `mail search` needs at least one of `--text`, `--from`, `--to`, `--subject`, `--after`, or `--before`. `--to` matches the To and Cc addresses.
 
+Dates: a day runs from 00:00 to the end of the day on the machine where you run the CLI, and the last day is included. `mail search --after DAY --before DAY` includes both days, `mail organize --until DAY` includes that day, and `calendar list --to DAY` includes that whole day (default: today through seven days from today). `--to +Nd` counts from `--from`; `Nd`, `Nw`, and `Nm` for `organize` count back from today. `calendar availability` and meeting commands take exact local times, not days. A `mail search` with dates can return fewer messages than `--count` on a page and still have `next_page`.
+
+`mail list`, `mail search`, and `calendar search` return one page: `{"messages": [...], "next_page": "..."}` (`"events"` for `calendar search`). `next_page` is there only when there are more results. For the next page, always run the same command with the same options and add `--page VALUE`; on Microsoft 365 mail, a value from other options is refused, and elsewhere it is passed to the provider as is. Without `--count` the provider's default page size applies: 100 messages on Gmail, 10 on Microsoft 365. `mail list` without `--folder` reads the Inbox; this is our choice, because the providers differ without a folder.
+
 `calendar search TEXT` uses the provider's own search (Google Calendar on Gmail, Microsoft Search on Microsoft 365). It returns one page of matching events in the provider's order, with the fields of `calendar list`. It has no date range.
 
-Limits: `--count` 1–100, at most 50 IDs per mutation, at most 100 recipients, categories, or meeting attendees per list. `calendar availability` accepts 1–20 addresses and a window of less than 62 days.
+Limits: `--count` has no limit of ours: the provider refuses or caps a count above its maximum (Gmail 500, Microsoft 365 1,000). Mutations, categories, recipients, and meeting attendees have no limit of ours: the provider refuses what it does not accept. `calendar availability` accepts 1–20 addresses and a window of less than 62 days (Microsoft Graph limits).
 
 ## Verdicts
 
@@ -214,10 +218,9 @@ Done when the applied run's `stats` (`applied`, `tagged`, `skipped`, `failed`) a
 
 - **Server unreachable:** report it and stop. Do not run `serve` or look for another way into the mailbox.
 - **Forbidden commands:** never run `serve`, `auth login`, `auth set-screening-key`, `auth set-approval-password`, `auth migrate`, `auth change-password`, or `cache clear`, and never pass `--home`. Never read files in the server's home directory (`config.toml`, `credentials.*`, `cache.db`, `fake-provider.db`, `audit.jsonl`), and never call Microsoft Graph or the Gmail API directly. These bypass the guard.
-- **Organize dates** use the server clock and UTC midnight. `--until` is exclusive. Explicit dates cannot be in the future.
-- **Calendar dates** use the client's local timezone. `--to +Nd` counts from `--from`. The range is at most 90 days.
+- **Dates** are local days on your machine, and the last day is included (see Dates above). `organize --since` cannot be in the future.
 - **Meeting refusals:** for `refused by policy: calendar_...`, see [Write policy results](#write-policy-results). `missing_scopes` means the login lacks the calendar write grant (`Calendars.ReadWrite` on Microsoft 365, `calendar.events.owned` on Gmail); the user must log in again on the server host and restart the server. Report other `calendar write refused` and `calendar response refused` errors as they are.
-- **Meeting size:** an invite accepts 1–100 `--to` attendees, at most 100 `--optional` attendees, and any length, and distribution lists are not detected. Check large or long meetings with the user.
+- **Meeting size:** an invite accepts any number of `--to` and `--optional` attendees, up to the provider's limit, and any length, and distribution lists are not detected. Check large or long meetings with the user.
 - **Empty `--body ''`** is a valid explicit value for `draft update`. It clears the body.
 - **Unread is not important.** Use content and sender, not only `is_read`, to prioritize.
 

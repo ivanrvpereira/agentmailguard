@@ -6,8 +6,11 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ivanrvpereira/agentmailguard/internal/guard"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/views"
 )
 
 type screeningResult struct {
@@ -41,7 +44,7 @@ func TestUnexpectedFetchedIDsNeverReachScreeningOrViews(t *testing.T) {
 			if err == nil || v.Subject != nil || v.Body != nil || s.calls != 0 {
 				t.Fatalf("malformed fetched response exposed fields or screened: %+v %v", v, err)
 			}
-			if got, err := g.List(ctx, "inbox", 1, 0); err == nil || len(got) != 0 || s.calls != 0 {
+			if got, err := summaries(g.List(ctx, "inbox", model.PageRequest{})); err == nil || len(got) != 0 || s.calls != 0 {
 				t.Fatal("malformed list body response accepted")
 			}
 			b.response = []model.Message{message("m1")}
@@ -125,13 +128,55 @@ func TestDraftIdentityOverridesPreviouslyCachedVerdict(t *testing.T) {
 }
 func TestSearchByRecipientAloneIsASearchTerm(t *testing.T) {
 	g, _, _ := setup(t, &mailbox{messages: []model.Message{message("m1")}}, &screener{verdict: model.Green})
-	got, err := g.Search(t.Context(), model.SearchQuery{To: ptr("ana@example.test")}, 10)
+	got, err := summaries(g.Search(t.Context(), model.SearchQuery{To: ptr("ana@example.test")}, model.PageRequest{}))
 	if err != nil || len(got) != 1 {
 		t.Fatalf("to-only search=%v err=%v", got, err)
 	}
-	_, err = g.Search(t.Context(), model.SearchQuery{To: ptr(""), Folder: ptr("inbox")}, 10)
+	_, err = summaries(g.Search(t.Context(), model.SearchQuery{To: ptr(""), Folder: ptr("inbox")}, model.PageRequest{}))
 	if err == nil || err.Error() != "search needs at least one of text, from, to, subject, after, before" {
 		t.Fatalf("search without a term returned %v", err)
+	}
+	day := time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC)
+	_, err = summaries(g.Search(t.Context(), model.SearchQuery{After: &day, Before: &day}, model.PageRequest{}))
+	if err != guard.GuardError("invalid request") {
+		t.Fatalf("search with Before not after After returned %v", err)
+	}
+}
+
+// The guard re-checks the page request before the adapter, and treats the adapter's next-page marker as provider
+// data: a marker that model.ValidPage refuses fails the whole page.
+func TestListAndSearchCheckThePageRequestAndTheNextMarker(t *testing.T) {
+	b := &mailbox{messages: []model.Message{message("m1")}}
+	g, _, _ := setup(t, b, &screener{verdict: model.Green})
+	ctx := t.Context()
+	for name, call := range map[string]func(model.PageRequest) (views.MailPage, error){
+		"List": func(p model.PageRequest) (views.MailPage, error) { return g.List(ctx, "inbox", p) },
+		"Search": func(p model.PageRequest) (views.MailPage, error) {
+			return g.Search(ctx, model.SearchQuery{Text: new("x")}, p)
+		},
+	} {
+		long := strings.Repeat("a", model.MaxPage)
+		b.next = long
+		asked := model.PageRequest{Size: 5, Page: "https://graph.example.test/v1.0/me/messages?$skip=5"}
+		got, err := call(asked)
+		if err != nil || len(got.Messages) != 1 || got.NextPage != long || b.pages[len(b.pages)-1] != asked {
+			t.Fatalf("%s: next=%.20q err=%v pages=%v", name, got.NextPage, err, b.pages)
+		}
+		before := len(b.pages)
+		for _, p := range []model.PageRequest{{Size: -1}, {Page: "a b"}, {Page: "é"}, {Page: long + "a"}} {
+			if got, err := call(p); err != guard.GuardError("invalid request") || got.Messages != nil {
+				t.Errorf("%s %+.20v accepted: %d messages, %v", name, p, len(got.Messages), err)
+			}
+		}
+		if len(b.pages) != before {
+			t.Fatalf("%s: an invalid page request reached the mailbox", name)
+		}
+		for _, next := range []string{"a b", "a\x1b[31m", "\u00e9", "a\nb", long + "a"} {
+			b.next = next
+			if got, err := call(model.PageRequest{}); err != guard.GuardError("ValueError") || got.Messages != nil || got.NextPage != "" {
+				t.Errorf("%s next %.20q accepted: %d messages, next %.20q, %v", name, next, len(got.Messages), got.NextPage, err)
+			}
+		}
 	}
 }
 func TestListReusesFetchedEmptyBodiesAndValidatesReadRequests(t *testing.T) {
@@ -141,25 +186,14 @@ func TestListReusesFetchedEmptyBodiesAndValidatesReadRequests(t *testing.T) {
 	s := &screener{verdict: model.Green}
 	g, _, _ := setup(t, b, s)
 	ctx := context.Background()
-	got, err := g.Search(ctx, model.SearchQuery{Text: new("x")}, 100)
+	got, err := summaries(g.Search(ctx, model.SearchQuery{Text: new("x")}, model.PageRequest{}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].Verdict != model.Green || len(b.gets) != 0 || s.calls != 1 {
 		t.Fatal("fetched empty list body was fetched again or not screened")
 	}
-	for _, n := range []int{0, 101} {
-		if _, err := g.List(ctx, "inbox", n, 0); err == nil {
-			t.Fatal("bad list count allowed")
-		}
-		if _, err := g.Search(ctx, model.SearchQuery{Text: new("x")}, n); err == nil {
-			t.Fatal("bad search count allowed")
-		}
-	}
-	if _, err := g.List(ctx, "inbox", 1, -1); err == nil {
-		t.Fatal("negative skip allowed")
-	}
-	if _, err := g.Search(ctx, model.SearchQuery{Folder: new("inbox")}, 1); err == nil {
+	if _, err := summaries(g.Search(ctx, model.SearchQuery{Folder: new("inbox")}, model.PageRequest{})); err == nil {
 		t.Fatal("folder-only search allowed")
 	}
 	b.messages[0].Body = nil

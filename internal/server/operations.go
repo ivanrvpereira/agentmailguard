@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -124,6 +124,11 @@ func params(b json.RawMessage, p any) error {
 	}
 	return strict(b, p, keys...)
 }
+
+// noMax is the max of a list that has no limit of ours: the provider refuses what it does not accept, and
+// MaxRequestBytes bounds the request.
+const noMax = math.MaxInt
+
 func listValid(v []string, min, max int) bool {
 	if len(v) < min || len(v) > max {
 		return false
@@ -146,7 +151,7 @@ type idsParam struct {
 type listParam struct {
 	Folder string `json:"folder"`
 	Count  int    `json:"count"`
-	Skip   int    `json:"skip"`
+	Page   string `json:"page"`
 }
 type threadParam struct {
 	ID string `json:"id"`
@@ -160,6 +165,7 @@ type searchParam struct {
 	Before  *string `json:"before"`
 	Folder  *string `json:"folder"`
 	Count   int     `json:"count"`
+	Page    string  `json:"page"`
 }
 type linkParam struct {
 	ID    string   `json:"id"`
@@ -190,6 +196,7 @@ type calendarParam struct {
 }
 type calendarSearchParam struct {
 	Text string `json:"text"`
+	Page string `json:"page"`
 }
 type availabilityParam struct {
 	To    []string `json:"to"`
@@ -315,11 +322,13 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 			return a.guard.CalendarGet(ctx, p.ID)
 		}
 	case "mail.list":
-		p := listParam{Folder: "inbox", Count: 25}
-		if params(r.Params, &p) != nil || !idValid(p.Folder) || p.Count < 1 || p.Count > 100 || p.Skip < 0 || p.Skip > 1000000 {
+		p := listParam{Folder: "inbox"}
+		if params(r.Params, &p) != nil || !idValid(p.Folder) || p.Count < 0 || !model.ValidPage(p.Page) {
 			return nil, errInvalid
 		}
-		call = func(a *account) (any, error) { return a.guard.List(ctx, p.Folder, p.Count, p.Skip) }
+		call = func(a *account) (any, error) {
+			return a.guard.List(ctx, p.Folder, model.PageRequest{Size: p.Count, Page: p.Page})
+		}
 	case "mail.thread":
 		var p threadParam
 		if params(r.Params, &p) != nil || !idValid(p.ID) {
@@ -327,8 +336,8 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		}
 		call = func(a *account) (any, error) { return a.guard.Thread(ctx, p.ID) }
 	case "mail.search":
-		p := searchParam{Count: 25}
-		if params(r.Params, &p) != nil || p.Count < 1 || p.Count > 100 {
+		var p searchParam
+		if params(r.Params, &p) != nil || p.Count < 0 || !model.ValidPage(p.Page) {
 			return nil, errInvalid
 		}
 		for _, v := range []*string{p.Text, p.Sender, p.To, p.Subject, p.Folder} {
@@ -342,14 +351,19 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 			out **time.Time
 		}{{p.After, &q.After}, {p.Before, &q.Before}} {
 			if d.v != nil {
-				t, e := time.Parse("2006-01-02", *d.v)
+				t, e := time.Parse(time.RFC3339, *d.v)
 				if e != nil {
 					return nil, errInvalid
 				}
 				*d.out = &t
 			}
 		}
-		call = func(a *account) (any, error) { return a.guard.Search(ctx, q, p.Count) }
+		if !q.RangeValid() {
+			return nil, errInvalid
+		}
+		call = func(a *account) (any, error) {
+			return a.guard.Search(ctx, q, model.PageRequest{Size: p.Count, Page: p.Page})
+		}
 	case "mail.link":
 		var p linkParam
 		if params(r.Params, &p) != nil || !idValid(p.ID) || p.All == (len(p.Links) > 0) || !listValid(p.Links, 0, 1000) {
@@ -378,7 +392,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		}
 	case "mail.archive", "mail.trash", "mail.read", "mail.unread":
 		var p idsParam
-		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, 50) {
+		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, noMax) {
 			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) {
@@ -393,35 +407,36 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		}
 	case "mail.move":
 		var p moveParam
-		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, 50) || !idValid(p.Folder) {
+		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, noMax) || !idValid(p.Folder) {
 			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) { return mutations(a.guard.Move(ctx, p.IDs, p.Folder)) }
 	case "mail.flag":
 		var p flagParam
-		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, 50) || (p.State != model.Flagged && p.State != model.NoFlag && p.State != model.Complete) {
+		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, noMax) || (p.State != model.Flagged && p.State != model.NoFlag && p.State != model.Complete) {
 			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) { return mutations(a.guard.Flag(ctx, p.IDs, p.State)) }
 	case "mail.categorize":
 		var p categoryParam
-		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, 50) || !listValid(p.Add, 0, 100) || !listValid(p.Remove, 0, 100) {
+		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, noMax) || !listValid(p.Add, 0, noMax) || !listValid(p.Remove, 0, noMax) {
 			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) { return mutations(a.guard.Categorize(ctx, p.IDs, p.Add, p.Remove)) }
 	case "mail.organize":
-		p := organizeParam{Since: "7d"}
+		var p organizeParam
 		if params(r.Params, &p) != nil {
 			return nil, errInvalid
 		}
+		// The client resolves days: since and until are exact times, and until may be in the future.
 		now := s.options.Now().UTC()
-		since, e := parseWhen(p.Since, now)
-		if e != nil {
+		since, e := time.Parse(time.RFC3339, p.Since)
+		if e != nil || since.Year() < 1 || since.After(now) {
 			return nil, errInvalid
 		}
 		var until *time.Time
 		if p.Until != nil {
-			u, e := parseWhen(*p.Until, now)
+			u, e := time.Parse(time.RFC3339, *p.Until)
 			if e != nil || !u.After(since) {
 				return nil, errInvalid
 			}
@@ -441,16 +456,16 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		}
 		first, e := time.Parse(time.RFC3339, p.Start)
 		last, e2 := time.Parse(time.RFC3339, p.End)
-		if e != nil || e2 != nil || !last.After(first) || last.Sub(first) > 90*24*time.Hour+time.Hour {
+		if e != nil || e2 != nil || !last.After(first) {
 			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) { return a.guard.CalendarList(ctx, first, last) }
 	case "calendar.search":
 		var p calendarSearchParam
-		if params(r.Params, &p) != nil || !validString(p.Text, 4096, false) {
+		if params(r.Params, &p) != nil || !validString(p.Text, 4096, false) || !model.ValidPage(p.Page) {
 			return nil, errInvalid
 		}
-		call = func(a *account) (any, error) { return a.guard.CalendarSearch(ctx, p.Text) }
+		call = func(a *account) (any, error) { return a.guard.CalendarSearch(ctx, p.Text, p.Page) }
 	case "calendar.availability":
 		var p availabilityParam
 		if params(r.Params, &p) != nil || !listValid(p.To, 1, model.MaxAvailabilityAddresses) {
@@ -475,7 +490,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		}
 	case "draft.new", "mail.send":
 		var p newParam
-		if params(r.Params, &p) != nil || !listValid(p.To, 1, 100) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) {
+		if params(r.Params, &p) != nil || !listValid(p.To, 1, noMax) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) {
 			return nil, errInvalid
 		}
 		draft := model.NewDraft{To: p.To, Subject: *p.Subject, Body: *p.Body}
@@ -506,7 +521,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		}
 	case "draft.forward", "mail.forward":
 		var p forwardParam
-		if params(r.Params, &p) != nil || !idValid(p.ID) || !listValid(p.To, 1, 100) {
+		if params(r.Params, &p) != nil || !idValid(p.ID) || !listValid(p.To, 1, noMax) {
 			return nil, errInvalid
 		}
 		if r.Operation == "mail.forward" {
@@ -670,42 +685,4 @@ func (s *Server) ruleList(ctx context.Context, a config.Account) (any, error) {
 		}
 	}
 	return out, nil
-}
-
-var relativePattern = regexp.MustCompile(`^([0-9]+)([dwm])$`)
-
-func parseWhen(value string, now time.Time) (time.Time, error) {
-	today := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC)
-	if match := relativePattern.FindStringSubmatch(value); match != nil {
-		n, e := strconv.Atoi(match[1])
-		if e != nil || n < 1 || n > 3650000 {
-			return time.Time{}, errInvalid
-		}
-		var t time.Time
-		switch match[2] {
-		case "d":
-			t = today.AddDate(0, 0, -n)
-		case "w":
-			if n > 521428 {
-				return t, errInvalid
-			}
-			t = today.AddDate(0, 0, -7*n)
-		case "m":
-			if n > 119987 {
-				return t, errInvalid
-			}
-			first := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, -n, 0)
-			last := first.AddDate(0, 1, -1).Day()
-			t = time.Date(first.Year(), first.Month(), min(today.Day(), last), 0, 0, 0, 0, time.UTC)
-		}
-		if t.Year() < 1 || t.Year() > 9999 {
-			return time.Time{}, errInvalid
-		}
-		return t, nil
-	}
-	t, e := time.Parse("2006-01-02", value)
-	if e != nil || t.Year() < 1 || t.After(today) {
-		return time.Time{}, errInvalid
-	}
-	return t, nil
 }

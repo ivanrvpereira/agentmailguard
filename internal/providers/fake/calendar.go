@@ -121,12 +121,15 @@ func (c *calendar) List(ctx context.Context, start, end time.Time) ([]model.Even
 }
 
 // Search matches text, ignoring case, in the subject, body, location, and the names and addresses of the
-// organizer and attendees, as Google Calendar's q does. The fake has no pages: it returns every match, ordered by
-// start.
-func (c *calendar) Search(ctx context.Context, text string) ([]model.Event, error) {
+// organizer and attendees, as Google Calendar's q does. Matches are ordered by start and paged as mail is.
+func (c *calendar) Search(ctx context.Context, text, page string) (model.EventPage, error) {
+	offset, size, err := window(model.PageRequest{Page: page})
+	if err != nil {
+		return model.EventPage{}, err
+	}
 	all, err := c.events(ctx, `ORDER BY id`)
 	if err != nil {
-		return nil, err
+		return model.EventPage{}, err
 	}
 	text = strings.ToLower(text)
 	has := func(s string) bool { return strings.Contains(strings.ToLower(s), text) }
@@ -135,7 +138,8 @@ func (c *calendar) Search(ctx context.Context, text string) ([]model.Event, erro
 			!slices.ContainsFunc(e.Attendees, func(a model.Attendee) bool { return has(a.Address.Name) || has(a.Address.Address) })
 	})
 	slices.SortStableFunc(out, func(a, b model.Event) int { return a.Start.Compare(b.Start) })
-	return out, nil
+	events, next := cut(out, offset, size)
+	return model.EventPage{Events: events, Next: next}, nil
 }
 
 // strength orders the statuses of free_busy rows; a slot shows its strongest row.

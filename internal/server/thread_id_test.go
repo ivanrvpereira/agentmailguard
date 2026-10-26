@@ -7,18 +7,25 @@ import (
 	"testing"
 )
 
-// threadIDs maps the id of each message in a mail.list or mail.search result, or of one mail.get result, to its
+// results returns the messages of a mail.list or mail.search page, or the one mail.get result.
+func results(t *testing.T, body string) []map[string]any {
+	t.Helper()
+	var v struct{ Messages []map[string]any }
+	if json.Unmarshal([]byte(body), &v) == nil && v.Messages != nil {
+		return v.Messages
+	}
+	var one map[string]any
+	if err := json.Unmarshal([]byte(body), &one); err != nil {
+		t.Fatalf("body %s: %v", body, err)
+	}
+	return []map[string]any{one}
+}
+
+// threadIDs maps the id of each message in a mail.list or mail.search page, or of one mail.get result, to its
 // verdict and thread_id. A missing thread_id is "absent".
 func threadIDs(t *testing.T, body string) map[string][2]string {
 	t.Helper()
-	var items []map[string]any
-	if json.Unmarshal([]byte(body), &items) != nil {
-		var one map[string]any
-		if err := json.Unmarshal([]byte(body), &one); err != nil {
-			t.Fatalf("body %s: %v", body, err)
-		}
-		items = []map[string]any{one}
-	}
+	items := results(t, body)
 	out := map[string][2]string{}
 	for _, item := range items {
 		thread, ok := item["thread_id"].(string)
@@ -64,18 +71,11 @@ func TestMailReadsOmitTheThreadIDThatTheProviderDoesNotGive(t *testing.T) {
 	}
 }
 
-// folders maps the id of each message in a mail.list or mail.search result, or of one mail.get result, to its verdict
+// folders maps the id of each message in a mail.list or mail.search page, or of one mail.get result, to its verdict
 // and folders. Missing folders are "absent".
 func folders(t *testing.T, body string) map[string][2]string {
 	t.Helper()
-	var items []map[string]any
-	if json.Unmarshal([]byte(body), &items) != nil {
-		var one map[string]any
-		if err := json.Unmarshal([]byte(body), &one); err != nil {
-			t.Fatalf("body %s: %v", body, err)
-		}
-		items = []map[string]any{one}
-	}
+	items := results(t, body)
 	out := map[string][2]string{}
 	for _, item := range items {
 		list := "absent"

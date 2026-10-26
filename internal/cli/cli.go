@@ -37,6 +37,7 @@ const notes = `All data commands use the server. No automatic server start. No p
 mail send, reply, and forward send email at once, and calendar invite, update, cancel, and respond (unless --no-notify) send meeting notifications at once, when the write policy allows them (default: deny).
 serve checks all credentials at start. An account that is not logged in, or whose sign-in fails, does not stop the start; its commands fail. Other credential failures stop the start.
 Login runs locally on the server host. Restart the server after login or account changes.
+Days in date options run from 00:00 to the end of the day on this machine's clock and time zone; the last day is included.
 Client/server authentication and built-in TLS are absent. Anyone who reaches the server can run every action that the write policy allows. Protect remote access with a tunnel.`
 
 // errUsage reports a rejected command line; errDone reports a finished command that already set its code.
@@ -268,12 +269,18 @@ func (r *runner) call(c *cobra.Command, op string, p map[string]any, pretty bool
 		}
 		text = styleText(views.ToText(v), v.Verdict) + "\n"
 	case pretty && (op == "mail.list" || op == "mail.search"):
-		var items []views.MailSummary
-		if json.Unmarshal(b, &items) != nil {
+		var page struct {
+			Messages *[]views.MailSummary `json:"messages"`
+			NextPage string               `json:"next_page"`
+		}
+		if json.Unmarshal(b, &page) != nil || page.Messages == nil {
 			r.code = failure(r.stderr, "invalid server response")
 			return errDone
 		}
-		text = summaryTable(items) + "\n"
+		text = summaryTable(*page.Messages) + "\n"
+		if page.NextPage != "" {
+			text += "next_page: " + terminalSafe(page.NextPage) + "\n"
+		}
 	default:
 		var indented bytes.Buffer
 		if json.Indent(&indented, bytes.TrimSpace(b), "", "  ") != nil {
@@ -466,16 +473,32 @@ func mailCmd(r *runner) *cobra.Command {
 	return c
 }
 
+// paging adds --count and --page to a list or search. The parameters carry each only when the command line sets it,
+// so the provider's default page size applies without --count.
+func paging(c *cobra.Command, count *int, page *string) {
+	c.Flags().IntVar(count, "count", 0, "number of messages per page; default: the provider's (Gmail 100, Microsoft 365 10)")
+	c.Flags().StringVar(page, "page", "", "next_page of an earlier result; repeat the same options")
+}
+
+// paged copies --count and --page into the parameters when the command line set them.
+func paged(c *cobra.Command, p map[string]any, count int, page *string) {
+	if c.Flags().Changed("count") {
+		p["count"] = count
+	}
+	optional(c, p, "page", page)
+}
+
 func mailListCmd(r *runner) *cobra.Command {
-	folder, count, skip := "inbox", 25, 0
+	folder, count, page := "inbox", 0, ""
 	pretty := false
-	c := r.leaf("list", "List screened messages in a folder", 0, 0, func(c *cobra.Command, _ []string) error {
-		return r.call(c, "mail.list", map[string]any{"folder": folder, "count": count, "skip": skip}, pretty)
+	c := r.leaf("list", "List one page of screened messages in a folder", 0, 0, func(c *cobra.Command, _ []string) error {
+		p := map[string]any{"folder": folder}
+		paged(c, p, count, &page)
+		return r.call(c, "mail.list", p, pretty)
 	})
 	negated(c, "pretty", "render the messages as a table instead of JSON", &pretty)
-	c.Flags().StringVar(&folder, "folder", folder, "folder name or identifier")
-	c.Flags().IntVar(&count, "count", count, "number of messages to return")
-	c.Flags().IntVar(&skip, "skip", skip, "number of messages to skip")
+	c.Flags().StringVar(&folder, "folder", folder, "folder name or identifier; the Inbox by default, our choice because the providers differ without a folder")
+	paging(c, &count, &page)
 	return c
 }
 
@@ -494,24 +517,49 @@ func mailThreadCmd(r *runner) *cobra.Command {
 	})
 }
 
-// isDate reports whether v is a calendar date the server accepts as a search bound.
-func isDate(v string) bool { _, e := time.Parse("2006-01-02", v); return e == nil }
+// midnight is the start of day d of month m in year y in loc; d may be out of range and is normalized, so callers add
+// or subtract days on the date, never on a time. Where a DST gap skips 00:00, the day starts at the end of the gap,
+// its first instant: time.Date may resolve the missing 00:00 to the evening before.
+func midnight(y int, m time.Month, d int, loc *time.Location) time.Time {
+	t := time.Date(y, m, d, 0, 0, 0, 0, loc)
+	if day := time.Date(y, m, d, 0, 0, 0, 0, time.UTC); t.Day() != day.Day() {
+		_, t = t.ZoneBounds()
+	}
+	return t
+}
+
+// localDay parses a YYYY-MM-DD day as its start, local midnight in loc.
+func localDay(v string, loc *time.Location) (time.Time, bool) {
+	t, e := time.Parse("2006-01-02", v)
+	return midnight(t.Year(), t.Month(), t.Day(), loc), e == nil
+}
 
 func mailSearchCmd(r *runner) *cobra.Command {
-	var text, from, to, subject, after, before, folder string
-	count := 25
+	var text, from, to, subject, after, before, folder, page string
+	count := 0
 	pretty := false
-	c := r.leaf("search", "Search screened messages", 0, 0, func(c *cobra.Command, _ []string) error {
-		p := map[string]any{"count": count}
+	c := r.leaf("search", "Search screened messages, one page at a time", 0, 0, func(c *cobra.Command, _ []string) error {
+		p := map[string]any{}
+		paged(c, p, count, &page)
 		optional(c, p, "text", &text)
 		optional(c, p, "from", &from)
 		optional(c, p, "to", &to)
 		optional(c, p, "subject", &subject)
-		optional(c, p, "after", &after)
-		optional(c, p, "before", &before)
 		optional(c, p, "folder", &folder)
-		if c.Flags().Changed("after") && !isDate(after) || c.Flags().Changed("before") && !isDate(before) {
+		// The server takes exact instants: after is the first day's local midnight, before the next local
+		// midnight after the last day, so both days are included.
+		loc := r.now().Location()
+		first, firstOK := localDay(after, loc)
+		last, lastOK := localDay(before, loc)
+		hasAfter, hasBefore := c.Flags().Changed("after"), c.Flags().Changed("before")
+		if hasAfter && !firstOK || hasBefore && !lastOK || hasAfter && hasBefore && last.Before(first) {
 			return errUsage
+		}
+		if hasAfter {
+			p["after"] = first.Format(time.RFC3339)
+		}
+		if hasBefore {
+			p["before"] = midnight(last.Year(), last.Month(), last.Day()+1, loc).Format(time.RFC3339)
 		}
 		return r.call(c, "mail.search", p, pretty)
 	})
@@ -520,10 +568,10 @@ func mailSearchCmd(r *runner) *cobra.Command {
 	c.Flags().StringVar(&from, "from", "", "sender address to match")
 	c.Flags().StringVar(&to, "to", "", "To or Cc address to match")
 	c.Flags().StringVar(&subject, "subject", "", "subject text to match")
-	c.Flags().StringVar(&after, "after", "", "earliest date YYYY-MM-DD")
-	c.Flags().StringVar(&before, "before", "", "latest date YYYY-MM-DD")
+	c.Flags().StringVar(&after, "after", "", "first day YYYY-MM-DD, included, from local midnight")
+	c.Flags().StringVar(&before, "before", "", "last day YYYY-MM-DD, included, to the next local midnight")
 	c.Flags().StringVar(&folder, "folder", "", "folder identifier to search")
-	c.Flags().IntVar(&count, "count", count, "number of messages to return")
+	paging(c, &count, &page)
 	return c
 }
 
@@ -584,18 +632,26 @@ func mailCategorizeCmd(r *runner) *cobra.Command {
 func mailOrganizeCmd(r *runner) *cobra.Command {
 	since, until, apply := "7d", "", false
 	c := r.leaf("organize", "Preview organize rules on recent messages; --apply performs them", 0, 0, func(c *cobra.Command, _ []string) error {
-		if !whenSyntax(since) || (c.Flags().Changed("until") && !whenSyntax(until)) {
+		now := r.now()
+		first, ok := organizeDay(since, now)
+		if !ok {
 			return errUsage
 		}
-		p := map[string]any{"since": since}
-		optional(c, p, "until", &until)
+		p := map[string]any{"since": first.Format(time.RFC3339)}
+		if c.Flags().Changed("until") {
+			last, ok := organizeDay(until, now)
+			if !ok {
+				return errUsage
+			}
+			p["until"] = midnight(last.Year(), last.Month(), last.Day()+1, now.Location()).Format(time.RFC3339)
+		}
 		if apply {
 			p["apply"] = true
 		}
 		return r.call(c, "mail.organize", p, false)
 	})
-	c.Flags().StringVar(&since, "since", since, "start as 7d, 2w, 1m, or YYYY-MM-DD")
-	c.Flags().StringVar(&until, "until", until, "end as 7d, 2w, 1m, or YYYY-MM-DD")
+	c.Flags().StringVar(&since, "since", since, "first day, from local midnight, as 7d, 2w, or 1m before today, or YYYY-MM-DD")
+	c.Flags().StringVar(&until, "until", until, "last day, included, as 7d, 2w, or 1m before today, or YYYY-MM-DD")
 	c.Flags().BoolVar(&apply, "apply", apply, "perform the planned changes")
 	return c
 }
@@ -608,20 +664,25 @@ func calendarCmd(r *runner) *cobra.Command {
 		if e != nil {
 			return errUsage
 		}
-		end, e := parseDay(to, start, now)
-		if e != nil {
+		last, e := parseDay(to, start, now)
+		if e != nil || last.Before(start) {
 			return errUsage
 		}
+		end := midnight(last.Year(), last.Month(), last.Day()+1, now.Location())
 		return r.call(c, "calendar.list", map[string]any{"start": start.Format(time.RFC3339), "end": end.Format(time.RFC3339)}, false)
 	})
-	list.Flags().StringVar(&from, "from", from, "start as today, +Nd, or YYYY-MM-DD")
-	list.Flags().StringVar(&to, "to", to, "end as today, +Nd, or YYYY-MM-DD")
+	list.Flags().StringVar(&from, "from", from, "first day, from local midnight, as today, +Nd, or YYYY-MM-DD")
+	list.Flags().StringVar(&to, "to", to, "last day, included, as today, +Nd from --from, or YYYY-MM-DD")
 	get := r.leaf("get ID", "Show one calendar event", 1, 1, func(c *cobra.Command, args []string) error {
 		return r.call(c, "calendar.get", map[string]any{"id": args[0]}, false)
 	})
-	search := r.leaf("search TEXT", "Search calendar events with the provider's own search", 1, 1, func(c *cobra.Command, args []string) error {
-		return r.call(c, "calendar.search", map[string]any{"text": args[0]}, false)
+	page := ""
+	search := r.leaf("search TEXT", "Search calendar events with the provider's own search, one page at a time", 1, 1, func(c *cobra.Command, args []string) error {
+		p := map[string]any{"text": args[0]}
+		optional(c, p, "page", &page)
+		return r.call(c, "calendar.search", p, false)
 	})
+	search.Flags().StringVar(&page, "page", "", "next_page of an earlier result for the same TEXT")
 	c := group(r, "calendar", "Read calendar events and M365 or fake availability, and send meeting notifications")
 	c.AddCommand(list, get, search, calendarAvailabilityCmd(r), calendarInviteCmd(r), calendarUpdateCmd(r), calendarCancelCmd(r), calendarRespondCmd(r))
 	return c
@@ -679,23 +740,51 @@ func forwardCmd(r *runner, op, short string) *cobra.Command {
 var relative = regexp.MustCompile(`^([0-9]+)([dwm])$`)
 var plusDays = regexp.MustCompile(`^\+([0-9]{1,3})d$`)
 
-func whenSyntax(v string) bool {
-	if m := relative.FindStringSubmatch(v); m != nil {
-		n, e := strconv.Atoi(m[1])
-		return e == nil && n >= 1 && n <= 3650000
+// organizeDay resolves an organize day to its local midnight on the client clock: Nd, Nw, or Nm counts back from
+// today, and YYYY-MM-DD is that day. A month back keeps the day of the month, or the month's last day if shorter.
+func organizeDay(v string, now time.Time) (time.Time, bool) {
+	loc := now.Location()
+	y, mo, d := now.Date()
+	m := relative.FindStringSubmatch(v)
+	if m == nil {
+		t, ok := localDay(v, loc)
+		return t, ok && t.Year() >= 1
 	}
-	d, e := time.Parse("2006-01-02", v)
-	return e == nil && d.Year() >= 1
+	n, e := strconv.Atoi(m[1])
+	if e != nil || n < 1 || n > 3650000 {
+		return time.Time{}, false
+	}
+	var t time.Time
+	switch m[2] {
+	case "d":
+		t = midnight(y, mo, d-n, loc)
+	case "w":
+		if n > 521428 {
+			return t, false
+		}
+		t = midnight(y, mo, d-7*n, loc)
+	case "m":
+		if n > 119987 {
+			return t, false
+		}
+		// The calendar arithmetic runs in UTC, which has no gaps; day 0 of the next month is this month's last day.
+		month := time.Date(y, mo-time.Month(n), 1, 0, 0, 0, 0, time.UTC)
+		last := time.Date(month.Year(), month.Month()+1, 0, 0, 0, 0, 0, time.UTC).Day()
+		t = midnight(month.Year(), month.Month(), min(d, last), loc)
+	}
+	return t, t.Year() >= 1 && t.Year() <= 9999
 }
 func parseDay(v string, base, now time.Time) (time.Time, error) {
 	loc := now.Location()
-	mid := func(t time.Time) time.Time { return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc) }
 	if v == "today" {
-		return mid(now), nil
+		return midnight(now.Year(), now.Month(), now.Day(), loc), nil
 	}
 	if m := plusDays.FindStringSubmatch(v); m != nil {
 		n, _ := strconv.Atoi(m[1])
-		return mid(base).AddDate(0, 0, n), nil
+		return midnight(base.Year(), base.Month(), base.Day()+n, loc), nil
 	}
-	return time.ParseInLocation("2006-01-02", v, loc)
+	if t, ok := localDay(v, loc); ok {
+		return t, nil
+	}
+	return time.Time{}, errUsage
 }

@@ -51,26 +51,27 @@ func (g *Guard) Links(ctx context.Context, id string, ids []string) ([]LinkResul
 	}
 	return out, ctx.Err()
 }
-func (g *Guard) Search(ctx context.Context, q model.SearchQuery, count int) ([]views.MailSummary, error) {
-	if err := checkCount(count); err != nil {
-		return nil, err
+
+// Search screens one page of the provider's search results, as List does.
+func (g *Guard) Search(ctx context.Context, q model.SearchQuery, page model.PageRequest) (views.MailPage, error) {
+	if err := checkPage(page); err != nil {
+		return views.MailPage{}, err
 	}
 	nonempty := func(s *string) bool { return s != nil && *s != "" }
 	if !nonempty(q.Text) && !nonempty(q.Sender) && !nonempty(q.To) && !nonempty(q.Subject) && q.After == nil && q.Before == nil {
-		return nil, GuardError("search needs at least one of text, from, to, subject, after, before")
+		return views.MailPage{}, GuardError("search needs at least one of text, from, to, subject, after, before")
+	}
+	if !q.RangeValid() {
+		return views.MailPage{}, GuardError("invalid request")
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return views.MailPage{}, err
 	}
-	messages, err := g.mailbox.Search(ctx, q, count, false)
+	found, err := g.mailbox.Search(ctx, q, page, false)
 	if err != nil {
-		return nil, safeErr(ctx, err)
+		return views.MailPage{}, safeErr(ctx, err)
 	}
-	categories, err := g.Categories(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return g.summaries(ctx, messages, categories)
+	return g.mailPage(ctx, found)
 }
 
 // threadValid checks a Thread result against the model.Mailbox contract: at least one message, all in the

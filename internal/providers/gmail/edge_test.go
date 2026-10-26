@@ -50,9 +50,7 @@ func TestMIMECharsetsAreMIMECharsetsNotHTMLAliases(t *testing.T) {
 		})
 	}
 }
-func TestSearchSanitizesStructuredValuesAndListSkipsPages(t *testing.T) {
-	mode := "search"
-	seen := []string{}
+func TestSearchSanitizesStructuredValues(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/labels" {
 			respond(w, map[string]any{"labels": []any{map[string]string{"id": "INBOX", "type": "system"}}})
@@ -60,37 +58,29 @@ func TestSearchSanitizesStructuredValuesAndListSkipsPages(t *testing.T) {
 		}
 		if r.URL.Path == "/messages" {
 			q := r.URL.Query()
-			seen = append(seen, q.Get("pageToken"))
 			if q.Get("labelIds") != "INBOX" {
 				t.Error("label missing")
 			}
-			if mode == "search" && q.Get("q") != `from:"a or from b" subject:"café über 日本" after:2026/09/01 before:2026/09/30 "r&d q3 draft final"` {
+			if q.Get("q") != `from:"a or from b" subject:"café über 日本" after:1788245999 before:1790751601 "r&d q3 draft final"` {
 				t.Error("search injection", q.Get("q"))
 			}
-			if q.Get("pageToken") == "" {
-				respond(w, map[string]any{"messages": []any{map[string]string{"id": "m1"}}, "nextPageToken": "next"})
-				return
-			}
-			respond(w, map[string]any{"messages": []any{map[string]string{"id": "m2"}}})
+			respond(w, map[string]any{"messages": []any{map[string]string{"id": "m1"}}})
 			return
 		}
 		id := strings.TrimPrefix(r.URL.Path, "/messages/")
-		respond(w, message(id, part("text/plain", "BODY")))
+		v := message(id, part("text/plain", "BODY"))
+		v["internalDate"] = "1788300000000"
+		respond(w, v)
 	}))
 	defer server.Close()
 	c := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), GmailURL: server.URL})
 	text, sender, subject, folder := `R&D: Q3 (draft) "final"`, `a" OR from:b`, "Café ÜBER 日本", "inbox"
-	after := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	before := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
-	found, err := c.Mailbox().Search(context.Background(), model.SearchQuery{Text: &text, Sender: &sender, Subject: &subject, Folder: &folder, After: &after, Before: &before}, 2, false)
-	if err != nil || len(found) != 2 || found[0].Body == nil {
+	pdt := time.FixedZone("UTC-7", -7*60*60)
+	after := time.Date(2026, 9, 1, 0, 0, 0, 0, pdt)
+	before := time.Date(2026, 9, 30, 0, 0, 0, 0, pdt)
+	found, err := c.Mailbox().Search(context.Background(), model.SearchQuery{Text: &text, Sender: &sender, Subject: &subject, Folder: &folder, After: &after, Before: &before}, model.PageRequest{}, false)
+	if err != nil || len(found.Messages) != 1 || found.Messages[0].Body == nil {
 		t.Fatal("full search", err)
-	}
-	mode = "list"
-	seen = nil
-	found, err = c.Mailbox().List(context.Background(), "inbox", 1, 1, false)
-	if err != nil || len(found) != 1 || found[0].ID != "m2" || !reflect.DeepEqual(seen, []string{"", "next"}) {
-		t.Fatal("skip pagination", err)
 	}
 }
 func TestDraftReplyPrefersPlainAndOwnSentTo(t *testing.T) {
@@ -111,5 +101,44 @@ func TestDraftReplyPrefersPlainAndOwnSentTo(t *testing.T) {
 	c := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), GmailURL: server.URL})
 	if _, err := c.Mailbox().DraftReply(context.Background(), "m", "Thanks"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Gmail takes after: and before: in seconds and does not document whether the boundary second matches, so Search
+// asks for one more second on each side and keeps the messages whose internalDate is in [After, Before). A message
+// without internalDate is outside any bound; the page keeps nextPageToken.
+func TestSearchWidensBySecondsAndKeepsExactReceivedTimes(t *testing.T) {
+	dates := map[string]string{"before-after": "1788220800499", "at-after": "1788220800500", "last": "1788307200499", "at-before": "1788307200500", "no-time": ""}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/labels":
+			respond(w, map[string]any{"labels": []any{map[string]string{"id": "INBOX", "type": "system"}}})
+		case "/messages":
+			if q := r.URL.Query().Get("q"); q != "after:1788220799 before:1788307202" {
+				t.Errorf("q=%s", q)
+			}
+			ids := []any{}
+			for _, id := range []string{"at-before", "last", "no-time", "at-after", "before-after"} {
+				ids = append(ids, map[string]string{"id": id})
+			}
+			respond(w, map[string]any{"messages": ids, "nextPageToken": "next"})
+		default:
+			id := strings.TrimPrefix(r.URL.Path, "/messages/")
+			v := message(id, part("text/plain", "BODY"))
+			v["internalDate"] = dates[id]
+			respond(w, v)
+		}
+	}))
+	defer server.Close()
+	c := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), GmailURL: server.URL})
+	after := time.Date(2026, 9, 1, 0, 0, 0, 500000000, time.UTC)
+	before := after.Add(24 * time.Hour)
+	found, err := c.Mailbox().Search(context.Background(), model.SearchQuery{After: &after, Before: &before}, model.PageRequest{}, false)
+	got := []string{}
+	for _, m := range found.Messages {
+		got = append(got, m.ID)
+	}
+	if err != nil || !reflect.DeepEqual(got, []string{"last", "at-after"}) || found.Next != "next" {
+		t.Fatalf("ids=%v next=%q err=%v", got, found.Next, err)
 	}
 }

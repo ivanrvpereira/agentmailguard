@@ -9,9 +9,10 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
+// checkIDs needs at least one ID. There is no maximum of ours: the providers change one message per call.
 func checkIDs(ids []string) error {
-	if len(ids) < 1 || len(ids) > 50 {
-		return GuardError("give between 1 and 50 message IDs")
+	if len(ids) < 1 {
+		return GuardError("give at least one message ID")
 	}
 	return nil
 }

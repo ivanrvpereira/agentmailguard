@@ -61,9 +61,13 @@ func TestFullBodyRequiresUsablePayload(t *testing.T) {
 				case "get":
 					messages, err = m.Get(ctx, []string{"m"}, true)
 				case "list":
-					messages, err = m.List(ctx, "INBOX", 1, 0, false)
+					var page model.MessagePage
+					page, err = m.List(ctx, "INBOX", model.PageRequest{Size: 1}, false)
+					messages = page.Messages
 				case "search":
-					messages, err = m.Search(ctx, model.SearchQuery{}, 1, false)
+					var page model.MessagePage
+					page, err = m.Search(ctx, model.SearchQuery{}, model.PageRequest{Size: 1}, false)
+					messages = page.Messages
 				case "reply":
 					draft, err = m.DraftReply(ctx, "m", "Reply")
 				}

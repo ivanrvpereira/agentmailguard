@@ -11,6 +11,7 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/cache"
 	"github.com/ivanrvpereira/agentmailguard/internal/guard"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/views"
 )
 
 var now = time.Date(2026, 9, 28, 15, 30, 0, 0, time.UTC)
@@ -31,13 +32,21 @@ type mailbox struct {
 	messages     []model.Message
 	gets         []fetch
 	listedBodies bool
+	next         string              // the next-page marker that List and Search return
+	pages        []model.PageRequest // the page requests that List and Search got
 }
 
+// summaries drops the next-page marker of a page.
+func summaries(p views.MailPage, err error) ([]views.MailSummary, error) { return p.Messages, err }
+
 func (b *mailbox) Categories(context.Context) ([]string, error) { return []string{"Work"}, nil }
-func (b *mailbox) Search(ctx context.Context, _ model.SearchQuery, count int, body bool) ([]model.Message, error) {
-	return b.List(ctx, "inbox", count, 0, body)
+func (b *mailbox) Search(ctx context.Context, _ model.SearchQuery, page model.PageRequest, body bool) (model.MessagePage, error) {
+	return b.List(ctx, "inbox", page, body)
 }
-func (b *mailbox) List(_ context.Context, _ string, _, _ int, _ bool) ([]model.Message, error) {
+func (b *mailbox) List(_ context.Context, _ string, page model.PageRequest, _ bool) (model.MessagePage, error) {
+	b.mu.Lock()
+	b.pages = append(b.pages, page)
+	b.mu.Unlock()
 	out := append([]model.Message{}, b.messages...)
 	if !b.listedBodies {
 		for i := range out {
@@ -45,7 +54,7 @@ func (b *mailbox) List(_ context.Context, _ string, _, _ int, _ bool) ([]model.M
 			out[i].Auth = nil
 		}
 	}
-	return out, nil
+	return model.MessagePage{Messages: out, Next: b.next}, nil
 }
 func (b *mailbox) Get(_ context.Context, ids []string, body bool) ([]model.Message, error) {
 	b.mu.Lock()
@@ -118,14 +127,14 @@ func TestCachedRedReadsNeverFetchOrExposeBody(t *testing.T) {
 	b := &mailbox{messages: []model.Message{message("m1")}}
 	s := &screener{verdict: model.Red}
 	g, _, _ := setup(t, b, s)
-	first, err := g.List(context.Background(), "inbox", 25, 0)
+	first, err := summaries(g.List(context.Background(), "inbox", model.PageRequest{}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(first) != 1 || first[0].Verdict != model.Red || first[0].Subject != nil || first[0].Sender.Name != nil {
 		t.Fatalf("red summary exposed fields: %+v", first)
 	}
-	_, err = g.List(context.Background(), "inbox", 25, 0)
+	_, err = summaries(g.List(context.Background(), "inbox", model.PageRequest{}))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -59,9 +59,9 @@ func TestInvalidCachedScreeningCannotAuthorizeViewsOrOrganization(t *testing.T) 
 					var v []views.MailSummary
 					var err error
 					if surface == "Search" {
-						v, err = g.Search(ctx, model.SearchQuery{Text: new("synthetic")}, 1)
+						v, err = summaries(g.Search(ctx, model.SearchQuery{Text: new("synthetic")}, model.PageRequest{}))
 					} else {
-						v, err = g.List(ctx, "inbox", 1, 0)
+						v, err = summaries(g.List(ctx, "inbox", model.PageRequest{}))
 					}
 					if err != nil || len(v) != 1 || v[0].Verdict != model.Red || v[0].Subject != nil {
 						t.Fatalf("invalid cache authorized summary: %+v %v", v, err)
