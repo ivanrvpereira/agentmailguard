@@ -395,9 +395,20 @@ type bodyArgs struct {
 	Body string `json:"body"`
 }
 type forwardArgs struct {
-	ID string   `json:"id"`
-	To []string `json:"to"`
+	ID   string   `json:"id"`
+	To   []string `json:"to"`
+	CC   []string `json:"cc"`
+	BCC  []string `json:"bcc"`
+	Body string   `json:"body"`
+	HTML bool     `json:"html"`
 }
+
+// newForwardArgs stores every field of a forward. A nil list becomes an empty list, because the API refuses null.
+func newForwardArgs(id string, f model.Forward) forwardArgs {
+	list := func(v []string) []string { return append([]string{}, v...) }
+	return forwardArgs{id, list(f.To), list(f.CC), list(f.BCC), f.Body, f.HTML}
+}
+
 type inviteArgs struct {
 	To       []string `json:"to"`
 	Optional []string `json:"optional,omitempty"`

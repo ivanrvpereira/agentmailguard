@@ -225,14 +225,23 @@ func (b *mailbox) ReplyRecipients(ctx context.Context, id string, all bool) (mod
 	return b.replyRecipients(source[0], all), nil
 }
 
-// forward carries the source body and attachments to new recipients.
-func (b *mailbox) forward(ctx context.Context, id string, to []string) (outgoing, error) {
+// forward carries the agent's note, recipients, and body type, and the source's attachments. A plain-text forward
+// body is the note; an HTML forward keeps the original below the note's HTML, as a reply does.
+func (b *mailbox) forward(ctx context.Context, id string, f model.Forward) (outgoing, error) {
 	source, err := b.Get(ctx, []string{id}, true)
 	if err != nil {
 		return outgoing{}, err
 	}
 	m := source[0]
-	return outgoing{to: to, subject: "Fw: " + m.Subject, body: *m.Body, contentType: string(*m.ContentType), attachments: m.Attachments, origin: "forward", source: &id, thread: &m.ThreadID}, nil
+	body, kind := f.Body, model.Text
+	if f.HTML {
+		quote := *m.Body
+		if *m.ContentType != model.HTML {
+			quote = model.HTMLBody(quote)
+		}
+		body, kind = f.Body+"<blockquote>"+quote+"</blockquote>", model.HTML
+	}
+	return outgoing{to: f.To, cc: f.CC, bcc: f.BCC, subject: "Fw: " + m.Subject, body: body, contentType: string(kind), attachments: m.Attachments, origin: "forward", source: &id, thread: &m.ThreadID}, nil
 }
 
 // jsonList is the JSON array text of a list column; nil is the empty array.
@@ -283,18 +292,23 @@ func (b *mailbox) DraftReply(ctx context.Context, id string, r model.Reply) (mod
 	if err != nil {
 		return model.DraftResult{}, err
 	}
+	return b.draftResult(ctx, o)
+}
+
+// draftResult stores the reply or forward o as a draft in the conversation of its source and gives what it stored.
+func (b *mailbox) draftResult(ctx context.Context, o outgoing) (model.DraftResult, error) {
 	draft, err := b.insert(ctx, o, true)
 	if err != nil {
 		return model.DraftResult{}, err
 	}
 	return model.DraftResult{ID: draft, ThreadID: *o.thread, To: o.to, CC: o.cc, BCC: o.bcc, Subject: o.subject}, nil
 }
-func (b *mailbox) DraftForward(ctx context.Context, id string, to []string) (string, error) {
-	o, err := b.forward(ctx, id, to)
+func (b *mailbox) DraftForward(ctx context.Context, id string, f model.Forward) (model.DraftResult, error) {
+	o, err := b.forward(ctx, id, f)
 	if err != nil {
-		return "", err
+		return model.DraftResult{}, err
 	}
-	return b.insert(ctx, o, true)
+	return b.draftResult(ctx, o)
 }
 
 // DraftUpdate changes only drafts that DraftNew made.
@@ -328,8 +342,8 @@ func (b *mailbox) SendReply(ctx context.Context, id string, r model.Reply) error
 	}
 	return err
 }
-func (b *mailbox) SendForward(ctx context.Context, id string, to []string) error {
-	o, err := b.forward(ctx, id, to)
+func (b *mailbox) SendForward(ctx context.Context, id string, f model.Forward) error {
+	o, err := b.forward(ctx, id, f)
 	if err == nil {
 		_, err = b.insert(ctx, o, false)
 	}

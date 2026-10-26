@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime"
 	"net/mail"
@@ -30,6 +31,8 @@ type mimePart struct {
 	Body     struct {
 		Data string
 		Size *int64
+		// AttachmentID names the data that messages.attachments.get gives when Data is not inline.
+		AttachmentID string `json:"attachmentId"`
 	}
 	Parts []mimePart
 }
@@ -108,6 +111,10 @@ func addresses(headers []header, name string) []model.Address {
 	}
 	return out
 }
+
+// skipParts, returned by the visit of walk, skips the parts below the visited part.
+var skipParts = errors.New("skip parts")
+
 func walk(p *mimePart, visit func(*mimePart, bool) error) error {
 	type item struct {
 		p        *mimePart
@@ -125,7 +132,9 @@ func walk(p *mimePart, visit func(*mimePart, bool) error) error {
 		}
 		p := last.p
 		attached := last.attached || p.Filename != "" || strings.HasPrefix(strings.ToLower(strings.TrimSpace(headerValue(p.Headers, "content-disposition"))), "attachment") || strings.EqualFold(p.MimeType, "message/rfc822")
-		if err := visit(p, attached); err != nil {
+		if err := visit(p, attached); errors.Is(err, skipParts) {
+			continue
+		} else if err != nil {
 			return err
 		}
 		for i := len(p.Parts) - 1; i >= 0; i-- {

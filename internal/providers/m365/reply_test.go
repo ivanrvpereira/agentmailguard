@@ -18,14 +18,15 @@ func graphRecipients(addresses ...string) []any {
 	return out
 }
 
-// replyGraph is a fake Graph API for replies. The created reply draft d1 has the given body and Microsoft's
-// recipients; a PATCH answers with the draft as patched, and send answers 202. fail names a request path that
-// answers 503. ids, when set, gives the draft ID of the create answer (key "create") or the PATCH answer (key "patch").
-// It records each request and its JSON body.
+// replyGraph is a fake Graph API for replies and forwards. The created draft d1 has the given body, the subject
+// "RE: Plan", and Microsoft's recipients; fields, when set, replaces those fields of it. A PATCH answers with the draft as patched, and send answers 202.
+// fail names a request path that answers 503. ids, when set, gives the draft ID of the create answer (key "create") or
+// the PATCH answer (key "patch"). It records each request and its JSON body.
 type replyGraph struct {
 	paths  []string
 	bodies []map[string]any
 	ids    map[string]any
+	fields map[string]any
 }
 
 func (g *replyGraph) handler(t *testing.T, kind, content, fail string) http.HandlerFunc {
@@ -41,6 +42,9 @@ func (g *replyGraph) handler(t *testing.T, kind, content, fail string) http.Hand
 		}
 		draft := map[string]any{"id": "d1", "conversationId": "conv", "subject": "RE: Plan", "isDraft": true, "body": map[string]any{"contentType": kind, "content": content},
 			"toRecipients": graphRecipients("ana@example.test"), "ccRecipients": graphRecipients("bo@example.test"), "bccRecipients": graphRecipients()}
+		for k, v := range g.fields {
+			draft[k] = v
+		}
 		switch r.Method + " " + r.URL.EscapedPath() {
 		case "POST /v1.0/me/messages/d1/send":
 			w.WriteHeader(http.StatusAccepted)

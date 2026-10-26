@@ -290,7 +290,8 @@ func TestDraftsLandInDraftsFromTheAccountAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	forward, err := m.DraftForward(ctx, "new", []string{"x@example.test"})
+	forwarded, err := m.DraftForward(ctx, "new", model.Forward{Body: "FYI", To: []string{"x@example.test"}})
+	forward := forwarded.ID
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +310,7 @@ func TestDraftsLandInDraftsFromTheAccountAddress(t *testing.T) {
 	want := []view{
 		{[]string{"ana@example.test"}, []string{"drafts"}, "Hello", "second", model.Text},
 		{[]string{"ana@example.test"}, []string{"drafts"}, "Re: Old report", "Thanks", model.Text},
-		{[]string{"x@example.test"}, []string{"drafts"}, "Fw: Lunch plans", "<p>Pizza?</p>", model.HTML},
+		{[]string{"x@example.test"}, []string{"drafts"}, "Fw: Lunch plans", "FYI", model.Text},
 	}
 	for i, d := range got {
 		to := []string{}
@@ -327,7 +328,10 @@ func TestDraftsLandInDraftsFromTheAccountAddress(t *testing.T) {
 	}
 	for _, call := range []func() error{
 		func() error { _, err := m.DraftReply(ctx, "gone", model.Reply{Body: "x"}); return err },
-		func() error { _, err := m.DraftForward(ctx, "theirs", []string{"x@example.test"}); return err },
+		func() error {
+			_, err := m.DraftForward(ctx, "theirs", model.Forward{To: []string{"x@example.test"}})
+			return err
+		},
 	} {
 		if call() == nil {
 			t.Error("draft from a missing message accepted")
@@ -343,7 +347,7 @@ func TestSendsLandInSentAndRecordKindAndSource(t *testing.T) {
 			return m.SendNew(ctx, model.NewDraft{To: []string{"ana@example.test"}, Subject: "Hello", Body: "hi"})
 		},
 		func() error { return m.SendReply(ctx, "old", model.Reply{Body: "Thanks"}) },
-		func() error { return m.SendForward(ctx, "new", []string{"x@example.test"}) },
+		func() error { return m.SendForward(ctx, "new", model.Forward{To: []string{"x@example.test"}}) },
 	} {
 		if err := call(); err != nil {
 			t.Fatal(err)
@@ -492,7 +496,8 @@ func TestRepliesAndForwardsJoinTheSourceConversationAndNewMailStartsItsOwn(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	forward, err := m.DraftForward(ctx, "new", []string{"x@example.test"})
+	forwarded, err := m.DraftForward(ctx, "new", model.Forward{To: []string{"x@example.test"}})
+	forward := forwarded.ID
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,7 +513,7 @@ func TestRepliesAndForwardsJoinTheSourceConversationAndNewMailStartsItsOwn(t *te
 			return m.SendNew(ctx, model.NewDraft{To: []string{"ana@example.test"}, Subject: "Hello", Body: "hi"})
 		},
 		func() error { return m.SendReply(ctx, "old", model.Reply{Body: "Thanks"}) },
-		func() error { return m.SendForward(ctx, "new", []string{"x@example.test"}) },
+		func() error { return m.SendForward(ctx, "new", model.Forward{To: []string{"x@example.test"}}) },
 	} {
 		if err := send(); err != nil {
 			t.Fatal(err)

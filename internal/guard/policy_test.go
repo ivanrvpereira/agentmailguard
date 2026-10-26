@@ -139,7 +139,10 @@ func TestDefaultPolicyTrashesAndDraftsGreenMail(t *testing.T) {
 			d, _, err := g.DraftReply(ctx, "m2", model.Reply{Body: "reply"})
 			return d.ID, err
 		},
-		func() (string, error) { return g.DraftForward(ctx, "m2", []string{"a@example.test"}) },
+		func() (string, error) {
+			d, _, err := g.DraftForward(ctx, "m2", model.Forward{To: []string{"a@example.test"}})
+			return d.ID, err
+		},
 		func() (string, error) { return g.DraftUpdate(ctx, "d1", "body") },
 	} {
 		if _, err := call(); err != nil {
@@ -169,7 +172,7 @@ func TestDefaultSealedDecisionRefusesSealedAndErrorMessages(t *testing.T) {
 			if _, _, err := g.DraftReply(ctx, "m1", model.Reply{Body: "reply"}); err == nil || err.Error() != "refused by policy: mail_draft" {
 				t.Fatalf("reply=%v", err)
 			}
-			if _, err := g.DraftForward(ctx, "m1", []string{"a@example.test"}); err == nil || err.Error() != "refused by policy: mail_draft" {
+			if _, _, err := g.DraftForward(ctx, "m1", model.Forward{To: []string{"a@example.test"}}); err == nil || err.Error() != "refused by policy: mail_draft" {
 				t.Fatalf("forward=%v", err)
 			}
 			if len(w.calls) != 0 || s.count() != 1 {
@@ -189,14 +192,14 @@ var sourceCalls = []struct {
 		return err
 	}},
 	{"draft.forward", "mail_draft", func(ctx context.Context, g *guard.Guard) error {
-		_, err := g.DraftForward(ctx, "m1", []string{"CANARY@example.test"})
+		_, _, err := g.DraftForward(ctx, "m1", model.Forward{Body: "CANARY note", To: []string{"CANARY@example.test"}})
 		return err
 	}},
 	{"mail.reply", "mail_send", func(ctx context.Context, g *guard.Guard) error {
 		return g.SendReply(ctx, "m1", model.Reply{Body: "CANARY reply"})
 	}},
 	{"mail.forward", "mail_send", func(ctx context.Context, g *guard.Guard) error {
-		return g.SendForward(ctx, "m1", []string{"CANARY@example.test"})
+		return g.SendForward(ctx, "m1", model.Forward{Body: "CANARY note", To: []string{"CANARY@example.test"}})
 	}},
 }
 

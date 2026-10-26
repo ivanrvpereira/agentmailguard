@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"io"
 	"mime"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/mail"
@@ -97,49 +96,6 @@ func TestSendReplyPostsTheQuotedReplyInTheThread(t *testing.T) {
 	}
 }
 
-func TestSendForwardUploadsTheOriginalToTheSendEndpoint(t *testing.T) {
-	sends := 0
-	c := sendClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "GET" {
-			respond(w, map[string]any{"id": "o1", "threadId": "thread", "raw": base64.RawURLEncoding.EncodeToString([]byte(originalMIME))})
-			return
-		}
-		sends++
-		if r.Method != "POST" || r.URL.Path != "/upload/send" || r.URL.Query().Get("uploadType") != "multipart" {
-			t.Errorf("request %s %s", r.Method, r.URL)
-		}
-		kind, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		if err != nil || kind != "multipart/related" {
-			t.Fatal("not related")
-		}
-		reader := multipart.NewReader(r.Body, params["boundary"])
-		metadata, err := reader.NextPart()
-		if err != nil {
-			t.Fatal(err)
-		}
-		var meta map[string]any
-		if json.NewDecoder(metadata).Decode(&meta) != nil || !reflect.DeepEqual(meta, map[string]any{"threadId": "thread"}) {
-			t.Errorf("metadata: %v", meta)
-		}
-		media, err := reader.NextPart()
-		if err != nil {
-			t.Fatal(err)
-		}
-		raw, _ := io.ReadAll(media)
-		sent, err := mail.ReadMessage(bytes.NewReader(raw))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Contains(raw, []byte(originalMIME)) || sent.Header.Get("Subject") != "Fwd: Plan" || sent.Header.Get("To") != "a@example.test" || sent.Header.Get("In-Reply-To") != "<m@example.test>" {
-			t.Errorf("forward MIME: %+v", sent.Header)
-		}
-		respond(w, map[string]string{"id": "sent"})
-	})
-	if err := c.Mailbox().SendForward(context.Background(), "o1", []string{"a@example.test"}); err != nil || sends != 1 {
-		t.Fatalf("send=%v requests=%d", err, sends)
-	}
-}
-
 func TestSendRefusesADraftSource(t *testing.T) {
 	sends := 0
 	c := sendClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -149,14 +105,13 @@ func TestSendRefusesADraftSource(t *testing.T) {
 		}
 		m := message("d1", part("text/plain", "x"))
 		m["labelIds"] = []string{"DRAFT"}
-		m["raw"] = base64.RawURLEncoding.EncodeToString([]byte(originalMIME))
 		respond(w, m)
 	})
 	b := c.Mailbox()
 	if err := b.SendReply(context.Background(), "d1", model.Reply{Body: "x"}); err == nil {
 		t.Fatal("reply to a draft sent")
 	}
-	if err := b.SendForward(context.Background(), "d1", []string{"a@example.test"}); err == nil {
+	if err := b.SendForward(context.Background(), "d1", model.Forward{To: []string{"a@example.test"}}); err == nil {
 		t.Fatal("forward of a draft sent")
 	}
 	if sends != 0 {
@@ -170,11 +125,7 @@ func TestFailedSendIsNotRetried(t *testing.T) {
 		sends := 0
 		c := sendClient(t, func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == "GET" {
-				if r.URL.Query().Get("format") == "raw" {
-					respond(w, map[string]any{"id": "o1", "threadId": "thread", "raw": base64.RawURLEncoding.EncodeToString([]byte(originalMIME))})
-				} else {
-					respond(w, message("o1", part("text/plain", "x")))
-				}
+				respond(w, message("o1", part("text/plain", "x")))
 				return
 			}
 			sends++
@@ -189,7 +140,7 @@ func TestFailedSendIsNotRetried(t *testing.T) {
 				return b.SendNew(ctx, model.NewDraft{To: []string{"a@example.test"}, Subject: "s", Body: "b"})
 			},
 			func() error { return b.SendReply(ctx, "o1", model.Reply{Body: "b"}) },
-			func() error { return b.SendForward(ctx, "o1", []string{"a@example.test"}) },
+			func() error { return b.SendForward(ctx, "o1", model.Forward{To: []string{"a@example.test"}}) },
 		} {
 			before := sends
 			if err := send(); err == nil {

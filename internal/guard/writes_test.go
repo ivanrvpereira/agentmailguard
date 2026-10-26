@@ -99,9 +99,9 @@ func (w *writer) ReplyRecipients(_ context.Context, _ string, all bool) (model.R
 	}
 	return replyRecipients(all), nil
 }
-func (w *writer) DraftForward(context.Context, string, []string) (string, error) {
+func (w *writer) DraftForward(context.Context, string, model.Forward) (model.DraftResult, error) {
 	_, err := w.write("draft_forward", nil)
-	return "d3", err
+	return model.DraftResult{ID: "d3"}, err
 }
 func (w *writer) DraftUpdate(_ context.Context, id, body string) (string, error) {
 	w.updates = append(w.updates, struct{ id, body string }{id, body})
@@ -212,7 +212,10 @@ func TestEveryManualRouteAndDraftHasContentFreeAudit(t *testing.T) {
 		func() error {
 			_, e := g.DraftNew(ctx, model.NewDraft{To: []string{"CANARY@example.com"}, Subject: "CANARY", Body: "CANARY"})
 			return e
-		}, func() error { _, _, e := g.DraftReply(ctx, "m1", model.Reply{Body: "CANARY"}); return e }, func() error { _, e := g.DraftForward(ctx, "m1", []string{"CANARY@example.com"}); return e }, func() error { _, e := g.DraftUpdate(ctx, "d1", "CANARY"); return e },
+		}, func() error { _, _, e := g.DraftReply(ctx, "m1", model.Reply{Body: "CANARY"}); return e }, func() error {
+			_, _, e := g.DraftForward(ctx, "m1", model.Forward{Body: "CANARY", To: []string{"CANARY@example.com"}})
+			return e
+		}, func() error { _, e := g.DraftUpdate(ctx, "d1", "CANARY"); return e },
 	}
 	for _, call := range calls {
 		if err := call(); err != nil {

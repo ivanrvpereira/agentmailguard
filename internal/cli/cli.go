@@ -34,8 +34,9 @@ func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "CLIOption
 const notes = `amg talks to the agentmailguard daemon (amgd serve) over HTTP: -H or AMG_HOST, default http://127.0.0.1:8787.
 It never starts the daemon and never changes accounts, credentials, or settings: amgd does that on the daemon host. No permanent delete.
 mail send, reply, and forward send email at once, and calendar invite, update, cancel, and respond (unless --no-notify) send meeting notifications at once, when the write policy allows them (default: deny).
---bcc recipients are hidden: the other recipients do not see them. draft new, mail send, reply, calendar invite, and calendar update bodies are plain text unless --html; HTML goes unchanged, without cleaning.
+--bcc recipients are hidden: the other recipients do not see them. draft new, mail send, reply, forward, calendar invite, and calendar update bodies are plain text unless --html; HTML goes unchanged, without cleaning.
 A reply goes to the sender, and with --all also to everyone on the original; its --cc and --bcc are added to those recipients. It keeps the quoted original and the conversation.
+A forward puts its --body note above the original, carries the original's attachments, and keeps the conversation. draft forward needs no recipient; mail forward needs a --to, --cc, or --bcc.
 Days in date options run from 00:00 to the end of the day on this machine's clock and time zone; the last day is included.
 Client authentication and built-in TLS are absent. Anyone who reaches the daemon can run every action that the write policy allows. Protect remote access with a tunnel.`
 
@@ -334,7 +335,7 @@ func mailCmd(r *runner) *cobra.Command {
 		mailMoveCmd(r), mailFlagCmd(r), mailCategorizeCmd(r), mailOrganizeCmd(r),
 		newMessageCmd(r, "send", "mail.send", "Send a new message at once; needs a --to, --cc, or --bcc"),
 		replyCmd(r, "mail.reply", "Send a reply to a message at once"),
-		forwardCmd(r, "mail.forward", "Send a forward of a message at once"))
+		forwardCmd(r, "mail.forward", "Send a forward of a message at once; needs a --to, --cc, or --bcc"))
 	return c
 }
 
@@ -612,16 +613,24 @@ func replyCmd(r *runner, op, short string) *cobra.Command {
 	return c
 }
 
-// forwardCmd runs draft.forward or mail.forward: one message ID and at least one --to.
+// forwardCmd runs draft.forward or mail.forward: one message ID; every option is optional, but a send needs at
+// least one --to, --cc, or --bcc.
 func forwardCmd(r *runner, op, short string) *cobra.Command {
-	var to []string
+	var to, cc, bcc []string
+	body, html := "", false
 	c := r.leaf("forward ID", short, 1, 1, func(c *cobra.Command, args []string) error {
-		if len(to) == 0 {
+		if op == "mail.forward" && !(model.Forward{To: to, CC: cc, BCC: bcc}).Addressed() {
 			return errUsage
 		}
-		return r.call(c, op, map[string]any{"id": args[0], "to": to}, false)
+		// The API refuses null, so a list without values is sent empty.
+		list := func(v []string) []string { return append([]string{}, v...) }
+		return r.call(c, op, map[string]any{"id": args[0], "to": list(to), "cc": list(cc), "bcc": list(bcc), "body": body, "html": html}, false)
 	})
 	c.Flags().StringArrayVar(&to, "to", nil, "recipient address; repeatable")
+	c.Flags().StringArrayVar(&cc, "cc", nil, "copy recipient address; repeatable")
+	c.Flags().StringArrayVar(&bcc, "bcc", nil, "hidden (blind copy) recipient address; repeatable")
+	c.Flags().StringVar(&body, "body", "", "note above the forwarded message, plain text unless --html; default empty")
+	c.Flags().BoolVar(&html, "html", false, "--body is HTML, used unchanged; default plain text")
 	return c
 }
 

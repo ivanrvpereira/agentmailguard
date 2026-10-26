@@ -308,8 +308,12 @@ type bodyParam struct {
 	Body *string `json:"body"`
 }
 type forwardParam struct {
-	ID string   `json:"id"`
-	To []string `json:"to"`
+	ID   string   `json:"id"`
+	To   []string `json:"to"`
+	CC   []string `json:"cc"`
+	BCC  []string `json:"bcc"`
+	Body string   `json:"body"`
+	HTML bool     `json:"html"`
 }
 type mutationDTO struct {
 	ID         string  `json:"id"`
@@ -349,8 +353,8 @@ type draftIDsDTO struct {
 	ThreadID string `json:"thread_id,omitempty"`
 }
 
-// newDraftDTO is the result of draft.new, and of draft.reply when sourceContentShown: the draft that the provider
-// made.
+// newDraftDTO is the result of draft.new, and of draft.reply and draft.forward when sourceContentShown: the draft
+// that the provider made.
 type newDraftDTO struct {
 	draftIDsDTO
 	To      []string `json:"to"`
@@ -364,9 +368,9 @@ func newDraft(d model.DraftResult) newDraftDTO {
 	return newDraftDTO{draftIDsDTO{d.ID, d.ThreadID}, cleaned(d.To), cleaned(d.CC), cleaned(d.BCC), content.CleanSubject(d.Subject)}
 }
 
-// sourceContentShown is the verdict limit of a reply draft result. Its recipients and subject come from the source
-// message, so they show only at the source verdicts that show its headers: green and yellow. Red, any other
-// verdict, and an unknown one give only the draft IDs.
+// sourceContentShown is the verdict limit of a reply or forward draft result. Its recipients and subject come from
+// the source message, so they show only at the source verdicts that show its headers: green and yellow. Red, any
+// other verdict, and an unknown one give only the draft IDs.
 func sourceContentShown(source model.Verdict) bool {
 	return source == model.Green || source == model.Yellow
 }
@@ -569,17 +573,31 @@ func bodyMessage(ctx context.Context, _ *Server, raw json.RawMessage) (call, gua
 	}, "", nil
 }
 
-// forwardMessage is the decoder of mail.forward (send) and draft.forward: one message ID and recipients.
+// forwardMessage is the decoder of mail.forward (send) and draft.forward: one message ID; to, cc, bcc, body, and
+// html are optional, but a send needs a recipient in to, cc, or bcc.
 func forwardMessage(send bool) decoder {
 	return func(ctx context.Context, _ *Server, raw json.RawMessage) (call, guard.GuardError, error) {
 		var p forwardParam
-		if params(raw, &p) != nil || !idValid(p.ID) || !listValid(p.To, 1, noMax) {
+		if params(raw, &p) != nil || !idValid(p.ID) || !listValid(p.To, 0, noMax) || !listValid(p.CC, 0, noMax) || !listValid(p.BCC, 0, noMax) || !validString(p.Body, MaxRequestBytes, true) {
+			return nil, "", errInvalid
+		}
+		forward := model.Forward{Body: p.Body, HTML: p.HTML, To: p.To, CC: p.CC, BCC: p.BCC}
+		if send && !forward.Addressed() {
 			return nil, "", errInvalid
 		}
 		if send {
-			return func(a *account) (any, error) { return sent(a.guard.SendForward(ctx, p.ID, p.To)) }, "", nil
+			return func(a *account) (any, error) { return sent(a.guard.SendForward(ctx, p.ID, forward)) }, "", nil
 		}
-		return func(a *account) (any, error) { id, e := a.guard.DraftForward(ctx, p.ID, p.To); return draftDTO{id}, e }, "", nil
+		return func(a *account) (any, error) {
+			d, source, e := a.guard.DraftForward(ctx, p.ID, forward)
+			if e != nil {
+				return nil, e
+			}
+			if !sourceContentShown(source) {
+				return draftIDsDTO{d.ID, d.ThreadID}, nil
+			}
+			return newDraft(d), nil
+		}, "", nil
 	}
 }
 

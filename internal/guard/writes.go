@@ -385,22 +385,39 @@ func (g *Guard) DraftReply(ctx context.Context, id string, reply model.Reply) (m
 	if err != nil {
 		return model.DraftResult{}, "", err
 	}
-	var verdict model.Verdict
-	if rows, err := g.cached(ctx, []string{id}); err == nil {
-		verdict = rows[id].Verdict
-	}
-	return made, verdict, nil
+	return made, g.cachedVerdict(ctx, id), nil
 }
-func (g *Guard) DraftForward(ctx context.Context, id string, to []string) (string, error) {
-	return g.compose(ctx, audit.DraftForward, id, forwardArgs{id, to}, func() (string, error) { return g.mailbox.DraftForward(ctx, id, to) })
+
+// DraftForward returns the forward draft that the provider made, and the screening verdict of its source from the
+// cache after the write: "" when there is none. A forward draft needs no recipient.
+func (g *Guard) DraftForward(ctx context.Context, id string, forward model.Forward) (model.DraftResult, model.Verdict, error) {
+	var made model.DraftResult
+	_, err := g.compose(ctx, audit.DraftForward, id, newForwardArgs(id, forward), func() (string, error) {
+		var err error
+		made, err = g.mailbox.DraftForward(ctx, id, forward)
+		return made.ID, err
+	})
+	if err != nil {
+		return model.DraftResult{}, "", err
+	}
+	return made, g.cachedVerdict(ctx, id), nil
+}
+
+// cachedVerdict is the screening verdict of message id in the cache: "" when there is none.
+func (g *Guard) cachedVerdict(ctx context.Context, id string) model.Verdict {
+	rows, err := g.cached(ctx, []string{id})
+	if err != nil {
+		return ""
+	}
+	return rows[id].Verdict
 }
 func (g *Guard) DraftUpdate(ctx context.Context, id, body string) (string, error) {
 	return g.compose(ctx, audit.DraftUpdate, id, bodyArgs{id, body}, func() (string, error) { return g.mailbox.DraftUpdate(ctx, id, body) })
 }
 
 // SendNew, SendReply, and SendForward send mail at once under the mail_send decision. Their params and
-// stored args are those of the matching draft operation. SendNew refuses a send without a recipient before any
-// policy decision.
+// stored args are those of the matching draft operation. SendNew and SendForward refuse a send without a
+// recipient before any policy decision.
 func (g *Guard) SendNew(ctx context.Context, draft model.NewDraft) error {
 	if !draft.Addressed() {
 		return GuardError("invalid request")
@@ -412,7 +429,10 @@ func (g *Guard) SendReply(ctx context.Context, id string, reply model.Reply) err
 	_, err := g.compose(ctx, audit.MailReply, id, newReplyArgs(id, reply), func() (string, error) { return "", g.mailbox.SendReply(ctx, id, reply) })
 	return err
 }
-func (g *Guard) SendForward(ctx context.Context, id string, to []string) error {
-	_, err := g.compose(ctx, audit.MailForward, id, forwardArgs{id, to}, func() (string, error) { return "", g.mailbox.SendForward(ctx, id, to) })
+func (g *Guard) SendForward(ctx context.Context, id string, forward model.Forward) error {
+	if !forward.Addressed() {
+		return GuardError("invalid request")
+	}
+	_, err := g.compose(ctx, audit.MailForward, id, newForwardArgs(id, forward), func() (string, error) { return "", g.mailbox.SendForward(ctx, id, forward) })
 	return err
 }

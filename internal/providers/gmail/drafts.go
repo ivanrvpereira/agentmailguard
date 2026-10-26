@@ -53,25 +53,34 @@ func textMessage(headers []header, body string, html bool, ids []string) ([]byte
 	if err != nil {
 		return nil, err
 	}
-	kind := "text/plain"
-	if html {
-		kind = "text/html"
+	kind, data, err := textBody(body, html)
+	if err != nil {
+		return nil, err
 	}
-	var b bytes.Buffer
-	b.Write(head)
-	b.WriteString("Content-Type: " + kind + "; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n")
+	head = append(head, "Content-Type: "+kind+"\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n"...)
+	return append(head, data...), nil
+}
+
+// textBody is the content type and the quoted-printable data of a text/plain body, or with html a text/html body.
+// Line ends become LF, and the body ends in one.
+func textBody(body string, html bool) (string, []byte, error) {
+	kind := "text/plain; charset=utf-8"
+	if html {
+		kind = "text/html; charset=utf-8"
+	}
 	body = strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "\r", "\n")
 	if !strings.HasSuffix(body, "\n") {
 		body += "\n"
 	}
+	var b bytes.Buffer
 	w := quotedprintable.NewWriter(&b)
-	if _, err = w.Write([]byte(body)); err != nil {
-		return nil, failure("Gmail", "ValueError")
+	if _, err := w.Write([]byte(body)); err != nil {
+		return "", nil, failure("Gmail", "ValueError")
 	}
-	if err = w.Close(); err != nil {
-		return nil, failure("Gmail", "ValueError")
+	if err := w.Close(); err != nil {
+		return "", nil, failure("Gmail", "ValueError")
 	}
-	return b.Bytes(), nil
+	return kind, b.Bytes(), nil
 }
 func draftID(v map[string]json.RawMessage) (string, error) {
 	id, _, err := draftMessage(v)

@@ -12,15 +12,15 @@ import (
 )
 
 // sendParams are valid params of the three send operations, in the shape of the matching draft operations, and
-// the paths of the Graph writes that each makes. A reply is a reply draft (approvalGraph names it w1), its PATCH,
-// and its send.
+// the paths of the Graph writes that each makes. A reply or forward is a draft (approvalGraph names it w1), its
+// PATCH, and its send.
 var sendParams = []struct {
 	op, params string
 	paths      []string
 }{
 	{"mail.send", `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body"}`, []string{"/me/sendMail"}},
 	{"mail.reply", `{"id":"m1","body":"CANARY reply"}`, []string{"/me/messages/m1/createReply", "/me/messages/w1", "/me/messages/w1/send"}},
-	{"mail.forward", `{"id":"m1","to":["a@example.test","b@example.test"]}`, []string{"/me/messages/m1/forward"}},
+	{"mail.forward", `{"id":"m1","to":["a@example.test","b@example.test"],"body":"CANARY note"}`, []string{"/me/messages/m1/createForward", "/me/messages/w1", "/me/messages/w1/send"}},
 }
 
 // writePaths are the paths of the recorded writes.
@@ -106,7 +106,7 @@ func TestInvalidMailSendParamsAreRefusedBeforeAccountAccess(t *testing.T) {
 	for op, params := range map[string][]string{
 		"mail.send":    {`{}`, `{"to":[],"cc":[],"bcc":[],"subject":"s","body":"b"}`, `{"bcc":[""]}`, `{"to":["a@example.test"],"html":"yes"}`, `{"to":["a@example.test"],"from":"x"}`, `{"to":["a@example.test"],"cc":null}`},
 		"mail.reply":   {`{}`, `{"body":"b"}`, `{"id":"","body":"b"}`, `{"id":"m1","body":"b","to":["x"]}`, `{"id":"m1","all":"yes"}`, `{"id":"m1","cc":[""]}`, `{"id":"m1","bcc":null}`},
-		"mail.forward": {`{}`, `{"id":"m1"}`, `{"id":"m1","to":[]}`, `{"id":"m1","to":["a"],"body":"b"}`},
+		"mail.forward": {`{}`, `{"to":["a@example.test"]}`, `{"id":"m1"}`, `{"id":"m1","to":[],"cc":[],"bcc":[],"body":"b"}`, `{"id":"m1","to":["a@example.test"],"subject":"s"}`, `{"id":"m1","cc":[""]}`, `{"id":"m1","bcc":null}`, `{"id":"m1","to":["a@example.test"],"html":"yes"}`},
 	} {
 		for _, p := range params {
 			if status, body := accountRPC(t, d.s, op, "work", p); status != 400 || body != `{"error":"invalid request"}` {

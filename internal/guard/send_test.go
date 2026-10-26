@@ -20,7 +20,7 @@ func (w *writer) SendReply(context.Context, string, model.Reply) error {
 	_, err := w.write("mail_reply", nil)
 	return err
 }
-func (w *writer) SendForward(context.Context, string, []string) error {
+func (w *writer) SendForward(context.Context, string, model.Forward) error {
 	_, err := w.write("mail_forward", nil)
 	return err
 }
@@ -37,7 +37,7 @@ var sendCalls = []struct {
 		return g.SendReply(ctx, "m1", model.Reply{Body: "CANARY reply"})
 	}},
 	{"mail.forward", func(ctx context.Context, g *guard.Guard) error {
-		return g.SendForward(ctx, "m1", []string{"CANARY@example.test"})
+		return g.SendForward(ctx, "m1", model.Forward{Body: "CANARY note", To: []string{"CANARY@example.test"}})
 	}},
 }
 
@@ -106,7 +106,7 @@ func TestApproveStoresTheSendInItsAPIShape(t *testing.T) {
 	params := map[string]string{
 		"mail.send":    `{"to":["CANARY@example.test"],"cc":[],"bcc":[],"subject":"CANARY subject","body":"CANARY body","html":false}`,
 		"mail.reply":   `{"id":"m1","body":"CANARY reply","html":false,"all":false,"cc":[],"bcc":[]}`,
-		"mail.forward": `{"id":"m1","to":["CANARY@example.test"]}`,
+		"mail.forward": `{"id":"m1","to":["CANARY@example.test"],"cc":[],"bcc":[],"body":"CANARY note","html":false}`,
 	}
 	for _, tc := range sendCalls {
 		t.Run(tc.op, func(t *testing.T) {
@@ -156,7 +156,7 @@ func TestJevFlagHoldsAnAllowedSend(t *testing.T) {
 	wants := map[string]map[string]any{
 		"mail.send":    {"to": []any{"CANARY@example.test"}, "cc": []any{}, "bcc": []any{}, "subject": "CANARY subject", "body": "CANARY body", "html": false},
 		"mail.reply":   {"body": "CANARY reply", "html": false, "all": false, "cc": []any{}, "bcc": []any{}, "reply_recipients": map[string]any{"to": []string{"ana@example.test"}, "cc": []string{}}},
-		"mail.forward": {"to": []any{"CANARY@example.test"}, "forwarded_message": map[string]any{"subject": "m1", "body": "BODYTEXT [L1]"}},
+		"mail.forward": {"to": []any{"CANARY@example.test"}, "cc": []any{}, "bcc": []any{}, "body": "CANARY note", "html": false, "forwarded_message": map[string]any{"subject": "m1", "body": "BODYTEXT [L1]"}},
 	}
 	for _, tc := range sendCalls {
 		t.Run(tc.op, func(t *testing.T) {
@@ -211,7 +211,7 @@ func TestFailedSendIsNotAudited(t *testing.T) {
 	}
 }
 
-// The guard re-checks that a send has a recipient: one without To, CC, or BCC is an invalid request that
+// The guard re-checks that a send or forward has a recipient: one without To, CC, or BCC is an invalid request that
 // reaches no policy decision, no Jev check, and no provider.
 func TestSendWithoutARecipientIsInvalid(t *testing.T) {
 	w := &writer{mailbox: &mailbox{}}
@@ -219,6 +219,9 @@ func TestSendWithoutARecipientIsInvalid(t *testing.T) {
 	g, _, path := policyGuard(t, w, nil, s, allowAll)
 	if err := g.SendNew(context.Background(), model.NewDraft{Subject: "CANARY subject", Body: "CANARY body"}); err == nil || err.Error() != "invalid request" {
 		t.Fatalf("send=%v", err)
+	}
+	if err := g.SendForward(context.Background(), "m1", model.Forward{Body: "CANARY note", HTML: true}); err == nil || err.Error() != "invalid request" {
+		t.Fatalf("forward=%v", err)
 	}
 	if len(w.calls) != 0 || len(s.checked()) != 0 || len(allAuditRecords(t, path)) != 0 {
 		t.Fatalf("writes=%v checks=%v records=%v", w.calls, s.checked(), allAuditRecords(t, path))

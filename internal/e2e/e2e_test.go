@@ -334,6 +334,85 @@ func TestApprovalPageShowsTheReplyRecipients(t *testing.T) {
 	}
 }
 
+// seedReport adds the message report: from bob to the account, with an HTML-like body and two attachments.
+func (s *server) seedReport() {
+	s.t.Helper()
+	s.exec(`INSERT INTO messages (account, id, sender_name, sender_address, to_addresses, subject, body, attachments) VALUES
+		('demo@fake.invalid', 'report', 'canary-name-bob', 'bob@example.test', '["demo@fake.invalid"]', 'canary-subject-report', 'canary-body-report: a <b>plan</b>', '["canary-file-plan.pdf","canary-file-notes.txt"]')`)
+}
+
+// A forward draft needs no recipient: it carries the agent's note, the original attachments, and the conversation of
+// the original. The result of a green source names the draft, its recipients, and subject.
+func TestDraftForwardCarriesTheNoteAndTheAttachmentsWithoutARecipient(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	s.seedReport()
+	draft := decode[newDraft](t, s.ok("draft", "forward", "report", "--body", "canary-body-note\nline two"))
+	if want := (newDraft{draft.ID, "report", []string{}, []string{}, []string{}, "Fw: canary-subject-report"}); draft.ID == "" || !reflect.DeepEqual(draft, want) {
+		t.Fatalf("draft=%+v", draft)
+	}
+	stored := s.column(`SELECT folder || ' ' || thread_id || ' ' || to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || attachments || ' ' || content_type || ' ' || body FROM messages WHERE id = ?`, draft.ID)
+	if !reflect.DeepEqual(stored, []string{`drafts report [] [] [] ["canary-file-plan.pdf","canary-file-notes.txt"] text canary-body-note` + "\nline two"}) {
+		t.Fatalf("stored draft: %q", stored)
+	}
+}
+
+// mail forward needs a recipient: without one it is invalid usage and reaches no policy decision. With To, CC, and
+// BCC and an HTML note, it sends at once under allow, with the original below the note and its attachments.
+func TestMailForwardSendsToEveryListWithTheOriginalBelowTheHTMLNote(t *testing.T) {
+	t.Parallel()
+	s := start(t, sendAllowed)
+	s.seedReport()
+	before := s.dump()
+	if out, errout, code := s.amg("mail", "forward", "report", "--body", "canary-body-nobody"); code != 2 || out != "" || errout == "" {
+		t.Fatalf("forward without a recipient: exit %d stdout %q stderr %q", code, out, errout)
+	}
+	s.assertTables(before)
+	if got := s.auditEvents("policy"); len(got) != 0 {
+		t.Fatalf("policy records of an invalid forward: %v", got)
+	}
+	if out := s.ok("mail", "forward", "report", "--to", "ana@example.test", "--cc", "cy@example.test", "--bcc", "ed@example.test", "--body", "<p>canary-body-note</p>", "--html"); !decode[struct{ OK bool }](t, out).OK {
+		t.Fatalf("forward: %s", out)
+	}
+	if got := s.column(`SELECT thread_id || ' ' || to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || attachments || ' ' || content_type || ' ' || body FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{
+		`report ["ana@example.test"] ["cy@example.test"] ["ed@example.test"] ["canary-file-plan.pdf","canary-file-notes.txt"] html <p>canary-body-note</p><blockquote>canary-body-report: a &lt;b&gt;plan&lt;/b&gt;</blockquote>`}) {
+		t.Fatalf("sent: %v", got)
+	}
+}
+
+// The approval page of a waiting forward shows its To and CC and marks its BCC as hidden; the approved run sends
+// to them. A forward draft of a red message waits, because Jev cannot read the forwarded text, and its approved run
+// stores only the draft IDs.
+func TestApprovalPageShowsTheForwardRecipients(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='approve'\n")
+	s.seedReport()
+	p := s.held("mail", "forward", "report", "--to", "ana@example.test", "--cc", "cy@example.test", "--bcc", "ed@example.test", "--body", "canary-body-forward-held")
+	if _, list := s.consoleGet(consolePassword, "/"); !strings.Contains(list, "ana@example.test; cc: cy@example.test; bcc (hidden): ed@example.test") {
+		t.Fatalf("list misses the recipients:\n%s", list)
+	}
+	_, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID)
+	for _, want := range []string{"<dt>to</dt><dd><pre>ana@example.test</pre></dd>", "<dt>cc</dt><dd><pre>cy@example.test</pre></dd>", "<dt>bcc (hidden recipients)</dt><dd><pre>ed@example.test</pre></dd>"} {
+		if !strings.Contains(item, want) {
+			t.Errorf("item page misses %q:\n%s", want, item)
+		}
+	}
+	s.approve(p.ApprovalID)
+	if got := s.column(`SELECT to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || attachments || ' ' || body FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{
+		`["ana@example.test"] ["cy@example.test"] ["ed@example.test"] ["canary-file-plan.pdf","canary-file-notes.txt"] canary-body-forward-held`}) {
+		t.Fatalf("sent: %v", got)
+	}
+	red := s.held("draft", "forward", "phish", "--to", "ana@example.test", "--body", "canary-body-forward-red")
+	s.approve(red.ApprovalID)
+	status := decode[struct {
+		State  string
+		Result map[string]any
+	}](t, s.ok("approvals", "status", red.ApprovalID))
+	if id, _ := status.Result["id"].(string); status.State != "done" || id == "" || !reflect.DeepEqual(status.Result, map[string]any{"id": id, "thread_id": "phish"}) {
+		t.Fatalf("approved red forward draft: %+v", status)
+	}
+}
+
 // A reply or forward of a sealed or error message is refused even when the policy allows drafts and sends.
 func TestRepliesAndForwardsOfASealedMessageAreAlwaysRefused(t *testing.T) {
 	t.Parallel()

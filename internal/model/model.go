@@ -175,6 +175,18 @@ type Reply struct {
 	CC, BCC []string
 }
 
+// Forward is a forward of a message: Body (empty when absent) is the note above the forwarded original, plain text
+// unless HTML, which marks Body as HTML source sent unchanged. To, CC, and BCC are the recipients; a draft needs
+// none, a send needs one (Addressed).
+type Forward struct {
+	Body        string
+	HTML        bool
+	To, CC, BCC []string
+}
+
+// Addressed reports a recipient in To, CC, or BCC, by the rule of NewDraft.Addressed.
+func (f Forward) Addressed() bool { return NewDraft{To: f.To, CC: f.CC, BCC: f.BCC}.Addressed() }
+
 // ReplySource is what the reply-recipient rule reads from the original message: its bare addresses, and Sent when
 // the account sent it.
 type ReplySource struct {
@@ -321,15 +333,17 @@ type Mailbox interface {
 	// ReplyRecipients reads message id and gives the To and CC of a reply to it by the ReplyRecipients rule, with
 	// the account's own addresses; all is reply all. It writes nothing. BCC is empty.
 	ReplyRecipients(ctx context.Context, id MessageID, all bool) (Recipients, error)
-	// DraftForward must be provider-built; unsupported providers must fail, not substitute a new draft.
-	DraftForward(ctx context.Context, id MessageID, to []string) (MessageID, error)
+	// DraftForward and SendForward keep the forward in the conversation of message id, with the forward's note
+	// above the original and the original's attachments. The forward must be provider-built; unsupported
+	// providers must fail, not substitute a new draft.
+	DraftForward(ctx context.Context, id MessageID, forward Forward) (DraftResult, error)
 	// DraftUpdate is restricted to new drafts, and returns the possibly changed message ID.
 	DraftUpdate(ctx context.Context, id MessageID, body string) (MessageID, error)
 	// SendNew, SendReply, and SendForward send mail at once, with the same content as the matching draft
 	// operation. A send request that may have reached the provider is never sent again.
 	SendNew(ctx context.Context, draft NewDraft) error
 	SendReply(ctx context.Context, id MessageID, reply Reply) error
-	SendForward(ctx context.Context, id MessageID, to []string) error
+	SendForward(ctx context.Context, id MessageID, forward Forward) error
 }
 type Calendar interface {
 	List(ctx context.Context, start, end time.Time) ([]Event, error)

@@ -69,9 +69,9 @@ func TestJevSeesOnlyTheAgentFieldsOfEachAction(t *testing.T) {
 		},
 			actionCall{"draft.update", "creates a draft that the user may send later", map[string]any{"body": "New body"}}},
 		{"draft.forward", func(ctx context.Context, g *guard.Guard) error {
-			_, err := g.DraftForward(ctx, "m1", []string{"b@example.test"})
+			_, _, err := g.DraftForward(ctx, "m1", model.Forward{Body: "<p>FYI</p>", HTML: true, To: []string{"b@example.test"}, CC: []string{"c@example.test"}, BCC: []string{"d@example.test"}})
 			return err
-		}, actionCall{"draft.forward", "creates a draft that the user may send later", map[string]any{"to": []any{"b@example.test"}, "forwarded_message": map[string]any{"subject": "m1", "body": "BODYTEXT [L1]"}}}},
+		}, actionCall{"draft.forward", "creates a draft that the user may send later", map[string]any{"to": []any{"b@example.test"}, "cc": []any{"c@example.test"}, "bcc": []any{"d@example.test"}, "body": "<p>FYI</p>", "html": true, "forwarded_message": map[string]any{"subject": "m1", "body": "BODYTEXT [L1]"}}}},
 		{"calendar.invite", func(ctx context.Context, g *guard.Guard) error {
 			_, err := g.CalendarInvite(ctx, model.NewEvent{Subject: "Plan", Body: "Agenda", Location: "Room 1", Start: start, End: start.Add(time.Hour), Attendees: []string{"a@example.test"}, Online: true})
 			return err
@@ -196,7 +196,7 @@ func TestDenyNeverAsksJev(t *testing.T) {
 	if _, err := g.DraftNew(ctx, model.NewDraft{Body: "x"}); err == nil || err.Error() != "refused by policy: mail_draft" {
 		t.Fatalf("draft=%v", err)
 	}
-	if _, err := g.DraftForward(ctx, "m1", []string{"a@example.test"}); err == nil {
+	if _, _, err := g.DraftForward(ctx, "m1", model.Forward{To: []string{"a@example.test"}}); err == nil {
 		t.Fatal("forward ran")
 	}
 	if err := callCalendarWrite(ctx, g, "invite"); err == nil {
@@ -260,7 +260,7 @@ func TestForwardWithoutSourceTextIsPending(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			_, err := g.DraftForward(ctx, "m1", []string{"a@example.test"})
+			_, _, err := g.DraftForward(ctx, "m1", model.Forward{To: []string{"a@example.test"}})
 			var pending guard.PendingError
 			if !errors.As(err, &pending) || len(w.calls) != 0 || len(s.checked()) != 0 {
 				t.Fatalf("forward=%v writes=%v checks=%+v", err, w.calls, s.checked())
