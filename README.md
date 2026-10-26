@@ -780,7 +780,7 @@ There is no scheduler and no automatic mailbox work.
 ## Verification and limits
 
 Tests run offline: real loopback HTTP, temporary homes, the fake provider, fake Graph, Gmail, and Jev endpoints, and a fake Keychain `Platform`.
-No test needs real mailbox data, a browser, OpenRouter, or Keychain access. CI (`.github/workflows/ci.yml`) runs `make` on Linux and macOS.
+No test needs real mailbox data, a browser, OpenRouter, or Keychain access. CI (`.github/workflows/ci.yml`) runs `make` on Linux only. The macOS-only code (the Keychain backend and the `*_darwin_test.go` tests) runs only in a local `make` on a Mac.
 
 The end-to-end tests in `internal/e2e` build the real binary and run `serve` as its own process, on a temporary home with a fake account, the fake screening engine, and the file credential backend. The CLI runs as a separate process, and the tests approve and deny items through the approval console over HTTP.
 After each test, the server log, `audit.jsonl`, and every table of `cache.db` except `pending` must contain no seeded name, subject, body, or address.
