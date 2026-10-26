@@ -86,7 +86,7 @@ func (f *consoleFixture) send(t *testing.T, r *http.Request, change func(*http.R
 
 func wrongPassword(r *http.Request) { r.SetBasicAuth("anyone", "private-wrong-pass") }
 
-const draftApprove = "[policy]\nmail_draft='approve'\nmail_trash='approve'\ncalendar_respond='approve'\n[policy.sealed]\nmail_draft='approve'\nmail_trash='approve'\n"
+const draftApprove = "[policy]\nmail_draft='approve'\nmail_trash='approve'\ncalendar_respond='approve'\n[policy.sealed]\nmail_trash='approve'\n"
 
 // Without a console password the console refuses every request with the command that sets one. A password that
 // amgd saves takes effect at the next reload.

@@ -49,7 +49,7 @@ func TestGmailMailSendFollowsThePolicyWithoutAGrantCheck(t *testing.T) {
 // The grant check comes before the policy, as for calendar writes: without Mail.Send nothing is decided,
 // read, or written, also when the policy allows the send.
 func TestM365MailSendWithoutTheSendGrantIsMissingScopes(t *testing.T) {
-	for _, policy := range []string{"", "[policy]\nmail_send='allow'\n[policy.sealed]\nmail_send='allow'\n"} {
+	for _, policy := range []string{"", "[policy]\nmail_send='allow'\n"} {
 		var requests atomic.Int32
 		d := graphDaemon(t, policy, "User.Read Mail.ReadWrite Calendars.Read Calendars.ReadWrite Mail.Send.Shared role:Mail.Send", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1); w.WriteHeader(202) }), newNativeAPI())
 		for _, tc := range sendParams {
@@ -131,9 +131,9 @@ func TestApprovedMailSendSendsOnceAndStoresOK(t *testing.T) {
 	}
 }
 
-// A reply or forward from a sealed source is refused by the default sealed decision. The fake Graph API
+// A reply or forward from a sealed source is always refused, also when mail_send allows it. The fake Graph API
 // serves no message, and a failed verdict lookup counts as sealed.
-func TestMailSendFromASealedSourceIsRefusedByDefault(t *testing.T) {
+func TestMailSendFromASealedSourceIsAlwaysRefused(t *testing.T) {
 	var writes atomic.Int32
 	d := graphDaemon(t, sendAllow, writeGrant, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
@@ -153,7 +153,7 @@ func TestMailSendFromASealedSourceIsRefusedByDefault(t *testing.T) {
 }
 
 func TestConsoleShowsTheSourceOfAReplyOrForwardSend(t *testing.T) {
-	f := consoleDaemon(t, "[policy]\nmail_send='approve'\n[policy.sealed]\nmail_send='approve'\n", true)
+	f := consoleDaemon(t, "[policy]\nmail_send='approve'\n", true)
 	for _, tc := range []struct{ op, params string }{
 		{"mail.reply", `{"id":"g","body":"reply text"}`},
 		{"mail.forward", `{"id":"g","to":["a@example.test"]}`},

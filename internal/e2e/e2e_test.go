@@ -152,6 +152,54 @@ func TestScreeningFlagMakesAnAllowedWriteWaitForApproval(t *testing.T) {
 	}
 }
 
+// A reply or forward of a sealed or error message is refused even when the policy allows drafts and sends.
+func TestRepliesAndForwardsOfASealedMessageAreAlwaysRefused(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='allow'\nmail_draft='allow'\n")
+	before := s.dump()
+	want := []map[string]any{}
+	for _, id := range []string{"code", "broken"} {
+		for _, tc := range []struct {
+			op, key string
+			args    []string
+		}{
+			{"mail.reply", "mail_send", []string{"mail", "reply", id, "--body", "canary-body-reply"}},
+			{"mail.forward", "mail_send", []string{"mail", "forward", id, "--to", "ana@example.test"}},
+			{"draft.reply", "mail_draft", []string{"draft", "reply", id, "--body", "canary-body-reply"}},
+			{"draft.forward", "mail_draft", []string{"draft", "forward", id, "--to", "ana@example.test"}},
+		} {
+			s.refused("refused by policy: "+tc.key, tc.args...)
+			want = append(want, map[string]any{"event": "policy", "account": "demo@fake.invalid", "operation": tc.op, "key": tc.key, "decision": "deny", "reasons": []any{"policy", "sealed"}, "id": id})
+		}
+	}
+	// A refused write changes no row at the provider: no sent mail and no draft.
+	s.assertTables(before)
+	if got := s.auditEvents("policy"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("policy records=%v\nwant %v", got, want)
+	}
+}
+
+// Only replies, forwards, and trash of a sealed message have a sealed check; the other mail writes act on it as on any message.
+func TestSealedMailCanStillBeOrganizedByHand(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	want := s.dump()
+	for _, message := range want["messages"] {
+		if message["id"] == "code" {
+			message["folder"], message["is_read"], message["flag"], message["categories"] = "archive", int64(1), "flagged", `["Sealed"]`
+		}
+	}
+	for _, args := range [][]string{
+		{"mail", "unread", "code"}, {"mail", "read", "code"}, {"mail", "flag", "code", "--state", "flagged"},
+		{"mail", "categorize", "code", "--add", "Sealed"}, {"mail", "move", "projects", "code"}, {"mail", "archive", "code"},
+	} {
+		if got := decode[[]result](t, s.ok(args...)); len(got) != 1 || !got[0].OK {
+			t.Fatalf("amg %v: %+v", args, got)
+		}
+	}
+	s.assertTables(want)
+}
+
 // result is one entry of a mail mutation result.
 type result struct {
 	ID         string `json:"id"`

@@ -126,7 +126,7 @@ func TestApproveStoresTheSendInItsAPIShape(t *testing.T) {
 	}
 }
 
-func TestSendFromASealedSourceIsRefusedByDefault(t *testing.T) {
+func TestSendFromASealedSourceIsAlwaysRefused(t *testing.T) {
 	policy := defaultPolicy
 	policy.Base.MailSend = config.Allow
 	for _, tc := range sendCalls[1:] {

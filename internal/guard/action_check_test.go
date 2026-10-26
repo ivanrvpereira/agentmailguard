@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ivanrvpereira/agentmailguard/internal/cache"
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
 	"github.com/ivanrvpereira/agentmailguard/internal/guard"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
@@ -231,17 +232,23 @@ func TestForwardWithoutSourceTextIsPending(t *testing.T) {
 	for name, tc := range map[string]struct {
 		box     *mailbox
 		verdict model.Verdict
+		cached  []cache.Row
 	}{
-		"hidden source":  {&mailbox{messages: messages("m1")}, model.Red},
-		"missing source": {&mailbox{}, ""},
+		"hidden source": {&mailbox{messages: messages("m1")}, model.Red, nil},
+		// A cached green verdict passes the sealed check; the source then cannot be read.
+		"missing source": {&mailbox{}, model.Green, []cache.Row{{MessageID: "m1", ReceivedAt: now, ScreenedAt: now, Verdict: model.Green, Score: new(0.0)}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := scoring(0.08)
 			s.verdicts = map[string]model.Verdict{"m1": tc.verdict}
-			policy := allowAll // the sealed decision allows, so only the check holds the action back
 			w := &writer{mailbox: tc.box}
-			g, c, path := policyGuard(t, w, nil, s, policy)
+			g, c, path := policyGuard(t, w, nil, s, allowAll)
 			ctx := context.Background()
+			for _, row := range tc.cached {
+				if err := c.Put(ctx, "work", row); err != nil {
+					t.Fatal(err)
+				}
+			}
 			_, err := g.DraftForward(ctx, "m1", []string{"a@example.test"})
 			var pending guard.PendingError
 			if !errors.As(err, &pending) || len(w.calls) != 0 || len(s.checked()) != 0 {

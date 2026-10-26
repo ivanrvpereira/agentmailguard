@@ -81,14 +81,11 @@ func (g *Guard) baseDecision(key string) config.Decision {
 	return config.Deny
 }
 
+// sealedDecision is the decision of key for a sealed message. Only mail_trash has a sealed setting; every other
+// key, such as a reply or forward under mail_draft or mail_send, is denied.
 func (g *Guard) sealedDecision(key string) config.Decision {
-	switch key {
-	case keyTrash:
+	if key == keyTrash {
 		return normal(g.policy.Sealed.MailTrash)
-	case keyDraft:
-		return normal(g.policy.Sealed.MailDraft)
-	case keySend:
-		return normal(g.policy.Sealed.MailSend)
 	}
 	return config.Deny
 }
@@ -200,8 +197,9 @@ func (g *Guard) forwardedText(ctx context.Context, id string) (map[string]any, e
 }
 
 // decide returns the decision of key for each message ID. It looks up or screens a message only when the
-// sealed decision is stricter than the base decision. A sealed or error verdict, or a failed lookup, counts
-// as sealed. The caller holds the mutation gate and not the security gate: screening can take the security gate.
+// sealed decision is stricter than the base decision; for a reply or forward that is whenever the base is not
+// deny. A sealed or error verdict, or a failed lookup, counts as sealed. The caller holds the mutation gate and
+// not the security gate: screening can take the security gate.
 func (g *Guard) decide(ctx context.Context, key string, ids []string) (map[string]decision, error) {
 	base, sealed := g.base(ctx, key), g.sealedDecision(key)
 	out := make(map[string]decision, len(ids))

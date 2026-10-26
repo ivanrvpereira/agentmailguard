@@ -147,7 +147,7 @@ No data is lost, because the data uses the email.
 A key is a dotted path:
 
 - `default_account`.
-- `policy.KEY`, `policy.sealed.KEY`, `accounts.ALIAS.policy.KEY`, and `accounts.ALIAS.policy.sealed.KEY`, for example `policy.mail_send`. See [Write policy](#write-policy).
+- `policy.KEY`, `policy.sealed.mail_trash`, `accounts.ALIAS.policy.KEY`, and `accounts.ALIAS.policy.sealed.mail_trash`, for example `policy.mail_send`. See [Write policy](#write-policy).
 - `accounts.ALIAS.client_id`, `accounts.ALIAS.tenant_id` (Microsoft 365), and `accounts.ALIAS.client_secret` (Gmail).
 - `screening.provider`, `screening.endpoint`, and `screening.model`. See [Screening](#screening).
 - `console.listen` and `console.hosts`. `console.hosts` takes a comma-separated list. See [Console configuration](#console-configuration).
@@ -563,17 +563,19 @@ In `mail organize --apply`, only a rule move to `trash` has a key.
 An invalid policy stops `amgd serve` with `config.toml: KEY_PATH: PROBLEM`, and a reload with an invalid policy is refused.
 For example: `config.toml: accounts.personal.policy.sealed.calendar_invite: unknown key`. The error never shows the value.
 `amgd config set` refuses an invalid policy key or value and leaves the file unchanged.
-A policy is invalid if it has an unknown key or table, a value other than `allow`, `approve`, or `deny`, or a calendar key in a sealed table.
+A policy is invalid if it has an unknown key or table, a value other than `allow`, `approve`, or `deny`, or a key other than `mail_trash` in a sealed table.
 
 ### Sealed messages
 
-The sealed tables apply to actions on an existing message: `mail trash`, `draft reply`, `draft forward`, `mail reply`, and `mail forward`.
-A sealed table accepts only `mail_trash`, `mail_draft`, and `mail_send`.
-For each key, the sealed decision is the first value in this order: `[accounts.ALIAS.policy.sealed]`, `[policy.sealed]`, `deny`.
+The daemon always refuses `draft reply`, `draft forward`, `mail reply`, and `mail forward` on a `sealed` or `error` message, with the refusal of their key: `refused by policy: mail_draft` or `refused by policy: mail_send`. No setting allows them.
+Unless the base decision is `deny`, the daemon looks up the verdict of the message for each reply and forward.
 
-If the referenced message is `sealed` or `error`, the daemon uses the stricter of the base decision and the sealed decision.
+The sealed tables apply only to `mail trash` and accept only `mail_trash`.
+The sealed decision is the first value in this order: `[accounts.ALIAS.policy.sealed]`, `[policy.sealed]`, `deny`.
+If the message to trash is `sealed` or `error`, the daemon uses the stricter of the base decision and the sealed decision.
 The order is `allow`, then `approve`, then `deny`.
 The daemon looks up the verdict only when the sealed decision is stricter than the base decision.
+
 If the message has no cached verdict, the daemon screens it first. A message that the daemon cannot screen counts as `sealed`.
 For `green`, `yellow`, and `red` messages, only the base decision applies.
 `draft new`, `draft update`, and `mail send` do not reference a received message, so only the base decision applies.
@@ -699,7 +701,7 @@ It also stores the result of the Jev check, if a check ran: the flag and the sco
 
 The audit log gets content-free records for the policy. Their `account` is the account key, and their `operation` is the API operation name, for example `mail.trash`.
 
-- `"event": "policy"` records each decision, also `allow`. It has `time`, `account`, `operation`, `key`, `decision`, and `reasons`: `policy`; `sealed` if the sealed decision made it stricter; `jev_flag` if Jev flagged the action; `jev_error` if the Jev check failed. It can also have `id`, `rule`, and `approval_id`. It never has the Jev score.
+- `"event": "policy"` records each decision, also `allow`. It has `time`, `account`, `operation`, `key`, `decision`, and `reasons`: `policy`; `sealed` if the referenced message is `sealed` or `error` and that made the decision stricter; `jev_flag` if Jev flagged the action; `jev_error` if the Jev check failed. It can also have `id`, `rule`, and `approval_id`. It never has the Jev score.
 - `"event": "approval"` records each step of a pending item. It has `time`, `account`, `operation`, `state` (`created`, `approved`, `denied`, `done`, or `failed`), and `approval_id`.
 - `"event": "console_signin"` records each wrong console password. It has only `time` and `result` (`failed`). It never has the username, the password, the host name, or the address of the browser.
 
@@ -728,7 +730,7 @@ An agent must run these commands only after the user authorizes that specific se
 The [write policy](#write-policy) key `mail_send` decides all three commands. The default is `deny`.
 To use them, set `mail_send` to `allow` or `approve` in `config.toml`.
 With `approve`, each send waits in the [approval console](#approval-console) and runs only after a person approves it.
-`mail reply` and `mail forward` act on an existing message, so `[policy.sealed] mail_send` applies to them. By default, the daemon refuses a reply to or a forward of a `sealed` or `error` message.
+`mail reply` and `mail forward` act on an existing message. The daemon always refuses a reply to or a forward of a `sealed` or `error` message, or of one that it cannot screen. See [Sealed messages](#sealed-messages).
 
 The commands take the same options as the matching draft commands:
 

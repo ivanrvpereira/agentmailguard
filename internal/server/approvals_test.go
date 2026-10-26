@@ -89,8 +89,8 @@ func pend(t *testing.T, s *server.Server, op, params string) []string {
 // trashApprove holds every trash. The sealed decision is approve too: the fake API serves no messages, so
 // each message counts as sealed, and an approved run must skip the sealed decision to run.
 const trashApprove = "[policy]\nmail_trash='approve'\n[policy.sealed]\nmail_trash='approve'\n"
-const allowAll = "[policy]\nmail_draft='allow'\ncalendar_invite='allow'\ncalendar_update='allow'\ncalendar_cancel='allow'\ncalendar_respond='allow'\n[policy.sealed]\nmail_draft='allow'\n"
-const approveAll = "[policy]\nmail_draft='approve'\ncalendar_invite='approve'\ncalendar_update='approve'\ncalendar_cancel='approve'\ncalendar_respond='approve'\n[policy.sealed]\nmail_draft='approve'\n"
+const allowAll = "[policy]\nmail_draft='allow'\ncalendar_invite='allow'\ncalendar_update='allow'\ncalendar_cancel='allow'\ncalendar_respond='allow'\n"
+const approveAll = "[policy]\nmail_draft='approve'\ncalendar_invite='approve'\ncalendar_update='approve'\ncalendar_cancel='approve'\ncalendar_respond='approve'\n"
 
 // approvalStatus asks for the state of an item. The call names an account that does not exist: the
 // operation is not account-scoped and ignores it.
@@ -135,8 +135,9 @@ func greenMessage(t *testing.T, id string) string {
 func TestApprovedActionMakesTheSameWriteAsTheAllowedCall(t *testing.T) {
 	for _, tc := range []struct{ name, op, params, event string }{
 		{"draft.new", "draft.new", `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body"}`, organizerEvent},
-		{"draft.reply", "draft.reply", `{"id":"m1","body":"CANARY reply"}`, organizerEvent},
-		// The allowed forward runs only when Jev can read the forwarded text, so the Graph API serves a green message.
+		// A reply or forward runs only when its source is not sealed, and the allowed forward only when Jev can read
+		// the forwarded text, so the Graph API serves a green message.
+		{"draft.reply", "draft.reply", `{"id":"m1","body":"CANARY reply"}`, greenMessage(t, "m1")},
 		{"draft.forward", "draft.forward", `{"id":"m1","to":["a@example.test","b@example.test"]}`, greenMessage(t, "m1")},
 		{"calendar.invite", "calendar.invite", `{"to":["a@example.test"],"subject":"CANARY","body":"CANARY body","start":"2026-10-09T09:00:00Z","end":"2026-10-09T10:00:00Z","location":"Room","online":false}`, organizerEvent},
 		{"calendar.update duration and attendees", "calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","start":"2026-10-09T12:00:00+01:00","duration":"30m","add":["new@example.test"],"remove":["remove@example.test"],"online":true}`, organizerEvent},
