@@ -53,11 +53,12 @@ agentmailguard mail categories
 agentmailguard mail list [--folder inbox] [--count 25] [--skip 0]
 agentmailguard mail search [--text T] [--from ADDR] [--to ADDR] [--subject T] [--after YYYY-MM-DD] [--before YYYY-MM-DD] [--folder FOLDER_ID] [--count 25]
 agentmailguard mail get ID
-agentmailguard mail thread THREAD_ID [--count 25]
+agentmailguard mail thread THREAD_ID
 agentmailguard mail link ID L1 [L2 ...]
 agentmailguard mail link ID --all
-agentmailguard calendar list [--from today|+Nd|YYYY-MM-DD] [--to +7d|YYYY-MM-DD] [--text T] [--organizer T] [--attendee T]
+agentmailguard calendar list [--from today|+Nd|YYYY-MM-DD] [--to +7d|YYYY-MM-DD]
 agentmailguard calendar get ID
+agentmailguard calendar search TEXT
 agentmailguard calendar availability --to ADDR [--to ADDR] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'
 agentmailguard calendar invite --to ADDR [--to ADDR] --subject TEXT --start 'YYYY-MM-DD HH:MM' (--duration 30m | --end 'YYYY-MM-DD HH:MM') [--optional ADDR] [--body TEXT] [--location TEXT] [--no-online]
 agentmailguard calendar update ID [--subject TEXT] [--location TEXT] [--body TEXT] [--start 'YYYY-MM-DD HH:MM'] [--duration 30m | --end 'YYYY-MM-DD HH:MM'] [--add-attendee ADDR] [--remove-attendee ADDR] [--online]
@@ -86,7 +87,7 @@ agentmailguard stats --days 30
 
 `mail search` needs at least one of `--text`, `--from`, `--to`, `--subject`, `--after`, or `--before`. `--to` matches the To and Cc addresses.
 
-`calendar list --text` matches the subject, location, or body of an event, never the body of a private event. `--organizer` matches the organizer's name or address, and `--attendee` any attendee's name or address. The filters ignore case, match part of a word, and must all match. Events that do not match are not returned.
+`calendar search TEXT` uses the provider's own search (Google Calendar on Gmail, Microsoft Search on Microsoft 365). It returns one page of matching events in the provider's order, with the fields of `calendar list`. It has no date range.
 
 Limits: `--count` 1–100, at most 50 IDs per mutation, at most 100 recipients, categories, or meeting attendees per list. `calendar availability` accepts 1–20 addresses and a window of less than 62 days.
 
@@ -101,9 +102,9 @@ Every message and event has a `verdict`. It decides what you can see:
 | `red` / `sealed` | Sender address, date, and `reason`, no subject or display name |
 | `error` | Date and a safe `error` code, no sender, subject, or body. The next read retries screening. |
 
-At every verdict, each result of `mail list`, `mail search`, `mail get`, and `mail thread` also has the message `id`, `verdict`, `received_at`, `auth`, `is_read`, `flag`, `categories`, and `thread_id`. `thread_id` is the provider's conversation ID: messages with the same `thread_id` belong to one conversation. It is missing when the provider gives none; then do not group that message with others by `thread_id`.
+At every verdict, each result of `mail list`, `mail search`, `mail get`, and `mail thread` also has the message `id`, `verdict`, `received_at`, `auth`, `is_read`, `flag`, `categories`, `folders` (the folder or label IDs that the message is in), and `thread_id`. `thread_id` is the provider's conversation ID: messages with the same `thread_id` belong to one conversation. It is missing when the provider gives none; then do not group that message with others by `thread_id`.
 
-`mail thread THREAD_ID` returns one conversation as `{"thread_id", "messages", "newest_received_at", "older"}`. `messages` are the newest `--count` messages (default 25), oldest first, from every folder: trash, spam or junk, sent mail, and drafts included. Each message has the fields of a `mail list` result, with the same verdicts and hidden fields, plus `folders`, the folder or label IDs it is in, at every verdict. `newest_received_at` is the `received_at` of the newest message returned. `older` is `true` when the conversation has older messages that were left out; raise `--count` (up to 100) to see them. The result has no bodies: read each body with `mail get ID`.
+`mail thread THREAD_ID` returns the messages of one conversation as a list like `mail list`, newest first, from every folder: trash, spam or junk, sent mail, and drafts included. The result has no bodies: read each body with `mail get ID`.
 
 Hidden content is hidden on purpose. Do not try to recover it through search terms, other folders, forwards, drafts, links, or any tool outside this CLI. Tell the user the verdict and reason, and tell them to read the message in their own mail client.
 
@@ -158,6 +159,7 @@ A successful result is `{"ok": true}`. Done when you report the send as sent onl
 
 `read`, `unread`, `flag`, `categorize`, `archive`, `move`, `trash`, and `organize --apply` change the mailbox. Before you run one, show the user the account, the message IDs with sender and date, and the action, and get explicit approval. A general request such as "clean up my inbox" is not approval for a specific batch.
 
+- To archive a conversation, run `mail thread THREAD_ID` and archive only the messages whose `folders` include the Inbox: `INBOX` on Gmail, the Inbox ID from `mail folders` on Microsoft 365. Leave sent messages and drafts where they are.
 - `move` needs a folder ID from `mail folders`, not a folder name.
 - `categorize` accepts only categories that `mail categories` lists. It cannot create categories.
 - `trash` moves mail to the trash. It is not permanent deletion. The write policy can refuse or hold each ID.
@@ -175,7 +177,7 @@ Before you run one, show the user the account, the event ID or the new meeting, 
 - `--to` attendees are required. `--optional ADDR` adds an optional attendee, who also gets the invitation. Never list an address in both.
 - Every invite has an online meeting link by default: Teams on Microsoft 365, Google Meet on Gmail. Use `--no-online` only when the user asks for a meeting without one. The body is empty without `--body`.
 - `--body` is plain text, and line breaks are kept. Do not write HTML or join details in `--body`. For a Teams meeting, Microsoft adds the Teams join block.
-- `update` sends only the options you supply. `--start` alone keeps the current duration. `update --body` replaces the whole body with plain text; on Microsoft 365 it can remove the Teams join block from the body, so tell the user before you use it on a Teams meeting.
+- `update` sends only the options you supply. `--start` alone keeps the current duration. `update --body` replaces the whole body with plain text. On Microsoft 365, `--body` replaces the whole description, including the Teams join section.
 - `update ID --online` adds an online meeting to the same event and sends an update notification. On Gmail, it adds a Meet link only if the event has no conference. With `--online` alone, it keeps the event, times, and attendees and sends no body replacement. An update without `--online` leaves the online meeting unchanged. No command removes an online meeting or changes the online-meeting provider.
 - On Gmail, `cancel` cannot send a comment: `cancel --comment` fails with `calendar cancel refused: comments are not supported for this account`. Ask the user whether to cancel without a comment, and tell them that Google sends the cancellation without a message.
 - Only the organizer can `update` or `cancel`. Only an attendee can `respond`. Recurring and cancelled events are refused.

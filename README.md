@@ -342,9 +342,9 @@ An explicit empty value, such as `draft update ID --body ''`, is not the same as
 | Group | Commands |
 | --- | --- |
 | State and auth | `stats --days 30`, `cache clear`, `rules list`, `approvals status ID`, `auth status`, local `auth login [--device-code] [--no-browser]`, `auth set-screening-key`, `auth set-approval-password`, `auth migrate --to file\|keychain`, `auth change-password` |
-| Mail reads | `mail list`, `mail get ID [--pretty]`, `mail thread THREAD_ID [--count N]`, `mail search`, `mail link ID L1 L2` or `mail link ID --all`, `mail folders`, `mail categories` |
+| Mail reads | `mail list`, `mail get ID [--pretty]`, `mail thread THREAD_ID`, `mail search`, `mail link ID L1 L2` or `mail link ID --all`, `mail folders`, `mail categories` |
 | Mail changes | `mail archive IDS...`, `mail trash IDS...`, `mail move FOLDER_ID IDS...`, `mail read IDS...`, `mail unread IDS...`, `mail flag IDS... --state flagged|complete|none`, `mail categorize IDS... --add NAME --remove NAME` |
-| Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d [--text TEXT] [--organizer TEXT] [--attendee TEXT]`, `calendar get ID` |
+| Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID`, `calendar search TEXT` |
 | Availability (Microsoft 365 and fake, read-only) | `calendar availability --to ADDRESS [--to ADDRESS] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'` |
 | Meetings (send notifications) | `calendar invite --to ADDRESS --subject TEXT --start 'YYYY-MM-DD HH:MM' --duration 30m\|--end 'YYYY-MM-DD HH:MM' [--optional ADDRESS] [--body TEXT] [--location TEXT] [--no-online]`, `calendar update ID [--subject TEXT] [--location TEXT] [--body TEXT] [--start TIME] [--duration D\|--end TIME] [--add-attendee ADDRESS] [--remove-attendee ADDRESS] [--online]`, `calendar cancel ID [--comment TEXT]`, `calendar respond ID --response accept\|tentative\|decline [--comment TEXT\|--no-notify]` |
 | Mail send (sends at once) | `mail send --to ADDRESS --subject TEXT --body TEXT`, `mail reply ID --body TEXT`, `mail forward ID --to ADDRESS` |
@@ -353,8 +353,8 @@ An explicit empty value, such as `draft update ID --body ''`, is not the same as
 Successful commands print the operation's JSON result.
 `mail get --pretty` formats only the guarded view.
 `mail search` needs at least one of `--text`, `--from`, `--to`, `--subject`, `--after`, or `--before`. `--to ADDRESS` matches the To and Cc fields: the Gmail `to:` and `cc:` operators, or the Microsoft 365 `to` and `cc` search properties.
-`calendar list --text TEXT` keeps only the events whose subject, location, or body contains the text. The body of a private event never counts. `--organizer TEXT` matches the organizer's name or address, and `--attendee TEXT` the name or address of any attendee. Each filter ignores case and matches part of a word; with more than one, an event must match all of them. An empty value is no filter. The server filters after it reads the events from the provider and before screening, so events that do not match are never screened or shown.
-`mail thread` prints JSON only. It returns the newest `--count` messages (default 25) of the conversation, oldest first, from every folder, including trash, spam or junk, sent mail, and drafts. Each message has the fields of a `mail list` result, screened the same way, plus `folders`. The result also has `thread_id`, `newest_received_at` (the `received_at` of the newest message returned), and `older`, which is true when the conversation has older messages that were left out. An unknown thread fails. Read bodies with `mail get`.
+`mail thread` prints JSON only. It returns the messages of the conversation as a list like `mail list`, newest first, from every folder, including trash, spam or junk, sent mail, and drafts. Gmail returns the whole thread (`threads.get`); on Microsoft 365 the server reads every page of the `conversationId` query. An unknown thread fails. Read bodies with `mail get`.
+`calendar search TEXT` uses the provider's own search: Google Calendar `events.list` with `q` on Gmail, and the Microsoft Search API (`POST /search/query` for events) on Microsoft 365. It returns one page in the provider's default size and order, with no date range. Each event is screened as `calendar get` screens it, and the result has the fields of a `calendar list` result. The provider matches the text on its side, so a hidden subject or body can decide whether an event is in the result. The fake provider matches the subject, body, location, organizer, and attendees, ignoring case.
 Draft update returns the resulting draft ID, which can change on Gmail.
 `mail send`, `mail reply`, and `mail forward` return `{"ok": true}`. The providers give no ID for a sent message.
 `calendar invite` returns the new event ID. The other meeting commands return the event ID and `"ok": true`.
@@ -624,7 +624,7 @@ On Gmail, guests cannot invite other people to a meeting that the server creates
 
 An update needs at least one change and sends only the options that you supply.
 An explicit empty `--subject ''`, `--location ''`, or `--body ''` clears that field.
-`--body` is plain text and replaces the whole body. As in an invite, it goes as escaped HTML that keeps the line breaks. On Microsoft 365, the new body can remove the Teams join block that Microsoft added to the body; this is not verified live. On Gmail, the Meet link is not part of the body and stays.
+`--body` is plain text and replaces the whole body. As in an invite, it goes as escaped HTML that keeps the line breaks. On Microsoft 365, `--body` replaces the whole description, including the Teams join section. On Gmail, the Meet link is not part of the body and stays.
 If an update changes only `--start`, the server keeps the current duration.
 `--duration` alone or `--end` alone keeps the current start.
 Attendee changes keep the type and the response of existing attendees. Added attendees are required attendees.
@@ -725,9 +725,9 @@ The calendar range must be at most 90 days.
 | red or sealed | Sender address, date, and reason, without display name or subject |
 | error | Date and safe error code, without sender, subject, or body |
 
-Every verdict also includes the message ID, the thread ID, verdict, authentication results, read state, flag, and mailbox-listed categories.
+Every verdict also includes the message ID, the thread ID, verdict, authentication results, read state, flag, mailbox-listed categories, and folders.
 The thread ID (`thread_id` in `mail list`, `mail search`, `mail get`, and `mail thread` results) is the provider's conversation ID: the Gmail `threadId` or the Microsoft 365 `conversationId`. Messages with the same `thread_id` belong to one conversation. It is an opaque provider ID, not message text. It is left out when the provider gives none, so an empty ID never groups unrelated messages.
-Each `mail thread` message also includes `folders` at every verdict: the folder IDs (Microsoft 365 and fake) or label IDs (Gmail) that the message is in. They are provider IDs, not message text.
+`folders` lists the folder IDs (Microsoft 365 and fake) or label IDs (Gmail) that the message is in. They are provider IDs, not message text.
 Manual mutations work at every verdict, but the [write policy](#write-policy) can refuse or hold `mail trash`, also by verdict.
 Automatic business actions remain green-only.
 `mail organize --apply` can add existing `Yellow`, `Red`, or `Sealed` security tags to matching hidden mail.
@@ -750,9 +750,9 @@ The only data endpoint is `POST /v1/call` with `Content-Type: application/json`:
 ```
 
 Operation names match CLI groups, such as `mail.get`, `mail.send`, `draft.update`, `calendar.invite`, `cache.clear`, and `approvals.status`.
-`mail.thread` takes `{"id":"THREAD_ID","count":N}`; `count` is optional and defaults to 25.
+`mail.thread` takes `{"id":"THREAD_ID"}`, and `calendar.search` takes `{"text":"TEXT"}`.
 Meeting times on the HTTP interface are RFC 3339 timestamps. `calendar.update` also accepts a Go `duration` string.
-`calendar.list` takes optional `text`, `organizer`, and `attendee` strings, `calendar.invite` an optional `optional` address list, `calendar.update` an optional `body`, and `calendar.respond` an optional boolean `no_notify`.
+`calendar.invite` takes an optional `optional` address list, `calendar.update` an optional `body`, and `calendar.respond` an optional boolean `no_notify`.
 The `account` field is optional, and `params` must be an object.
 Unknown operations or fields, duplicate keys, malformed JSON, trailing JSON, null fields, invalid types, and oversized requests are refused.
 There is no HTTP login, token, key, raw-message, classification, rules-mutation, or approval endpoint. Only the [approval console](#approval-console), on its own address, approves or denies pending items.
@@ -762,7 +762,7 @@ A policy refusal returns HTTP 500 with `{"error":"refused by policy: KEY"}`.
 
 Requests are limited to 1 MiB and 16 JSON nesting levels.
 The client bounds responses at 64 MiB and never follows redirects or retries requests, including stale-connection write replay.
-Mail list, search, and thread counts range from 1 to 100, skip is at most 1,000,000, and manual mutations accept at most 50 IDs.
+Mail list and search counts range from 1 to 100, skip is at most 1,000,000, and manual mutations accept at most 50 IDs.
 Recipient and category lists accept at most 100 entries, and IDs and search strings are limited to 4,096 bytes.
 Stats accepts 1 to 365,000 days.
 
@@ -785,6 +785,8 @@ Not verified against real providers or services:
 - mail sends, replies, and forwards;
 - meeting invites, updates, cancellations, and responses;
 - provider acceptance of generated drafts;
+- `mail thread`: the Microsoft 365 `conversationId` query, and Gmail threads that contain a draft;
+- `calendar search`: the Microsoft Search request, and reading its hits as events;
 - Microsoft 365 device-code login, which organization policies can also refuse;
 - requests to Jev cloud, or to any screening endpoint or model other than the default;
 - migration of a real Keychain record.
