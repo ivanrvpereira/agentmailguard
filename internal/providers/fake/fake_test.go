@@ -49,13 +49,13 @@ func mailbox(t *testing.T) (model.Mailbox, string) {
 	t.Helper()
 	home := t.TempDir()
 	seed(t, home, `INSERT INTO messages (account, id, folder, sender_name, sender_address, to_addresses, subject, body, content_type, received_at, is_read, categories, attachments, spf, dmarc, compauth, compauth_reason) VALUES
-		('demo', 'old', 'inbox', 'Ana', 'ana@example.test', '["demo@fake.test"]', 'Old report', 'old body', 'text', '2026-03-01T09:00:00Z', 1, '["Work"]', '["report.pdf"]', 'pass', 'fail', 'fail', '601'),
-		('demo', 'new', 'inbox', 'Bob', 'bob@example.test', '["demo@fake.test"]', 'Lunch plans', '<p>Pizza?</p>', 'html', '2026-03-31T10:00:00+02:00', 0, '[]', '[]', NULL, NULL, NULL, NULL),
-		('demo', 'mid', 'inbox', 'Ana', 'ana@example.test', '[]', 'Invoice', 'Pay by Friday', 'text', '2026-03-15T09:00:00Z', 0, '[]', '[]', NULL, NULL, NULL, NULL),
-		('demo', 'arc', 'archive', 'Carla', 'carla@example.test', '[]', 'Archived invoice', 'old', 'text', '2026-03-20T09:00:00Z', 1, '[]', '[]', NULL, NULL, NULL, NULL),
+		('demo@fake.test', 'old', 'inbox', 'Ana', 'ana@example.test', '["demo@fake.test"]', 'Old report', 'old body', 'text', '2026-03-01T09:00:00Z', 1, '["Work"]', '["report.pdf"]', 'pass', 'fail', 'fail', '601'),
+		('demo@fake.test', 'new', 'inbox', 'Bob', 'bob@example.test', '["demo@fake.test"]', 'Lunch plans', '<p>Pizza?</p>', 'html', '2026-03-31T10:00:00+02:00', 0, '[]', '[]', NULL, NULL, NULL, NULL),
+		('demo@fake.test', 'mid', 'inbox', 'Ana', 'ana@example.test', '[]', 'Invoice', 'Pay by Friday', 'text', '2026-03-15T09:00:00Z', 0, '[]', '[]', NULL, NULL, NULL, NULL),
+		('demo@fake.test', 'arc', 'archive', 'Carla', 'carla@example.test', '[]', 'Archived invoice', 'old', 'text', '2026-03-20T09:00:00Z', 1, '[]', '[]', NULL, NULL, NULL, NULL),
 		('other', 'theirs', 'inbox', 'Ana', 'ana@example.test', '[]', 'Invoice', 'Pay', 'text', '2026-03-31T09:00:00Z', 0, '[]', '[]', NULL, NULL, NULL, NULL)`,
-		`INSERT INTO messages (account, id, folder, sender_address, subject, received_at, is_draft) VALUES ('demo', 'draft', 'inbox', 'demo@fake.test', 'Draft invoice', '2026-03-31T11:00:00Z', 1)`)
-	return fake.New("demo", home, func() time.Time { return now }).Mailbox(), home
+		`INSERT INTO messages (account, id, folder, sender_address, subject, received_at, is_draft) VALUES ('demo@fake.test', 'draft', 'inbox', 'demo@fake.test', 'Draft invoice', '2026-03-31T11:00:00Z', 1)`)
+	return fake.New("demo@fake.test", home, func() time.Time { return now }).Mailbox(), home
 }
 
 // messages drops the next-page marker of a page.
@@ -158,11 +158,11 @@ func TestSearchMatchesCaseInsensitiveSubstringsAcrossTheAccount(t *testing.T) {
 func TestSearchByRecipientMatchesToAndCcButNotTheSender(t *testing.T) {
 	home := t.TempDir()
 	seed(t, home, `INSERT INTO messages (account, id, folder, sender_address, to_addresses, cc_addresses, subject, received_at) VALUES
-		('demo', 'to', 'inbox', 'bob@example.test', '["ana@example.test"]', '[]', 'To Ana', '2026-03-01T09:00:00Z'),
-		('demo', 'cc', 'inbox', 'bob@example.test', '["carla@example.test"]', '["ana@example.test"]', 'Cc Ana', '2026-03-02T09:00:00Z'),
-		('demo', 'sender', 'inbox', 'ana@example.test', '["bob@example.test"]', '[]', 'From Ana', '2026-03-03T09:00:00Z'),
-		('demo', 'nobody', 'inbox', 'ana@example.test', '[]', '[]', 'Note to self', '2026-03-04T09:00:00Z')`)
-	m := fake.New("demo", home, func() time.Time { return now }).Mailbox()
+		('demo@fake.test', 'to', 'inbox', 'bob@example.test', '["ana@example.test"]', '[]', 'To Ana', '2026-03-01T09:00:00Z'),
+		('demo@fake.test', 'cc', 'inbox', 'bob@example.test', '["carla@example.test"]', '["ana@example.test"]', 'Cc Ana', '2026-03-02T09:00:00Z'),
+		('demo@fake.test', 'sender', 'inbox', 'ana@example.test', '["bob@example.test"]', '[]', 'From Ana', '2026-03-03T09:00:00Z'),
+		('demo@fake.test', 'nobody', 'inbox', 'ana@example.test', '[]', '[]', 'Note to self', '2026-03-04T09:00:00Z')`)
+	m := fake.New("demo@fake.test", home, func() time.Time { return now }).Mailbox()
 	to := "ANA@example"
 	got, err := messages(m.Search(t.Context(), model.SearchQuery{To: &to}, model.PageRequest{}, false))
 	if err != nil || !reflect.DeepEqual(ids(got), []string{"cc", "to"}) {
@@ -199,7 +199,7 @@ func TestFoldersMarkTrashAndEveryFolderBelowIt(t *testing.T) {
 	if _, err := m.Folders(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	seed(t, home, `INSERT INTO folders (account, id, name, parent) VALUES ('demo', 'projects', 'Projects', NULL), ('demo', 'old', 'Old', 'trash'), ('demo', 'older', 'Older', 'old'), ('other', 'theirs', 'Theirs', NULL)`)
+	seed(t, home, `INSERT INTO folders (account, id, name, parent) VALUES ('demo@fake.test', 'projects', 'Projects', NULL), ('demo@fake.test', 'old', 'Old', 'trash'), ('demo@fake.test', 'older', 'Older', 'old'), ('other', 'theirs', 'Theirs', NULL)`)
 	got, err := m.Folders(context.Background())
 	want := []model.Folder{{ID: "inbox", Name: "Inbox"}, {ID: "drafts", Name: "Drafts"}, {ID: "sent", Name: "Sent"}, {ID: "archive", Name: "Archive"}, {ID: "trash", Name: "Trash", Trash: true}, {ID: "projects", Name: "Projects"}, {ID: "old", Name: "Old", Trash: true}, {ID: "older", Name: "Older", Trash: true}}
 	if err != nil || !reflect.DeepEqual(got, want) {
@@ -219,7 +219,7 @@ func folderOf(t *testing.T, m model.Mailbox, id string) model.Message {
 func TestMutationsChangeMessagesAndReportMissingIDsInOrder(t *testing.T) {
 	m, home := mailbox(t)
 	ctx := context.Background()
-	seed(t, home, `INSERT INTO categories (account, name) VALUES ('demo', 'Work'), ('demo', 'Home'), ('other', 'Theirs')`)
+	seed(t, home, `INSERT INTO categories (account, name) VALUES ('demo@fake.test', 'Work'), ('demo@fake.test', 'Home'), ('other', 'Theirs')`)
 	if got, err := m.Categories(ctx); err != nil || !reflect.DeepEqual(got, []string{"Work", "Home"}) {
 		t.Fatalf("categories=%v err=%v", got, err)
 	}
@@ -241,7 +241,7 @@ func TestMutationsChangeMessagesAndReportMissingIDsInOrder(t *testing.T) {
 	if got, err := messages(m.List(ctx, "trash", model.PageRequest{}, false)); err != nil || !reflect.DeepEqual(ids(got), []string{"mid", "old"}) {
 		t.Fatalf("trash=%v err=%v", ids(got), err)
 	}
-	seed(t, home, `INSERT INTO folders (account, id, name) VALUES ('demo', 'projects', 'Projects')`)
+	seed(t, home, `INSERT INTO folders (account, id, name) VALUES ('demo@fake.test', 'projects', 'Projects')`)
 	for _, call := range []func() ([]model.MutationResult, error){
 		func() ([]model.MutationResult, error) { return m.Archive(ctx, []string{"new"}) },
 		func() ([]model.MutationResult, error) { return m.Move(ctx, []string{"arc"}, "projects") },
@@ -271,20 +271,15 @@ func TestMutationsChangeMessagesAndReportMissingIDsInOrder(t *testing.T) {
 
 func TestStatusGivesTheAccountAddressWithoutScopes(t *testing.T) {
 	home := t.TempDir()
-	p := fake.New("demo", home, nil)
+	p := fake.New("demo@fake.test", home, nil)
 	if address, scopes, err := p.Status(context.Background()); err != nil || address != "demo@fake.test" || scopes == nil || len(scopes) != 0 {
 		t.Fatalf("address=%q scopes=%v err=%v", address, scopes, err)
-	}
-	seed(t, home, `INSERT INTO identities (account, address, name) VALUES ('demo', 'me@example.test', 'Demo User')`)
-	if address, _, err := p.Status(context.Background()); err != nil || address != "me@example.test" {
-		t.Fatalf("address=%q err=%v", address, err)
 	}
 }
 
 func TestDraftsLandInDraftsFromTheAccountAddress(t *testing.T) {
-	m, home := mailbox(t)
+	m, _ := mailbox(t)
 	ctx := context.Background()
-	seed(t, home, `INSERT INTO identities (account, address, name) VALUES ('demo', 'me@example.test', 'Demo User')`)
 	created, err := m.DraftNew(ctx, model.NewDraft{To: []string{"ana@example.test"}, Subject: "Hello", Body: "first"})
 	if err != nil {
 		t.Fatal(err)
@@ -319,7 +314,7 @@ func TestDraftsLandInDraftsFromTheAccountAddress(t *testing.T) {
 		for _, a := range d.To {
 			to = append(to, a.Address)
 		}
-		if v := (view{to, d.Folders, d.Subject, *d.Body, *d.ContentType}); !reflect.DeepEqual(v, want[i]) || !d.IsDraft || d.Sender != (model.Address{Name: "Demo User", Address: "me@example.test"}) || !d.ReceivedAt.Equal(now) {
+		if v := (view{to, d.Folders, d.Subject, *d.Body, *d.ContentType}); !reflect.DeepEqual(v, want[i]) || !d.IsDraft || d.Sender != (model.Address{Address: "demo@fake.test"}) || !d.ReceivedAt.Equal(now) {
 			t.Errorf("draft %d=%+v", i, d)
 		}
 	}
@@ -366,7 +361,7 @@ func TestSendsLandInSentAndRecordKindAndSource(t *testing.T) {
 		}
 		seeded[s.ID] = true
 	}
-	rows, err := open(t, home).Query(`SELECT subject, origin, coalesce(source_id, '') FROM messages WHERE account = 'demo' AND folder = 'sent' ORDER BY subject`)
+	rows, err := open(t, home).Query(`SELECT subject, origin, coalesce(source_id, '') FROM messages WHERE account = 'demo@fake.test' AND folder = 'sent' ORDER BY subject`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +390,7 @@ func TestFakeDBIsPrivate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, home := range []string{fresh, seeded} {
-		if _, _, err := fake.New("demo", home, nil).Status(context.Background()); err != nil {
+		if _, _, err := fake.New("demo@fake.test", home, nil).Status(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		if info, err := os.Stat(filepath.Join(home, "fake-provider.db")); err != nil || info.Mode().Perm() != 0600 {
@@ -437,7 +432,7 @@ func TestWritesWaitForAnotherWriter(t *testing.T) {
 
 func TestSeededMailWithoutATimeIsReceivedNow(t *testing.T) {
 	m, home := mailbox(t)
-	seed(t, home, `INSERT INTO messages (account, id, subject) VALUES ('demo', 'quick', 'No time')`)
+	seed(t, home, `INSERT INTO messages (account, id, subject) VALUES ('demo@fake.test', 'quick', 'No time')`)
 	got := folderOf(t, m, "quick")
 	if d := time.Since(got.ReceivedAt); d < -time.Minute || d > time.Minute || !reflect.DeepEqual(got.Folders, []string{"inbox"}) {
 		t.Fatalf("message=%+v", got)
@@ -543,12 +538,12 @@ func TestDatabaseFromBeforeThreadsOpensAndKeepsItsMail(t *testing.T) {
 		t.Fatal("schema.sql has no thread_id column")
 	}
 	db := open(t, home)
-	for _, s := range []string{before, `INSERT INTO messages (account, id, subject, received_at) VALUES ('demo', 'old', 'Old report', '2026-03-01T09:00:00Z')`} {
+	for _, s := range []string{before, `INSERT INTO messages (account, id, subject, received_at) VALUES ('demo@fake.test', 'old', 'Old report', '2026-03-01T09:00:00Z')`} {
 		if _, err := db.Exec(s); err != nil {
 			t.Fatal(err)
 		}
 	}
-	m := fake.New("demo", home, func() time.Time { return now }).Mailbox()
+	m := fake.New("demo@fake.test", home, func() time.Time { return now }).Mailbox()
 	ctx := t.Context()
 	list, err := messages(m.List(ctx, "inbox", model.PageRequest{}, false))
 	if err != nil || !reflect.DeepEqual(threads(list), map[string]string{"old": "old"}) {
@@ -561,7 +556,7 @@ func TestDatabaseFromBeforeThreadsOpensAndKeepsItsMail(t *testing.T) {
 	if got, err := m.Get(ctx, []string{reply}, false); err != nil || got[0].ThreadID != "old" {
 		t.Fatalf("reply=%+v err=%v", got, err)
 	}
-	reopened := fake.New("demo", home, func() time.Time { return now }).Mailbox()
+	reopened := fake.New("demo@fake.test", home, func() time.Time { return now }).Mailbox()
 	if got, err := reopened.Get(ctx, []string{"old", reply}, false); err != nil || !reflect.DeepEqual(threads(got), map[string]string{"old": "old", reply: "old"}) {
 		t.Fatalf("reopened threads=%v err=%v", threads(got), err)
 	}
@@ -580,9 +575,9 @@ func TestThreadReturnsEveryMessageOfTheConversationNewestFirstFromEveryFolder(t 
 	m, home := mailbox(t)
 	ctx := t.Context()
 	seed(t, home, `INSERT INTO messages (account, id, folder, sender_address, subject, received_at, is_draft, thread_id) VALUES
-		('demo', 'sent-reply', 'sent', 'demo@fake.test', 'Re: Old report', '2026-03-02T09:00:00Z', 0, 'old'),
-		('demo', 'binned', 'trash', 'ana@example.test', 'Re: Old report', '2026-03-03T09:00:00+01:00', 0, 'old'),
-		('demo', 'reply-draft', 'drafts', 'demo@fake.test', 'Re: Old report', '2026-03-04T09:00:00Z', 1, 'old'),
+		('demo@fake.test', 'sent-reply', 'sent', 'demo@fake.test', 'Re: Old report', '2026-03-02T09:00:00Z', 0, 'old'),
+		('demo@fake.test', 'binned', 'trash', 'ana@example.test', 'Re: Old report', '2026-03-03T09:00:00+01:00', 0, 'old'),
+		('demo@fake.test', 'reply-draft', 'drafts', 'demo@fake.test', 'Re: Old report', '2026-03-04T09:00:00Z', 1, 'old'),
 		('other', 'their-reply', 'inbox', 'ana@example.test', 'Re: Old report', '2026-03-05T09:00:00Z', 0, 'old')`)
 	got, err := m.Thread(ctx, "old")
 	if err != nil || !reflect.DeepEqual(ids(got), []string{"reply-draft", "binned", "sent-reply", "old"}) {

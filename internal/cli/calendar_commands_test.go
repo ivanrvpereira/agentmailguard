@@ -33,10 +33,10 @@ func meetingClient(t *testing.T, args ...string) (code int, stdout, stderr strin
 	}))
 	defer h.Close()
 	var out, errout bytes.Buffer
-	code = cli.Run(context.Background(), append([]string{"--server", h.URL, "--account", "work"}, args...), &out, &errout, cli.Options{
+	code = cli.Run(context.Background(), append([]string{"--host", h.URL, "--account", "work"}, args...), &out, &errout, cli.Options{
 		Now: func() time.Time { return time.Date(2026, 3, 1, 12, 0, 0, 0, loc) },
 		LookupEnv: func(k string) string {
-			if k != "AGENTMAILGUARD_SERVER" && stateful(k) {
+			if k != "AMG_HOST" && stateful(k) {
 				t.Errorf("read local environment %s", k)
 			}
 			return ""

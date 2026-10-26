@@ -87,7 +87,7 @@ func TestSendWaitsForApprovalAndRunsOnlyOnce(t *testing.T) {
 	t.Parallel()
 	s := start(t, "[policy]\nmail_send='approve'\n")
 	sent := func() []string {
-		return s.column(`SELECT subject FROM messages WHERE account = 'demo' AND folder = 'sent' ORDER BY subject`)
+		return s.column(`SELECT subject FROM messages WHERE account = 'demo@fake.invalid' AND folder = 'sent' ORDER BY subject`)
 	}
 	send := func(subject string) pending {
 		return s.held("mail", "send", "--to", "ana@example.test", "--subject", subject, "--body", "canary-body-send")
@@ -193,9 +193,13 @@ func TestTrashArchiveAndMoveNeverDeleteMail(t *testing.T) {
 func TestOrganizePreviewWritesNothingAndApplyRunsOnce(t *testing.T) {
 	t.Parallel()
 	s := start(t, "")
-	rules := "[accounts.demo.projects]\nfolder = 'projects'\ninstructions = 'canary-rule: mail about projects.'\n[accounts.demo.invoices]\ncategory = 'Invoices'\ninstructions = 'canary-rule: mail about invoices.'\n"
+	rules := "[accounts.\"demo@fake.invalid\".projects]\nfolder = 'projects'\ninstructions = 'canary-rule: mail about projects.'\n[accounts.\"demo@fake.invalid\".invoices]\ncategory = 'Invoices'\ninstructions = 'canary-rule: mail about invoices.'\n"
 	if err := os.WriteFile(filepath.Join(s.home, "rules.toml"), []byte(rules), 0600); err != nil {
 		t.Fatal(err)
+	}
+	// A hand edit takes effect at the reload.
+	if got := s.reload(); got != "reload ok" {
+		t.Fatalf("reload: %s\n%s", got, s.logText())
 	}
 	want := s.dump()
 	if preview := s.ok("--timeout", "5m", "mail", "organize", "--since", "1d"); !strings.Contains(preview, `"rule": "projects"`) {
@@ -230,9 +234,9 @@ func TestMeetingsFromAvailabilityToCancel(t *testing.T) {
 	t.Parallel()
 	s := start(t, "[policy]\ncalendar_invite='approve'\ncalendar_respond='allow'\ncalendar_cancel='allow'\n")
 	day := time.Now().UTC().AddDate(0, 0, 2).Format("2006-01-02")
-	s.exec(`INSERT INTO free_busy (account, address, start_at, end_at, status) VALUES ('demo', 'ana@example.test', ?, ?, 'busy')`, day+"T09:00:00Z", day+"T09:30:00Z")
-	s.exec(`INSERT INTO events (account, id, subject, start_at, end_at, organizer_name, organizer_address) VALUES ('demo', 'review', 'canary-subject-review', ?, ?, 'canary-name-boss', 'boss@example.test')`, day+"T14:00:00Z", day+"T15:00:00Z")
-	s.exec(`INSERT INTO attendees (account, event_id, address, name, response) VALUES ('demo', 'review', 'boss@example.test', 'canary-name-boss', 'organizer'), ('demo', 'review', 'me@demo.test', 'canary-name-me', 'none')`)
+	s.exec(`INSERT INTO free_busy (account, address, start_at, end_at, status) VALUES ('demo@fake.invalid', 'ana@example.test', ?, ?, 'busy')`, day+"T09:00:00Z", day+"T09:30:00Z")
+	s.exec(`INSERT INTO events (account, id, subject, start_at, end_at, organizer_name, organizer_address) VALUES ('demo@fake.invalid', 'review', 'canary-subject-review', ?, ?, 'canary-name-boss', 'boss@example.test')`, day+"T14:00:00Z", day+"T15:00:00Z")
+	s.exec(`INSERT INTO attendees (account, event_id, address, name, response) VALUES ('demo@fake.invalid', 'review', 'boss@example.test', 'canary-name-boss', 'organizer'), ('demo@fake.invalid', 'review', 'demo@fake.invalid', 'canary-name-me', 'none')`)
 
 	availability := decode[struct {
 		Schedules []struct {
@@ -255,7 +259,7 @@ func TestMeetingsFromAvailabilityToCancel(t *testing.T) {
 	}
 
 	s.ok("calendar", "respond", "review", "--response", "accept", "--comment", "canary-comment-respond")
-	if got := s.column(`SELECT response FROM attendees WHERE event_id = 'review' AND address = 'me@demo.test'`); !reflect.DeepEqual(got, []string{"accepted"}) {
+	if got := s.column(`SELECT response FROM attendees WHERE event_id = 'review' AND address = 'demo@fake.invalid'`); !reflect.DeepEqual(got, []string{"accepted"}) {
 		t.Fatalf("response: %v", got)
 	}
 
@@ -293,7 +297,7 @@ func TestThreadShowsTheWholeConversationScreenedWithItsFolders(t *testing.T) {
 	s.exec(`UPDATE messages SET thread_id = 'lunch', folder = 'trash', received_at = '2020-01-01T08:00:00Z' WHERE id = 'phish'`)
 	s.exec(`UPDATE messages SET received_at = '2020-01-01T09:00:00Z' WHERE id = 'lunch'`)
 	s.exec(`INSERT INTO messages (account, id, folder, sender_name, sender_address, to_addresses, subject, body, received_at, thread_id) VALUES
-		('demo', 'lunch-reply', 'sent', 'canary-name-me', 'me@demo.test', '["ana@example.test"]', 'canary-subject-lunch-reply', 'canary-body-lunch-reply: Friday works.', '2020-01-01T10:00:00Z', 'lunch')`)
+		('demo@fake.invalid', 'lunch-reply', 'sent', 'canary-name-me', 'demo@fake.invalid', '["ana@example.test"]', 'canary-subject-lunch-reply', 'canary-body-lunch-reply: Friday works.', '2020-01-01T10:00:00Z', 'lunch')`)
 	draft := decode[struct{ ID string }](t, s.ok("draft", "reply", "lunch", "--body", "canary-body-draft: see you at noon")).ID
 
 	type message struct {

@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard/internal/cache"
 	"github.com/ivanrvpereira/agentmailguard/internal/content"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"github.com/ivanrvpereira/agentmailguard/internal/views"
@@ -29,7 +28,7 @@ func TestMailVerdictViews(t *testing.T) {
 	rendered := content.Rendered{Markdown: "VISIBLE-BODY", Links: map[string]string{"L1": "https://example.test/SECRET-TOKEN"}}
 	for _, verdict := range []model.Verdict{model.Green, model.Yellow, model.Sealed, model.Red, model.Error} {
 		t.Run(string(verdict), func(t *testing.T) {
-			row := cache.Row{Verdict: verdict, Error: new("TimeoutError")}
+			row := views.Screen{Verdict: verdict, Error: new("TimeoutError")}
 			v, err := views.View(message, row, []string{"listed"}, &rendered)
 			if err != nil {
 				t.Fatal(err)
@@ -96,11 +95,11 @@ func TestMailVerdictViews(t *testing.T) {
 			}
 		})
 	}
-	if _, err := views.View(message, cache.Row{Verdict: model.Green}, nil, nil); err == nil {
+	if _, err := views.View(message, views.Screen{Verdict: model.Green}, nil, nil); err == nil {
 		t.Fatal("green accepted missing body")
 	}
 	empty := content.Rendered{Links: map[string]string{}}
-	v, err := views.View(model.Message{}, cache.Row{Verdict: model.Green}, nil, &empty)
+	v, err := views.View(model.Message{}, views.Screen{Verdict: model.Green}, nil, &empty)
 	if err != nil {
 		t.Fatal(err)
 	}

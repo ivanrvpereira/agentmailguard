@@ -29,14 +29,14 @@ func rpcPage(t *testing.T, s *server.Server, op, params string) (page, string) {
 
 // The fake provider pages like Graph: 10 items by default, and next_page names the next page until the last one.
 func TestMailListAndSearchReturnOnePageWithTheNextPageMarker(t *testing.T) {
-	home := fakeHome(t, "")
+	home := fakeHome(t)
 	db := fakeDB(t, home)
 	for i := range 11 {
-		if _, err := db.Exec(`INSERT INTO messages (account, id, sender_address, subject, body, received_at, spf, dkim, dmarc) VALUES ('demo', ?, 'sender@example.test', 'invoice', 'body', ?, 'pass', 'pass', 'pass')`, fmt.Sprintf("m%02d", i), fmt.Sprintf("2026-10-05T%02d:00:00Z", i)); err != nil {
+		if _, err := db.Exec(`INSERT INTO messages (account, id, sender_address, subject, body, received_at, spf, dkim, dmarc) VALUES (?, ?, 'sender@example.test', 'invoice', 'body', ?, 'pass', 'pass', 'pass')`, demoEmail, fmt.Sprintf("m%02d", i), fmt.Sprintf("2026-10-05T%02d:00:00Z", i)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	s, _ := fakeServer(t, home)
+	s := fakeDaemon(t, home, "").s
 	for _, c := range []struct{ op, params string }{{"mail.list", `{`}, {"mail.search", `{"text":"sender@example.test",`}} {
 		first, _ := rpcPage(t, s, c.op, c.params+`"folder":"inbox"}`)
 		if len(first.Messages) != 10 || first.Next == nil || *first.Next != "10" {
@@ -54,14 +54,14 @@ func TestMailListAndSearchReturnOnePageWithTheNextPageMarker(t *testing.T) {
 }
 
 func TestCalendarSearchReturnsOnePageWithTheNextPageMarker(t *testing.T) {
-	home := fakeHome(t, "")
+	home := fakeHome(t)
 	db := fakeDB(t, home)
 	for i := range 12 {
-		if _, err := db.Exec(`INSERT INTO events (account, id, subject, start_at, end_at) VALUES ('demo', ?, 'Planning', ?, ?)`, fmt.Sprintf("e%02d", i), fmt.Sprintf("2026-10-09T%02d:00:00Z", i), fmt.Sprintf("2026-10-09T%02d:30:00Z", i)); err != nil {
+		if _, err := db.Exec(`INSERT INTO events (account, id, subject, start_at, end_at) VALUES (?, ?, 'Planning', ?, ?)`, demoEmail, fmt.Sprintf("e%02d", i), fmt.Sprintf("2026-10-09T%02d:00:00Z", i), fmt.Sprintf("2026-10-09T%02d:30:00Z", i)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	s, _ := fakeServer(t, home)
+	s := fakeDaemon(t, home, "").s
 	first, _ := rpcPage(t, s, "calendar.search", `{"text":"planning"}`)
 	if len(first.Events) != 10 || first.Next == nil || *first.Next != "10" {
 		t.Fatalf("first page: %+v", first)
@@ -74,7 +74,7 @@ func TestCalendarSearchReturnsOnePageWithTheNextPageMarker(t *testing.T) {
 // A count goes to the provider as given: the fake refuses more than 1,000, as Graph does, and that refusal is a
 // provider error. A negative count, skip, and a page that is not a bounded marker are invalid requests.
 func TestListAndSearchSendTheCountAsGivenAndRefuseInvalidPages(t *testing.T) {
-	s, _ := fakeServer(t, fakeHome(t, ""))
+	s := fakeDaemon(t, fakeHome(t), "").s
 	for _, c := range []struct{ op, params string }{{"mail.list", `{"count":1001}`}, {"mail.search", `{"text":"g","count":1001}`}} {
 		if status, body := accountRPC(t, s, c.op, "demo", c.params); status != 500 || body != `{"error":"operation failed"}` {
 			t.Errorf("%s count 1001: %d %s", c.op, status, body)

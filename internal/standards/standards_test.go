@@ -132,8 +132,31 @@ func TestImportBoundaries(t *testing.T) {
 			switch {
 			case p.ImportPath == "internal/model" || p.ImportPath == "internal/client":
 				t.Errorf("%s imports %s: model and client import no other internal package", p.ImportPath, dep)
-			case strings.HasPrefix(dep, "internal/providers/") && p.ImportPath != "internal/server" && p.ImportPath != "internal/cli":
-				t.Errorf("%s imports %s: only server and cli import provider packages", p.ImportPath, dep)
+			case strings.HasPrefix(dep, "internal/providers/") && p.ImportPath != "internal/server" && p.ImportPath != "internal/daemon":
+				t.Errorf("%s imports %s: only server and daemon import provider packages", p.ImportPath, dep)
+			}
+		}
+	}
+}
+
+// amg runs on the agent's host. It talks HTTP to the daemon and must not reach the store, the cache, the
+// configuration, the providers, or cgo, so it builds with CGO_ENABLED=0.
+func TestAgentClientHasNoDaemonCode(t *testing.T) {
+	cmd := exec.Command("go", "list", "-deps", "./cmd/amg")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("go list: %v\n%s", err, stderr.String())
+	}
+	forbidden := []string{module + "internal/cache", module + "internal/credentials", module + "internal/server", module + "internal/config", module + "internal/daemon", module + "internal/providers/", "github.com/mattn/go-sqlite3", "github.com/keybase/go-keychain", "runtime/cgo"}
+	for dep := range strings.Lines(string(out)) {
+		dep = strings.TrimSpace(dep)
+		for _, f := range forbidden {
+			if dep == f || strings.HasPrefix(dep, f) && (strings.HasSuffix(f, "/") || strings.HasPrefix(dep, f+"/")) {
+				t.Errorf("cmd/amg depends on %s", dep)
 			}
 		}
 	}

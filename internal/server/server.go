@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -19,22 +20,23 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/cache"
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/guard"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
-	"github.com/ivanrvpereira/agentmailguard/internal/screening"
 )
 
 const MaxRequestBytes = 1 << 20
 const ShutdownTimeout = 10 * time.Second
 
+// Options are the external seams of the daemon. Store is required: the daemon reads logins, the screening key,
+// and the console password hash only from it.
 type Options struct {
-	Credentials credentials.Store
-	Screener    model.Screener
-	M365        m365.Options
-	Gmail       gmail.Options
-	Now         func() time.Time
-	LookupEnv   func(string) string // supplies the credentials file password; nil reads the process environment
+	Store    *credentials.RecordStore
+	Screener model.Screener // nil: the engine that [screening] names
+	M365     m365.Options
+	Gmail    gmail.Options
+	Now      func() time.Time
 	// ScreeningHTTPClient is the HTTP client of the jev engine. Nil uses the default client. For tests.
 	ScreeningHTTPClient *http.Client
 }
@@ -54,58 +56,27 @@ type Server struct {
 	slots     chan struct{}
 	closeOnce *sync.Once
 	closeErr  error
-	accounts  map[string]*account
-	creds     *memoryStore
-	preloaded bool
-	// approvals is the [approvals] table, read once at start. approvalBase is the console item URL prefix.
-	approvals    config.Approvals
-	approvalBase string
-	// screening is the [screening] table, read once at start.
-	screening config.Screening
-	// approvalHash is the bcrypt hash of the approval console password, read once by Preload.
-	// Empty means not set. A change takes effect only after a restart.
-	approvalHash string
+	// current is the state that new requests use; nil until the first Load succeeds.
+	current atomic.Pointer[state]
+	// loading serializes loads. It is never held while mu is wanted by a load's caller.
+	loading *sync.Mutex
+	// started, listen, and backend are fixed by the first Load, under mu: the console address and the credential
+	// backend change only at a restart.
+	started         bool
+	listen, backend string
+	// accountGates are the guard gates of each account key, kept across loads.
+	accountGates map[string]*guard.Gates
+	// signins limits wrong console passwords across loads.
+	signins *signinLimit
 }
 
-func (Server) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "Server{redacted}") }
+func (*Server) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "Server{redacted}") }
 
+// New opens cache.db and the audit log. It reads no configuration: Load does.
 func New(ctx context.Context, home string, opts Options) (*Server, error) {
 	home, err := config.Home(home)
-	if err != nil {
+	if err != nil || opts.Store == nil {
 		return nil, errors.New("configuration unavailable")
-	}
-	// An invalid [approvals] table stops the start. Other configuration errors surface at preload or on
-	// the first account call, as before, and leave the default console address.
-	approvals, err := config.LoadApprovals(ctx, filepath.Join(home, "config.toml"))
-	if errors.As(err, new(config.ApprovalsError)) {
-		return nil, err
-	}
-	if err != nil {
-		approvals.Listen = config.DefaultApprovalsListen
-	}
-	// An invalid [screening] table stops the start too; it never falls back to another engine.
-	screen, err := config.LoadScreening(ctx, filepath.Join(home, "config.toml"))
-	if errors.As(err, new(config.ScreeningError)) {
-		return nil, err
-	}
-	if opts.Credentials == nil {
-		accounts, err := config.LoadAccounts(ctx, filepath.Join(home, "config.toml"))
-		if err != nil {
-			return nil, errConfig
-		}
-		backend, err := config.CredentialsBackend(ctx, filepath.Join(home, "config.toml"))
-		if err != nil {
-			return nil, errConfig
-		}
-		if backend == "file" {
-			password, _ := credentials.TakePasswordEnv(opts.LookupEnv)
-			opts.Credentials = credentials.NewFile(home, password)
-		} else {
-			opts.Credentials, err = credentials.NewMacOS(home, accounts)
-			if err != nil {
-				return nil, credentials.ErrUnavailable
-			}
-		}
 	}
 	c, err := cache.Open(ctx, filepath.Join(home, "cache.db"))
 	if err != nil {
@@ -114,23 +85,9 @@ func New(ctx context.Context, home string, opts Options) (*Server, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	creds := &memoryStore{backend: safeStore{opts.Credentials}}
-	opts.Credentials = creds
-	if opts.Screener == nil && screen.Provider == "fake" {
-		opts.Screener = screening.NewFake()
-	}
-	if opts.Screener == nil {
-		opts.Screener = screening.New(screening.Options{Credentials: opts.Credentials, HTTPClient: safeHTTP(opts.ScreeningHTTPClient), Endpoint: screen.Endpoint, Model: screen.Model})
-	}
-	opts.Screener = safeScreener{opts.Screener}
-	opts.M365.HTTPClient = safeHTTP(opts.M365.HTTPClient)
-	opts.Gmail.HTTPClient = safeHTTP(opts.Gmail.HTTPClient)
 	ctx, cancel := context.WithCancel(ctx)
-	return &Server{home: home, options: opts, cache: c, audit: audit.New(filepath.Join(home, "audit.jsonl")), ctx: ctx, cancel: cancel, slots: make(chan struct{}, 64), accounts: make(map[string]*account), creds: creds, mu: new(sync.Mutex), work: new(sync.WaitGroup), closeOnce: new(sync.Once), approvals: approvals, approvalBase: "http://" + approvals.Listen + "/a/", screening: screen}, nil
+	return &Server{home: home, options: opts, cache: c, audit: audit.New(filepath.Join(home, "audit.jsonl")), ctx: ctx, cancel: cancel, slots: make(chan struct{}, 64), mu: new(sync.Mutex), work: new(sync.WaitGroup), closeOnce: new(sync.Once), loading: new(sync.Mutex), accountGates: map[string]*guard.Gates{}, signins: &signinLimit{}}, nil
 }
-
-// FakeScreening reports whether the [screening] table, read once at start, selects the fake engine.
-func (s *Server) FakeScreening() bool { return s.screening.Provider == "fake" }
 
 // Close stops admission, cancels active calls, and waits at most ShutdownTimeout.
 func (s *Server) Close() error {
@@ -158,6 +115,8 @@ type request struct {
 	Operation string          `json:"operation"`
 	Account   *string         `json:"account,omitempty"`
 	Params    json.RawMessage `json:"params"`
+	// key selects the account of an approved action by its key instead of an alias. The API cannot set it.
+	key string
 }
 
 var errInvalid = errors.New("invalid request")
@@ -219,7 +178,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case s.slots <- struct{}{}:
 		defer func() { <-s.slots }()
 	default:
-		fail(w, 503, "server busy")
+		fail(w, 503, "daemon busy")
 		return
 	}
 	rc := http.NewResponseController(w)
@@ -349,32 +308,52 @@ type statsDTO struct {
 	CompAuthFail        int                       `json:"compauth_fail"`
 }
 
+// call runs one API operation on the current state. A name that is not in the operation table is refused.
 func (s *Server) call(ctx context.Context, r request) (any, error) {
-	switch r.Operation {
-	case "stats":
-		p := struct {
-			Days int `json:"days"`
-		}{30}
-		if strict(r.Params, &p, "days") != nil || p.Days < 1 || p.Days > 365000 {
-			return nil, errInvalid
-		}
-		stats, e := s.cache.Stats(ctx, p.Days, s.options.Now())
-		out := map[string]statsDTO{}
-		for a, v := range stats {
-			out[a] = statsDTO{v.Total, v.Counts, v.Shares, v.GreenShareNonSealed, v.DMARCFail, v.CompAuthFail}
-		}
-		return out, e
-	case "cache.clear":
-		if strict(r.Params, &struct{}{}) != nil {
-			return nil, errInvalid
-		}
-		n, e := s.cache.Clear(ctx)
-		return struct {
-			Deleted int64 `json:"deleted"`
-		}{n}, e
-	case "approvals.status":
-		return s.approvalStatus(ctx, r.Params)
-	default:
-		return s.accountCall(ctx, r)
+	st := s.current.Load()
+	if st == nil {
+		return nil, ErrUnavailable
 	}
+	op, ok := operations[r.Operation]
+	if !ok {
+		return nil, errInvalid
+	}
+	if op.daemon != nil {
+		return op.daemon(ctx, s, st, r.Params)
+	}
+	return s.accountCall(ctx, st, op, r)
+}
+
+func stats(ctx context.Context, s *Server, _ *state, raw json.RawMessage) (any, error) {
+	p := struct {
+		Days int `json:"days"`
+	}{30}
+	if strict(raw, &p, "days") != nil || p.Days < 1 || p.Days > 365000 {
+		return nil, errInvalid
+	}
+	v, e := s.cache.Stats(ctx, p.Days, s.options.Now())
+	out := map[string]statsDTO{}
+	for a, v := range v {
+		out[a] = statsDTO{v.Total, v.Counts, v.Shares, v.GreenShareNonSealed, v.DMARCFail, v.CompAuthFail}
+	}
+	return out, e
+}
+
+type accountDTO struct {
+	Account  string `json:"account"`
+	Provider string `json:"provider"`
+	Email    string `json:"email"`
+	Default  bool   `json:"default"`
+}
+
+// accountList lists the configured accounts. It carries no secret and no sign-in state.
+func accountList(_ context.Context, _ *Server, st *state, raw json.RawMessage) (any, error) {
+	if strict(raw, &struct{}{}) != nil {
+		return nil, errInvalid
+	}
+	out := []accountDTO{}
+	for _, a := range st.config.Accounts {
+		out = append(out, accountDTO{a.Alias, a.Provider, a.Email, a.Alias == st.config.DefaultAccount})
+	}
+	return out, nil
 }

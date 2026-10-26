@@ -74,7 +74,7 @@ func TestChangePasswordFailuresPreserveFile(t *testing.T) {
 				}
 				defer os.Chmod(home, 0700)
 			case "keychain":
-				store = credentials.New(nil, home, nil)
+				store = credentials.New(nil, home)
 			}
 			password := "new-password"
 			switch mode {
@@ -147,22 +147,6 @@ func TestChangePasswordUsesSharedLockAndLatestReread(t *testing.T) {
 	}
 }
 
-func TestMigrationDoesNotWriteAnExistingLegacyTarget(t *testing.T) {
-	ctx := context.Background()
-	home := t.TempDir()
-	source := credentials.NewFile(home, "synthetic-password")
-	if source.SaveScreeningKey(ctx, "source-key") != nil {
-		t.Fatal("seed")
-	}
-	p := &fakePlatform{values: map[[2]string][]byte{{"agentmailguard-go-openrouter", "agentmailguard-go"}: []byte("legacy-key")}}
-	if source.Migrate(ctx, credentials.New(p, home, nil)) != credentials.ErrTargetExists {
-		t.Fatal("legacy target not refused")
-	}
-	if _, ok := p.values[[2]string{"agentmailguard", "credentials"}]; ok {
-		t.Fatal("refused migration wrote target")
-	}
-}
-
 func TestMigrationNeverCreatesTargetFromFailedSource(t *testing.T) {
 	for _, mode := range []string{"missing", "malformed", "version", "denied"} {
 		t.Run(mode, func(t *testing.T) {
@@ -176,7 +160,7 @@ func TestMigrationNeverCreatesTargetFromFailedSource(t *testing.T) {
 			case "denied":
 				p.readFailure = map[[2]string]error{{"agentmailguard", "credentials"}: errors.New("private-canary")}
 			}
-			source := credentials.New(p, home, nil)
+			source := credentials.New(p, home)
 			if err := source.Migrate(context.Background(), credentials.NewFile(home, "synthetic-password")); err == nil || strings.Contains(err.Error(), "private-") {
 				t.Fatal("missing/failed source accepted or exposed")
 			}
@@ -193,7 +177,7 @@ func TestMigrationRefusesUnsafeCopies(t *testing.T) {
 			ctx := context.Background()
 			home := t.TempDir()
 			p := &fakePlatform{values: map[[2]string][]byte{}}
-			source := credentials.New(p, home, nil)
+			source := credentials.New(p, home)
 			target := credentials.NewFile(home, "synthetic-password")
 			if mode != "missing" {
 				p.values[[2]string{"agentmailguard", "credentials"}] = []byte(`{"version":1,"oauth":{},"openrouter_key":"source-key"}`)
@@ -211,7 +195,7 @@ func TestMigrationRefusesUnsafeCopies(t *testing.T) {
 			}
 			before, _ := os.ReadFile(filepath.Join(home, "credentials.age"))
 			if mode == "same" {
-				target = credentials.New(p, home, nil)
+				target = credentials.New(p, home)
 			}
 			if source.Migrate(ctx, target) == nil {
 				t.Fatal("unsafe migration succeeded")
@@ -236,7 +220,7 @@ func TestMigrationSerializesTargetCheckAndWrite(t *testing.T) {
 	results := make(chan error, 2)
 	var wg sync.WaitGroup
 	for range 2 {
-		wg.Go(func() { results <- source.Migrate(ctx, credentials.New(p, home, nil)) })
+		wg.Go(func() { results <- source.Migrate(ctx, credentials.New(p, home)) })
 	}
 	wg.Wait()
 	close(results)
@@ -262,7 +246,7 @@ func TestMigrationSerializesTargetCheckAndWrite(t *testing.T) {
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	bounded, stop := context.WithTimeout(ctx, 30*time.Millisecond)
 	defer stop()
-	if err := source.Migrate(bounded, credentials.New(p, home, nil)); !errors.Is(err, context.DeadlineExceeded) {
+	if err := source.Migrate(bounded, credentials.New(p, home)); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("migration bypassed shared lock")
 	}
 }
@@ -271,7 +255,7 @@ func TestCopyCredentialsPreservesCompleteSource(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()
 	p := &fakePlatform{values: map[[2]string][]byte{}}
-	source := credentials.New(p, home, nil)
+	source := credentials.New(p, home)
 	if source.SaveOAuth(ctx, "gmail", "work", credentials.OAuth{RefreshToken: "private-token"}) != nil || source.SaveScreeningKey(ctx, "private-key") != nil {
 		t.Fatal("seed failed")
 	}

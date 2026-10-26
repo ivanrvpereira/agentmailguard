@@ -15,17 +15,16 @@ import (
 
 // SQL here creates input fixtures for the public Open API. Assertions use the cache
 // API, except byte equality for the external contract that failed opens change no data.
-const legacy = `CREATE TABLE mail_cache (
+// mailCache and pending are the tables of 001_schema.sql, written out as a database at version 1 has them.
+const mailCache = `CREATE TABLE mail_cache (
  account TEXT NOT NULL, message_id TEXT NOT NULL, received_at TEXT NOT NULL,
  score REAL CHECK (score BETWEEN 0 AND 1),
  verdict TEXT NOT NULL CHECK (verdict IN ('green','yellow','sealed','red','error')),
  error TEXT, spf TEXT, dkim TEXT, dmarc TEXT, compauth TEXT, compauth_reason TEXT,
- screened_at TEXT NOT NULL, PRIMARY KEY (account, message_id));
+ screened_at TEXT NOT NULL, organization TEXT, organization_applied_at TEXT,
+ security_applied_verdict TEXT CHECK (security_applied_verdict IN ('yellow','sealed','red')), PRIMARY KEY (account, message_id));
  CREATE INDEX mail_cache_received_at ON mail_cache (account, received_at);`
-const v2 = `ALTER TABLE mail_cache ADD COLUMN organization TEXT; ALTER TABLE mail_cache ADD COLUMN applied_at TEXT;`
-const v3 = `ALTER TABLE mail_cache ADD COLUMN tagged_verdict TEXT CHECK (tagged_verdict IN ('yellow','sealed','red'));`
-const v4 = `ALTER TABLE mail_cache RENAME COLUMN applied_at TO organization_applied_at; ALTER TABLE mail_cache RENAME COLUMN tagged_verdict TO security_applied_verdict;`
-const v5 = `CREATE TABLE pending (id TEXT PRIMARY KEY NOT NULL, account TEXT NOT NULL, op TEXT NOT NULL, args TEXT NOT NULL, jev TEXT,
+const pendingTable = `CREATE TABLE pending (id TEXT PRIMARY KEY NOT NULL, account TEXT NOT NULL, op TEXT NOT NULL, args TEXT NOT NULL, jev TEXT,
  state TEXT NOT NULL CHECK (state IN ('pending','running','done','denied','failed')), result TEXT, created TEXT NOT NULL, updated TEXT NOT NULL);`
 
 func fixture(t *testing.T, version int, schema, after string) string {
@@ -37,82 +36,59 @@ func fixture(t *testing.T, version int, schema, after string) string {
 	}
 	defer db.Close()
 	sqlText := schema + `INSERT INTO mail_cache (account,message_id,received_at,score,verdict,spf,dkim,dmarc,compauth,compauth_reason,screened_at)
- VALUES ('work','m1','2026-09-25T08:30:00+00:00',0.05,'green','pass','pass','fail','fail','000','2026-09-25T09:00:00+00:00');` + after + fmt.Sprintf("PRAGMA user_version = %d;", version)
+ VALUES ('work@example.test','m1','2026-09-25T08:30:00+00:00',0.05,'green','pass','pass','fail','fail','000','2026-09-25T09:00:00+00:00');` + after + fmt.Sprintf("PRAGMA user_version = %d;", version)
 	if _, err := db.Exec(sqlText); err != nil {
 		t.Fatal(err)
 	}
 	return path
 }
-func TestAllMigrationsPreserveRowsAndMarkers(t *testing.T) {
-	for version := 0; version <= 5; version++ {
-		t.Run(fmt.Sprint(version), func(t *testing.T) {
-			schema, after := legacy, ""
-			want := row("m1")
-			if version >= 2 {
-				schema += v2
-				after = `UPDATE mail_cache SET organization='{}', applied_at='2026-09-25T08:30:00+00:00';`
-				want.Organization = &model.Organization{}
-				want.OrganizationAppliedAt = &received
-			}
-			if version >= 3 {
-				schema += v3
-				after += `UPDATE mail_cache SET tagged_verdict='yellow';`
-				want.SecurityAppliedVerdict = ptr(model.Yellow)
-			}
-			if version >= 4 {
-				schema += v4
-				after = strings.ReplaceAll(strings.ReplaceAll(after, "applied_at", "organization_applied_at"), "tagged_verdict", "security_applied_verdict")
-			}
-			if version >= 5 {
-				schema += v5
-			}
-			path := fixture(t, version, schema, after)
-			c, err := cache.Open(ctx, path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got, err := c.Get(ctx, "work", []string{"m1"})
-			if err != nil || !reflect.DeepEqual(got["m1"], want) {
-				t.Fatalf("lost state: %+v %v", got, err)
-			}
-			if err := c.MarkSecurityApplied(ctx, "work", "m1", model.Red); err != nil {
-				t.Fatal(err)
-			}
-			if err := c.Close(); err != nil {
-				t.Fatal(err)
-			}
-			c, err = cache.Open(ctx, path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer c.Close()
-			want.SecurityAppliedVerdict = ptr(model.Red)
-			got, err = c.Get(ctx, "work", []string{"m1"})
-			if err != nil || !reflect.DeepEqual(got["m1"], want) {
-				t.Fatalf("reopen changed state: %+v %v", got, err)
-			}
-			id, err := c.AddPending(ctx, "work", "mail.trash", []byte(`{}`), nil, received)
-			if err != nil {
-				t.Fatalf("migrated cache cannot store pending actions: %v", err)
-			}
-			if p, err := c.GetPending(ctx, id); err != nil || p.State != cache.StatePending {
-				t.Fatalf("migrated cache cannot read pending actions: %+v %v", p, err)
-			}
-		})
+func TestNewDatabaseGetsTheSchemaAndKeepsRowsAcrossOpens(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cache.db")
+	c, err := cache.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := row("m1")
+	if err := c.Put(ctx, "work@example.test", want); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.MarkSecurityApplied(ctx, "work@example.test", "m1", model.Red); err != nil {
+		t.Fatal(err)
+	}
+	id, err := c.AddPending(ctx, "work@example.test", "mail.trash", []byte(`{}`), nil, received)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	c, err = cache.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	want.SecurityAppliedVerdict = ptr(model.Red)
+	got, err := c.Get(ctx, "work@example.test", []string{"m1"})
+	if err != nil || !reflect.DeepEqual(got["m1"], want) {
+		t.Fatalf("reopen changed state: %+v %v", got, err)
+	}
+	if p, err := c.GetPending(ctx, id); err != nil || p.State != cache.StatePending || p.Account != "work@example.test" {
+		t.Fatalf("pending after reopen: %+v %v", p, err)
 	}
 }
+
 func TestInvalidStoredAnswersFailClosedOnRead(t *testing.T) {
 	for _, organization := range []string{
 		`{"folder":{"choice":"stay","confidence":1,"probabilities":{"stay":0.2}}}`,
 		`{"categories":{"RAW CONTENT CANARY":0.9}}`,
 		`{} {"raw":"RAW CONTENT CANARY"}`,
 	} {
-		path := fixture(t, 4, legacy+v2+v3+v4, `UPDATE mail_cache SET organization='`+organization+`';`)
+		path := fixture(t, 1, mailCache+pendingTable, `UPDATE mail_cache SET organization='`+organization+`';`)
 		c, err := cache.Open(ctx, path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := c.Get(ctx, "work", []string{"m1"})
+		got, err := c.Get(ctx, "work@example.test", []string{"m1"})
 		c.Close()
 		if err == nil || len(got) != 0 {
 			t.Error("invalid stored answers returned as usable classification")
@@ -126,13 +102,14 @@ func TestRejectedMigrationsLeaveDatabaseUnchanged(t *testing.T) {
 		version int
 		schema  string
 	}{
-		{"newer legacy", 6, legacy}, {"newer current", 6, legacy + v2 + v3 + v4 + v5},
-		{"claimed current missing pending table", 5, legacy + v2 + v3 + v4},
-		{"negative version", -1, legacy},
-		{"second statement fails", 0, legacy + `ALTER TABLE mail_cache ADD COLUMN applied_at TEXT;`},
-		{"claimed current missing columns", 4, legacy},
-		{"pending wrong upsert key", 1, strings.ReplaceAll(legacy, ", PRIMARY KEY (account, message_id)", "")},
-		{"current wrong upsert key", 4, strings.ReplaceAll(legacy, ", PRIMARY KEY (account, message_id)", ", UNIQUE (account, message_id, verdict)") + v2 + v3 + v4},
+		// A home from before the email account key has a cache at version 5. It is refused, not changed.
+		{"old program's cache", 5, mailCache + pendingTable},
+		{"newer than this program", 2, mailCache + pendingTable},
+		{"claimed current missing pending table", 1, mailCache},
+		{"negative version", -1, mailCache},
+		{"claimed current missing columns", 1, strings.ReplaceAll(mailCache, ", organization TEXT, organization_applied_at TEXT", "") + pendingTable},
+		{"current wrong upsert key", 1, strings.ReplaceAll(mailCache, ", PRIMARY KEY (account, message_id)", ", UNIQUE (account, message_id, verdict)") + pendingTable},
+		{"script fails on an existing table", 0, strings.ReplaceAll(mailCache, "score REAL", "score TEXT, verdict2 TEXT, score2 REAL") + "CREATE TABLE pending (x TEXT);"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			path := fixture(t, tt.version, tt.schema, "")

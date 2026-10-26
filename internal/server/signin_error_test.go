@@ -1,7 +1,6 @@
 package server_test
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,18 +9,8 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
-	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
-	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
-
-// expiredStore holds a login whose access token has expired, so every call first asks the provider for a new one.
-type expiredStore struct{ store }
-
-func (s *expiredStore) LoadOAuth(context.Context, string, string) (credentials.OAuth, error) {
-	s.loads.Add(1)
-	return credentials.OAuth{RefreshToken: "private-refresh-canary", ExpiresAt: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), Username: "synthetic@example.test"}, nil
-}
 
 func TestRefusedSignInTellsTheClientToSignInAgain(t *testing.T) {
 	for _, provider := range []string{"gmail", "m365"} {
@@ -32,18 +21,16 @@ func TestRefusedSignInTellsTheClientToSignInAgain(t *testing.T) {
 				io.WriteString(w, `{"error":"invalid_grant","error_description":"CANARY raw error"}`)
 			}))
 			defer api.Close()
-			home := t.TempDir()
-			configFile(t, home)
+			// The login holds only an expired refresh token, so every call first asks the provider for a new one.
+			expired := credentials.OAuth{RefreshToken: "private-refresh-canary", ExpiresAt: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)}
+			config := workConfig
 			if provider == "gmail" {
-				useGmail(t, home)
+				config = gmailConfig
 			}
-			s, err := server.New(context.Background(), home, server.Options{Credentials: &expiredStore{}, Screener: newNativeAPI().screener(t), M365: m365.Options{BaseURL: api.URL, AuthorityURL: api.URL}, Gmail: gmail.Options{HTTPClient: api.Client(), TokenURL: api.URL + "/token", GmailURL: api.URL}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer s.Close()
-			status, body := meetingRPC(t, s, "mail.folders", `{}`)
-			if want := `{"error":"sign-in failed; check the network, or run auth login and restart the server"}`; status != 500 || body != want || strings.Contains(body, "CANARY") {
+			d := startDaemon(t, daemonSetup{config: config, record: record(map[string]credentials.OAuth{"m365/" + workEmail: expired, "gmail/" + gmailEmail: expired}), jev: newNativeAPI(),
+				options: server.Options{M365: m365Options(api.URL), Gmail: googleOptions(api.URL)}})
+			status, body := accountRPC(t, d.s, "mail.folders", "", `{}`)
+			if want := `{"error":"sign-in failed; check the network, or run amgd account login"}`; status != 500 || body != want || strings.Contains(body, "CANARY") {
 				t.Fatalf("response=%d %s", status, body)
 			}
 		})

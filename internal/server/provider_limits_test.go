@@ -17,14 +17,12 @@ func addresses(n int) string {
 	return string(b)
 }
 
-// The server sets no limit of its own on message IDs, recipients, or attendees: the provider refuses what it does
+// The daemon sets no limit of its own on message IDs, recipients, or attendees: the provider refuses what it does
 // not accept. The fake provider accepts any number.
 func TestListsHaveNoLimitOfOurOwn(t *testing.T) {
-	home := fakeHome(t, "[policy]\nmail_send='allow'\nmail_draft='allow'\ncalendar_invite='allow'\ncalendar_update='allow'\n")
-	if _, err := fakeDB(t, home).Exec(`INSERT INTO events (account, id, subject, start_at, end_at) VALUES ('demo', 'e1', 'Planning', '2026-10-09T09:00:00Z', '2026-10-09T10:00:00Z')`); err != nil {
-		t.Fatal(err)
-	}
-	s, _ := fakeServer(t, home)
+	home := fakeHome(t)
+	fakeSQL(t, home, `INSERT INTO events (account, id, subject, start_at, end_at) VALUES (?1, 'e1', 'Planning', '2026-10-09T09:00:00Z', '2026-10-09T10:00:00Z')`)
+	s := fakeDaemon(t, home, "[policy]\nmail_send='allow'\nmail_draft='allow'\ncalendar_invite='allow'\ncalendar_update='allow'\n").s
 	ids := make([]string, 51)
 	for i := range ids {
 		ids[i] = "g"
@@ -59,7 +57,7 @@ func TestListsHaveNoLimitOfOurOwn(t *testing.T) {
 	names := make([]string, 101)
 	for i := range names {
 		names[i] = fmt.Sprintf("c%d", i)
-		if _, err := fakeDB(t, home).Exec(`INSERT INTO categories (account, name) VALUES ('demo', ?)`, names[i]); err != nil {
+		if _, err := fakeDB(t, home).Exec(`INSERT INTO categories (account, name) VALUES (?, ?)`, demoEmail, names[i]); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/cli"
-	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
 
 // stateful reports whether reading k would let the environment change what a command does. The color
@@ -34,9 +33,10 @@ func TestCommandsUseHTTPWithoutLocalState(t *testing.T) {
 		op, params string
 	}{
 		{[]string{"stats"}, "stats", `{"days":30}`},
-		{[]string{"cache", "clear"}, "cache.clear", `{}`},
 		{[]string{"rules", "list"}, "rules.list", `{}`},
-		{[]string{"auth", "status"}, "auth.status", `{}`},
+		{[]string{"account", "list"}, "account.list", `{}`},
+		{[]string{"account", "status"}, "account.status", `{}`},
+		{[]string{"approvals", "status", "p"}, "approvals.status", `{"id":"p"}`},
 		{[]string{"mail", "list"}, "mail.list", `{"folder":"inbox"}`},
 		{[]string{"mail", "list", "--folder", "f", "--count", "4", "--page", "next-4"}, "mail.list", `{"folder":"f","count":4,"page":"next-4"}`},
 		{[]string{"mail", "get", "m"}, "mail.get", `{"id":"m"}`},
@@ -99,8 +99,8 @@ func TestCommandsUseHTTPWithoutLocalState(t *testing.T) {
 			}))
 			defer h.Close()
 			var out, errout bytes.Buffer
-			code := cli.Run(context.Background(), append([]string{"--server", h.URL, "--account", "remote"}, tc.args...), &out, &errout, cli.Options{Now: func() time.Time { return time.Date(2026, 3, 31, 12, 0, 0, 0, loc) }, LookupEnv: func(k string) string {
-				if k != "AGENTMAILGUARD_SERVER" && stateful(k) {
+			code := cli.Run(context.Background(), append([]string{"--host", h.URL, "--account", "remote"}, tc.args...), &out, &errout, cli.Options{Now: func() time.Time { return time.Date(2026, 3, 31, 12, 0, 0, 0, loc) }, LookupEnv: func(k string) string {
+				if stateful(k) {
 					t.Errorf("read local environment %s", k)
 				}
 				return ""
@@ -136,7 +136,7 @@ func TestOutputFailureIsSafeAndDoesNotRepeatOperation(t *testing.T) {
 			defer h.Close()
 			out := &failedOutput{}
 			var errout bytes.Buffer
-			code := cli.Run(context.Background(), append([]string{"--server", h.URL}, tc.args...), out, &errout, cli.Options{LookupEnv: func(string) string { return "" }})
+			code := cli.Run(context.Background(), append([]string{"-H", h.URL}, tc.args...), out, &errout, cli.Options{LookupEnv: func(string) string { return "" }})
 			if code != 1 || errout.String() != "error: output failed\n" || calls.Load() != 1 || out.writes != 1 {
 				t.Fatalf("exit=%d stderr=%q HTTP attempts=%d output attempts=%d", code, errout.String(), calls.Load(), out.writes)
 			}
@@ -168,7 +168,7 @@ func TestExplicitBlankAccountRefusedBeforeHTTPOrLocalState(t *testing.T) {
 	}))
 	defer h.Close()
 	for _, account := range []string{"", " ", "\t\n", "\u2003"} {
-		for _, command := range [][]string{{"mail", "trash", "source-id"}, {"auth", "login", "--device-code"}} {
+		for _, command := range [][]string{{"mail", "trash", "source-id"}, {"account", "status"}} {
 			for _, global := range []bool{true, false} {
 				args := append([]string{}, command...)
 				if global {
@@ -209,21 +209,16 @@ func TestPrettyAliasesUseLastOption(t *testing.T) {
 			io.WriteString(w, `{"id":"source-id","verdict":"red"}`)
 		}))
 		var out, errout bytes.Buffer
-		args := append([]string{"--server", h.URL, "mail", "get", "source-id"}, tc.flags...)
+		args := append([]string{"-H", h.URL, "mail", "get", "source-id"}, tc.flags...)
 		code := cli.Run(context.Background(), args, &out, &errout, cli.Options{LookupEnv: func(string) string { return "" }})
 		h.Close()
 		if code != 0 || errout.Len() != 0 || calls.Load() != 1 || json.Valid(out.Bytes()) == tc.pretty || strings.Contains(out.String(), "Verdict:     red") != tc.pretty {
 			t.Errorf("flags=%v exit=%d out=%q stderr=%q", tc.flags, code, out.String(), errout.String())
 		}
 	}
-	for _, tc := range []struct {
-		args []string
-		want string
-	}{{[]string{"mail", "get", "--help"}, "--no-pretty"}, {[]string{"auth", "login", "--help"}, "--no-device-code"}} {
-		var out, errout bytes.Buffer
-		if code := cli.Run(context.Background(), tc.args, &out, &errout, cli.Options{}); code != 0 || !strings.Contains(out.String(), tc.want) {
-			t.Fatalf("negative option %s absent from %v help", tc.want, tc.args)
-		}
+	var out, errout bytes.Buffer
+	if code := cli.Run(context.Background(), []string{"mail", "get", "--help"}, &out, &errout, cli.Options{}); code != 0 || !strings.Contains(out.String(), "--no-pretty") {
+		t.Fatal("negative option --no-pretty absent from mail get help")
 	}
 }
 
@@ -240,7 +235,7 @@ func TestUsageAndHelpNeedNoServerOrState(t *testing.T) {
 	for _, tc := range []struct {
 		args []string
 		want []string
-	}{{nil, []string{"serve", "mail", "calendar", "draft"}}, {[]string{"mail"}, []string{"organize", "categorize", "link"}}} {
+	}{{nil, []string{"account", "mail", "calendar", "draft", "AMG_HOST"}}, {[]string{"mail"}, []string{"organize", "categorize", "link"}}} {
 		var out, errout bytes.Buffer
 		args := append([]string{}, tc.args...)
 		code := cli.Run(context.Background(), append(args, "--help"), &out, &errout, cli.Options{LookupEnv: func(k string) string {
@@ -259,7 +254,7 @@ func TestUsageAndHelpNeedNoServerOrState(t *testing.T) {
 
 func TestOptionsFormattingIsRedacted(t *testing.T) {
 	lookup := func(string) string { return "SYNTHETIC-PASSWORD" }
-	opts := cli.Options{LookupEnv: lookup, Server: server.Options{LookupEnv: lookup}}
+	opts := cli.Options{LookupEnv: lookup}
 	for _, value := range []any{opts, &opts} {
 		for _, verb := range []string{"%v", "%+v", "%#v", "%s"} {
 			if printed := fmt.Sprintf(verb, value); printed != "CLIOptions{redacted}" {
@@ -309,7 +304,7 @@ func TestDateOptionsResolveToLocalMidnightsOnTheClientClock(t *testing.T) {
 			io.WriteString(w, `{}`)
 		}))
 		var out, errout bytes.Buffer
-		code := cli.Run(context.Background(), append([]string{"--server", h.URL}, tc.args...), &out, &errout, cli.Options{Now: func() time.Time { return tc.now }, LookupEnv: func(string) string { return "" }})
+		code := cli.Run(context.Background(), append([]string{"-H", h.URL}, tc.args...), &out, &errout, cli.Options{Now: func() time.Time { return tc.now }, LookupEnv: func(string) string { return "" }})
 		h.Close()
 		if code != 0 || got != tc.params {
 			t.Errorf("%v at %v: exit %d params %s want %s", tc.args, tc.now, code, got, tc.params)
@@ -318,8 +313,94 @@ func TestDateOptionsResolveToLocalMidnightsOnTheClientClock(t *testing.T) {
 	for _, args := range [][]string{{"mail", "organize", "--since", "999999999999999999999m"}, {"mail", "organize", "--since", "0d"}, {"mail", "organize", "--since", "7d", "--until", "2026-02-30"},
 		{"mail", "search", "--after", "2026-03-07", "--before", "2026-03-06"}} {
 		var out, errout bytes.Buffer
-		if code := cli.Run(context.Background(), append([]string{"--server", "http://127.0.0.1:1"}, args...), &out, &errout, cli.Options{LookupEnv: func(string) string { return "" }}); code != 2 {
+		if code := cli.Run(context.Background(), append([]string{"-H", "http://127.0.0.1:1"}, args...), &out, &errout, cli.Options{LookupEnv: func(string) string { return "" }}); code != 2 {
 			t.Errorf("%v: exit %d stderr %s", args, code, errout.String())
+		}
+	}
+}
+
+func TestDaemonAddressFromHostOptionThenEnvironmentThenDefault(t *testing.T) {
+	hit := func(name string) (*httptest.Server, *atomic.Int32) {
+		var calls atomic.Int32
+		h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			io.WriteString(w, `{}`)
+		}))
+		t.Cleanup(h.Close)
+		return h, &calls
+	}
+	flag, flagCalls := hit("flag")
+	env, envCalls := hit("env")
+	for _, tc := range []struct {
+		args        []string
+		flags, envs int32
+	}{
+		{[]string{"-H", flag.URL, "stats"}, 1, 0},
+		{[]string{"--host", flag.URL, "stats"}, 2, 0},
+		{[]string{"stats"}, 2, 1},
+	} {
+		var out, errout bytes.Buffer
+		code := cli.Run(context.Background(), tc.args, &out, &errout, cli.Options{LookupEnv: func(k string) string {
+			if k == "AMG_HOST" {
+				return env.URL
+			}
+			return ""
+		}})
+		if code != 0 || flagCalls.Load() != tc.flags || envCalls.Load() != tc.envs {
+			t.Fatalf("%v: exit %d flag calls %d env calls %d stderr %s", tc.args, code, flagCalls.Load(), envCalls.Load(), errout.String())
+		}
+	}
+}
+
+// amg is the agent's tool: an allowlist for it must not allow any management command.
+func TestAgentClientHasNoManagementCommands(t *testing.T) {
+	for _, args := range [][]string{{"serve"}, {"reload"}, {"config"}, {"store"}, {"auth"}, {"cache"}, {"account", "add", "work"}, {"account", "login", "work"}, {"account", "remove", "work"}, {"mail", "get", "x", "--home", "/tmp"}} {
+		var out, errout bytes.Buffer
+		code := cli.Run(context.Background(), args, &out, &errout, cli.Options{LookupEnv: func(k string) string {
+			if stateful(k) {
+				t.Fatalf("%v read %s", args, k)
+			}
+			return ""
+		}})
+		if code != 2 {
+			t.Errorf("%v: exit %d stdout %q stderr %q", args, code, out.String(), errout.String())
+		}
+	}
+}
+
+func TestCLIExitSemanticsAndDaemonErrors(t *testing.T) {
+	for _, tc := range []struct {
+		args       []string
+		status     int
+		body       string
+		exit       int
+		wantOutput bool
+	}{
+		{[]string{"mail", "archive", "a", "b"}, 200, `[{"id":"a","ok":true,"error":null},{"id":"b","ok":false,"error":"failed"}]`, 0, true},
+		{[]string{"account", "status"}, 200, `{"account":"work","email":"work@example.com","ok":false,"logged_in":false}`, 1, true},
+		{[]string{"mail", "get", "x"}, 500, `{"error":"private-daemon-canary"}`, 1, false},
+		{[]string{"mail", "organize", "--since", "2026-01-01"}, 400, `{"error":"invalid request"}`, 2, false},
+		{[]string{"mail", "list", "--count", "-1"}, 400, `{"error":"invalid request"}`, 1, false},
+	} {
+		h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req struct{ Account string }
+			json.NewDecoder(r.Body).Decode(&req)
+			if req.Account != "" {
+				t.Error("default account must remain daemon-selected")
+			}
+			w.WriteHeader(tc.status)
+			io.WriteString(w, tc.body)
+		}))
+		var out, errout bytes.Buffer
+		code := cli.Run(context.Background(), tc.args, &out, &errout, cli.Options{LookupEnv: func(k string) string {
+			if k == "AMG_HOST" {
+				return h.URL
+			}
+			return ""
+		}})
+		h.Close()
+		if code != tc.exit || (out.Len() > 0) != tc.wantOutput || strings.Contains(errout.String(), "canary") {
+			t.Errorf("%v: exit %d output %s stderr %s", tc.args, code, out.String(), errout.String())
 		}
 	}
 }

@@ -48,7 +48,7 @@ func runPretty(t *testing.T, body string, env map[string]string, args ...string)
 	h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, body) }))
 	defer h.Close()
 	var out, errout bytes.Buffer
-	code := cli.Run(context.Background(), append([]string{"--server", h.URL}, args...), &out, &errout,
+	code := cli.Run(context.Background(), append([]string{"--host", h.URL}, args...), &out, &errout,
 		cli.Options{LookupEnv: func(k string) string { return env[k] }})
 	return code, out.String(), errout.String()
 }
@@ -150,7 +150,7 @@ func TestMailListWithoutPrettyStaysIndentedJSON(t *testing.T) {
 func TestMailListPrettyRefusesAResponseThatIsNotASummaryList(t *testing.T) {
 	for _, body := range []string{`{"ok":true}`, `{"messages":[{"id":5}]}`, `[]`, `"text"`} {
 		code, out, errout := runPretty(t, body, nil, "mail", "list", "--pretty")
-		if code != 1 || out != "" || errout != "error: invalid server response\n" {
+		if code != 1 || out != "" || errout != "error: invalid daemon response\n" {
 			t.Errorf("body=%s exit=%d stdout=%q stderr=%q", body, code, out, errout)
 		}
 	}
@@ -195,10 +195,10 @@ func TestMailGetPrettyShowsTheThreadNextToTheID(t *testing.T) {
 
 // Styling the prefix may add color, never a word: removing the sequences gives the plain line back.
 func TestErrorPrefixKeepsItsWordsOnEveryWriter(t *testing.T) {
-	const want = "error: invalid server URL\n"
+	const want = "error: invalid daemon URL\n"
 	run := func(env map[string]string) string {
 		var out, errout bytes.Buffer
-		code := cli.Run(context.Background(), []string{"--server", "not-a-url", "mail", "list"}, &out, &errout,
+		code := cli.Run(context.Background(), []string{"--host", "not-a-url", "mail", "list"}, &out, &errout,
 			cli.Options{LookupEnv: func(k string) string { return env[k] }})
 		if code != 1 || out.Len() != 0 {
 			t.Fatalf("env=%v exit=%d stdout=%q", env, code, out.String())

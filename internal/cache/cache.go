@@ -222,6 +222,18 @@ func (c *Cache) Clear(ctx context.Context) (int64, error) {
 	return result.RowsAffected()
 }
 
+// DeleteAccount removes the cached verdicts and answers of an account. Its pending actions stay.
+func (c *Cache) DeleteAccount(ctx context.Context, account string) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	result, err := c.db.ExecContext(ctx, "DELETE FROM mail_cache WHERE account = ?", account)
+	if err != nil {
+		return 0, errors.New("cache clear failed")
+	}
+	return result.RowsAffected()
+}
+
 // SaveOrganization accepts only explicit, validated answer fields, never a generic map.
 func (c *Cache) SaveOrganization(ctx context.Context, account, messageID string, organization model.Organization) error {
 	if err := organization.Validate(); err != nil {

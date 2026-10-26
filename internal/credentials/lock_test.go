@@ -42,7 +42,7 @@ func (p *concurrentPlatform) Write(_ context.Context, _, _ string, v []byte) err
 func TestConcurrentStoresPreserveEveryEntry(t *testing.T) {
 	home := t.TempDir()
 	p := &concurrentPlatform{}
-	stores := []*credentials.RecordStore{credentials.New(p, home, nil), credentials.New(p, home, nil)}
+	stores := []*credentials.RecordStore{credentials.New(p, home), credentials.New(p, home)}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	errs := make(chan error, 2)
@@ -71,11 +71,11 @@ func TestConcurrentStoresPreserveEveryEntry(t *testing.T) {
 	}
 }
 func TestStoreLockAcrossProcesses(t *testing.T) {
-	if home := os.Getenv("AGENTMAILGUARD_LOCK_TEST_HOME"); home != "" {
+	if home := os.Getenv("AMG_LOCK_TEST_HOME"); home != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
 		p := &concurrentPlatform{}
-		if err := credentials.New(p, home, nil).SaveScreeningKey(ctx, "synthetic"); !errors.Is(err, context.DeadlineExceeded) {
+		if err := credentials.New(p, home).SaveScreeningKey(ctx, "synthetic"); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatal("child ignored cross-process lock")
 		}
 		p.mu.Lock()
@@ -98,7 +98,7 @@ func TestStoreLockAcrossProcesses(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestStoreLockAcrossProcesses$", "-test.timeout=3s")
-	cmd.Env = []string{"AGENTMAILGUARD_LOCK_TEST_HOME=" + home}
+	cmd.Env = []string{"AMG_LOCK_TEST_HOME=" + home}
 	if err := cmd.Run(); err != nil {
 		t.Fatal("child did not honor the held lock")
 	}
@@ -116,7 +116,7 @@ func TestStoreHonorsHomeFlockAndCancellation(t *testing.T) {
 	}
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	p := &concurrentPlatform{}
-	s := credentials.New(p, home, nil)
+	s := credentials.New(p, home)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	if err := s.SaveScreeningKey(ctx, "synthetic"); !errors.Is(err, context.DeadlineExceeded) {

@@ -18,11 +18,19 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/views"
 )
 
-// Options configures a guard. A zero decision in Policy counts as deny.
+// Options configures a guard. A zero decision in Policy counts as deny. Nil Gates gives the guard its own gates.
 type Options struct {
 	Now    func() time.Time
 	Policy config.Policy
+	Gates  *Gates
 }
+
+// Gates are the mutation and security gates of one account. Guards of the same account share them, so a reload
+// that builds new guards while old requests still run keeps every write of the account under the same gates.
+type Gates struct{ mutation, security chan struct{} }
+
+func NewGates() *Gates { return &Gates{make(chan struct{}, 1), make(chan struct{}, 1)} }
+
 type Guard struct {
 	account  string
 	mailbox  model.Mailbox
@@ -44,7 +52,10 @@ func New(account string, mailbox model.Mailbox, calendar model.Calendar, screene
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	return &Guard{account, mailbox, calendar, screener, store, log, opts.Now, opts.Policy, make(chan struct{}, 1), make(chan struct{}, 1)}
+	if opts.Gates == nil {
+		opts.Gates = NewGates()
+	}
+	return &Guard{account, mailbox, calendar, screener, store, log, opts.Now, opts.Policy, opts.Gates.mutation, opts.Gates.security}
 }
 
 // GuardError contains only fixed refusal text or a safe failure code.
@@ -87,6 +98,12 @@ func safeCode(err error) string {
 	}
 	return "Error"
 }
+
+// screen is the part of a cache row that a view shows.
+func screen(row cache.Row) views.Screen {
+	return views.Screen{Verdict: row.Verdict, Auth: row.Auth, Error: row.Error}
+}
+
 func safeErr(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -321,7 +338,7 @@ func (g *Guard) summaries(ctx context.Context, messages []model.Message, categor
 				return err
 			}
 		}
-		out[i] = views.Summary(m, row, categories)
+		out[i] = views.Summary(m, screen(row), categories)
 		return nil
 	})
 	if err != nil {
@@ -397,7 +414,7 @@ func (g *Guard) Get(ctx context.Context, id string) (views.MailView, error) {
 	if err != nil {
 		return views.MailView{}, err
 	}
-	return views.View(m, row, categories, r)
+	return views.View(m, screen(row), categories, r)
 }
 func (g *Guard) Categories(ctx context.Context) ([]string, error) {
 	if err := ctx.Err(); err != nil {

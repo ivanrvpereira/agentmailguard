@@ -23,7 +23,7 @@ const granted = "https://www.googleapis.com/auth/gmail.modify https://www.google
 // writeGranted is the grant that login requests now; it also allows calendar writes.
 const writeGranted = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.events.owned"
 
-var account = config.Account{Name: "synthetic", Provider: "gmail", ClientID: "client", ClientSecret: "secret"}
+var account = config.Account{Alias: "synthetic", Email: "synthetic@example.test", Provider: "gmail", ClientID: "client", ClientSecret: "secret"}
 
 type memoryStore struct {
 	mu           sync.Mutex

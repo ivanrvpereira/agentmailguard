@@ -4,35 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"math"
-	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard/internal/config"
 	"github.com/ivanrvpereira/agentmailguard/internal/content"
-	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 	"github.com/ivanrvpereira/agentmailguard/internal/guard"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
-	"github.com/ivanrvpereira/agentmailguard/internal/providers/fake"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 	"github.com/ivanrvpereira/agentmailguard/internal/rules"
 )
-
-type provider interface {
-	Mailbox() model.Mailbox
-	Calendar() model.Calendar
-	Status(context.Context) (string, []string, error)
-}
-type account struct {
-	config   config.Account
-	provider provider
-	guard    *guard.Guard
-}
 
 // providerGrants lists, for each provider, the grants of which one allows an operation. A provider without an
 // entry needs no grant beyond its login scopes.
@@ -44,12 +30,11 @@ var mailSendGrants = providerGrants{"m365": {"Mail.Send"}}
 // calendarWriteGrants allow the meeting writes. Gmail logins made before calendar writes have only the read-only grant.
 var calendarWriteGrants = providerGrants{"m365": {"Calendars.ReadWrite"}, "gmail": {gmail.CalendarWriteScope}}
 
-var errRestart = errors.New("account configuration changed; restart required")
-var errConfig = errors.New("configuration unavailable")
-var errRules = errors.New("rules unavailable")
+// availabilityGrants allow calendar.availability on Microsoft 365.
+var availabilityGrants = providerGrants{"m365": {"Calendars.ReadBasic", "Calendars.Read", "Calendars.ReadWrite"}}
 
 func publicError(e error) (string, bool) {
-	for _, fixed := range []error{errRestart, errConfig, errRules} {
+	for _, fixed := range []error{errNoAccounts, errUnknownAccount} {
 		if e == fixed {
 			return fixed.Error(), true
 		}
@@ -72,50 +57,137 @@ func publicError(e error) (string, bool) {
 	}
 	return "", false
 }
-func (s *Server) load(ctx context.Context, name *string) (config.Account, error) {
-	a, e := config.LoadAccount(ctx, filepath.Join(s.home, "config.toml"), name)
-	if e != nil {
-		return config.Account{}, errConfig
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if old := s.accounts[a.Name]; (old != nil && old.config != a) || (old == nil && s.preloaded) {
-		return config.Account{}, errRestart
-	}
-	return a, nil
+
+// call runs a validated request on one account.
+type call func(*account) (any, error)
+
+// decoder validates the complete typed params of an account operation before any account or provider access.
+// A non-empty gmailRefusal refuses a valid request that Gmail cannot carry out.
+type decoder func(ctx context.Context, s *Server, raw json.RawMessage) (c call, gmailRefusal guard.GuardError, err error)
+
+// operation is one entry of the API. An account operation has decode and runs on one account; a daemon operation
+// has daemon and runs on the daemon state.
+type operation struct {
+	decode decoder
+	grants providerGrants
+	daemon func(ctx context.Context, s *Server, st *state, raw json.RawMessage) (any, error)
 }
-func (s *Server) instance(a config.Account) (*account, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if old := s.accounts[a.Name]; old != nil {
-		if old.config != a {
-			return nil, errRestart
+
+// typed builds a decoder from a parameter struct with its defaults, a validation, and the run on one account.
+func typed[P any](defaults P, valid func(*P) bool, run func(ctx context.Context, s *Server, p P, a *account) (any, error)) decoder {
+	return func(ctx context.Context, s *Server, raw json.RawMessage) (call, guard.GuardError, error) {
+		p := defaults
+		if params(raw, &p) != nil || !valid(&p) {
+			return nil, "", errInvalid
 		}
-		return old, nil
+		return func(a *account) (any, error) { return run(ctx, s, p, a) }, "", nil
 	}
-	if s.preloaded {
-		return nil, errRestart
-	}
-	var p provider
-	if a.Provider == "fake" {
-		p = fake.New(a.Name, s.home, s.options.Now)
-	} else if a.Provider == "gmail" {
-		o := s.options.Gmail
-		if o.Now == nil {
-			o.Now = s.options.Now
-		}
-		p = gmail.New(a, s.options.Credentials, o)
-	} else {
-		o := s.options.M365
-		if o.Now == nil {
-			o.Now = s.options.Now
-		}
-		p = m365.New(a, s.options.Credentials, o)
-	}
-	v := &account{a, p, guard.New(a.Name, p.Mailbox(), p.Calendar(), s.options.Screener, s.cache, s.audit, guard.Options{Now: s.options.Now, Policy: a.Policy})}
-	s.accounts[a.Name] = v
-	return v, nil
 }
+
+type none struct{}
+
+func always[P any](*P) bool { return true }
+
+// ids is the decoder of a mail action on one or more message IDs.
+func ids(run func(ctx context.Context, g *guard.Guard, ids []string) ([]model.MutationResult, error)) decoder {
+	return typed(idsParam{}, func(p *idsParam) bool { return listValid(p.IDs, 1, noMax) }, func(ctx context.Context, _ *Server, p idsParam, a *account) (any, error) {
+		return mutations(run(ctx, a.guard, p.IDs))
+	})
+}
+
+// operations is the whole API: one entry per operation name, and any other name is refused. No entry writes
+// credentials, the console password, accounts, or settings: the API uses mail and never manages the daemon.
+// TestAPIOperationsAreReviewed lists every entry.
+var operations = map[string]operation{
+	"stats":            {daemon: stats},
+	"account.list":     {daemon: accountList},
+	"approvals.status": {daemon: approvalStatus},
+	"account.status": {decode: typed(none{}, always, func(ctx context.Context, s *Server, _ none, a *account) (any, error) {
+		return s.status(ctx, a)
+	})},
+	"rules.list": {decode: typed(none{}, always, func(ctx context.Context, _ *Server, _ none, a *account) (any, error) {
+		return ruleList(ctx, a)
+	})},
+	"mail.get": {decode: typed(idParam{}, func(p *idParam) bool { return idValid(p.ID) }, func(ctx context.Context, _ *Server, p idParam, a *account) (any, error) {
+		return a.guard.Get(ctx, p.ID)
+	})},
+	"mail.list": {decode: typed(listParam{Folder: "inbox"}, func(p *listParam) bool {
+		return idValid(p.Folder) && p.Count >= 0 && model.ValidPage(p.Page)
+	}, func(ctx context.Context, _ *Server, p listParam, a *account) (any, error) {
+		return a.guard.List(ctx, p.Folder, model.PageRequest{Size: p.Count, Page: p.Page})
+	})},
+	"mail.thread": {decode: typed(threadParam{}, func(p *threadParam) bool { return idValid(p.ID) }, func(ctx context.Context, _ *Server, p threadParam, a *account) (any, error) {
+		return a.guard.Thread(ctx, p.ID)
+	})},
+	"mail.search": {decode: mailSearch},
+	"mail.link": {decode: typed(linkParam{}, func(p *linkParam) bool {
+		return idValid(p.ID) && p.All != (len(p.Links) > 0) && listValid(p.Links, 0, 1000)
+	}, func(ctx context.Context, _ *Server, p linkParam, a *account) (any, error) {
+		return a.guard.Links(ctx, p.ID, p.Links)
+	})},
+	"mail.folders": {decode: typed(none{}, always, func(ctx context.Context, _ *Server, _ none, a *account) (any, error) {
+		v, e := a.guard.Folders(ctx)
+		out := make([]folderDTO, 0, len(v))
+		for _, f := range v {
+			out = append(out, folderDTO{f.ID, f.Name})
+		}
+		return out, e
+	})},
+	"mail.categories": {decode: typed(none{}, always, func(ctx context.Context, _ *Server, _ none, a *account) (any, error) {
+		return a.guard.Categories(ctx)
+	})},
+	"mail.archive": {decode: ids(func(ctx context.Context, g *guard.Guard, ids []string) ([]model.MutationResult, error) {
+		return g.Archive(ctx, ids)
+	})},
+	"mail.trash": {decode: ids(func(ctx context.Context, g *guard.Guard, ids []string) ([]model.MutationResult, error) {
+		return g.Trash(ctx, ids)
+	})},
+	"mail.read": {decode: ids(func(ctx context.Context, g *guard.Guard, ids []string) ([]model.MutationResult, error) {
+		return g.MarkRead(ctx, ids, true)
+	})},
+	"mail.unread": {decode: ids(func(ctx context.Context, g *guard.Guard, ids []string) ([]model.MutationResult, error) {
+		return g.MarkRead(ctx, ids, false)
+	})},
+	"mail.move": {decode: typed(moveParam{}, func(p *moveParam) bool { return listValid(p.IDs, 1, noMax) && idValid(p.Folder) }, func(ctx context.Context, _ *Server, p moveParam, a *account) (any, error) {
+		return mutations(a.guard.Move(ctx, p.IDs, p.Folder))
+	})},
+	"mail.flag": {decode: typed(flagParam{}, func(p *flagParam) bool {
+		return listValid(p.IDs, 1, noMax) && (p.State == model.Flagged || p.State == model.NoFlag || p.State == model.Complete)
+	}, func(ctx context.Context, _ *Server, p flagParam, a *account) (any, error) {
+		return mutations(a.guard.Flag(ctx, p.IDs, p.State))
+	})},
+	"mail.categorize": {decode: typed(categoryParam{}, func(p *categoryParam) bool {
+		return listValid(p.IDs, 1, noMax) && listValid(p.Add, 0, noMax) && listValid(p.Remove, 0, noMax)
+	}, func(ctx context.Context, _ *Server, p categoryParam, a *account) (any, error) {
+		return mutations(a.guard.Categorize(ctx, p.IDs, p.Add, p.Remove))
+	})},
+	"mail.organize": {decode: mailOrganize},
+	"mail.send":     {decode: newMessage(true), grants: mailSendGrants},
+	"mail.reply":    {decode: bodyMessage("mail.reply"), grants: mailSendGrants},
+	"mail.forward":  {decode: forwardMessage(true), grants: mailSendGrants},
+	"draft.new":     {decode: newMessage(false)},
+	"draft.reply":   {decode: bodyMessage("draft.reply")},
+	"draft.update":  {decode: bodyMessage("draft.update")},
+	"draft.forward": {decode: forwardMessage(false)},
+	"calendar.get": {decode: typed(idParam{}, func(p *idParam) bool { return idValid(p.ID) }, func(ctx context.Context, _ *Server, p idParam, a *account) (any, error) {
+		return a.guard.CalendarGet(ctx, p.ID)
+	})},
+	"calendar.list": {decode: calendarList},
+	"calendar.search": {decode: typed(calendarSearchParam{}, func(p *calendarSearchParam) bool {
+		return validString(p.Text, 4096, false) && model.ValidPage(p.Page)
+	}, func(ctx context.Context, _ *Server, p calendarSearchParam, a *account) (any, error) {
+		return a.guard.CalendarSearch(ctx, p.Text, p.Page)
+	})},
+	"calendar.availability": {decode: calendarAvailability, grants: availabilityGrants},
+	"calendar.invite":       {decode: calendarInvite, grants: calendarWriteGrants},
+	"calendar.update":       {decode: calendarUpdate, grants: calendarWriteGrants},
+	"calendar.cancel":       {decode: calendarCancel, grants: calendarWriteGrants},
+	"calendar.respond":      {decode: calendarRespond, grants: calendarWriteGrants},
+}
+
+// Operations lists the names of every API operation.
+func Operations() []string { return slices.Sorted(maps.Keys(operations)) }
+
 func params(b json.RawMessage, p any) error {
 	typ := reflect.TypeOf(p).Elem()
 	keys := make([]string, typ.NumField())
@@ -277,9 +349,9 @@ type updateDTO struct {
 }
 type statusDTO struct {
 	Account       string    `json:"account"`
+	Email         string    `json:"email"`
 	OK            bool      `json:"ok"`
 	LoggedIn      bool      `json:"logged_in"`
-	Username      *string   `json:"username,omitempty"`
 	Scopes        *[]string `json:"scopes,omitempty"`
 	ExtraScopes   *[]string `json:"extra_scopes,omitempty"`
 	MissingScopes *[]string `json:"missing_scopes,omitempty"`
@@ -297,219 +369,119 @@ type rulesDTO struct {
 	Warnings []guard.Warning `json:"warnings"`
 }
 
-// Dispatch first validates a complete typed operation. Account and provider access occur only afterwards.
-func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
-	var call func(*account) (any, error)
-	// unsupported names the Gmail refusal of an operation or request that Gmail cannot carry out.
-	unsupported, grants := guard.GuardError(""), providerGrants(nil)
-	switch r.Operation {
-	case "calendar.invite", "calendar.update", "calendar.cancel", "calendar.respond":
-		grants = calendarWriteGrants
-		var e error
-		call, unsupported, e = calendarWriteCall(ctx, r.Operation, r.Params)
+func mailSearch(ctx context.Context, _ *Server, raw json.RawMessage) (call, guard.GuardError, error) {
+	var p searchParam
+	if params(raw, &p) != nil || p.Count < 0 || !model.ValidPage(p.Page) {
+		return nil, "", errInvalid
+	}
+	for _, v := range []*string{p.Text, p.Sender, p.To, p.Subject, p.Folder} {
+		if v != nil && !validString(*v, 4096, true) {
+			return nil, "", errInvalid
+		}
+	}
+	q := model.SearchQuery{Text: p.Text, Sender: p.Sender, To: p.To, Subject: p.Subject, Folder: p.Folder}
+	for _, d := range []struct {
+		v   *string
+		out **time.Time
+	}{{p.After, &q.After}, {p.Before, &q.Before}} {
+		if d.v != nil {
+			t, e := time.Parse(time.RFC3339, *d.v)
+			if e != nil {
+				return nil, "", errInvalid
+			}
+			*d.out = &t
+		}
+	}
+	if !q.RangeValid() {
+		return nil, "", errInvalid
+	}
+	return func(a *account) (any, error) {
+		return a.guard.Search(ctx, q, model.PageRequest{Size: p.Count, Page: p.Page})
+	}, "", nil
+}
+
+func mailOrganize(ctx context.Context, s *Server, raw json.RawMessage) (call, guard.GuardError, error) {
+	var p organizeParam
+	if params(raw, &p) != nil {
+		return nil, "", errInvalid
+	}
+	// The client resolves days: since and until are exact times, and until may be in the future.
+	now := s.options.Now().UTC()
+	since, e := time.Parse(time.RFC3339, p.Since)
+	if e != nil || since.Year() < 1 || since.After(now) {
+		return nil, "", errInvalid
+	}
+	var until *time.Time
+	if p.Until != nil {
+		u, e := time.Parse(time.RFC3339, *p.Until)
+		if e != nil || !u.After(since) {
+			return nil, "", errInvalid
+		}
+		until = &u
+	}
+	return func(a *account) (any, error) { return a.guard.Organize(ctx, since, a.rules, now, p.Apply, until) }, "", nil
+}
+
+func calendarList(ctx context.Context, _ *Server, raw json.RawMessage) (call, guard.GuardError, error) {
+	var p calendarParam
+	if params(raw, &p) != nil {
+		return nil, "", errInvalid
+	}
+	first, e := time.Parse(time.RFC3339, p.Start)
+	last, e2 := time.Parse(time.RFC3339, p.End)
+	if e != nil || e2 != nil || !last.After(first) {
+		return nil, "", errInvalid
+	}
+	return func(a *account) (any, error) { return a.guard.CalendarList(ctx, first, last) }, "", nil
+}
+
+func calendarAvailability(ctx context.Context, _ *Server, raw json.RawMessage) (call, guard.GuardError, error) {
+	var p availabilityParam
+	if params(raw, &p) != nil || !listValid(p.To, 1, model.MaxAvailabilityAddresses) {
+		return nil, "", errInvalid
+	}
+	first, e := time.Parse(time.RFC3339, p.Start)
+	last, e2 := time.Parse(time.RFC3339, p.End)
+	if e != nil || e2 != nil || !model.ValidAvailabilityRequest(p.To, first, last) {
+		return nil, "", errInvalid
+	}
+	return func(a *account) (any, error) {
+		v, e := a.guard.CalendarAvailability(ctx, p.To, first, last)
 		if e != nil {
 			return nil, e
 		}
-	case "mail.get", "calendar.get":
-		var p idParam
-		if params(r.Params, &p) != nil || !idValid(p.ID) {
-			return nil, errInvalid
+		out := availabilityDTO{first.Format(time.RFC3339Nano), last.Format(time.RFC3339Nano), int(model.AvailabilityInterval / time.Minute), make([]scheduleDTO, 0, len(v))}
+		for _, schedule := range v {
+			out.Schedules = append(out.Schedules, scheduleDTO{schedule.Address, schedule.Slots})
 		}
-		call = func(a *account) (any, error) {
-			if r.Operation == "mail.get" {
-				return a.guard.Get(ctx, p.ID)
-			}
-			return a.guard.CalendarGet(ctx, p.ID)
-		}
-	case "mail.list":
-		p := listParam{Folder: "inbox"}
-		if params(r.Params, &p) != nil || !idValid(p.Folder) || p.Count < 0 || !model.ValidPage(p.Page) {
-			return nil, errInvalid
-		}
-		call = func(a *account) (any, error) {
-			return a.guard.List(ctx, p.Folder, model.PageRequest{Size: p.Count, Page: p.Page})
-		}
-	case "mail.thread":
-		var p threadParam
-		if params(r.Params, &p) != nil || !idValid(p.ID) {
-			return nil, errInvalid
-		}
-		call = func(a *account) (any, error) { return a.guard.Thread(ctx, p.ID) }
-	case "mail.search":
-		var p searchParam
-		if params(r.Params, &p) != nil || p.Count < 0 || !model.ValidPage(p.Page) {
-			return nil, errInvalid
-		}
-		for _, v := range []*string{p.Text, p.Sender, p.To, p.Subject, p.Folder} {
-			if v != nil && !validString(*v, 4096, true) {
-				return nil, errInvalid
-			}
-		}
-		q := model.SearchQuery{Text: p.Text, Sender: p.Sender, To: p.To, Subject: p.Subject, Folder: p.Folder}
-		for _, d := range []struct {
-			v   *string
-			out **time.Time
-		}{{p.After, &q.After}, {p.Before, &q.Before}} {
-			if d.v != nil {
-				t, e := time.Parse(time.RFC3339, *d.v)
-				if e != nil {
-					return nil, errInvalid
-				}
-				*d.out = &t
-			}
-		}
-		if !q.RangeValid() {
-			return nil, errInvalid
-		}
-		call = func(a *account) (any, error) {
-			return a.guard.Search(ctx, q, model.PageRequest{Size: p.Count, Page: p.Page})
-		}
-	case "mail.link":
-		var p linkParam
-		if params(r.Params, &p) != nil || !idValid(p.ID) || p.All == (len(p.Links) > 0) || !listValid(p.Links, 0, 1000) {
-			return nil, errInvalid
-		}
-		call = func(a *account) (any, error) { return a.guard.Links(ctx, p.ID, p.Links) }
-	case "mail.folders", "mail.categories", "auth.status", "rules.list":
-		if params(r.Params, &struct{}{}) != nil {
-			return nil, errInvalid
-		}
-		call = func(a *account) (any, error) {
-			switch r.Operation {
-			case "mail.folders":
-				v, e := a.guard.Folders(ctx)
-				out := make([]folderDTO, 0, len(v))
-				for _, f := range v {
-					out = append(out, folderDTO{f.ID, f.Name})
-				}
-				return out, e
-			case "mail.categories":
-				return a.guard.Categories(ctx)
-			case "auth.status":
-				return s.status(ctx, a)
-			}
-			return nil, errInvalid
-		}
-	case "mail.archive", "mail.trash", "mail.read", "mail.unread":
-		var p idsParam
-		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, noMax) {
-			return nil, errInvalid
-		}
-		call = func(a *account) (any, error) {
-			switch r.Operation {
-			case "mail.archive":
-				return mutations(a.guard.Archive(ctx, p.IDs))
-			case "mail.trash":
-				return mutations(a.guard.Trash(ctx, p.IDs))
-			default:
-				return mutations(a.guard.MarkRead(ctx, p.IDs, r.Operation == "mail.read"))
-			}
-		}
-	case "mail.move":
-		var p moveParam
-		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, noMax) || !idValid(p.Folder) {
-			return nil, errInvalid
-		}
-		call = func(a *account) (any, error) { return mutations(a.guard.Move(ctx, p.IDs, p.Folder)) }
-	case "mail.flag":
-		var p flagParam
-		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, noMax) || (p.State != model.Flagged && p.State != model.NoFlag && p.State != model.Complete) {
-			return nil, errInvalid
-		}
-		call = func(a *account) (any, error) { return mutations(a.guard.Flag(ctx, p.IDs, p.State)) }
-	case "mail.categorize":
-		var p categoryParam
-		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, noMax) || !listValid(p.Add, 0, noMax) || !listValid(p.Remove, 0, noMax) {
-			return nil, errInvalid
-		}
-		call = func(a *account) (any, error) { return mutations(a.guard.Categorize(ctx, p.IDs, p.Add, p.Remove)) }
-	case "mail.organize":
-		var p organizeParam
-		if params(r.Params, &p) != nil {
-			return nil, errInvalid
-		}
-		// The client resolves days: since and until are exact times, and until may be in the future.
-		now := s.options.Now().UTC()
-		since, e := time.Parse(time.RFC3339, p.Since)
-		if e != nil || since.Year() < 1 || since.After(now) {
-			return nil, errInvalid
-		}
-		var until *time.Time
-		if p.Until != nil {
-			u, e := time.Parse(time.RFC3339, *p.Until)
-			if e != nil || !u.After(since) {
-				return nil, errInvalid
-			}
-			until = &u
-		}
-		call = func(a *account) (any, error) {
-			loaded, e := s.loadRules(ctx, a.config.Name)
-			if e != nil {
-				return nil, e
-			}
-			return a.guard.Organize(ctx, since, loaded, now, p.Apply, until)
-		}
-	case "calendar.list":
-		var p calendarParam
-		if params(r.Params, &p) != nil {
-			return nil, errInvalid
-		}
-		first, e := time.Parse(time.RFC3339, p.Start)
-		last, e2 := time.Parse(time.RFC3339, p.End)
-		if e != nil || e2 != nil || !last.After(first) {
-			return nil, errInvalid
-		}
-		call = func(a *account) (any, error) { return a.guard.CalendarList(ctx, first, last) }
-	case "calendar.search":
-		var p calendarSearchParam
-		if params(r.Params, &p) != nil || !validString(p.Text, 4096, false) || !model.ValidPage(p.Page) {
-			return nil, errInvalid
-		}
-		call = func(a *account) (any, error) { return a.guard.CalendarSearch(ctx, p.Text, p.Page) }
-	case "calendar.availability":
-		var p availabilityParam
-		if params(r.Params, &p) != nil || !listValid(p.To, 1, model.MaxAvailabilityAddresses) {
-			return nil, errInvalid
-		}
-		first, e := time.Parse(time.RFC3339, p.Start)
-		last, e2 := time.Parse(time.RFC3339, p.End)
-		if e != nil || e2 != nil || !model.ValidAvailabilityRequest(p.To, first, last) {
-			return nil, errInvalid
-		}
-		unsupported, grants = guard.CalendarAvailabilityUnsupported, providerGrants{"m365": {"Calendars.ReadBasic", "Calendars.Read", "Calendars.ReadWrite"}}
-		call = func(a *account) (any, error) {
-			v, e := a.guard.CalendarAvailability(ctx, p.To, first, last)
-			if e != nil {
-				return nil, e
-			}
-			out := availabilityDTO{first.Format(time.RFC3339Nano), last.Format(time.RFC3339Nano), int(model.AvailabilityInterval / time.Minute), make([]scheduleDTO, 0, len(v))}
-			for _, schedule := range v {
-				out.Schedules = append(out.Schedules, scheduleDTO{schedule.Address, schedule.Slots})
-			}
-			return out, nil
-		}
-	case "draft.new", "mail.send":
+		return out, nil
+	}, guard.CalendarAvailabilityUnsupported, nil
+}
+
+// newMessage is the decoder of mail.send (send) and draft.new: both need to, subject, and body.
+func newMessage(send bool) decoder {
+	return func(ctx context.Context, _ *Server, raw json.RawMessage) (call, guard.GuardError, error) {
 		var p newParam
-		if params(r.Params, &p) != nil || !listValid(p.To, 1, noMax) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) {
-			return nil, errInvalid
+		if params(raw, &p) != nil || !listValid(p.To, 1, noMax) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) {
+			return nil, "", errInvalid
 		}
 		draft := model.NewDraft{To: p.To, Subject: *p.Subject, Body: *p.Body}
-		if r.Operation == "mail.send" {
-			grants = mailSendGrants
-			call = func(a *account) (any, error) { return sent(a.guard.SendNew(ctx, draft)) }
-		} else {
-			call = func(a *account) (any, error) { id, e := a.guard.DraftNew(ctx, draft); return draftDTO{id}, e }
+		if send {
+			return func(a *account) (any, error) { return sent(a.guard.SendNew(ctx, draft)) }, "", nil
 		}
-	case "draft.reply", "draft.update", "mail.reply":
+		return func(a *account) (any, error) { id, e := a.guard.DraftNew(ctx, draft); return draftDTO{id}, e }, "", nil
+	}
+}
+
+// bodyMessage is the decoder of draft.reply, draft.update, and mail.reply: one message ID and a body.
+func bodyMessage(op string) decoder {
+	return func(ctx context.Context, _ *Server, raw json.RawMessage) (call, guard.GuardError, error) {
 		var p bodyParam
-		if params(r.Params, &p) != nil || !idValid(p.ID) || p.Body == nil || !validString(*p.Body, MaxRequestBytes, true) {
-			return nil, errInvalid
+		if params(raw, &p) != nil || !idValid(p.ID) || p.Body == nil || !validString(*p.Body, MaxRequestBytes, true) {
+			return nil, "", errInvalid
 		}
-		if r.Operation == "mail.reply" {
-			grants = mailSendGrants
-		}
-		call = func(a *account) (any, error) {
-			switch r.Operation {
+		return func(a *account) (any, error) {
+			switch op {
 			case "draft.reply":
 				id, e := a.guard.DraftReply(ctx, p.ID, *p.Body)
 				return draftDTO{id}, e
@@ -518,38 +490,40 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 			}
 			id, e := a.guard.DraftUpdate(ctx, p.ID, *p.Body)
 			return updateDTO{id, true}, e
-		}
-	case "draft.forward", "mail.forward":
-		var p forwardParam
-		if params(r.Params, &p) != nil || !idValid(p.ID) || !listValid(p.To, 1, noMax) {
-			return nil, errInvalid
-		}
-		if r.Operation == "mail.forward" {
-			grants = mailSendGrants
-			call = func(a *account) (any, error) { return sent(a.guard.SendForward(ctx, p.ID, p.To)) }
-		} else {
-			call = func(a *account) (any, error) { id, e := a.guard.DraftForward(ctx, p.ID, p.To); return draftDTO{id}, e }
-		}
-	default:
-		return nil, errInvalid
+		}, "", nil
 	}
-	a, e := s.load(ctx, r.Account)
+}
+
+// forwardMessage is the decoder of mail.forward (send) and draft.forward: one message ID and recipients.
+func forwardMessage(send bool) decoder {
+	return func(ctx context.Context, _ *Server, raw json.RawMessage) (call, guard.GuardError, error) {
+		var p forwardParam
+		if params(raw, &p) != nil || !idValid(p.ID) || !listValid(p.To, 1, noMax) {
+			return nil, "", errInvalid
+		}
+		if send {
+			return func(a *account) (any, error) { return sent(a.guard.SendForward(ctx, p.ID, p.To)) }, "", nil
+		}
+		return func(a *account) (any, error) { id, e := a.guard.DraftForward(ctx, p.ID, p.To); return draftDTO{id}, e }, "", nil
+	}
+}
+
+// accountCall validates the complete typed request first. Account and provider access come only afterwards.
+func (s *Server) accountCall(ctx context.Context, st *state, op operation, r request) (any, error) {
+	run, unsupported, e := op.decode(ctx, s, r.Params)
 	if e != nil {
 		return nil, e
 	}
-	if r.Operation == "rules.list" {
-		return s.ruleList(ctx, a)
+	a, e := st.account(r.Account, r.key)
+	if e != nil {
+		return nil, e
 	}
-	if unsupported != "" && a.Provider == "gmail" {
+	if unsupported != "" && a.config.Provider == "gmail" {
 		return nil, unsupported
 	}
-	instance, e := s.instance(a)
-	if e != nil {
-		return nil, e
-	}
 	// The grant check comes before the policy decision.
-	if needed := grants[a.Provider]; needed != nil {
-		_, scopes, e := instance.provider.Status(ctx)
+	if needed := op.grants[a.config.Provider]; needed != nil {
+		_, scopes, e := a.provider.Status(ctx)
 		if e != nil {
 			return nil, e
 		}
@@ -559,34 +533,36 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 			return nil, guard.GuardError("missing_scopes")
 		}
 	}
-	v, e := call(instance)
+	v, e := run(a)
 	if pending, ok := errors.AsType[guard.PendingError](e); ok {
-		return pendingDTO{"pending", pending.ApprovalID, s.approvalBase + pending.ApprovalID}, nil
+		return pendingDTO{"pending", pending.ApprovalID, s.approvalURL(pending.ApprovalID)}, nil
 	}
 	return v, e
 }
+
+// approvalURL is the console page of a stored action.
+func (s *Server) approvalURL(id string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return "http://" + s.listen + "/a/" + id
+}
+
+// status reports the sign-in state of an account from the credential snapshot of the state that the request uses.
 func (s *Server) status(ctx context.Context, a *account) (any, error) {
-	out := statusDTO{Account: a.config.Name}
+	out := statusDTO{Account: a.config.Alias, Email: a.config.Email}
 	if a.config.Provider == "fake" {
 		out.LoggedIn = true
-		user, scopes, e := a.provider.Status(ctx)
+		_, scopes, e := a.provider.Status(ctx)
 		if e == nil {
-			out.OK, out.Username, out.Scopes = true, &user, &scopes
+			out.OK, out.Scopes = true, &scopes
 		}
 		return out, nil
 	}
-	saved, e := s.options.Credentials.LoadOAuth(ctx, a.config.Provider, a.config.Name)
-	if errors.Is(e, credentials.ErrNotFound) {
+	if _, e := a.logins.LoadOAuth(ctx, a.config.Provider, a.config.Key()); e != nil {
 		return out, nil
 	}
-	if e != nil {
-		return nil, errors.New("authentication unavailable")
-	}
 	out.LoggedIn = true
-	if saved.Username != "" {
-		out.Username = &saved.Username
-	}
-	user, scopes, e := a.provider.Status(ctx)
+	_, scopes, e := a.provider.Status(ctx)
 	if e != nil {
 		var diagnostic interface{ MissingScopes() []string }
 		if errors.As(e, &diagnostic) {
@@ -596,7 +572,6 @@ func (s *Server) status(ctx context.Context, a *account) (any, error) {
 		return out, nil
 	}
 	out.OK = true
-	out.Username = &user
 	extra := m365.ExtraScopes(scopes)
 	if a.config.Provider == "gmail" {
 		extra = gmail.ExtraScopes(scopes)
@@ -626,31 +601,14 @@ func safeScopeDiagnostics(scopes []string) []string {
 	return out
 }
 
-func (s *Server) loadRules(ctx context.Context, name string) (rules.Rules, error) {
-	names, e := config.AccountNames(ctx, filepath.Join(s.home, "config.toml"))
-	if e != nil {
-		return rules.Rules{}, errConfig
-	}
-	r, e := rules.Load(ctx, filepath.Join(s.home, "rules.toml"), name, names)
-	if e != nil {
-		return rules.Rules{}, errRules
-	}
-	return r, nil
-}
-func (s *Server) ruleList(ctx context.Context, a config.Account) (any, error) {
-	r, e := s.loadRules(ctx, a.Name)
-	if e != nil {
-		return nil, e
-	}
-	out := rulesDTO{Account: a.Name, Rules: []ruleDTO{}, Warnings: []guard.Warning{}}
+// ruleList shows the rules of the account from the current state, with the folder and category names.
+func ruleList(ctx context.Context, a *account) (any, error) {
+	r := a.rules
+	out := rulesDTO{Account: a.config.Alias, Rules: []ruleDTO{}, Warnings: []guard.Warning{}}
 	if len(r.Rules) == 0 {
 		return out, nil
 	}
-	instance, e := s.instance(a)
-	if e != nil {
-		return nil, e
-	}
-	g := instance.guard
+	g := a.guard
 	folders, e := g.Folders(ctx)
 	if e != nil {
 		return nil, e

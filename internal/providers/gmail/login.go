@@ -147,7 +147,7 @@ func (c *Client) Login(ctx context.Context, deviceCode bool, prompt func(uri, co
 	if err != nil {
 		return "", nil, err
 	}
-	if err = c.store.SaveOAuth(ctx, "gmail", c.account.Name, token); err != nil {
+	if err = c.store.SaveOAuth(ctx, "gmail", c.account.Email, token); err != nil {
 		return "", nil, safeContext(ctx, "Gmail")
 	}
 	c.token = &token

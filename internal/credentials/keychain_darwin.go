@@ -6,13 +6,12 @@ import (
 	"context"
 	"errors"
 
-	"github.com/ivanrvpereira/agentmailguard/internal/config"
 	"github.com/keybase/go-keychain"
 )
 
 // NewMacOS creates a native adapter without accessing the Keychain until an operation.
-func NewMacOS(home string, accounts []config.Account) (Store, error) {
-	return New(nativeKeychain{}, home, accounts), nil
+func NewMacOS(home string) (*RecordStore, error) {
+	return New(nativeKeychain{}, home), nil
 }
 
 type nativeKeychain struct{}

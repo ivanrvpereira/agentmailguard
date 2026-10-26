@@ -14,4 +14,5 @@ test:
 build:
 	go build ./...
 	mkdir -p bin
-	go build -o bin/agentmailguard ./cmd/agentmailguard
+	CGO_ENABLED=0 go build -o bin/amg ./cmd/amg
+	go build -o bin/amgd ./cmd/amgd

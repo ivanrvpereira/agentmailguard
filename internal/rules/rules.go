@@ -4,10 +4,10 @@ package rules
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -34,84 +34,99 @@ type Rules struct {
 	Stay  string
 }
 
-// Load validates every account, including accounts other than the selected one.
-// knownAccounts comes from config.AccountNames, keeping credential data out of this parser.
-func Load(ctx context.Context, path, account string, knownAccounts []string) (Rules, error) {
-	empty := Rules{Rules: []Rule{}, Stay: StayInstructions}
+// Load reads the rules of every known account, keyed by account email. Tables are named by email, compared in
+// lowercase. Each known account gets a value, with no rules when the file has none for it. Tables for an email that
+// is not known are not validated or used: they are returned in unknown, in file order, so that left-over rules
+// never stop the daemon. A missing file has no rules.
+func Load(ctx context.Context, path string, known []string) (map[string]Rules, []string, error) {
+	result := map[string]Rules{}
+	for _, email := range known {
+		result[strings.ToLower(email)] = Rules{Rules: []Rule{}, Stay: StayInstructions}
+	}
 	if err := ctx.Err(); err != nil {
-		return empty, err
+		return nil, nil, err
 	}
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return empty, nil
+		return result, []string{}, nil
 	}
 	if err != nil {
-		return empty, fmt.Errorf("%s: cannot read rules", path)
+		return nil, nil, fmt.Errorf("%s: cannot read rules", path)
 	}
 	var document map[string]any
 	metadata, err := toml.Decode(string(data), &document)
 	if err != nil {
-		return empty, fmt.Errorf("invalid TOML in %s", path)
+		return nil, nil, fmt.Errorf("invalid TOML in %s", path)
 	}
 	for key := range document {
 		if key != "accounts" {
-			return empty, fmt.Errorf("%s: unknown top-level key %q", path, key)
+			return nil, nil, fmt.Errorf("%s: unknown top-level key %q", path, key)
 		}
 	}
 	accounts, ok := document["accounts"].(map[string]any)
 	if document["accounts"] != nil && !ok {
-		return empty, fmt.Errorf("%s: 'accounts' must be a table of accounts", path)
+		return nil, nil, fmt.Errorf("%s: 'accounts' must be a table of accounts", path)
 	}
-	selected := map[string]Rule{}
-	for accountName, raw := range accounts {
-		where := fmt.Sprintf("%s: account %q", path, accountName)
-		if !slices.Contains(knownAccounts, accountName) {
-			return empty, fmt.Errorf("%s: account not in config.toml", where)
+	parsed := map[string]map[string]Rule{}
+	lower := map[string]bool{}
+	for account, raw := range accounts {
+		if _, known := result[strings.ToLower(account)]; !known {
+			continue
 		}
+		where := fmt.Sprintf("%s: account %q", path, account)
+		if lower[strings.ToLower(account)] {
+			return nil, nil, fmt.Errorf("%s: another table names the same account", where)
+		}
+		lower[strings.ToLower(account)] = true
 		tables, ok := raw.(map[string]any)
 		if !ok {
-			return empty, fmt.Errorf("%s must be a table of rules", where)
+			return nil, nil, fmt.Errorf("%s must be a table of rules", where)
 		}
 		targets := map[Kind]map[string]bool{Folder: {}, Category: {}}
+		parsed[account] = map[string]Rule{}
 		// Sort validation only; the returned rules retain file order below.
-		names := make([]string, 0, len(tables))
-		for name := range tables {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
+		for _, name := range slices.Sorted(maps.Keys(tables)) {
 			rule, err := parseRule(where, name, tables[name])
 			if err != nil {
-				return empty, err
+				return nil, nil, err
 			}
-			if accountName == account {
-				selected[name] = rule
-			}
+			parsed[account][name] = rule
 			if name == Stay {
 				continue
 			}
 			if targets[rule.Kind][rule.Target] {
-				return empty, fmt.Errorf("%s, rule %q: another rule has the same %s", where, name, rule.Kind)
+				return nil, nil, fmt.Errorf("%s, rule %q: another rule has the same %s", where, name, rule.Kind)
 			}
 			targets[rule.Kind][rule.Target] = true
 		}
 	}
-	result := empty
-	seen := map[string]bool{}
+	unknown := []string{}
+	seen := map[[2]string]bool{}
 	for _, key := range metadata.Keys() {
-		if len(key) < 3 || key[0] != "accounts" || key[1] != account || seen[key[2]] {
+		if len(key) < 2 || key[0] != "accounts" {
 			continue
 		}
-		name := key[2]
-		seen[name] = true
-		rule := selected[name]
-		if name == Stay {
-			result.Stay = rule.Instructions
+		rules, known := parsed[key[1]]
+		if !known {
+			if !slices.Contains(unknown, key[1]) {
+				unknown = append(unknown, key[1])
+			}
 			continue
 		}
-		result.Rules = append(result.Rules, rule)
+		if len(key) < 3 || seen[[2]string{key[1], key[2]}] {
+			continue
+		}
+		seen[[2]string{key[1], key[2]}] = true
+		account, rule := strings.ToLower(key[1]), rules[key[2]]
+		r := result[account]
+		if key[2] == Stay {
+			r.Stay = rule.Instructions
+		} else {
+			r.Rules = append(r.Rules, rule)
+		}
+		result[account] = r
 	}
-	return result, ctx.Err()
+	return result, unknown, ctx.Err()
 }
 
 var namePattern = regexp.MustCompile(`^[a-z0-9-]+$`)

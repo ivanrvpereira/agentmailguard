@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,24 +13,44 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
 )
 
+// head is the top of a valid file whose default account is work; work is the table of that account.
+const (
+	head = "version = 1\ndefault_account = 'work'\n"
+	work = "[accounts.work]\nprovider = 'm365'\nemail = 'work@example.test'\nclient_id = 'c'\ntenant_id = 't'\n"
+)
+
 func file(t *testing.T, text string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.toml")
-	text = strings.ReplaceAll(text, `\n`, "\n")
 	if err := os.WriteFile(path, []byte(text), 0600); err != nil {
 		t.Fatal(err)
 	}
 	return path
 }
+
+func parse(t *testing.T, text string) (config.Config, error) {
+	t.Helper()
+	return config.Load(context.Background(), file(t, text))
+}
+
+// refusal fails the test unless err is the config error for path with no file value in it.
+func refusal(t *testing.T, err error, path string) {
+	t.Helper()
+	e, ok := errors.AsType[config.Error](err)
+	if !ok || e.Path != path || strings.Contains(err.Error(), "SECRET") {
+		t.Fatalf("error=%v, want a config error at %q", err, path)
+	}
+}
+
 func TestHomeDefaultEnvironmentAndExplicitOverride(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("AGENTMAILGUARD_HOME", "")
+	t.Setenv("AMG_HOME", "")
 	got, err := config.Home("")
 	if err != nil || got != filepath.Join(home, ".agentmailguard") {
 		t.Fatalf("home=%q error=%v", got, err)
 	}
-	t.Setenv("AGENTMAILGUARD_HOME", "~/separate")
+	t.Setenv("AMG_HOME", "~/separate")
 	got, err = config.Home("")
 	if err != nil || got != filepath.Join(home, "separate") {
 		t.Fatalf("home=%q error=%v", got, err)
@@ -40,64 +61,125 @@ func TestHomeDefaultEnvironmentAndExplicitOverride(t *testing.T) {
 	}
 }
 
-func TestInvalidAccountsAreRefusedWithoutFileValues(t *testing.T) {
-	for _, text := range []string{
-		"", "[accounts.work", "accounts = 1", "[accounts]\\nwork = 1", "[accounts.work]\\nprovider = 'm365'\\nclient_id = 'x'",
-		"[accounts.work]\\nprovider = 'SECRET-CANARY'", "[accounts.work]\\nprovider = 'gmail'\\nclient_id = 'x'\\nclient_secret = true",
-		"[accounts.work]\\nprovider = 'gmail'\\nclient_id = 'x'\\nclient_secret = '  '", "[accounts.work]\\nprovider = 'gmail'\\nprovider = 'SECRET-CANARY'",
-	} {
-		path := file(t, text)
-		if _, err := config.LoadAccount(context.Background(), path, nil); err == nil || strings.Contains(err.Error(), "SECRET-CANARY") {
-			t.Fatalf("expected safe rejection: %v", err)
-		}
+func TestMissingFileIsAnEmptyConfiguration(t *testing.T) {
+	got, err := config.Load(context.Background(), filepath.Join(t.TempDir(), "config.toml"))
+	want := config.Config{Accounts: []config.Account{}, Screening: config.Screening{Provider: "jev"}, Console: config.Console{Listen: "localhost:8788"}, Backend: "keychain"}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("config=%+v error=%v", got, err)
 	}
-	path := filepath.Join(t.TempDir(), "missing")
-	if _, err := config.AccountNames(context.Background(), path); err == nil {
-		t.Fatal("missing config accepted")
+}
+
+func TestVersionIsRequired(t *testing.T) {
+	for _, text := range []string{"", "default_account = 'work'\n" + work, "version = 2\n", "version = '1'\n", "version = 1.0\n"} {
+		_, err := parse(t, text)
+		refusal(t, err, "version")
+	}
+	if _, err := parse(t, "version = 1\n"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDefaultAccountMustNameAnAccount(t *testing.T) {
+	_, err := parse(t, "version = 1\n"+work)
+	refusal(t, err, "default_account")
+	_, err = parse(t, "version = 1\ndefault_account = 'home'\n"+work)
+	refusal(t, err, "default_account")
+	_, err = parse(t, "version = 1\ndefault_account = 'work'\n")
+	refusal(t, err, "default_account")
+	got, err := parse(t, head+work)
+	if err != nil || got.DefaultAccount != "work" {
+		t.Fatalf("config=%+v error=%v", got, err)
+	}
+}
+
+func TestInvalidAccountsNameTheKeyWithoutFileValues(t *testing.T) {
+	for _, tc := range []struct{ text, path string }{
+		{"[accounts.work", ""},
+		{"accounts = 1\n", "accounts"},
+		{"[accounts]\nwork = 1\n", "accounts.work"},
+		{"[accounts.work]\nprovider = 'm365'\nemail = 'work@example.test'\nclient_id = 'x'\n", "accounts.work.tenant_id"},
+		{"[accounts.work]\nprovider = 'SECRET-CANARY'\nemail = 'work@example.test'\n", "accounts.work.provider"},
+		{"[accounts.work]\nprovider = 'gmail'\nemail = 'work@example.test'\nclient_id = 'x'\nclient_secret = true\n", "accounts.work.client_secret"},
+		{"[accounts.work]\nprovider = 'gmail'\nemail = 'work@example.test'\nclient_id = 'x'\nclient_secret = '  '\n", "accounts.work.client_secret"},
+		{"[accounts.work]\nprovider = 'm365'\nclient_id = 'c'\ntenant_id = 't'\n", "accounts.work.email"},
+		{"[accounts.work]\nprovider = 'fake'\nemail = 'SECRET-CANARY'\n", "accounts.work.email"},
+		{"[accounts.work]\nprovider = 'fake'\nemail = 'SECRET CANARY@example.test'\n", "accounts.work.email"},
+		{"[accounts.work]\nprovider = 'fake'\nemail = 'work@example.test'\nclient_id = 'SECRET-CANARY'\n", "accounts.work.client_id"},
+		{"[accounts.work]\nprovider = 'm365'\nemail = 'work@example.test'\nclient_id = 'c'\ntenant_id = 't'\nclient_secret = 'SECRET-CANARY'\n", "accounts.work.client_secret"},
+		{"[accounts.\"my work\"]\nprovider = 'fake'\nemail = 'work@example.test'\n", `accounts."my work"`},
+		{"unknown = 'SECRET-CANARY'\n[accounts.work]\nprovider = 'fake'\nemail = 'work@example.test'\n", "unknown"},
+	} {
+		_, err := parse(t, head+tc.text)
+		refusal(t, err, tc.path)
+	}
+}
+
+func TestEmailsAreLowercaseAndUnique(t *testing.T) {
+	got, err := parse(t, "version = 1\ndefault_account = 'work'\n[accounts.work]\nprovider = 'fake'\nemail = ' Ivan@Example.TEST '\n")
+	if err != nil || got.Accounts[0].Email != "ivan@example.test" || got.Accounts[0].Key() != "ivan@example.test" {
+		t.Fatalf("config=%+v error=%v", got, err)
+	}
+	_, err = parse(t, "version = 1\ndefault_account = 'work'\n[accounts.work]\nprovider = 'fake'\nemail = 'ivan@example.test'\n[accounts.other]\nprovider = 'fake'\nemail = 'IVAN@example.test'\n")
+	refusal(t, err, "accounts.work.email")
+	if !strings.Contains(err.Error(), "same email as account other") {
+		t.Fatalf("error=%v", err)
 	}
 }
 
 func TestFakeAccountsNeedNoProviderFields(t *testing.T) {
-	path := file(t, "[accounts.demo]\nprovider = 'fake'\n[accounts.demo.policy]\nmail_send = 'allow'\n")
-	got, err := config.LoadAccount(context.Background(), path, nil)
-	if err != nil || got.Name != "demo" || got.Provider != "fake" || got.ClientID != "" || got.Policy.Base.MailSend != config.Allow {
-		t.Fatalf("account=%v policy=%+v error=%v", got, got.Policy, err)
+	got, err := parse(t, "version = 1\ndefault_account = 'demo'\n[accounts.demo]\nprovider = 'fake'\nemail = 'demo@fake.invalid'\n[accounts.demo.policy]\nmail_send = 'allow'\n")
+	if err != nil || len(got.Accounts) != 1 {
+		t.Fatalf("config=%+v error=%v", got, err)
 	}
-	path = file(t, "[accounts.demo]\nprovider = 'other'\n")
-	if _, err := config.LoadAccount(context.Background(), path, nil); err == nil || !strings.HasSuffix(err.Error(), "supported: m365, gmail, fake") {
-		t.Fatalf("unsupported provider error=%v", err)
+	a := got.Accounts[0]
+	if a.Alias != "demo" || a.Provider != "fake" || a.Email != "demo@fake.invalid" || a.ClientID != "" || a.Policy.Base.MailSend != config.Allow {
+		t.Fatalf("account=%v policy=%+v", a, a.Policy)
 	}
 }
 
-func TestAccountSelectionUsesFileOrderAndProviderFields(t *testing.T) {
-	path := file(t, `[accounts.work]
+func TestAccountsAreInAliasOrderWithProviderFields(t *testing.T) {
+	got, err := parse(t, `version = 1
+default_account = "work"
+[accounts.work]
 provider = " m365 "
+email = "work@example.test"
 client_id = " work-client "
 tenant_id = " work-tenant "
-client_secret = "ignored"
 [accounts.home]
 provider = "gmail"
+email = "home@example.test"
 client_id = "home-client"
 client_secret = "SECRET-CANARY"
-tenant_id = "ignored"
 `)
-	ctx := context.Background()
-	names, err := config.AccountNames(ctx, path)
-	if err != nil || !reflect.DeepEqual(names, []string{"work", "home"}) {
-		t.Fatalf("names=%v error=%v", names, err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	got, err := config.LoadAccount(ctx, path, nil)
-	if err != nil || got.Name != "work" || got.Provider != "m365" || got.ClientID != "work-client" || got.TenantID != "work-tenant" || got.ClientSecret != "" {
-		t.Fatalf("account=%v error=%v", got, err)
+	want := []config.Account{
+		{Alias: "home", Email: "home@example.test", Provider: "gmail", ClientID: "home-client", ClientSecret: "SECRET-CANARY", Policy: config.DefaultPolicy},
+		{Alias: "work", Email: "work@example.test", Provider: "m365", ClientID: "work-client", TenantID: "work-tenant", Policy: config.DefaultPolicy},
 	}
-	name := "home"
-	got, err = config.LoadAccount(ctx, path, &name)
-	if err != nil || got.ClientSecret != "SECRET-CANARY" || got.TenantID != "" {
-		t.Fatalf("account=%v error=%v", got, err)
+	if !reflect.DeepEqual(got.Accounts, want) {
+		t.Fatalf("accounts=%v", got.Accounts)
+	}
+	if a, ok := got.ByEmail("HOME@example.test"); !ok || a.Alias != "home" {
+		t.Fatalf("by email=%v %v", a, ok)
 	}
 	for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d", "%f"} {
-		if strings.Contains(fmt.Sprintf(format, got), "SECRET-CANARY") {
+		if strings.Contains(fmt.Sprintf(format, got.Accounts[0]), "SECRET-CANARY") {
 			t.Fatal("account formatting exposes secret")
 		}
 	}
+}
+
+func TestCredentialsBackend(t *testing.T) {
+	got, err := parse(t, "version = 1\n[credentials]\nbackend = 'file'\n")
+	if err != nil || got.Backend != "file" {
+		t.Fatalf("config=%+v error=%v", got, err)
+	}
+	for _, text := range []string{"[credentials]\nbackend = 'SECRET-CANARY'\n", "[credentials]\n"} {
+		_, err := parse(t, "version = 1\n"+text)
+		refusal(t, err, "credentials.backend")
+	}
+	_, err = parse(t, "version = 1\n[credentials]\nbackend = 'file'\nother = 'SECRET-CANARY'\n")
+	refusal(t, err, "credentials.other")
 }

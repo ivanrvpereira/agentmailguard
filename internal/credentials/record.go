@@ -15,7 +15,7 @@ import (
 // accepts any longer text after a valid prefix, which could carry a plain password.
 var bcryptHash = regexp.MustCompile(`^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$`)
 
-func validApprovalHash(hash string) bool {
+func validConsoleHash(hash string) bool {
 	_, err := bcrypt.Cost([]byte(hash))
 	return err == nil && bcryptHash.MatchString(hash)
 }
@@ -24,7 +24,7 @@ func validateRecord(r Record) error {
 	if r.Version != 1 {
 		return ErrUnsupportedVersion
 	}
-	if r.OAuth == nil || (r.ApprovalHash != "" && !validApprovalHash(r.ApprovalHash)) {
+	if r.OAuth == nil || (r.ConsoleHash != "" && !validConsoleHash(r.ConsoleHash)) {
 		return ErrInvalidRecord
 	}
 	for key, token := range r.OAuth {
@@ -75,16 +75,16 @@ func decodeRecord(value []byte) (Record, error) {
 		Version      *int                       `json:"version"`
 		OAuth        map[string]json.RawMessage `json:"oauth"`
 		ScreeningKey *string                    `json:"openrouter_key"`
-		ApprovalHash *string                    `json:"approval_hash"`
+		ConsoleHash  *string                    `json:"approval_hash"`
 	}
 	d = json.NewDecoder(bytes.NewReader(value))
 	d.DisallowUnknownFields()
-	if d.Decode(&wire) != nil || wire.Version == nil || wire.ScreeningKey == nil || wire.OAuth == nil || (hasHash && (wire.ApprovalHash == nil || *wire.ApprovalHash == "")) {
+	if d.Decode(&wire) != nil || wire.Version == nil || wire.ScreeningKey == nil || wire.OAuth == nil || (hasHash && (wire.ConsoleHash == nil || *wire.ConsoleHash == "")) {
 		return Record{}, ErrInvalidRecord
 	}
 	r := Record{Version: *wire.Version, OAuth: make(map[string]OAuth, len(wire.OAuth)), ScreeningKey: strings.TrimSpace(*wire.ScreeningKey)}
-	if wire.ApprovalHash != nil {
-		r.ApprovalHash = *wire.ApprovalHash
+	if wire.ConsoleHash != nil {
+		r.ConsoleHash = *wire.ConsoleHash
 	}
 	for key, raw := range wire.OAuth {
 		token, err := decodeOAuth(raw)

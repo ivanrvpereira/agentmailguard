@@ -2,21 +2,15 @@ package server_test
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
-	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
-	"github.com/ivanrvpereira/agentmailguard/internal/screening"
 	"github.com/ivanrvpereira/agentmailguard/internal/server"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -24,11 +18,10 @@ import (
 const consolePassword = "private-console-pass"
 const consoleHost = "localhost:8788"
 
-// consoleFixture is a preloaded server for the M365 account work, against the native fake Graph API and Jev.
-// Its clock moves only when the test moves it.
+// consoleFixture is a daemon with the M365 account work against the native fake Graph API and Jev, and its
+// console. Its clock moves only when the test moves it.
 type consoleFixture struct {
-	s       *server.Server
-	home    string
+	d       *daemon
 	api     *nativeAPI
 	now     time.Time
 	console http.Handler
@@ -36,49 +29,31 @@ type consoleFixture struct {
 
 func (f *consoleFixture) advance(d time.Duration) { f.now = f.now.Add(d) }
 
-// consoleServer starts a server whose credential record holds the approval password when password is true.
-// table is appended to the configuration.
-func consoleServer(t *testing.T, table string, password bool) *consoleFixture {
+// consoleHash is the bcrypt hash of consolePassword.
+func consoleHash(t *testing.T) string {
 	t.Helper()
-	home := t.TempDir()
-	text := "[accounts.work]\nprovider='m365'\nclient_id='synthetic'\ntenant_id='synthetic'\n" + table
-	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(text), 0600); err != nil {
-		t.Fatal(err)
-	}
-	record := credentials.Record{Version: 1, ScreeningKey: "synthetic-key", OAuth: map[string]credentials.OAuth{
-		"m365/work": {AccessToken: statusJWT(m365Grant + " Calendars.ReadWrite Mail.Send"), RefreshToken: "private-refresh", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Scopes: strings.Fields(m365Grant + " Calendars.ReadWrite Mail.Send"), Username: "work@example.test"},
-	}}
-	if password {
-		hash, err := bcrypt.GenerateFromPassword([]byte(consolePassword), bcrypt.MinCost)
-		if err != nil {
-			t.Fatal(err)
-		}
-		record.ApprovalHash = string(hash)
-	}
-	data, err := json.Marshal(record)
+	hash, err := bcrypt.GenerateFromPassword([]byte(consolePassword), bcrypt.MinCost)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := credentials.New(&recordPlatform{data: data}, home, nil)
+	return string(hash)
+}
+
+// consoleDaemon starts a daemon whose credential record holds the console password when password is true.
+// config is appended to the configuration.
+func consoleDaemon(t *testing.T, config string, password bool) *consoleFixture {
+	t.Helper()
+	r := record(map[string]credentials.OAuth{"m365/" + workEmail: m365Login(m365Grant + " Calendars.ReadWrite Mail.Send")})
+	if password {
+		r.ConsoleHash = consoleHash(t)
+	}
 	api := newNativeAPI()
 	graph := httptest.NewServer(http.HandlerFunc(api.graph))
 	t.Cleanup(graph.Close)
-	jev := httptest.NewServer(http.HandlerFunc(api.jev))
-	t.Cleanup(jev.Close)
-	f := &consoleFixture{home: home, api: api, now: time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC)}
-	screen := screening.New(screening.Options{Endpoint: jev.URL, Credentials: store})
-	s, err := server.New(context.Background(), home, server.Options{Credentials: store, Screener: screen, M365: m365.Options{BaseURL: graph.URL, AuthorityURL: graph.URL}, Now: func() time.Time { return f.now }, LookupEnv: func(string) string { return "" }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s.Close() })
-	if _, err := s.Preload(context.Background(), nil); err != nil {
-		t.Fatal(err)
-	}
-	f.s = s
-	if handler, ok := s.Console(); ok {
-		f.console = handler
-	}
+	f := &consoleFixture{api: api, now: time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC)}
+	f.d = startDaemon(t, daemonSetup{config: "default_account = 'work'\n" + workTable + config, record: r, jev: api,
+		options: server.Options{M365: m365Options(graph.URL), Now: func() time.Time { return f.now }}})
+	f.console = f.d.s.Console()
 	return f
 }
 
@@ -99,9 +74,6 @@ func (f *consoleFixture) decide(t *testing.T, id, decision string, change func(*
 
 func (f *consoleFixture) send(t *testing.T, r *http.Request, change func(*http.Request)) *httptest.ResponseRecorder {
 	t.Helper()
-	if f.console == nil {
-		t.Fatal("console is off")
-	}
 	r.Host = consoleHost
 	r.SetBasicAuth("anyone", consolePassword)
 	if change != nil {
@@ -116,16 +88,34 @@ func wrongPassword(r *http.Request) { r.SetBasicAuth("anyone", "private-wrong-pa
 
 const draftApprove = "[policy]\nmail_draft='approve'\nmail_trash='approve'\ncalendar_respond='approve'\n[policy.sealed]\nmail_draft='approve'\nmail_trash='approve'\n"
 
-func TestConsoleIsOffWithoutAnApprovalPassword(t *testing.T) {
-	f := consoleServer(t, "", false)
-	if handler, ok := f.s.Console(); ok || handler != nil {
-		t.Fatal("console is on without a password")
+// Without a console password the console refuses every request with the command that sets one. A password that
+// amgd saves takes effect at the next reload.
+func TestConsoleRefusesEverythingUntilAPasswordIsSetAndReloaded(t *testing.T) {
+	f := consoleDaemon(t, draftApprove, false)
+	id := pend(t, f.d.s, "draft.new", `{"to":["CANARY@example.test"],"subject":"CANARY","body":"CANARY"}`)[0]
+	for _, path := range []string{"/", "/a/" + id} {
+		if w := f.get(t, path, nil); w.Code != 503 || strings.TrimSpace(w.Body.String()) != "console password not set; run amgd config set console.password" {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body)
+		}
+	}
+	if w := f.decide(t, id, "approve", nil); w.Code != 503 || f.writes() != 0 {
+		t.Fatalf("decision without a password: %d writes=%d", w.Code, f.writes())
+	}
+	if err := f.d.store.SaveConsoleHash(context.Background(), consoleHash(t)); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.get(t, "/", nil); w.Code != 503 {
+		t.Fatalf("before the reload: %d", w.Code)
+	}
+	f.d.reload(t)
+	if w := f.get(t, "/", nil); w.Code != 200 {
+		t.Fatalf("after the reload: %d %s", w.Code, w.Body)
 	}
 }
 
 func TestConsoleNeedsThePasswordOnEveryPage(t *testing.T) {
-	f := consoleServer(t, draftApprove, true)
-	id := pend(t, f.s, "draft.new", `{"to":["CANARY@example.test"],"subject":"CANARY","body":"CANARY"}`)[0]
+	f := consoleDaemon(t, draftApprove, true)
+	id := pend(t, f.d.s, "draft.new", `{"to":["CANARY@example.test"],"subject":"CANARY","body":"CANARY"}`)[0]
 	for _, path := range []string{"/", "/a/" + id, "/missing"} {
 		for name, change := range map[string]func(*http.Request){
 			"no credentials":   func(r *http.Request) { r.Header.Del("Authorization") },
@@ -149,12 +139,12 @@ func TestConsoleNeedsThePasswordOnEveryPage(t *testing.T) {
 
 // Each wrong password adds one record that holds no request detail. Missing credentials add none.
 func TestConsoleAuditsEachFailedSignInWithoutDetails(t *testing.T) {
-	f := consoleServer(t, "", true)
+	f := consoleDaemon(t, "", true)
 	f.get(t, "/", func(r *http.Request) { r.Header.Del("Authorization") })
 	f.get(t, "/", func(r *http.Request) { r.SetBasicAuth("private-user-canary", "private-pass-canary") })
 	f.get(t, "/", func(r *http.Request) { r.SetBasicAuth("private-user-canary", "private-pass-canary2") })
 	f.get(t, "/", nil)
-	text, records := auditOf(t, f.home)
+	text, records := auditOf(t, f.d.home)
 	if len(records) != 2 || strings.Contains(text, "private-") || strings.Contains(text, "localhost") || strings.Contains(text, "192.0.2") {
 		t.Fatalf("audit=%s", text)
 	}
@@ -166,7 +156,7 @@ func TestConsoleAuditsEachFailedSignInWithoutDetails(t *testing.T) {
 }
 
 func TestConsoleRefusesEveryRequestAfterFiveFailedSignInsForAMinute(t *testing.T) {
-	f := consoleServer(t, "", true)
+	f := consoleDaemon(t, "", true)
 	for i := range 5 {
 		if w := f.get(t, "/", wrongPassword); w.Code != 401 {
 			t.Fatalf("failure %d: %d", i, w.Code)
@@ -179,7 +169,7 @@ func TestConsoleRefusesEveryRequestAfterFiveFailedSignInsForAMinute(t *testing.T
 			t.Fatalf("%s while limited: %d", name, w.Code)
 		}
 	}
-	if _, records := auditOf(t, f.home); len(records) != 5 {
+	if _, records := auditOf(t, f.d.home); len(records) != 5 {
 		t.Fatalf("records=%d; refused requests are not password checks", len(records))
 	}
 	f.advance(11 * time.Second)
@@ -190,7 +180,7 @@ func TestConsoleRefusesEveryRequestAfterFiveFailedSignInsForAMinute(t *testing.T
 
 // Host names that are not the console address or an extra configured host are refused, which blocks DNS rebinding.
 func TestConsoleAcceptsOnlyItsOwnHostNames(t *testing.T) {
-	f := consoleServer(t, "[approvals]\nlisten='127.0.0.1:9000'\nhosts=['mac.tail0.ts.net','Box.example.test:8443']\n", true)
+	f := consoleDaemon(t, "[console]\nlisten='127.0.0.1:9000'\nhosts=['mac.tail0.ts.net','Box.example.test:8443']\n", true)
 	for host, want := range map[string]int{
 		"127.0.0.1:9000":        200,
 		"mac.tail0.ts.net":      200,
@@ -218,7 +208,7 @@ func TestConsoleAcceptsOnlyItsOwnHostNames(t *testing.T) {
 }
 
 func TestConsoleResponsesCarryTheSecurityHeaders(t *testing.T) {
-	f := consoleServer(t, "", true)
+	f := consoleDaemon(t, "", true)
 	for name, change := range map[string]func(*http.Request){
 		"page":           nil,
 		"no credentials": func(r *http.Request) { r.Header.Del("Authorization") },
@@ -260,15 +250,15 @@ func onlyConsoleLinks(t *testing.T, page string) {
 }
 
 func TestConsoleListShowsWaitingActionsNewestFirstThenResolved(t *testing.T) {
-	f := consoleServer(t, draftApprove, true)
+	f := consoleDaemon(t, draftApprove, true)
 	add := func(name string) string {
 		t.Helper()
-		id := pend(t, f.s, "draft.new", `{"to":["`+name+`@example.test"],"subject":"`+name+`-subject","body":"`+name+`-body"}`)[0]
+		id := pend(t, f.d.s, "draft.new", `{"to":["`+name+`@example.test"],"subject":"`+name+`-subject","body":"`+name+`-body"}`)[0]
 		f.advance(time.Minute)
 		return id
 	}
 	older, denied, newer := add("older"), add("denied"), add("newer")
-	if err := f.s.Deny(context.Background(), denied); err != nil {
+	if err := f.d.s.Deny(context.Background(), denied); err != nil {
 		t.Fatal(err)
 	}
 	w := f.get(t, "/", nil)
@@ -283,7 +273,7 @@ func TestConsoleListShowsWaitingActionsNewestFirstThenResolved(t *testing.T) {
 	if positions[0] < 0 || positions[0] > positions[1] || positions[1] > positions[2] {
 		t.Fatalf("order newer, older, denied: positions=%v page=%s", positions, page)
 	}
-	for _, want := range []string{"work", "draft.new", "older@example.test", "older-subject", "pending", "denied", "3m", "1m"} {
+	for _, want := range []string{workEmail, "draft.new", "older@example.test", "older-subject", "pending", "denied", "3m", "1m"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("list misses %q: %s", want, page)
 		}
@@ -296,8 +286,8 @@ func TestConsoleListShowsWaitingActionsNewestFirstThenResolved(t *testing.T) {
 
 // Optional attendees receive the invitation, so the list shows them with the required ones.
 func TestConsoleListShowsOptionalAttendeesAsRecipients(t *testing.T) {
-	f := consoleServer(t, approveAll, true)
-	pend(t, f.s, "calendar.invite", `{"to":["required@example.test"],"optional":["optional@example.test"],"subject":"s","body":"","start":"2026-04-01T09:00:00Z","end":"2026-04-01T10:00:00Z"}`)
+	f := consoleDaemon(t, approveAll, true)
+	pend(t, f.d.s, "calendar.invite", `{"to":["required@example.test"],"optional":["optional@example.test"],"subject":"s","body":"","start":"2026-04-01T09:00:00Z","end":"2026-04-01T10:00:00Z"}`)
 	if page := f.get(t, "/", nil).Body.String(); !strings.Contains(page, "required@example.test, optional@example.test") {
 		t.Fatalf("list misses the recipients: %s", page)
 	}
@@ -306,14 +296,14 @@ func TestConsoleListShowsOptionalAttendeesAsRecipients(t *testing.T) {
 // The item page shows the stored arguments as text and the referenced message through the guarded read,
 // without its body.
 func TestConsoleItemShowsStoredArgumentsAsTextAndTheMessageSummary(t *testing.T) {
-	f := consoleServer(t, draftApprove, true)
-	id := pend(t, f.s, "draft.reply", `{"id":"g","body":"<script>alert(1)</script> see https://evil.example/x"}`)[0]
+	f := consoleDaemon(t, draftApprove, true)
+	id := pend(t, f.d.s, "draft.reply", `{"id":"g","body":"<script>alert(1)</script> see https://evil.example/x"}`)[0]
 	w := f.get(t, "/a/"+id, nil)
 	page := w.Body.String()
 	if w.Code != 200 {
 		t.Fatalf("%d %s", w.Code, page)
 	}
-	for _, want := range []string{"work", "draft.reply", "pending", "&lt;script&gt;alert(1)&lt;/script&gt; see https://evil.example/x", "private-subject-g", "sender@example.test", "green", "2026-03-30", `name="decision" value="approve"`, `name="decision" value="deny"`} {
+	for _, want := range []string{workEmail, "draft.reply", "pending", "&lt;script&gt;alert(1)&lt;/script&gt; see https://evil.example/x", "private-subject-g", "sender@example.test", "green", "2026-03-30", `name="decision" value="approve"`, `name="decision" value="deny"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("item page misses %q", want)
 		}
@@ -326,7 +316,7 @@ func TestConsoleItemShowsStoredArgumentsAsTextAndTheMessageSummary(t *testing.T)
 
 // The item page shows the Jev action check result; an action without a check shows none. The list does not show it.
 func TestConsoleItemShowsTheJevCheck(t *testing.T) {
-	f := consoleServer(t, draftApprove, true)
+	f := consoleDaemon(t, draftApprove, true)
 	for _, tc := range []struct {
 		score float64
 		want  string
@@ -338,12 +328,12 @@ func TestConsoleItemShowsTheJevCheck(t *testing.T) {
 		f.api.mu.Lock()
 		f.api.actionScore = tc.score
 		f.api.mu.Unlock()
-		id := pend(t, f.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
+		id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
 		if page := f.get(t, "/a/"+id, nil).Body.String(); !strings.Contains(page, tc.want) {
 			t.Errorf("item page misses %q: %s", tc.want, page)
 		}
 	}
-	id := pend(t, f.s, "mail.trash", `{"ids":["g"]}`)[0]
+	id := pend(t, f.d.s, "mail.trash", `{"ids":["g"]}`)[0]
 	if page := f.get(t, "/a/"+id, nil).Body.String(); strings.Contains(page, "Jev") {
 		t.Errorf("unchecked action shows a Jev result: %s", page)
 	}
@@ -352,63 +342,27 @@ func TestConsoleItemShowsTheJevCheck(t *testing.T) {
 	}
 }
 
-// offlineTransport fails every request, so a test server never reaches a real screening endpoint.
-type offlineTransport struct{}
-
-func (offlineTransport) RoundTrip(*http.Request) (*http.Response, error) {
-	return nil, errors.New("offline")
-}
-
-// fakeConsole starts a server on home whose credential record holds a screening key and the approval
-// password. The [screening] table of home selects the engine; the jev engine has no network.
-func fakeConsole(t *testing.T, home string) *consoleFixture {
+// fakeConsole starts a daemon for the fake account demo on home, with config appended, whose credential record
+// holds a screening key and the console password. The jev engine reaches no network.
+func fakeConsole(t *testing.T, home, config string) *consoleFixture {
 	t.Helper()
-	hash, err := bcrypt.GenerateFromPassword([]byte(consolePassword), bcrypt.MinCost)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := json.Marshal(credentials.Record{Version: 1, ScreeningKey: "synthetic-key", ApprovalHash: string(hash), OAuth: map[string]credentials.OAuth{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	store := credentials.New(&recordPlatform{data: data}, home, nil)
-	s, err := server.New(context.Background(), home, server.Options{Credentials: store, ScreeningHTTPClient: &http.Client{Transport: offlineTransport{}}, LookupEnv: func(string) string { return "" }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s.Close() })
-	if _, err := s.Preload(context.Background(), nil); err != nil {
-		t.Fatal(err)
-	}
-	handler, ok := s.Console()
-	if !ok {
-		t.Fatal("console is off")
-	}
-	return &consoleFixture{s: s, home: home, console: handler}
+	r := record(nil)
+	r.ConsoleHash = consoleHash(t)
+	d := startDaemon(t, daemonSetup{home: home, config: demoConfig + config, record: r})
+	return &consoleFixture{d: d, console: d.s.Console()}
 }
 
-// pendDemo makes a call of the fake account demo that the policy holds and returns the approval ID.
-func pendDemo(t *testing.T, s *server.Server, op, params string) string {
-	t.Helper()
-	status, body := accountRPC(t, s, op, "demo", params)
-	match := approvalIDs.FindStringSubmatch(body)
-	if status != 200 || match == nil {
-		t.Fatalf("%s: %d %s", op, status, body)
-	}
-	return match[1]
-}
-
-const fakeScreeningDraftApprove = "[screening]\nprovider='fake'\n[policy]\nmail_draft='approve'\n"
+const draftApproveOnly = "[policy]\nmail_draft='approve'\n"
 
 // A check made by the fake engine is labeled as a keyword check, never as a Jev check.
 func TestConsoleItemLabelsTheFakeCheck(t *testing.T) {
-	f := fakeConsole(t, fakeHome(t, fakeScreeningDraftApprove))
+	f := fakeConsole(t, fakeHome(t), fakeScreen+draftApproveOnly)
 	for body, want := range map[string]string{
 		"See you at noon":        "Fake check (keywords only): not flagged (score 0.05)",
 		"Your new password is x": "Fake check (keywords only): flagged (score 0.90)",
 		"SCREENFAIL":             "Fake check (keywords only): check failed (TypeSafeAPIError 503)",
 	} {
-		id := pendDemo(t, f.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"`+body+`"}`)
+		id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"`+body+`"}`)[0]
 		if page := f.get(t, "/a/"+id, nil).Body.String(); !strings.Contains(page, want) || strings.Contains(page, "Jev") {
 			t.Errorf("%q: item page misses %q or names Jev: %s", body, want, page)
 		}
@@ -418,19 +372,13 @@ func TestConsoleItemLabelsTheFakeCheck(t *testing.T) {
 // The label follows the engine that made the check, not the engine of the running server: an item checked by
 // the fake engine keeps its label after a restart with Jev screening.
 func TestConsoleItemKeepsTheFakeLabelAfterARestartWithJev(t *testing.T) {
-	home := fakeHome(t, fakeScreeningDraftApprove)
-	before := fakeConsole(t, home)
-	id := pendDemo(t, before.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"See you at noon"}`)
-	if err := before.s.Close(); err != nil {
+	home := fakeHome(t)
+	before := fakeConsole(t, home, fakeScreen+draftApproveOnly)
+	id := pend(t, before.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"See you at noon"}`)[0]
+	if err := before.d.s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[accounts.demo]\nprovider='fake'\n[policy]\nmail_draft='approve'\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	after := fakeConsole(t, home)
-	if after.s.FakeScreening() {
-		t.Fatal("the restarted server uses fake screening")
-	}
+	after := fakeConsole(t, home, draftApproveOnly)
 	page := after.get(t, "/a/"+id, nil).Body.String()
 	if want := "Fake check (keywords only): not flagged (score 0.05)"; !strings.Contains(page, want) || strings.Contains(page, "Jev") {
 		t.Fatalf("item page misses %q or names Jev: %s", want, page)
@@ -440,24 +388,23 @@ func TestConsoleItemKeepsTheFakeLabelAfterARestartWithJev(t *testing.T) {
 // The mark of the fake engine stays with the stored item: the agent's responses and the audit log never
 // carry it.
 func TestFakeCheckMarkStaysOutOfAgentResponsesAndTheAudit(t *testing.T) {
-	home := fakeHome(t, fakeScreeningDraftApprove)
-	f := fakeConsole(t, home)
-	status, body := accountRPC(t, f.s, "draft.new", "demo", `{"to":["a@example.test"],"subject":"s","body":"Your new password is x"}`)
+	f := fakeConsole(t, fakeHome(t), fakeScreen+draftApproveOnly)
+	status, body := accountRPC(t, f.d.s, "draft.new", "demo", `{"to":["a@example.test"],"subject":"s","body":"Your new password is x"}`)
 	match := approvalID.FindStringSubmatch(body)
 	if status != 200 || match == nil {
 		t.Fatalf("draft: %d %s", status, body)
 	}
-	if status, body := approvalStatus(t, f.s, match[1]); status != 200 || body != `{"state":"pending"}` {
+	if status, body := approvalStatus(t, f.d.s, match[1]); status != 200 || body != `{"state":"pending"}` {
 		t.Fatalf("status: %d %s", status, body)
 	}
-	if text, _ := auditOf(t, home); strings.Contains(text, "fake") || !strings.Contains(text, `"jev_flag"`) {
+	if text, _ := auditOf(t, f.d.home); strings.Contains(text, "fake") || !strings.Contains(text, `"jev_flag"`) {
 		t.Fatalf("audit=%s", text)
 	}
 }
 
 func TestConsoleItemShowsTheReferencedEvent(t *testing.T) {
-	f := consoleServer(t, draftApprove, true)
-	id := pend(t, f.s, "calendar.respond", `{"id":"e","response":"tentative","comment":"CANARY comment"}`)[0]
+	f := consoleDaemon(t, draftApprove, true)
+	id := pend(t, f.d.s, "calendar.respond", `{"id":"e","response":"tentative","comment":"CANARY comment"}`)[0]
 	page := f.get(t, "/a/"+id, nil).Body.String()
 	for _, want := range []string{"calendar.respond", "tentative", "CANARY comment", "private-subject-event", "2026-03-31T10:00:00", "2026-03-31T11:00:00"} {
 		if !strings.Contains(page, want) {
@@ -471,8 +418,8 @@ func TestConsoleItemShowsTheReferencedEvent(t *testing.T) {
 
 // A referenced message that cannot be read does not block the decision.
 func TestConsoleItemStillOffersTheDecisionWhenTheMessageIsUnavailable(t *testing.T) {
-	f := consoleServer(t, draftApprove, true)
-	id := pend(t, f.s, "mail.trash", `{"ids":["gone"]}`)[0]
+	f := consoleDaemon(t, draftApprove, true)
+	id := pend(t, f.d.s, "mail.trash", `{"ids":["gone"]}`)[0]
 	page := f.get(t, "/a/"+id, nil).Body.String()
 	if !strings.Contains(page, "not available") || !strings.Contains(page, `value="approve"`) || !strings.Contains(page, "gone") {
 		t.Fatalf("page=%s", page)
@@ -480,8 +427,8 @@ func TestConsoleItemStillOffersTheDecisionWhenTheMessageIsUnavailable(t *testing
 }
 
 func TestConsoleRefusesUnknownPathsAndIDs(t *testing.T) {
-	f := consoleServer(t, draftApprove, true)
-	id := pend(t, f.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
+	f := consoleDaemon(t, draftApprove, true)
+	id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
 	for _, path := range []string{"/a/" + strings.ToUpper(id), "/a/" + id[1:], "/a/" + id + "/x", "/a/0123456789abcdef0123456789abcdef", "/a/", "/v1/call", "/index.html"} {
 		if w := f.get(t, path, nil); w.Code != 404 {
 			t.Errorf("%s: %d", path, w.Code)
@@ -507,8 +454,8 @@ func (f *consoleFixture) writes() int {
 }
 
 func TestConsoleApproveRunsTheActionOnceAndShowsDone(t *testing.T) {
-	f := consoleServer(t, draftApprove, true)
-	id := pend(t, f.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
+	f := consoleDaemon(t, draftApprove, true)
+	id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
 	w := f.decide(t, id, "approve", nil)
 	if w.Code != 303 || w.Header().Get("Location") != "/a/"+id || f.writes() != 1 {
 		t.Fatalf("approve: %d %q writes=%d", w.Code, w.Header().Get("Location"), f.writes())
@@ -527,8 +474,8 @@ func TestConsoleApproveRunsTheActionOnceAndShowsDone(t *testing.T) {
 }
 
 func TestConsoleDenyRunsNothing(t *testing.T) {
-	f := consoleServer(t, draftApprove, true)
-	id := pend(t, f.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
+	f := consoleDaemon(t, draftApprove, true)
+	id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
 	if w := f.decide(t, id, "deny", nil); w.Code != 303 || w.Header().Get("Location") != "/a/"+id {
 		t.Fatalf("deny: %d", w.Code)
 	}
@@ -543,8 +490,8 @@ func TestConsoleDenyRunsNothing(t *testing.T) {
 
 // A failed run shows failed and its safe code.
 func TestConsoleShowsTheCodeOfAFailedRun(t *testing.T) {
-	f := consoleServer(t, draftApprove, true)
-	id := pend(t, f.s, "mail.trash", `{"ids":["gone"]}`)[0]
+	f := consoleDaemon(t, draftApprove, true)
+	id := pend(t, f.d.s, "mail.trash", `{"ids":["gone"]}`)[0]
 	if w := f.decide(t, id, "approve", nil); w.Code != 303 {
 		t.Fatalf("approve: %d %s", w.Code, w.Body)
 	}
@@ -556,8 +503,8 @@ func TestConsoleShowsTheCodeOfAFailedRun(t *testing.T) {
 
 // A decision needs an Origin of the console itself, which blocks cross-site form posts.
 func TestConsoleDecisionNeedsTheConsoleOrigin(t *testing.T) {
-	f := consoleServer(t, "[approvals]\nhosts=['mac.tail0.ts.net']\n"+draftApprove, true)
-	id := pend(t, f.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
+	f := consoleDaemon(t, "[console]\nhosts=['mac.tail0.ts.net']\n"+draftApprove, true)
+	id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
 	for name, change := range map[string]func(*http.Request){
 		"no origin":      func(r *http.Request) { r.Header.Del("Origin") },
 		"null origin":    func(r *http.Request) { r.Header.Set("Origin", "null") },
@@ -569,9 +516,10 @@ func TestConsoleDecisionNeedsTheConsoleOrigin(t *testing.T) {
 			t.Errorf("%s: %d", name, w.Code)
 		}
 	}
-	if f.writes() != 0 || storedArgs(t, f.home, id).State != "pending" {
-		t.Fatal("refused decision changed the item")
+	if f.writes() != 0 {
+		t.Fatal("refused decision reached the provider")
 	}
+	assertState(t, f.d.s, id, `{"state":"pending"}`)
 	// Behind an HTTPS tunnel the browser sends the https origin of the tunnel host.
 	w := f.decide(t, id, "deny", func(r *http.Request) {
 		r.Host = "mac.tail0.ts.net"
@@ -583,8 +531,8 @@ func TestConsoleDecisionNeedsTheConsoleOrigin(t *testing.T) {
 }
 
 func TestConsoleRefusesMalformedDecisions(t *testing.T) {
-	f := consoleServer(t, draftApprove, true)
-	id := pend(t, f.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
+	f := consoleDaemon(t, draftApprove, true)
+	id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
 	for name, change := range map[string]func(*http.Request){
 		"unknown decision": func(r *http.Request) { r.Body = io.NopCloser(strings.NewReader("decision=maybe")) },
 		"empty body":       func(r *http.Request) { r.Body = io.NopCloser(strings.NewReader("")) },
@@ -603,9 +551,10 @@ func TestConsoleRefusesMalformedDecisions(t *testing.T) {
 			t.Errorf("%s: %d", name, w.Code)
 		}
 	}
-	if f.writes() != 0 || storedArgs(t, f.home, id).State != "pending" {
-		t.Fatal("refused decision changed the item")
+	if f.writes() != 0 {
+		t.Fatal("refused decision reached the provider")
 	}
+	assertState(t, f.d.s, id, `{"state":"pending"}`)
 	if w := f.decide(t, "0123456789abcdef0123456789abcdef", "approve", nil); w.Code != 404 {
 		t.Fatalf("unknown id: %d", w.Code)
 	}

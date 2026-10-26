@@ -1,4 +1,5 @@
-// Package cli is the testable command entrypoint. Data commands only use HTTP.
+// Package cli is amg, the agent's client: API commands only, over HTTP to the daemon. It reads no local state and
+// builds without cgo; the management commands are in amgd.
 package cli
 
 import (
@@ -17,86 +18,56 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/client"
-	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
-	"github.com/ivanrvpereira/agentmailguard/internal/server"
+	"github.com/ivanrvpereira/agentmailguard/internal/term"
 	"github.com/ivanrvpereira/agentmailguard/internal/views"
 )
 
 type Options struct {
-	CredentialPlatform credentials.Platform // optional native Keychain dependency for local migration
-	Client             client.Options
-	Server             server.Options
-	LookupEnv          func(string) string
-	Now                func() time.Time
-	Stdin              io.Reader // defaults to os.Stdin; read by auth set-screening-key and set-approval-password, by auth login for a pasted Gmail address, and by serve for a missing screening key
+	Client    client.Options
+	LookupEnv func(string) string
+	Now       func() time.Time
 }
 
 func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "CLIOptions{redacted}") }
 
-const notes = `All data commands use the server. No automatic server start. No permanent delete.
+const notes = `amg talks to the agentmailguard daemon (amgd serve) over HTTP: -H or AMG_HOST, default http://127.0.0.1:8787.
+It never starts the daemon and never changes accounts, credentials, or settings: amgd does that on the daemon host. No permanent delete.
 mail send, reply, and forward send email at once, and calendar invite, update, cancel, and respond (unless --no-notify) send meeting notifications at once, when the write policy allows them (default: deny).
-serve checks all credentials at start. An account that is not logged in, or whose sign-in fails, does not stop the start; its commands fail. Other credential failures stop the start.
-Login runs locally on the server host. Restart the server after login or account changes.
 Days in date options run from 00:00 to the end of the day on this machine's clock and time zone; the last day is included.
-Client/server authentication and built-in TLS are absent. Anyone who reaches the server can run every action that the write policy allows. Protect remote access with a tunnel.`
+Client authentication and built-in TLS are absent. Anyone who reaches the daemon can run every action that the write policy allows. Protect remote access with a tunnel.`
 
 // errUsage reports a rejected command line; errDone reports a finished command that already set its code.
 var errUsage = errors.New("invalid command usage")
 var errDone = errors.New("command finished")
 
-// errorLine writes one message line; the prefix may carry color, the words never change. Run gives
-// every caller a message writer that keeps, downgrades, or removes the color.
-func errorLine(w io.Writer, message string) {
-	fmt.Fprintln(w, errorStyle.Render("error:")+" "+message)
-}
-func usage(w io.Writer) int                   { errorLine(w, "invalid command usage; use --help"); return 2 }
-func failure(w io.Writer, message string) int { errorLine(w, message); return 1 }
-
-// Scope labels come from provider tokens, so each one is quoted.
-func warnExtraScopes(w io.Writer, extra []string) {
-	quoted := make([]string, len(extra))
-	note := ""
-	for i, s := range extra {
-		quoted[i] = strconv.Quote(s)
-		if strings.HasPrefix(s, "role:") {
-			note = " role: entries are application permissions."
-		}
-	}
-	fmt.Fprintf(w, "%s token grants extra scopes the server does not use: %s.%s Remove the extra consent to reduce exposure.\n", warningStyle.Render("warning:"), strings.Join(quoted, ", "), note)
-}
+func usage(w io.Writer) int                   { return term.Usage(w) }
+func failure(w io.Writer, message string) int { return term.Failure(w, message) }
 func output(stdout, stderr io.Writer, text string, code int) int {
-	if _, err := io.WriteString(stdout, text); err != nil {
-		return failure(stderr, "output failed")
-	}
-	return code
+	return term.Output(stdout, stderr, text, code)
 }
 
 // runner holds the per-invocation state of one command tree. Run builds a new one every call.
 type runner struct {
 	opts           Options
-	passwordEnv    func(string) string
 	stdout, stderr io.Writer
 	account        string
-	base           string
-	home           string
+	host           string
 	timeout        time.Duration
 	code           int
 }
 
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Options) (code int) {
-	// A nil lookup preserves the distinction between missing and explicitly empty process passwords.
-	passwordEnv := opts.LookupEnv
 	if opts.LookupEnv == nil {
 		opts.LookupEnv = os.Getenv
 	}
 	// Messages carry color for one run at most, decided once from the injected writer and environment.
-	stderr = colorized(stderr, opts.LookupEnv)
+	stderr = term.Colorized(stderr, opts.LookupEnv)
 	defer func() {
 		if recover() != nil {
 			code = failure(stderr, "operation failed")
 		}
 	}()
-	r := &runner{opts: opts, passwordEnv: passwordEnv, stdout: stdout, stderr: stderr}
+	r := &runner{opts: opts, stdout: stdout, stderr: stderr}
 	// Help goes to a buffer so a failed write is reported once, and so Cobra never writes a partial page.
 	// Everything else Cobra prints, including messages that quote the command line, is discarded.
 	var help bytes.Buffer
@@ -121,8 +92,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Opti
 
 func newRoot(r *runner, raw []string) *cobra.Command {
 	root := &cobra.Command{
-		Use:           "agentmailguard",
-		Short:         "Screened mailbox access through the agentmailguard server",
+		Use:           "amg",
+		Short:         "Screened mailbox access through the agentmailguard daemon",
 		Long:          notes,
 		Args:          cobra.ArbitraryArgs,
 		SilenceErrors: true,
@@ -143,11 +114,10 @@ func newRoot(r *runner, raw []string) *cobra.Command {
 	// hidden. This interface has none, so the registered one gets another name and "help" stays an unknown word.
 	root.SetHelpCommand(&cobra.Command{Use: "no-help-command", Hidden: true, RunE: func(*cobra.Command, []string) error { return errUsage }})
 	f := root.PersistentFlags()
-	f.StringVar(&r.account, "account", "", "account name from the server configuration")
-	f.StringVar(&r.base, "server", "", "server base URL")
+	f.StringVar(&r.account, "account", "", "account alias; see amg account list")
+	f.StringVarP(&r.host, "host", "H", "", "daemon URL (default from AMG_HOST, else "+client.DefaultServer+")")
 	f.DurationVar(&r.timeout, "timeout", client.DefaultTimeout, "request timeout")
-	f.StringVar(&r.home, "home", "", "configuration directory; serve, auth login, set-screening-key, set-approval-password, migrate, and change-password only")
-	root.AddCommand(serveCmd(r), authCmd(r), statsCmd(r), cacheCmd(r), rulesCmd(r), approvalsCmd(r), mailCmd(r), calendarCmd(r), draftCmd(r))
+	root.AddCommand(accountCmd(r), statsCmd(r), rulesCmd(r), approvalsCmd(r), mailCmd(r), calendarCmd(r), draftCmd(r))
 	return root
 }
 
@@ -217,37 +187,27 @@ func (n negatedValue) Set(v string) error {
 	return err
 }
 
-// resolve applies the option checks shared by every command and returns the server base
-// plus whether a server was supplied by option or environment.
-func (r *runner) resolve(c *cobra.Command, allowHome bool) (bool, string, error) {
-	if c.Flags().Changed("home") && !allowHome {
-		return false, "", errUsage
+// host is the daemon URL: -H, then AMG_HOST, then the default.
+func (r *runner) daemon(c *cobra.Command) string {
+	if c.Flags().Changed("host") {
+		return r.host
 	}
-	if r.timeout <= 0 {
-		return false, "", errUsage
+	if v := r.opts.LookupEnv("AMG_HOST"); v != "" {
+		return v
 	}
-	envServer := r.opts.LookupEnv("AGENTMAILGUARD_SERVER")
-	base := r.base
-	if !c.Flags().Changed("server") {
-		base = envServer
-	}
-	if base == "" {
-		base = client.DefaultServer
-	}
-	return c.Flags().Changed("server") || envServer != "", base, nil
+	return client.DefaultServer
 }
 
 // call runs a data operation over HTTP and writes the response once.
 func (r *runner) call(c *cobra.Command, op string, p map[string]any, pretty bool) error {
-	_, base, err := r.resolve(c, false)
-	if err != nil {
-		return err
+	if r.timeout <= 0 {
+		return errUsage
 	}
 	clientOpts := r.opts.Client
 	clientOpts.Timeout = r.timeout
-	cl, e := client.New(base, clientOpts)
+	cl, e := client.New(r.daemon(c), clientOpts)
 	if e != nil {
-		r.code = failure(r.stderr, "invalid server URL")
+		r.code = failure(r.stderr, "invalid daemon URL")
 		return errDone
 	}
 	b, e := cl.Call(c.Context(), op, r.account, p)
@@ -264,7 +224,7 @@ func (r *runner) call(c *cobra.Command, op string, p map[string]any, pretty bool
 	case pretty && op == "mail.get":
 		var v views.MailView
 		if json.Unmarshal(b, &v) != nil {
-			r.code = failure(r.stderr, "invalid server response")
+			r.code = failure(r.stderr, "invalid daemon response")
 			return errDone
 		}
 		text = styleText(views.ToText(v), v.Verdict) + "\n"
@@ -274,17 +234,17 @@ func (r *runner) call(c *cobra.Command, op string, p map[string]any, pretty bool
 			NextPage string               `json:"next_page"`
 		}
 		if json.Unmarshal(b, &page) != nil || page.Messages == nil {
-			r.code = failure(r.stderr, "invalid server response")
+			r.code = failure(r.stderr, "invalid daemon response")
 			return errDone
 		}
 		text = summaryTable(*page.Messages) + "\n"
 		if page.NextPage != "" {
-			text += "next_page: " + terminalSafe(page.NextPage) + "\n"
+			text += "next_page: " + term.Safe(page.NextPage) + "\n"
 		}
 	default:
 		var indented bytes.Buffer
 		if json.Indent(&indented, bytes.TrimSpace(b), "", "  ") != nil {
-			r.code = failure(r.stderr, "invalid server response")
+			r.code = failure(r.stderr, "invalid daemon response")
 			return errDone
 		}
 		text = indented.String() + "\n"
@@ -292,13 +252,13 @@ func (r *runner) call(c *cobra.Command, op string, p map[string]any, pretty bool
 	// JSON output never carries color; styled text passes the writer's profile.
 	stdout := r.stdout
 	if pretty {
-		stdout = colorized(r.stdout, r.opts.LookupEnv)
+		stdout = term.Colorized(r.stdout, r.opts.LookupEnv)
 	}
 	if output(stdout, r.stderr, text, 0) != 0 {
 		r.code = 1
 		return errDone
 	}
-	if op == "auth.status" {
+	if op == "account.status" {
 		var v struct {
 			OK            bool      `json:"ok"`
 			LoggedIn      bool      `json:"logged_in"`
@@ -306,11 +266,11 @@ func (r *runner) call(c *cobra.Command, op string, p map[string]any, pretty bool
 			MissingScopes *[]string `json:"missing_scopes"`
 		}
 		if json.Unmarshal(b, &v) != nil {
-			r.code = failure(r.stderr, "invalid server response")
+			r.code = failure(r.stderr, "invalid daemon response")
 			return errDone
 		}
 		if v.OK && v.ExtraScopes != nil {
-			warnExtraScopes(r.stderr, *v.ExtraScopes)
+			term.WarnExtraScopes(r.stderr, *v.ExtraScopes)
 		}
 		if !v.OK {
 			switch {
@@ -326,102 +286,10 @@ func (r *runner) call(c *cobra.Command, op string, p map[string]any, pretty bool
 	return errDone
 }
 
-func serveCmd(r *runner) *cobra.Command {
-	listen := "127.0.0.1:8787"
-	c := r.leaf("serve", "Run the mailbox server on this host", 0, 0, func(c *cobra.Command, _ []string) error {
-		supplied, _, err := r.resolve(c, true)
-		if err != nil {
-			return err
-		}
-		if supplied || c.Flags().Changed("account") {
-			return errUsage
-		}
-		if r.opts.Server.LookupEnv == nil {
-			r.opts.Server.LookupEnv = r.opts.LookupEnv
-		}
-		r.code = serve(c.Context(), r.home, listen, r.opts.Stdin, r.stderr, r.opts.Server, r.passwordEnv)
-		return errDone
-	})
-	c.Flags().StringVar(&listen, "listen", listen, "listen address")
-	return c
-}
-
-func authCmd(r *runner) *cobra.Command {
-	device, noBrowser := false, false
-	signIn := r.leaf("login", "Sign in to a provider on this host", 0, 0, func(c *cobra.Command, _ []string) error {
-		supplied, _, err := r.resolve(c, true)
-		if err != nil {
-			return err
-		}
-		if supplied {
-			r.code = failure(r.stderr, "login is local only; remove --server and AGENTMAILGUARD_SERVER")
-			return errDone
-		}
-		r.code = login(c.Context(), r.home, r.account, device, noBrowser, r.opts.Stdin, r.stdout, r.stderr, r.opts.Server, r.passwordEnv)
-		return errDone
-	})
-	negated(signIn, "device-code", "use the provider device-code flow", &device)
-	signIn.Flags().BoolVar(&noBrowser, "no-browser", false, "print the Gmail sign-in URL without opening a browser")
-	screeningKey := r.leaf("set-screening-key", "Save the screening key on this host from stdin", 0, 0, func(c *cobra.Command, _ []string) error {
-		supplied, _, err := r.resolve(c, true)
-		if err != nil {
-			return err
-		}
-		if c.Flags().Changed("account") {
-			return errUsage
-		}
-		if supplied {
-			r.code = failure(r.stderr, "Screening key setup is local only; remove --server and AGENTMAILGUARD_SERVER")
-			return errDone
-		}
-		r.code = setScreeningKey(c.Context(), r.home, r.opts.Stdin, r.stderr, r.opts.Server, r.passwordEnv)
-		return errDone
-	})
-	approvalPassword := r.leaf("set-approval-password", "Set the approval console password on this host from stdin", 0, 0, func(c *cobra.Command, _ []string) error {
-		supplied, _, err := r.resolve(c, true)
-		if err != nil {
-			return err
-		}
-		if c.Flags().Changed("account") {
-			return errUsage
-		}
-		if supplied {
-			r.code = failure(r.stderr, "approval password setup is local only; remove --server and AGENTMAILGUARD_SERVER")
-			return errDone
-		}
-		r.code = setApprovalPassword(c.Context(), r.home, r.opts.Stdin, r.stderr, r.opts.Server, r.passwordEnv)
-		return errDone
-	})
-	c := group(r, "auth", "Provider sign-in and credential setup")
-	c.AddCommand(signIn, r.leaf("status", "Report account sign-in and scope state", 0, 0, r.none("auth.status")), screeningKey, approvalPassword,
-		credentialCmd(r, "migrate", "Copy credentials to the other local backend"),
-		credentialCmd(r, "change-password", "Change the local credential file password"))
-	return c
-}
-
-func credentialCmd(r *runner, name, short string) *cobra.Command {
-	target := ""
-	c := r.leaf(name, short, 0, 0, func(c *cobra.Command, _ []string) error {
-		supplied, _, err := r.resolve(c, true)
-		if err != nil {
-			return err
-		}
-		if c.Flags().Changed("account") {
-			return errUsage
-		}
-		if supplied {
-			r.code = failure(r.stderr, "credential commands are local only; remove --server and AGENTMAILGUARD_SERVER")
-			return errDone
-		}
-		if name == "migrate" && target != "file" && target != "keychain" {
-			return errUsage
-		}
-		r.code = credentialCommand(c.Context(), "auth."+name, r.home, target, r.stdout, r.stderr, r.opts, r.passwordEnv)
-		return errDone
-	})
-	if name == "migrate" {
-		c.Flags().StringVar(&target, "to", "", "target credential backend: file or keychain")
-	}
+func accountCmd(r *runner) *cobra.Command {
+	c := group(r, "account", "Accounts of the daemon")
+	c.AddCommand(r.leaf("list", "List the account aliases, providers, and emails", 0, 0, r.none("account.list")),
+		r.leaf("status", "Report the sign-in state, email, and scopes of one account", 0, 0, r.none("account.status")))
 	return c
 }
 
@@ -437,14 +305,8 @@ func statsCmd(r *runner) *cobra.Command {
 	return c
 }
 
-func cacheCmd(r *runner) *cobra.Command {
-	c := group(r, "cache", "Screening cache maintenance")
-	c.AddCommand(r.leaf("clear", "Discard cached screening results", 0, 0, r.none("cache.clear")))
-	return c
-}
-
 func rulesCmd(r *runner) *cobra.Command {
-	c := group(r, "rules", "Organize rules stored on the server")
+	c := group(r, "rules", "Organize rules of the daemon")
 	c.AddCommand(r.leaf("list", "List the configured organize rules", 0, 0, r.none("rules.list")))
 	return c
 }

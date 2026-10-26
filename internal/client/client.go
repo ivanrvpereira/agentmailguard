@@ -1,4 +1,4 @@
-// Package client sends a single bounded JSON call without local mailbox state or retries.
+// Package client sends a single bounded JSON call to the daemon without local mailbox state or retries.
 package client
 
 import (
@@ -43,7 +43,7 @@ func (e *Error) Error() string { return e.message }
 func New(base string, opts Options) (*Client, error) {
 	u, e := url.Parse(base)
 	if e != nil || u.Host == "" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(base, "#") || (u.Scheme != "http" && u.Scheme != "https") {
-		return nil, errors.New("invalid server URL")
+		return nil, errors.New("invalid daemon URL")
 	}
 	if opts.Timeout < 0 {
 		return nil, errors.New("invalid client timeout")
@@ -75,29 +75,29 @@ func (c *Client) Call(ctx context.Context, operation, account string, params any
 	}
 	req, e := http.NewRequestWithContext(ctx, "POST", c.url, bytes.NewReader(data))
 	if e != nil {
-		return nil, errors.New("invalid server URL")
+		return nil, errors.New("invalid daemon URL")
 	}
 	req.GetBody = nil
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	resp, e := c.http.Do(req)
 	if e != nil {
-		return nil, errors.New("server request failed")
+		return nil, errors.New("daemon request failed")
 	}
 	defer resp.Body.Close()
 	b, e := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBytes+1))
 	if e != nil || len(b) > MaxResponseBytes {
-		return nil, errors.New("invalid server response")
+		return nil, errors.New("invalid daemon response")
 	}
 	if resp.StatusCode != 200 {
-		message := "server request failed"
+		message := "daemon request failed"
 		// Only exact protocol refusals are safe to display. All other bodies are discarded.
 		var v struct {
 			Error string `json:"error"`
 		}
 		if json.Unmarshal(b, &v) == nil {
 			switch v.Error {
-			case "invalid request", "operation failed", "configuration unavailable", "rules unavailable", "account configuration changed; restart required", "sign-in failed; check the network, or run auth login and restart the server", "server unavailable", "server busy", "browser requests refused", "move refused: the destination must be a folder ID from `folders`", "move refused: use mail.trash", "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
+			case "invalid request", "operation failed", "no accounts; run amgd account add", "unknown account; run amg account list", "sign-in failed; check the network, or run amgd account login", "daemon unavailable", "daemon busy", "browser requests refused", "move refused: the destination must be a folder ID from `folders`", "move refused: use mail.trash", "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
 				"link refused: message is red, not green", "link refused: message is yellow, not green", "link refused: message is sealed, not green", "link refused: message is error, not green",
 				"search needs at least one of text, from, to, subject, after, before",
 				"calendar writes are not supported for this account", "calendar availability is not supported for this account", "missing_scopes",
@@ -113,7 +113,7 @@ func (c *Client) Call(ctx context.Context, operation, account string, params any
 		return nil, &Error{Status: resp.StatusCode, message: message}
 	}
 	if !json.Valid(b) {
-		return nil, errors.New("invalid server response")
+		return nil, errors.New("invalid daemon response")
 	}
 	return json.RawMessage(b), nil
 }

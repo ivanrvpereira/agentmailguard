@@ -1,7 +1,6 @@
 package config
 
 import (
-	"context"
 	"maps"
 	"net/url"
 	"regexp"
@@ -10,21 +9,8 @@ import (
 	"strings"
 )
 
-// Screening is the [screening] table. Provider is jev or fake. Endpoint is the HTTPS URL of the jev engine and
-// Model is the model name that it asks; empty means the built-in default. The fake engine ignores both.
-type Screening struct{ Provider, Endpoint, Model string }
-
-// ScreeningError names the invalid [screening] key path. It never contains the configured value.
-type ScreeningError struct{ Path string }
-
-func (e ScreeningError) Error() string { return "invalid screening: " + e.Path }
-
-// LoadScreening reads the optional [screening] table. An absent table or key gives the default.
-func LoadScreening(ctx context.Context, path string) (Screening, error) {
-	d, _, err := document(ctx, path)
-	if err != nil {
-		return Screening{}, err
-	}
+// screening reads the optional [screening] table. An absent table or key gives the default.
+func screening(d map[string]any) (Screening, error) {
 	result := Screening{Provider: "jev"}
 	value, present := d["screening"]
 	if !present {
@@ -32,22 +18,25 @@ func LoadScreening(ctx context.Context, path string) (Screening, error) {
 	}
 	table, ok := value.(map[string]any)
 	if !ok {
-		return Screening{}, ScreeningError{keyPath("screening")}
+		return Screening{}, fail("must be a table", "screening")
 	}
 	for _, key := range slices.Sorted(maps.Keys(table)) {
-		fail := ScreeningError{keyPath("screening", key)}
 		text, ok := table[key].(string)
 		switch {
-		case !ok:
-			return Screening{}, fail
-		case key == "provider" && (text == "jev" || text == "fake"):
+		case key != "provider" && key != "endpoint" && key != "model":
+			return Screening{}, fail("unknown key", "screening", key)
+		case key == "provider" && ok && (text == "jev" || text == "fake"):
 			result.Provider = text
-		case key == "endpoint" && validEndpoint(text):
+		case key == "provider":
+			return Screening{}, fail("must be jev or fake", "screening", key)
+		case key == "endpoint" && ok && validEndpoint(text):
 			result.Endpoint = text
-		case key == "model" && validModel.MatchString(text):
+		case key == "endpoint":
+			return Screening{}, fail("must be an https URL", "screening", key)
+		case key == "model" && ok && validModel.MatchString(text):
 			result.Model = text
 		default:
-			return Screening{}, fail
+			return Screening{}, fail("must be a model name", "screening", key)
 		}
 	}
 	return result, nil

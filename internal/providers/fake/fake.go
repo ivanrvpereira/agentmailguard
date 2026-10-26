@@ -36,7 +36,8 @@ type Provider struct {
 	db            *sql.DB
 }
 
-// New has no side effects. fake-provider.db is opened on the first call.
+// New has no side effects. fake-provider.db is opened on the first call. account is the account key, the
+// configured email: it is the account column of every row and the account's own address.
 func New(account, home string, now func() time.Time) *Provider {
 	if now == nil {
 		now = time.Now
@@ -123,17 +124,9 @@ func addColumn(ctx context.Context, db *sql.DB, table, column, definition string
 	return tx.Commit()
 }
 
-// identity is the account's own address from the identities table, or <account>@fake.test.
-func (p *Provider) identity(ctx context.Context, db *sql.DB) (model.Address, error) {
-	a := model.Address{}
-	err := db.QueryRowContext(ctx, `SELECT name, address FROM identities WHERE account = ?`, p.account).Scan(&a.Name, &a.Address)
-	if errors.Is(err, sql.ErrNoRows) {
-		return model.Address{Address: p.account + "@fake.test"}, nil
-	}
-	if err != nil {
-		return a, storageError
-	}
-	return a, nil
+// identity is the account's own address: its configured email.
+func (p *Provider) identity(context.Context, *sql.DB) (model.Address, error) {
+	return model.Address{Address: p.account}, nil
 }
 
 // Status returns the account's own address. Fake accounts have no scopes.

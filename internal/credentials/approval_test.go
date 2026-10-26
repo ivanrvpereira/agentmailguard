@@ -25,8 +25,8 @@ func testHash(t *testing.T, password string) string {
 func TestRecordWithoutApprovalPasswordKeepsTheOldShape(t *testing.T) {
 	ctx := context.Background()
 	p := &fakePlatform{values: map[[2]string][]byte{item: []byte(`{"version":1,"oauth":{},"openrouter_key":"old-key"}`)}}
-	store := credentials.New(p, t.TempDir(), nil)
-	if _, err := store.LoadApprovalHash(ctx); !errors.Is(err, credentials.ErrNotFound) {
+	store := credentials.New(p, t.TempDir())
+	if _, err := store.LoadConsoleHash(ctx); !errors.Is(err, credentials.ErrNotFound) {
 		t.Fatalf("unset approval password: %v", err)
 	}
 	if err := store.SaveScreeningKey(ctx, "new-key"); err != nil {
@@ -40,12 +40,12 @@ func TestRecordWithoutApprovalPasswordKeepsTheOldShape(t *testing.T) {
 func TestApprovalHashRoundTripsAndOnlyAcceptsBcrypt(t *testing.T) {
 	ctx := context.Background()
 	p := &fakePlatform{values: map[[2]string][]byte{}}
-	store := credentials.New(p, t.TempDir(), nil)
+	store := credentials.New(p, t.TempDir())
 	if err := store.SaveScreeningKey(ctx, "key"); err != nil {
 		t.Fatal(err)
 	}
 	for _, bad := range []string{"", "private-canary", "$2a$04$short", testHash(t, "other") + " private-canary"} {
-		if err := store.SaveApprovalHash(ctx, bad); err == nil || strings.Contains(err.Error(), "canary") {
+		if err := store.SaveConsoleHash(ctx, bad); err == nil || strings.Contains(err.Error(), "canary") {
 			t.Fatalf("non-bcrypt value accepted or exposed: %v", err)
 		}
 	}
@@ -53,17 +53,17 @@ func TestApprovalHashRoundTripsAndOnlyAcceptsBcrypt(t *testing.T) {
 		t.Fatal("refused hash reached the platform")
 	}
 	hash := testHash(t, "private-approval")
-	if err := store.SaveApprovalHash(ctx, hash); err != nil {
+	if err := store.SaveConsoleHash(ctx, hash); err != nil {
 		t.Fatal(err)
 	}
-	got, err := credentials.New(p, t.TempDir(), nil).LoadApprovalHash(ctx)
+	got, err := credentials.New(p, t.TempDir()).LoadConsoleHash(ctx)
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(got), []byte("private-approval")) != nil {
 		t.Fatalf("hash round trip failed: %v", err)
 	}
 	if key, err := store.LoadScreeningKey(ctx); err != nil || key != "key" {
 		t.Fatal("saving the hash lost the screening key")
 	}
-	record := credentials.Record{Version: 1, OAuth: map[string]credentials.OAuth{}, ApprovalHash: hash}
+	record := credentials.Record{Version: 1, OAuth: map[string]credentials.OAuth{}, ConsoleHash: hash}
 	for _, format := range []string{"%v", "%+v", "%#v", "%s"} {
 		if strings.Contains(fmt.Sprintf(format, record), "$2a$") {
 			t.Fatal("record formatting exposes the hash")
@@ -82,7 +82,7 @@ func TestApprovalHashFieldIsStrictlyDecoded(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := &fakePlatform{values: map[[2]string][]byte{item: []byte(raw)}}
-			_, err := credentials.New(p, t.TempDir(), nil).LoadApprovalHash(context.Background())
+			_, err := credentials.New(p, t.TempDir()).LoadConsoleHash(context.Background())
 			if !errors.Is(err, credentials.ErrInvalidRecord) || p.writes != 0 {
 				t.Fatalf("invalid approval hash accepted: %v", err)
 			}
@@ -93,8 +93,8 @@ func TestApprovalHashFieldIsStrictlyDecoded(t *testing.T) {
 func TestMigrationKeepsTheApprovalHash(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()
-	source := credentials.New(&fakePlatform{values: map[[2]string][]byte{}}, home, nil)
-	if err := source.SaveApprovalHash(ctx, testHash(t, "private-approval")); err != nil {
+	source := credentials.New(&fakePlatform{values: map[[2]string][]byte{}}, home)
+	if err := source.SaveConsoleHash(ctx, testHash(t, "private-approval")); err != nil {
 		t.Fatal(err)
 	}
 	target := credentials.NewFile(home, "synthetic-password")
@@ -104,7 +104,7 @@ func TestMigrationKeepsTheApprovalHash(t *testing.T) {
 	if err := target.ChangePassword(ctx, "other-password"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := credentials.NewFile(home, "other-password").LoadApprovalHash(ctx)
+	got, err := credentials.NewFile(home, "other-password").LoadConsoleHash(ctx)
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(got), []byte("private-approval")) != nil {
 		t.Fatalf("migration or password change lost the hash: %v", err)
 	}

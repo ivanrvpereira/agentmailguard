@@ -34,7 +34,7 @@ func (s *RecordStore) ChangePassword(ctx context.Context, password string) error
 var ErrTargetExists = errors.New("target credentials already exist")
 var ErrInvalidTarget = errors.New("credential migration requires the other backend in the same home")
 
-// Migrate copies a complete existing record without changing the configured backend.
+// Migrate copies a complete existing record. The caller changes [credentials] backend in config.toml.
 // Both stores share one lock; calling their Store methods here would deadlock.
 func (s *RecordStore) Migrate(ctx context.Context, target *RecordStore) error {
 	if target == nil || filepath.Clean(s.home) != filepath.Clean(target.home) {
@@ -52,13 +52,7 @@ func (s *RecordStore) Migrate(ctx context.Context, target *RecordStore) error {
 		if err != nil {
 			return Record{}, err
 		}
-		if k, ok := target.backend.(*keychainBackend); ok {
-			// A refused copy must not trigger a write to a legacy target either.
-			_, err = k.readRecord(ctx, false)
-		} else {
-			_, err = target.readExistingLocked(ctx)
-		}
-		if err == nil {
+		if _, err = target.readExistingLocked(ctx); err == nil {
 			return Record{}, ErrTargetExists
 		}
 		if !errors.Is(err, ErrNotFound) {
