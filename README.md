@@ -342,19 +342,23 @@ An explicit empty value, such as `draft update ID --body ''`, is not the same as
 | Group | Commands |
 | --- | --- |
 | State and auth | `stats --days 30`, `cache clear`, `rules list`, `approvals status ID`, `auth status`, local `auth login [--device-code] [--no-browser]`, `auth set-screening-key`, `auth set-approval-password`, `auth migrate --to file\|keychain`, `auth change-password` |
-| Mail reads | `mail list`, `mail get ID [--pretty]`, `mail thread THREAD_ID`, `mail search`, `mail link ID L1 L2` or `mail link ID --all`, `mail folders`, `mail categories` |
+| Mail reads | `mail list [--folder ID] [--count N] [--page NEXT_PAGE]`, `mail get ID [--pretty]`, `mail thread THREAD_ID`, `mail search [--count N] [--page NEXT_PAGE]`, `mail link ID L1 L2` or `mail link ID --all`, `mail folders`, `mail categories` |
 | Mail changes | `mail archive IDS...`, `mail trash IDS...`, `mail move FOLDER_ID IDS...`, `mail read IDS...`, `mail unread IDS...`, `mail flag IDS... --state flagged|complete|none`, `mail categorize IDS... --add NAME --remove NAME` |
-| Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID`, `calendar search TEXT` |
+| Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID`, `calendar search TEXT [--page NEXT_PAGE]` |
 | Availability (Microsoft 365 and fake, read-only) | `calendar availability --to ADDRESS [--to ADDRESS] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'` |
 | Meetings (send notifications) | `calendar invite --to ADDRESS --subject TEXT --start 'YYYY-MM-DD HH:MM' --duration 30m\|--end 'YYYY-MM-DD HH:MM' [--optional ADDRESS] [--body TEXT] [--location TEXT] [--no-online]`, `calendar update ID [--subject TEXT] [--location TEXT] [--body TEXT] [--start TIME] [--duration D\|--end TIME] [--add-attendee ADDRESS] [--remove-attendee ADDRESS] [--online]`, `calendar cancel ID [--comment TEXT]`, `calendar respond ID --response accept\|tentative\|decline [--comment TEXT\|--no-notify]` |
 | Mail send (sends at once) | `mail send --to ADDRESS --subject TEXT --body TEXT`, `mail reply ID --body TEXT`, `mail forward ID --to ADDRESS` |
 | Drafts (no send) | `draft new --to ADDRESS --subject TEXT --body TEXT`, `draft reply ID --body TEXT`, `draft forward ID --to ADDRESS`, `draft update ID --body TEXT` |
 
 Successful commands print the operation's JSON result.
+`mail list`, `mail search`, and `calendar search` return one page: `{"messages": [...], "next_page": "..."}`, with `"events"` for `calendar search`. `next_page` is present only when the provider has more results. To read the next page, always repeat the same command with the same options and add `--page VALUE`. The server checks the form of the value and otherwise passes it to the provider as is; only for Microsoft 365 mail does it also refuse a next link from other options.
+Without `--count`, the provider's default page size applies, so the same command returns a different number of messages on each provider: Gmail returns 100 (`messages.list` `maxResults`, at most 500), and Microsoft 365 returns 10 (Graph `$top`, at most 1,000). The fake provider pages like Microsoft 365. A `--count` above the provider's maximum is sent as given; the provider refuses or caps it, and a refusal fails the command like other provider errors. `calendar search` has no `--count`: Google Calendar uses its default page size, and Microsoft Search returns at most 25 events a page.
+`mail list` reads the Inbox unless `--folder` is given. This is our choice: without a folder, the providers' lists differ in meaning (Gmail: all mail except spam and trash; Microsoft 365: every folder, including Deleted Items and Junk Email).
+`mail list --pretty` and `mail search --pretty` print the table and then, when there is a next page, one `next_page: VALUE` line.
 `mail get --pretty` formats only the guarded view.
 `mail search` needs at least one of `--text`, `--from`, `--to`, `--subject`, `--after`, or `--before`. `--to ADDRESS` matches the To and Cc fields: the Gmail `to:` and `cc:` operators, or the Microsoft 365 `to` and `cc` search properties.
-`mail thread` prints JSON only. It returns the messages of the conversation as a list like `mail list`, newest first, from every folder, including trash, spam or junk, sent mail, and drafts. Gmail returns the whole thread (`threads.get`); on Microsoft 365 the server reads every page of the `conversationId` query. An unknown thread fails. Read bodies with `mail get`.
-`calendar search TEXT` uses the provider's own search: Google Calendar `events.list` with `q` on Gmail, and the Microsoft Search API (`POST /search/query` for events) on Microsoft 365. It returns one page in the provider's default size and order, with no date range. Each event is screened as `calendar get` screens it, and the result has the fields of a `calendar list` result. The provider matches the text on its side, so a hidden subject or body can decide whether an event is in the result. The fake provider matches the subject, body, location, organizer, and attendees, ignoring case.
+`mail thread` prints JSON only. It returns the messages of the conversation as a plain list of `mail list` messages, without pages, newest first, from every folder, including trash, spam or junk, sent mail, and drafts. Gmail returns the whole thread (`threads.get`); on Microsoft 365 the server reads every page of the `conversationId` query. An unknown thread fails. Read bodies with `mail get`.
+`calendar search TEXT` uses the provider's own search: Google Calendar `events.list` with `q` on Gmail, and the Microsoft Search API (`POST /search/query` for events) on Microsoft 365. It returns one page in the provider's default size and order, with `next_page` as above, and has no date range. Each event is screened as `calendar get` screens it, and the result has the fields of a `calendar list` result. The provider matches the text on its side, so a hidden subject or body can decide whether an event is in the result. The fake provider matches the subject, body, location, organizer, and attendees, ignoring case.
 Draft update returns the resulting draft ID, which can change on Gmail.
 `mail send`, `mail reply`, and `mail forward` return `{"ok": true}`. The providers give no ID for a sent message.
 `calendar invite` returns the new event ID. The other meeting commands return the event ID and `"ok": true`.
@@ -746,11 +750,11 @@ It does not evaluate stylesheets, `!important` precedence, colour contrast, geom
 The only data endpoint is `POST /v1/call` with `Content-Type: application/json`:
 
 ```json
-{"operation":"mail.list","account":"work","params":{"folder":"inbox","count":25,"skip":0}}
+{"operation":"mail.list","account":"work","params":{"folder":"inbox","count":10}}
 ```
 
 Operation names match CLI groups, such as `mail.get`, `mail.send`, `draft.update`, `calendar.invite`, `cache.clear`, and `approvals.status`.
-`mail.thread` takes `{"id":"THREAD_ID"}`, and `calendar.search` takes `{"text":"TEXT"}`.
+`mail.thread` takes `{"id":"THREAD_ID"}`, and `calendar.search` takes `{"text":"TEXT"}` and an optional `page`.
 Meeting times on the HTTP interface are RFC 3339 timestamps. `calendar.update` also accepts a Go `duration` string.
 `calendar.invite` takes an optional `optional` address list, `calendar.update` an optional `body`, and `calendar.respond` an optional boolean `no_notify`.
 The `account` field is optional, and `params` must be an object.
@@ -762,9 +766,9 @@ A policy refusal returns HTTP 500 with `{"error":"refused by policy: KEY"}`.
 
 Requests are limited to 1 MiB and 16 JSON nesting levels.
 The client bounds responses at 64 MiB and never follows redirects or retries requests, including stale-connection write replay.
-Mail list and search counts range from 1 to 100, and skip is at most 1,000,000.
+Mail list and search take an optional `count` of 0 or more; 0 or no count sends no size, so the provider's default applies. They and `calendar.search` take an optional `page`: the `next_page` of an earlier result, at most 16 KiB of printable ASCII without spaces. A `next_page` from the provider that breaks these bounds fails the call. On Gmail the page is the provider's `pageToken`. On Microsoft 365 a mail page is Graph's whole `@odata.nextLink`, which the server follows only with Graph's origin, the path of the same options, each query value of those options, and otherwise only `$top`, `$skip`, and `$skiptoken`; a calendar page is the Microsoft Search `from` offset.
 Manual mutations need at least one ID, and recipient and attendee lists at least one address; the server sets no maximum on these lists, because the provider refuses what it does not accept and the request size limit bounds them.
-Category lists accept at most 100 entries, and IDs and search strings are limited to 4,096 bytes.
+IDs and search strings are limited to 4,096 bytes.
 Stats accepts 1 to 365,000 days.
 
 The server admits at most 64 concurrent calls.
@@ -788,6 +792,7 @@ Not verified against real providers or services:
 - provider acceptance of generated drafts;
 - `mail thread` on a Microsoft 365 conversation with a message in Junk Email (checked live on 2026-10-26: Gmail threads with drafts, and Microsoft 365 conversations across Inbox, Sent Items, Drafts, Deleted Items, and other folders; `calendar search` on both providers was checked the same day);
 - Microsoft 365 device-code login, which organization policies can also refuse;
+- paging with `--page` and `next_page`, and the default page sizes, on `mail list`, `mail search`, and `calendar search`;
 - requests to Jev cloud, or to any screening endpoint or model other than the default;
 - migration of a real Keychain record.
 

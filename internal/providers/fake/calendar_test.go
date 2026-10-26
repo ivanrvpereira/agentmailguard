@@ -368,13 +368,19 @@ func TestCalendarSearchMatchesEventTextAndPeopleByStart(t *testing.T) {
 		"theirs":           {}, // another account's event
 		"nothing":          {},
 	} {
-		got, err := c.Search(ctx, text)
-		if err != nil || !reflect.DeepEqual(eventIDs(got), want) {
-			t.Errorf("%q: ids=%v err=%v", text, eventIDs(got), err)
+		got, err := c.Search(ctx, text, "")
+		if err != nil || !reflect.DeepEqual(eventIDs(got.Events), want) || got.Next != "" {
+			t.Errorf("%q: ids=%v next=%q err=%v", text, eventIDs(got.Events), got.Next, err)
 		}
 	}
-	got, err := c.Search(ctx, "planning")
-	if one, _ := c.Get(ctx, "mine"); err != nil || len(got) != 1 || !reflect.DeepEqual(got[0], one) {
+	if got, err := c.Search(ctx, "o", "3"); err != nil || !reflect.DeepEqual(eventIDs(got.Events), []string{"gone", "later"}) || got.Next != "" {
+		t.Errorf("page 3: ids=%v next=%q err=%v", eventIDs(got.Events), got.Next, err)
+	}
+	if got, err := c.Search(ctx, "o", "x"); err == nil || got.Events != nil {
+		t.Errorf("invalid page accepted: %v", got)
+	}
+	got, err := c.Search(ctx, "planning", "")
+	if one, _ := c.Get(ctx, "mine"); err != nil || len(got.Events) != 1 || !reflect.DeepEqual(got.Events[0], one) {
 		t.Fatalf("search=%+v err=%v", got, err)
 	}
 }

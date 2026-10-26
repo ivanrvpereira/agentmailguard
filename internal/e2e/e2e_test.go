@@ -17,11 +17,50 @@ func verdict(t *testing.T, view string) string {
 	return decode[struct{ Verdict string }](t, view).Verdict
 }
 
+// mailPage is the result of mail list and mail search.
+type mailPage struct {
+	Messages []struct{ ID, Verdict string }
+	NextPage *string `json:"next_page"`
+}
+
+// An agent reads a folder page by page: it repeats the same options with --page until no next_page comes.
+func TestListPagesThroughTheFolderWithNextPage(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	all := decode[mailPage](t, s.ok("mail", "list"))
+	if len(all.Messages) != 6 || all.NextPage != nil {
+		t.Fatalf("one default page of six: %+v", all)
+	}
+	seen := []string{}
+	args := []string{"mail", "list", "--count", "4"}
+	for range 3 {
+		p := decode[mailPage](t, s.ok(args...))
+		for _, m := range p.Messages {
+			seen = append(seen, m.ID)
+		}
+		if p.NextPage == nil {
+			break
+		}
+		args = []string{"mail", "list", "--count", "4", "--page", *p.NextPage}
+	}
+	want := []string{}
+	for _, m := range all.Messages {
+		want = append(want, m.ID)
+	}
+	if !reflect.DeepEqual(seen, want) {
+		t.Fatalf("pages gave %v, want %v", seen, want)
+	}
+	if out := s.ok("mail", "list", "--count", "4", "--pretty"); !strings.HasSuffix(out, "\nnext_page: 4\n") {
+		t.Fatalf("pretty page without its next_page line:\n%s", out)
+	}
+	s.refused("invalid request", "mail", "list", "--page", "not a page")
+}
+
 func TestTriageHidesUnsafeMailAndFailsClosed(t *testing.T) {
 	t.Parallel()
 	s := start(t, "")
 	verdicts := map[string]string{}
-	for _, m := range decode[[]struct{ ID, Verdict string }](t, s.ok("mail", "list")) {
+	for _, m := range decode[mailPage](t, s.ok("mail", "list")).Messages {
 		verdicts[m.ID] = m.Verdict
 	}
 	want := map[string]string{"lunch": "green", "invoice": "green", "kickoff": "green", "phish": "red", "code": "sealed", "broken": "error"}

@@ -50,15 +50,15 @@ agentmailguard --account work mail list --count 10
 agentmailguard auth status
 agentmailguard mail folders
 agentmailguard mail categories
-agentmailguard mail list [--folder inbox] [--count 25] [--skip 0]
-agentmailguard mail search [--text T] [--from ADDR] [--to ADDR] [--subject T] [--after YYYY-MM-DD] [--before YYYY-MM-DD] [--folder FOLDER_ID] [--count 25]
+agentmailguard mail list [--folder inbox] [--count N] [--page NEXT_PAGE]
+agentmailguard mail search [--text T] [--from ADDR] [--to ADDR] [--subject T] [--after YYYY-MM-DD] [--before YYYY-MM-DD] [--folder FOLDER_ID] [--count N] [--page NEXT_PAGE]
 agentmailguard mail get ID
 agentmailguard mail thread THREAD_ID
 agentmailguard mail link ID L1 [L2 ...]
 agentmailguard mail link ID --all
 agentmailguard calendar list [--from today|+Nd|YYYY-MM-DD] [--to +7d|YYYY-MM-DD]
 agentmailguard calendar get ID
-agentmailguard calendar search TEXT
+agentmailguard calendar search TEXT [--page NEXT_PAGE]
 agentmailguard calendar availability --to ADDR [--to ADDR] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'
 agentmailguard calendar invite --to ADDR [--to ADDR] --subject TEXT --start 'YYYY-MM-DD HH:MM' (--duration 30m | --end 'YYYY-MM-DD HH:MM') [--optional ADDR] [--body TEXT] [--location TEXT] [--no-online]
 agentmailguard calendar update ID [--subject TEXT] [--location TEXT] [--body TEXT] [--start 'YYYY-MM-DD HH:MM'] [--duration 30m | --end 'YYYY-MM-DD HH:MM'] [--add-attendee ADDR] [--remove-attendee ADDR] [--online]
@@ -87,9 +87,11 @@ agentmailguard stats --days 30
 
 `mail search` needs at least one of `--text`, `--from`, `--to`, `--subject`, `--after`, or `--before`. `--to` matches the To and Cc addresses.
 
+`mail list`, `mail search`, and `calendar search` return one page: `{"messages": [...], "next_page": "..."}` (`"events"` for `calendar search`). `next_page` is there only when there are more results. For the next page, always run the same command with the same options and add `--page VALUE`; on Microsoft 365 mail, a value from other options is refused, and elsewhere it is passed to the provider as is. Without `--count` the provider's default page size applies: 100 messages on Gmail, 10 on Microsoft 365. `mail list` without `--folder` reads the Inbox; this is our choice, because the providers differ without a folder.
+
 `calendar search TEXT` uses the provider's own search (Google Calendar on Gmail, Microsoft Search on Microsoft 365). It returns one page of matching events in the provider's order, with the fields of `calendar list`. It has no date range.
 
-Limits: `--count` 1–100, at most 100 categories per list. Mutations, recipients, and meeting attendees have no limit of ours: the provider refuses what it does not accept. `calendar availability` accepts 1–20 addresses and a window of less than 62 days (Microsoft Graph limits).
+Limits: `--count` has no limit of ours: the provider refuses or caps a count above its maximum (Gmail 500, Microsoft 365 1,000). Mutations, categories, recipients, and meeting attendees have no limit of ours: the provider refuses what it does not accept. `calendar availability` accepts 1–20 addresses and a window of less than 62 days (Microsoft Graph limits).
 
 ## Verdicts
 

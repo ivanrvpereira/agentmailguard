@@ -54,6 +54,21 @@ func TestListsHaveNoLimitOfOurOwn(t *testing.T) {
 	if status, body := accountRPC(t, s, "calendar.list", "demo", `{"start":"2026-01-01T00:00:00Z","end":"2027-01-01T00:00:00Z"}`); status != 200 || !strings.Contains(body, `"id":"e1"`) {
 		t.Errorf("calendar list over a year: %d %.200s", status, body)
 	}
+	// Gmail messages.modify takes at most 100 labels to add and 100 to remove, and refuses more itself; Graph
+	// documents no limit on message categories.
+	names := make([]string, 101)
+	for i := range names {
+		names[i] = fmt.Sprintf("c%d", i)
+		if _, err := fakeDB(t, home).Exec(`INSERT INTO categories (account, name) VALUES ('demo', ?)`, names[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, _ := json.Marshal(names)
+	for _, field := range []string{"add", "remove"} {
+		if status, body := accountRPC(t, s, "mail.categorize", "demo", `{"ids":["g"],"`+field+`":`+string(list)+`}`); status != 200 || !strings.Contains(body, `"ok":true`) {
+			t.Errorf("categorize --%s with 101 categories: %d %.200s", field, status, body)
+		}
+	}
 	if status, body := accountRPC(t, s, "mail.read", "demo", `{"ids":[]}`); status != 400 {
 		t.Errorf("read without IDs: %d %s", status, body)
 	}

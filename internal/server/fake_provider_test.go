@@ -82,8 +82,8 @@ func TestFakeAccountReadsScreenedMailAndSendsIntoSent(t *testing.T) {
 	home := fakeHome(t, sendAllow)
 	s, creds := fakeServer(t, home)
 	status, body := accountRPC(t, s, "mail.list", "demo", `{}`)
-	var list []struct{ ID, Verdict string }
-	if status != 200 || json.Unmarshal([]byte(body), &list) != nil || !reflect.DeepEqual(list, []struct{ ID, Verdict string }{{"g", "green"}}) {
+	var list page
+	if status != 200 || json.Unmarshal([]byte(body), &list) != nil || !reflect.DeepEqual(list.Messages, []struct{ ID, Verdict string }{{"g", "green"}}) {
 		t.Fatalf("list: %d %s", status, body)
 	}
 	if status, body := accountRPC(t, s, "mail.send", "demo", `{"to":["ana@example.test"],"subject":"Hello","body":"hi"}`); status != 200 || body != `{"ok":true}` {
@@ -177,8 +177,8 @@ func TestFakeScreeningStartsWithoutAKeyAndScreensByMarker(t *testing.T) {
 		t.Fatalf("checks=%v err=%v", checks, err)
 	}
 	status, body := accountRPC(t, s, "mail.list", "demo", `{}`)
-	var list []struct{ ID, Verdict string }
-	if status != 200 || json.Unmarshal([]byte(body), &list) != nil || !reflect.DeepEqual(list, []struct{ ID, Verdict string }{{"r", "red"}, {"g", "green"}}) {
+	var list page
+	if status != 200 || json.Unmarshal([]byte(body), &list) != nil || !reflect.DeepEqual(list.Messages, []struct{ ID, Verdict string }{{"r", "red"}, {"g", "green"}}) {
 		t.Fatalf("list: %d %s", status, body)
 	}
 	if reads, writes := creds.accesses(); len(reads)+len(writes) != 0 {
@@ -210,8 +210,8 @@ func TestConfiguredScreeningEndpointModelAndKeyReachJev(t *testing.T) {
 	t.Cleanup(func() { s.Close() })
 	// Only an answer from the fake Jev makes the verdict green.
 	status, body := accountRPC(t, s, "mail.list", "demo", `{}`)
-	var list []struct{ ID, Verdict string }
-	if status != 200 || json.Unmarshal([]byte(body), &list) != nil || !reflect.DeepEqual(list, []struct{ ID, Verdict string }{{"g", "green"}}) {
+	var list page
+	if status != 200 || json.Unmarshal([]byte(body), &list) != nil || !reflect.DeepEqual(list.Messages, []struct{ ID, Verdict string }{{"g", "green"}}) {
 		t.Fatalf("list: %d %s", status, body)
 	}
 }

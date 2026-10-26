@@ -196,9 +196,9 @@ func TestMailParallelJevPreservesOrderedIndependentOutcomes(t *testing.T) {
 				var items []views.MailSummary
 				var err error
 				if surface == "List" {
-					items, err = g.List(ctx, "inbox", 40, 0)
+					items, err = summaries(g.List(ctx, "inbox", model.PageRequest{}))
 				} else {
-					items, err = g.Search(ctx, model.SearchQuery{Text: new("synthetic")}, 40)
+					items, err = summaries(g.Search(ctx, model.SearchQuery{Text: new("synthetic")}, model.PageRequest{}))
 				}
 				done <- result{items, err}
 			}()
@@ -332,9 +332,9 @@ func TestParallelJevCancellationDrainsAndStopsQueuedItems(t *testing.T) {
 				case "Classify":
 					_, err = g.Classify(ctx, batchIDs(), orgRules())
 				case "List":
-					_, err = g.List(ctx, "inbox", 40, 0)
+					_, err = summaries(g.List(ctx, "inbox", model.PageRequest{}))
 				case "Search":
-					_, err = g.Search(ctx, model.SearchQuery{Text: new("synthetic")}, 40)
+					_, err = summaries(g.Search(ctx, model.SearchQuery{Text: new("synthetic")}, model.PageRequest{}))
 				case "CalendarList":
 					_, err = g.CalendarList(ctx, now, now.Add(time.Hour))
 				}

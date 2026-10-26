@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -57,6 +58,9 @@ func mailbox(t *testing.T) (model.Mailbox, string) {
 	return fake.New("demo", home, func() time.Time { return now }).Mailbox(), home
 }
 
+// messages drops the next-page marker of a page.
+func messages(p model.MessagePage, err error) ([]model.Message, error) { return p.Messages, err }
+
 func ids(messages []model.Message) []string {
 	out := []string{}
 	for _, m := range messages {
@@ -68,9 +72,10 @@ func ids(messages []model.Message) []string {
 func TestListReturnsFolderMessagesNewestFirstWithoutBodies(t *testing.T) {
 	m, _ := mailbox(t)
 	ctx := context.Background()
-	got, err := m.List(ctx, "inbox", 2, 1, false)
-	if err != nil || !reflect.DeepEqual(ids(got), []string{"new", "mid"}) {
-		t.Fatalf("ids=%v err=%v", ids(got), err)
+	page, err := m.List(ctx, "inbox", model.PageRequest{Size: 2, Page: "1"}, false)
+	got := page.Messages
+	if err != nil || !reflect.DeepEqual(ids(got), []string{"new", "mid"}) || page.Next != "3" {
+		t.Fatalf("ids=%v next=%q err=%v", ids(got), page.Next, err)
 	}
 	if got[0].Body != nil || got[0].ContentType != nil || got[0].Auth != nil {
 		t.Fatal("metadata list carried body or auth")
@@ -81,9 +86,7 @@ func TestListReturnsFolderMessagesNewestFirstWithoutBodies(t *testing.T) {
 		t.Fatalf("message=%+v", got[0])
 	}
 	for _, call := range []func() error{
-		func() error { _, err := m.List(ctx, "nowhere", 25, 0, false); return err },
-		func() error { _, err := m.List(ctx, "inbox", 0, 0, false); return err },
-		func() error { _, err := m.List(ctx, "inbox", 25, -1, false); return err },
+		func() error { _, err := m.List(ctx, "nowhere", model.PageRequest{}, false); return err },
 	} {
 		if err := call(); err == nil {
 			t.Error("invalid list accepted")
@@ -138,15 +141,15 @@ func TestSearchMatchesCaseInsensitiveSubstringsAcrossTheAccount(t *testing.T) {
 		{"subject only", model.SearchQuery{Subject: text("friday")}, 25, []string{}},
 		{"after and before are inclusive dates", model.SearchQuery{After: day("2026-03-15"), Before: day("2026-03-20")}, 25, []string{"arc", "mid"}},
 		{"folder", model.SearchQuery{Text: text("invoice"), Folder: &archive}, 25, []string{"arc"}},
-		{"count", model.SearchQuery{Text: text("invoice")}, 2, []string{"draft", "arc"}},
+		{"size", model.SearchQuery{Text: text("invoice")}, 2, []string{"draft", "arc"}},
 	} {
-		got, err := m.Search(ctx, tc.query, tc.count, false)
+		got, err := messages(m.Search(ctx, tc.query, model.PageRequest{Size: tc.count}, false))
 		if err != nil || !reflect.DeepEqual(ids(got), tc.want) {
 			t.Errorf("%s: ids=%v err=%v", tc.name, ids(got), err)
 		}
 	}
 	nowhere := "nowhere"
-	if _, err := m.Search(ctx, model.SearchQuery{Folder: &nowhere}, 25, false); err == nil {
+	if _, err := messages(m.Search(ctx, model.SearchQuery{Folder: &nowhere}, model.PageRequest{}, false)); err == nil {
 		t.Error("unknown folder accepted")
 	}
 }
@@ -160,13 +163,13 @@ func TestSearchByRecipientMatchesToAndCcButNotTheSender(t *testing.T) {
 		('demo', 'nobody', 'inbox', 'ana@example.test', '[]', '[]', 'Note to self', '2026-03-04T09:00:00Z')`)
 	m := fake.New("demo", home, func() time.Time { return now }).Mailbox()
 	to := "ANA@example"
-	got, err := m.Search(t.Context(), model.SearchQuery{To: &to}, 25, false)
+	got, err := messages(m.Search(t.Context(), model.SearchQuery{To: &to}, model.PageRequest{}, false))
 	if err != nil || !reflect.DeepEqual(ids(got), []string{"cc", "to"}) {
 		t.Fatalf("ids=%v err=%v", ids(got), err)
 	}
 	// An empty value is no filter, as for the other fields and the real providers.
 	empty, subject := "", "self"
-	got, err = m.Search(t.Context(), model.SearchQuery{To: &empty, Subject: &subject}, 25, false)
+	got, err = messages(m.Search(t.Context(), model.SearchQuery{To: &empty, Subject: &subject}, model.PageRequest{}, false))
 	if err != nil || !reflect.DeepEqual(ids(got), []string{"nobody"}) {
 		t.Fatalf("empty to: ids=%v err=%v", ids(got), err)
 	}
@@ -234,7 +237,7 @@ func TestMutationsChangeMessagesAndReportMissingIDsInOrder(t *testing.T) {
 	if got := folderOf(t, m, "old"); !reflect.DeepEqual(got.Folders, []string{"trash"}) {
 		t.Fatalf("trashed folders=%v", got.Folders)
 	}
-	if got, err := m.List(ctx, "trash", 25, 0, false); err != nil || !reflect.DeepEqual(ids(got), []string{"mid", "old"}) {
+	if got, err := messages(m.List(ctx, "trash", model.PageRequest{}, false)); err != nil || !reflect.DeepEqual(ids(got), []string{"mid", "old"}) {
 		t.Fatalf("trash=%v err=%v", ids(got), err)
 	}
 	seed(t, home, `INSERT INTO folders (account, id, name) VALUES ('demo', 'projects', 'Projects')`)
@@ -351,7 +354,7 @@ func TestSendsLandInSentAndRecordKindAndSource(t *testing.T) {
 	if m.SendReply(ctx, "gone", "x") == nil {
 		t.Fatal("reply to a missing message accepted")
 	}
-	sent, err := m.List(ctx, "sent", 25, 0, false)
+	sent, err := messages(m.List(ctx, "sent", model.PageRequest{}, false))
 	if err != nil || len(sent) != 3 {
 		t.Fatalf("sent=%v err=%v", ids(sent), err)
 	}
@@ -378,7 +381,7 @@ func TestSendsLandInSentAndRecordKindAndSource(t *testing.T) {
 	if want := [][3]string{{"Fw: Lunch plans", "forward", "new"}, {"Hello", "new", ""}, {"Re: Old report", "reply", "old"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sent rows=%v", got)
 	}
-	if drafts, err := m.List(ctx, "drafts", 25, 0, false); err != nil || len(drafts) != 0 {
+	if drafts, err := messages(m.List(ctx, "drafts", model.PageRequest{}, false)); err != nil || len(drafts) != 0 {
 		t.Fatalf("drafts=%v err=%v", ids(drafts), err)
 	}
 }
@@ -426,7 +429,7 @@ func TestWritesWaitForAnotherWriter(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if sent, err := m.List(ctx, "sent", 25, 0, false); err != nil || len(sent) != 1 {
+	if sent, err := messages(m.List(ctx, "sent", model.PageRequest{}, false)); err != nil || len(sent) != 1 {
 		t.Fatalf("sent=%v err=%v", ids(sent), err)
 	}
 }
@@ -454,11 +457,11 @@ func TestMessagesCarryTheirSeededThreadOrTheirOwnID(t *testing.T) {
 	ctx := t.Context()
 	seed(t, home, `UPDATE messages SET thread_id = 'invoices' WHERE id IN ('old', 'mid')`)
 	invoice := "invoice"
-	list, err := m.List(ctx, "inbox", 25, 0, false)
+	list, err := messages(m.List(ctx, "inbox", model.PageRequest{}, false))
 	if err != nil {
 		t.Fatal(err)
 	}
-	search, err := m.Search(ctx, model.SearchQuery{Text: &invoice}, 25, false)
+	search, err := messages(m.Search(ctx, model.SearchQuery{Text: &invoice}, model.PageRequest{}, false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -511,7 +514,7 @@ func TestRepliesAndForwardsJoinTheSourceConversationAndNewMailStartsItsOwn(t *te
 			t.Fatal(err)
 		}
 	}
-	sent, err := m.List(ctx, "sent", 25, 0, false)
+	sent, err := messages(m.List(ctx, "sent", model.PageRequest{}, false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -546,7 +549,7 @@ func TestDatabaseFromBeforeThreadsOpensAndKeepsItsMail(t *testing.T) {
 	}
 	m := fake.New("demo", home, func() time.Time { return now }).Mailbox()
 	ctx := t.Context()
-	list, err := m.List(ctx, "inbox", 25, 0, false)
+	list, err := messages(m.List(ctx, "inbox", model.PageRequest{}, false))
 	if err != nil || !reflect.DeepEqual(threads(list), map[string]string{"old": "old"}) {
 		t.Fatalf("list threads=%v err=%v", threads(list), err)
 	}
@@ -593,6 +596,43 @@ func TestThreadReturnsEveryMessageOfTheConversationNewestFirstFromEveryFolder(t 
 	for _, unknown := range []string{"gone", "theirs"} {
 		if got, err := m.Thread(ctx, unknown); !errors.Is(err, model.MailboxError("NotFoundError")) || len(got) != 0 {
 			t.Errorf("%s: ids=%v err=%v", unknown, ids(got), err)
+		}
+	}
+}
+
+// The fake pages like Graph $top: 10 by default, at most 1,000. Its marker is the decimal offset of the next page;
+// any other marker is refused.
+func TestListAndSearchReturnOnePageAndTheNextMarker(t *testing.T) {
+	home := t.TempDir()
+	rows := []string{}
+	for i := range 12 {
+		rows = append(rows, fmt.Sprintf(`('demo', 'm%02d', 'Invoice', '2026-03-01T%02d:00:00Z')`, i, i))
+	}
+	seed(t, home, `INSERT INTO messages (account, id, subject, received_at) VALUES `+strings.Join(rows, ","))
+	m := fake.New("demo", home, func() time.Time { return now }).Mailbox()
+	ctx := t.Context()
+	invoice := "invoice"
+	for name, call := range map[string]func(model.PageRequest) (model.MessagePage, error){
+		"list": func(p model.PageRequest) (model.MessagePage, error) { return m.List(ctx, "inbox", p, false) },
+		"search": func(p model.PageRequest) (model.MessagePage, error) {
+			return m.Search(ctx, model.SearchQuery{Text: &invoice}, p, false)
+		},
+	} {
+		first, err := call(model.PageRequest{})
+		if err != nil || len(first.Messages) != 10 || first.Messages[0].ID != "m11" || first.Next != "10" {
+			t.Fatalf("%s first: ids=%v next=%q err=%v", name, ids(first.Messages), first.Next, err)
+		}
+		last, err := call(model.PageRequest{Page: first.Next})
+		if err != nil || !reflect.DeepEqual(ids(last.Messages), []string{"m01", "m00"}) || last.Next != "" {
+			t.Fatalf("%s last: ids=%v next=%q err=%v", name, ids(last.Messages), last.Next, err)
+		}
+		if all, err := call(model.PageRequest{Size: 1000}); err != nil || len(all.Messages) != 12 || all.Next != "" {
+			t.Fatalf("%s size 1000: %d next=%q err=%v", name, len(all.Messages), all.Next, err)
+		}
+		for _, p := range []model.PageRequest{{Size: 1001}, {Size: -1}, {Page: "x"}, {Page: "-1"}, {Page: "01"}, {Page: " 1"}} {
+			if got, err := call(p); err == nil || got.Messages != nil {
+				t.Errorf("%s %+v accepted: %v", name, p, ids(got.Messages))
+			}
 		}
 	}
 }

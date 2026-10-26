@@ -28,8 +28,8 @@ func TestCalendarSearchReturnsTheScreenedEventsThatTheProviderFinds(t *testing.T
 	}
 	s, _ := fakeServer(t, home)
 	status, body := accountRPC(t, s, "calendar.search", "demo", `{"text":"olga"}`)
-	var items []struct{ ID, Verdict string }
-	if err := json.Unmarshal([]byte(body), &items); status != 200 || err != nil || len(items) != 1 || items[0].ID != "lunch" || items[0].Verdict != "green" {
+	var found page
+	if err := json.Unmarshal([]byte(body), &found); status != 200 || err != nil || len(found.Events) != 1 || found.Events[0].ID != "lunch" || found.Events[0].Verdict != "green" {
 		t.Fatalf("search: %d %s", status, body)
 	}
 	for _, params := range []string{`{}`, `{"text":""}`, `{"text":7}`, `{"text":"` + strings.Repeat("a", 4097) + `"}`, `{"text":"olga","start":"2026-10-09T00:00:00Z"}`} {

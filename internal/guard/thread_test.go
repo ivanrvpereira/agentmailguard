@@ -54,7 +54,7 @@ func TestThreadScreensEachMessageAsListDoes(t *testing.T) {
 			t.Fatalf("red message exposed hidden fields: %+v", m)
 		}
 	}
-	list, err := g.List(ctx, "inbox", 25, 0)
+	list, err := summaries(g.List(ctx, "inbox", model.PageRequest{}))
 	if err != nil || !reflect.DeepEqual(list, got) {
 		t.Fatalf("list=%+v thread=%+v err=%v", list, got, err)
 	}

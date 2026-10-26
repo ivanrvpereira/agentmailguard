@@ -15,8 +15,8 @@ func TestMailSearchByRecipientMapsToAndNamesEveryTermInTheRefusal(t *testing.T) 
 	}
 	s, _ := fakeServer(t, home)
 	status, body := accountRPC(t, s, "mail.search", "demo", `{"to":"ana@example.test"}`)
-	var items []struct{ ID string }
-	if err := json.Unmarshal([]byte(body), &items); status != 200 || err != nil || !reflect.DeepEqual(items, []struct{ ID string }{{"to-ana"}}) {
+	var page struct{ Messages []struct{ ID string } }
+	if err := json.Unmarshal([]byte(body), &page); status != 200 || err != nil || !reflect.DeepEqual(page.Messages, []struct{ ID string }{{"to-ana"}}) {
 		t.Fatalf("to search: %d %s", status, body)
 	}
 	for params, want := range map[string]string{

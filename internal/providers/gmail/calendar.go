@@ -143,17 +143,22 @@ func (c *calendar) List(ctx context.Context, start, end time.Time) ([]model.Even
 	}
 }
 
-// Search reads the first page of events.list with q only, so Google's default page size and order apply
-// (https://developers.google.com/workspace/calendar/api/v3/reference/events/list). Its items are full events,
-// except that a deleted instance of a recurring event comes as a cancelled entry without a start; it is skipped.
-func (c *calendar) Search(ctx context.Context, text string) ([]model.Event, error) {
-	v, err := c.c.get(ctx, "Calendar", c.c.options.CalendarURL+"/events", url.Values{"q": {text}})
+// Search reads one page of events.list with q and the page as pageToken only, so Google's default page size and
+// order apply (https://developers.google.com/workspace/calendar/api/v3/reference/events/list). Its items are full
+// events, except that a deleted instance of a recurring event comes as a cancelled entry without a start; it is
+// skipped. The next page is nextPageToken; one equal to the page is refused, as it would never end.
+func (c *calendar) Search(ctx context.Context, text, page string) (model.EventPage, error) {
+	q := url.Values{"q": {text}}
+	if page != "" {
+		q.Set("pageToken", page)
+	}
+	v, err := c.c.get(ctx, "Calendar", c.c.options.CalendarURL+"/events", q)
 	if err != nil {
-		return nil, err
+		return model.EventPage{}, err
 	}
 	a, err := items(v, "items", "Calendar")
 	if err != nil {
-		return nil, err
+		return model.EventPage{}, err
 	}
 	out := []model.Event{}
 	for _, raw := range a {
@@ -166,11 +171,15 @@ func (c *calendar) Search(ctx context.Context, text string) ([]model.Event, erro
 		}
 		event, err := parseEvent(raw)
 		if err != nil {
-			return nil, err
+			return model.EventPage{}, err
 		}
 		out = append(out, event)
 	}
-	return out, nil
+	next, err := pageToken(v, map[string]bool{page: true}, "Calendar")
+	if err != nil {
+		return model.EventPage{}, err
+	}
+	return model.EventPage{Events: out, Next: next}, nil
 }
 func (c *calendar) Get(ctx context.Context, id string) (model.Event, error) {
 	v, err := c.c.get(ctx, "Calendar", c.c.options.CalendarURL+"/events/"+segment(id), nil)

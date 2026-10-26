@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -109,14 +110,55 @@ func (b *mailbox) folderExists(ctx context.Context, folder string) error {
 	return nil
 }
 
-func (b *mailbox) List(ctx context.Context, folder string, count, skip int, body bool) ([]model.Message, error) {
-	if count < 1 || skip < 0 {
-		return nil, invalid
+// pageSize and maxPageSize are Graph's $top default and maximum, which the fake follows.
+const pageSize, maxPageSize = 10, 1000
+
+// window reads a page request as the offset that its marker names and the page size. A marker is the decimal
+// offset that cut made; anything else is invalid.
+func window(p model.PageRequest) (offset, size int, err error) {
+	size = p.Size
+	if size == 0 {
+		size = pageSize
+	}
+	if size < 0 || size > maxPageSize {
+		return 0, 0, invalid
+	}
+	if p.Page == "" {
+		return 0, size, nil
+	}
+	offset, e := strconv.Atoi(p.Page)
+	if e != nil || offset < 0 || strconv.Itoa(offset) != p.Page {
+		return 0, 0, invalid
+	}
+	return offset, size, nil
+}
+
+// cut returns the page of all at offset and the marker of the next page, "" on the last page.
+func cut[T any](all []T, offset, size int) ([]T, string) {
+	if offset >= len(all) {
+		return []T{}, ""
+	}
+	end := offset + min(size, len(all)-offset)
+	if end == len(all) {
+		return all[offset:], ""
+	}
+	return all[offset:end], strconv.Itoa(end)
+}
+
+func (b *mailbox) List(ctx context.Context, folder string, page model.PageRequest, body bool) (model.MessagePage, error) {
+	offset, size, err := window(page)
+	if err != nil {
+		return model.MessagePage{}, err
 	}
 	if err := b.folderExists(ctx, folder); err != nil {
-		return nil, err
+		return model.MessagePage{}, err
 	}
-	return b.query(ctx, body, `AND folder = ?`+newest+` LIMIT ? OFFSET ?`, folder, count, skip)
+	all, err := b.query(ctx, body, `AND folder = ?`+newest, folder)
+	if err != nil {
+		return model.MessagePage{}, err
+	}
+	out, next := cut(all, offset, size)
+	return model.MessagePage{Messages: out, Next: next}, nil
 }
 
 // Thread reads the conversation from every folder by the effective thread ID: a NULL thread_id is the message ID.
@@ -137,26 +179,24 @@ func contains(value string, part *string) bool {
 
 // Search matches case-insensitive substrings; To matches any one To or Cc address. After and Before are
 // inclusive UTC dates, like the Microsoft 365 received>= and received<= terms.
-func (b *mailbox) Search(ctx context.Context, q model.SearchQuery, count int, body bool) ([]model.Message, error) {
-	if count < 1 {
-		return nil, invalid
+func (b *mailbox) Search(ctx context.Context, q model.SearchQuery, page model.PageRequest, body bool) (model.MessagePage, error) {
+	offset, size, err := window(page)
+	if err != nil {
+		return model.MessagePage{}, err
 	}
 	where, args := newest, []any{}
 	if q.Folder != nil {
 		if err := b.folderExists(ctx, *q.Folder); err != nil {
-			return nil, err
+			return model.MessagePage{}, err
 		}
 		where, args = `AND folder = ?`+newest, []any{*q.Folder}
 	}
 	all, err := b.query(ctx, true, where, args...)
 	if err != nil {
-		return nil, err
+		return model.MessagePage{}, err
 	}
-	out := []model.Message{}
+	found := []model.Message{}
 	for _, m := range all {
-		if len(out) == count {
-			break
-		}
 		day := m.ReceivedAt.UTC()
 		sender := m.Sender.Name + "\n" + m.Sender.Address
 		recipient := q.To == nil || *q.To == "" || slices.ContainsFunc(slices.Concat(m.To, m.CC), func(a model.Address) bool { return contains(a.Address, q.To) })
@@ -167,9 +207,10 @@ func (b *mailbox) Search(ctx context.Context, q model.SearchQuery, count int, bo
 		if !body {
 			m.Body, m.ContentType, m.Auth = nil, nil, nil
 		}
-		out = append(out, m)
+		found = append(found, m)
 	}
-	return out, nil
+	out, next := cut(found, offset, size)
+	return model.MessagePage{Messages: out, Next: next}, nil
 }
 
 // ScanInbox reads metadata of non-draft inbox mail with since <= received_at < until. A row with an

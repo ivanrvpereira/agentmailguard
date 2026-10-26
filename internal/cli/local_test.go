@@ -243,7 +243,7 @@ func TestCLIExitSemanticsAndServerErrors(t *testing.T) {
 		{[]string{"auth", "status"}, 200, `{"account":"work","ok":false,"logged_in":false}`, 1, true},
 		{[]string{"mail", "get", "x"}, 500, `{"error":"private-server-canary"}`, 1, false},
 		{[]string{"mail", "organize", "--since", "2026-01-01"}, 400, `{"error":"invalid request"}`, 2, false},
-		{[]string{"mail", "list", "--count", "101"}, 400, `{"error":"invalid request"}`, 1, false},
+		{[]string{"mail", "list", "--count", "-1"}, 400, `{"error":"invalid request"}`, 1, false},
 	} {
 		h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var req struct{ Account string }

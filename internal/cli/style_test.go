@@ -27,11 +27,11 @@ func received(t *testing.T, year int, month time.Month, day, hour, minute int) s
 // sgr matches a color or decoration sequence, so a test can compare styled output with plain output.
 var sgr = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
-// summaryList is one response per verdict class: green and yellow carry a sender name and a subject,
+// summaryList is one page with one message per verdict class: green and yellow carry a sender name and a subject,
 // red and sealed carry the address only, and error carries neither.
 func summaryList(t *testing.T) string {
 	t.Helper()
-	return `[{"id":"green-id","verdict":"green","received_at":"` + received(t, 2026, 3, 7, 9, 30) + `","auth":{},"is_read":false,"flag":"flagged","categories":[],` +
+	return `{"messages":[{"id":"green-id","verdict":"green","received_at":"` + received(t, 2026, 3, 7, 9, 30) + `","auth":{},"is_read":false,"flag":"flagged","categories":[],` +
 		`"sender":{"name":"Alice Example","address":"alice@test"},"subject":"Quarterly numbers"},` +
 		`{"id":"yellow-id","verdict":"yellow","received_at":"` + received(t, 2026, 3, 7, 8, 15) + `","auth":{},"is_read":true,"flag":"none","categories":[],` +
 		`"sender":{"name":"Carol Example","address":"carol@test"},"subject":"Invoice","reason":"injection"},` +
@@ -39,7 +39,7 @@ func summaryList(t *testing.T) string {
 		`"sender":{"address":"bob@test"},"reason":"injection"},` +
 		`{"id":"sealed-id","verdict":"sealed","received_at":"` + received(t, 2026, 3, 6, 11, 45) + `","auth":{},"is_read":true,"flag":"none","categories":[],` +
 		`"sender":{"address":"dave@test"},"reason":"account_security"},` +
-		`{"id":"error-id","verdict":"error","received_at":"` + received(t, 2026, 3, 5, 7, 0) + `","auth":{},"is_read":true,"flag":"none","categories":[],"error":"Error"}]`
+		`{"id":"error-id","verdict":"error","received_at":"` + received(t, 2026, 3, 5, 7, 0) + `","auth":{},"is_read":true,"flag":"none","categories":[],"error":"Error"}]}`
 }
 
 // runPretty runs one command against a fake server that answers with body.
@@ -90,6 +90,22 @@ func TestMailListAndSearchPrettyRenderAPlainTable(t *testing.T) {
 	}
 }
 
+// The next page follows the table on one line, so the agent can repeat the command with --page; without one, the
+// table ends the output.
+func TestMailListPrettyPrintsTheNextPageAfterTheTable(t *testing.T) {
+	_, without, _ := runPretty(t, summaryList(t), nil, "mail", "list", "--pretty")
+	if strings.Contains(without, "next_page") {
+		t.Fatalf("next_page line without a next page:\n%s", without)
+	}
+	body := strings.TrimSuffix(summaryList(t), "}") + `,"next_page":"token-2"}`
+	for _, args := range [][]string{{"mail", "list", "--pretty"}, {"mail", "search", "--text", "x", "--pretty"}} {
+		code, out, errout := runPretty(t, body, nil, args...)
+		if code != 0 || errout != "" || out != without+"next_page: token-2\n" {
+			t.Errorf("%v: exit=%d stderr=%q\n%s", args, code, errout, out)
+		}
+	}
+}
+
 // Each verdict carries its own meaning in color: safe, caution, refused, account security, failure.
 func TestMailListPrettyColorsEachVerdictWhenColorIsForced(t *testing.T) {
 	plain := func() string {
@@ -132,7 +148,7 @@ func TestMailListWithoutPrettyStaysIndentedJSON(t *testing.T) {
 }
 
 func TestMailListPrettyRefusesAResponseThatIsNotASummaryList(t *testing.T) {
-	for _, body := range []string{`{"ok":true}`, `[{"id":5}]`, `"text"`} {
+	for _, body := range []string{`{"ok":true}`, `{"messages":[{"id":5}]}`, `[]`, `"text"`} {
 		code, out, errout := runPretty(t, body, nil, "mail", "list", "--pretty")
 		if code != 1 || out != "" || errout != "error: invalid server response\n" {
 			t.Errorf("body=%s exit=%d stdout=%q stderr=%q", body, code, out, errout)
@@ -209,8 +225,8 @@ func TestErrorPrefixKeepsItsWordsOnEveryWriter(t *testing.T) {
 func TestPrettyOutputDropsControlSequencesFromServerText(t *testing.T) {
 	env := map[string]string{"CLICOLOR_FORCE": "1", "TERM": "xterm-256color"}
 	hostile := `Hi \u001b[31mfake\u001b[0m \u001b]8;;http://x\u0007link\u001b]8;;\u0007 back\rspace\u0008`
-	list := `[{"id":"h-id","verdict":"green","received_at":"` + received(t, 2026, 3, 7, 9, 30) + `","auth":{},"is_read":false,"flag":"none","categories":[],` +
-		`"sender":{"name":"` + hostile + `","address":"alice@test"},"subject":"` + hostile + `"}]`
+	list := `{"messages":[{"id":"h-id","verdict":"green","received_at":"` + received(t, 2026, 3, 7, 9, 30) + `","auth":{},"is_read":false,"flag":"none","categories":[],` +
+		`"sender":{"name":"` + hostile + `","address":"alice@test"},"subject":"` + hostile + `"}],"next_page":"` + hostile + `"}`
 	get := `{"id":"h-id","verdict":"green","received_at":"` + received(t, 2026, 3, 7, 9, 30) + `","auth":{},"is_read":false,"flag":"none","categories":[],` +
 		`"sender":{"name":"Alice","address":"alice@test"},"subject":"` + hostile + `","body":"line one\n` + hostile + `\nline three"}`
 	for _, tc := range []struct {
@@ -244,8 +260,8 @@ func TestPrettyOutputDropsControlSequencesFromServerText(t *testing.T) {
 // the argument of the next command.
 func TestPrettyTableTruncatesSenderAndSubject(t *testing.T) {
 	long := strings.Repeat("word ", 30)
-	list := `[{"id":"long-id","verdict":"green","received_at":"` + received(t, 2026, 3, 7, 9, 30) + `","auth":{},"is_read":false,"flag":"none","categories":[],` +
-		`"sender":{"name":"` + long + `","address":"alice@test"},"subject":"` + long + `"}]`
+	list := `{"messages":[{"id":"long-id","verdict":"green","received_at":"` + received(t, 2026, 3, 7, 9, 30) + `","auth":{},"is_read":false,"flag":"none","categories":[],` +
+		`"sender":{"name":"` + long + `","address":"alice@test"},"subject":"` + long + `"}]}`
 	code, out, errout := runPretty(t, list, nil, "mail", "list", "--pretty")
 	if code != 0 || errout != "" {
 		t.Fatalf("exit=%d stderr=%q", code, errout)

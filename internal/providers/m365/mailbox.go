@@ -1,6 +1,7 @@
 package m365
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"net/url"
@@ -117,15 +118,13 @@ func (b *mailbox) Get(ctx context.Context, ids []string, body bool) ([]model.Mes
 	}
 	return out, nil
 }
-func (b *mailbox) List(ctx context.Context, folder string, count, skip int, body bool) ([]model.Message, error) {
-	if count < 1 || skip < 0 {
-		return nil, invalidMetadata
-	}
+
+// List reads one page of folder, newest first. $top goes only with a size, as given, so Graph's default (10) and
+// maximum (1,000) apply (https://learn.microsoft.com/en-us/graph/api/user-list-messages?view=graph-rest-1.0).
+func (b *mailbox) List(ctx context.Context, folder string, page model.PageRequest, body bool) (model.MessagePage, error) {
 	q := messageQuery(body)
-	q.Set("$top", strconv.Itoa(count))
-	q.Set("$skip", strconv.Itoa(skip))
 	q.Set("$orderby", "receivedDateTime desc")
-	return b.collection(ctx, b.c.endpoint("/me/mailFolders/"+escapeID(folder)+"/messages", q), body)
+	return b.page(ctx, "/me/mailFolders/"+escapeID(folder)+"/messages", q, page, body)
 }
 
 // notFound is the error of a Graph 404, which a missing message gets.
@@ -188,37 +187,63 @@ func kql(q model.SearchQuery) string {
 	}
 	return `"` + strings.Join(parts, " ") + `"`
 }
-func (b *mailbox) Search(ctx context.Context, query model.SearchQuery, count int, body bool) ([]model.Message, error) {
-	if count < 1 {
-		return nil, invalidMetadata
-	}
+func (b *mailbox) Search(ctx context.Context, query model.SearchQuery, page model.PageRequest, body bool) (model.MessagePage, error) {
 	path := "/me/messages"
 	if query.Folder != nil {
 		path = "/me/mailFolders/" + escapeID(*query.Folder) + "/messages"
 	}
 	q := messageQuery(body)
-	q.Set("$top", strconv.Itoa(count))
 	q.Set("$search", kql(query))
-	return b.collection(ctx, b.c.endpoint(path, q), body)
+	return b.page(ctx, path, q, page, body)
 }
-func (b *mailbox) collection(ctx context.Context, raw string, body bool) ([]model.Message, error) {
-	d, err := b.c.get(ctx, raw, false)
+
+// maxTop is the largest $top that Graph documents for messages
+// (https://learn.microsoft.com/en-us/graph/api/user-list-messages?view=graph-rest-1.0).
+const maxTop = 1000
+
+// page reads one page of messages at path with q, plus $top when a size is given. A page with more items than the
+// size, or than maxTop without one, is refused. A page is a nextLink that Graph
+// gave for the same request, applied as is (https://learn.microsoft.com/en-us/graph/paging); one that pageLink or
+// validURL refuses fails before any credential read. The next page is the response's nextLink.
+func (b *mailbox) page(ctx context.Context, path string, q url.Values, page model.PageRequest, body bool) (model.MessagePage, error) {
+	if page.Size < 0 {
+		return model.MessagePage{}, invalidMetadata
+	}
+	if page.Size > 0 {
+		q.Set("$top", strconv.Itoa(page.Size))
+	}
+	first := b.c.endpoint(path, q)
+	link := first
+	if page.Page != "" {
+		if !pageLink(page.Page, first) {
+			return model.MessagePage{}, invalidPage
+		}
+		link = page.Page
+	}
+	d, err := b.c.get(ctx, link, false)
 	if err != nil {
-		return nil, err
+		return model.MessagePage{}, err
 	}
 	items, err := pageItems(d)
 	if err != nil {
-		return nil, err
+		return model.MessagePage{}, err
+	}
+	if len(items) > min(cmp.Or(page.Size, maxTop), maxTop) {
+		return model.MessagePage{}, invalidPage
 	}
 	out := []model.Message{}
 	for _, d := range items {
 		m, err := message(d, body)
 		if err != nil {
-			return nil, err
+			return model.MessagePage{}, err
 		}
 		out = append(out, m)
 	}
-	return out, nil
+	next, err := b.c.next(d, first)
+	if err != nil {
+		return model.MessagePage{}, err
+	}
+	return model.MessagePage{Messages: out, Next: next}, nil
 }
 
 // Folders marks Deleted Items and every folder below it, so moves there can be refused. A failed lookup fails closed.

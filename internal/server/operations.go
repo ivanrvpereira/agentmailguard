@@ -152,7 +152,7 @@ type idsParam struct {
 type listParam struct {
 	Folder string `json:"folder"`
 	Count  int    `json:"count"`
-	Skip   int    `json:"skip"`
+	Page   string `json:"page"`
 }
 type threadParam struct {
 	ID string `json:"id"`
@@ -166,6 +166,7 @@ type searchParam struct {
 	Before  *string `json:"before"`
 	Folder  *string `json:"folder"`
 	Count   int     `json:"count"`
+	Page    string  `json:"page"`
 }
 type linkParam struct {
 	ID    string   `json:"id"`
@@ -196,6 +197,7 @@ type calendarParam struct {
 }
 type calendarSearchParam struct {
 	Text string `json:"text"`
+	Page string `json:"page"`
 }
 type availabilityParam struct {
 	To    []string `json:"to"`
@@ -321,11 +323,13 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 			return a.guard.CalendarGet(ctx, p.ID)
 		}
 	case "mail.list":
-		p := listParam{Folder: "inbox", Count: 25}
-		if params(r.Params, &p) != nil || !idValid(p.Folder) || p.Count < 1 || p.Count > 100 || p.Skip < 0 || p.Skip > 1000000 {
+		p := listParam{Folder: "inbox"}
+		if params(r.Params, &p) != nil || !idValid(p.Folder) || p.Count < 0 || !model.ValidPage(p.Page) {
 			return nil, errInvalid
 		}
-		call = func(a *account) (any, error) { return a.guard.List(ctx, p.Folder, p.Count, p.Skip) }
+		call = func(a *account) (any, error) {
+			return a.guard.List(ctx, p.Folder, model.PageRequest{Size: p.Count, Page: p.Page})
+		}
 	case "mail.thread":
 		var p threadParam
 		if params(r.Params, &p) != nil || !idValid(p.ID) {
@@ -333,8 +337,8 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		}
 		call = func(a *account) (any, error) { return a.guard.Thread(ctx, p.ID) }
 	case "mail.search":
-		p := searchParam{Count: 25}
-		if params(r.Params, &p) != nil || p.Count < 1 || p.Count > 100 {
+		var p searchParam
+		if params(r.Params, &p) != nil || p.Count < 0 || !model.ValidPage(p.Page) {
 			return nil, errInvalid
 		}
 		for _, v := range []*string{p.Text, p.Sender, p.To, p.Subject, p.Folder} {
@@ -355,7 +359,9 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 				*d.out = &t
 			}
 		}
-		call = func(a *account) (any, error) { return a.guard.Search(ctx, q, p.Count) }
+		call = func(a *account) (any, error) {
+			return a.guard.Search(ctx, q, model.PageRequest{Size: p.Count, Page: p.Page})
+		}
 	case "mail.link":
 		var p linkParam
 		if params(r.Params, &p) != nil || !idValid(p.ID) || p.All == (len(p.Links) > 0) || !listValid(p.Links, 0, 1000) {
@@ -411,7 +417,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		call = func(a *account) (any, error) { return mutations(a.guard.Flag(ctx, p.IDs, p.State)) }
 	case "mail.categorize":
 		var p categoryParam
-		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, noMax) || !listValid(p.Add, 0, 100) || !listValid(p.Remove, 0, 100) {
+		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, noMax) || !listValid(p.Add, 0, noMax) || !listValid(p.Remove, 0, noMax) {
 			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) { return mutations(a.guard.Categorize(ctx, p.IDs, p.Add, p.Remove)) }
@@ -453,10 +459,10 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		call = func(a *account) (any, error) { return a.guard.CalendarList(ctx, first, last) }
 	case "calendar.search":
 		var p calendarSearchParam
-		if params(r.Params, &p) != nil || !validString(p.Text, 4096, false) {
+		if params(r.Params, &p) != nil || !validString(p.Text, 4096, false) || !model.ValidPage(p.Page) {
 			return nil, errInvalid
 		}
-		call = func(a *account) (any, error) { return a.guard.CalendarSearch(ctx, p.Text) }
+		call = func(a *account) (any, error) { return a.guard.CalendarSearch(ctx, p.Text, p.Page) }
 	case "calendar.availability":
 		var p availabilityParam
 		if params(r.Params, &p) != nil || !listValid(p.To, 1, model.MaxAvailabilityAddresses) {

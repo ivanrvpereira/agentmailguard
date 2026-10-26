@@ -2,6 +2,7 @@ package guard_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,9 +21,9 @@ func (c *calendar) List(context.Context, time.Time, time.Time) ([]model.Event, e
 	c.calls++
 	return []model.Event{c.event}, nil
 }
-func (c *calendar) Search(context.Context, string) ([]model.Event, error) {
+func (c *calendar) Search(context.Context, string, string) (model.EventPage, error) {
 	c.calls++
-	return []model.Event{c.event}, nil
+	return model.EventPage{Events: []model.Event{c.event}}, nil
 }
 
 type eventScreener struct {
@@ -100,16 +101,17 @@ func TestPrivateEventsScreenEveryReadWithoutBody(t *testing.T) {
 	}
 }
 
-// searchCalendar answers Search with found and counts the calls.
+// searchCalendar answers Search with found and next, and records the pages it was asked for.
 type searchCalendar struct {
 	model.Calendar
 	found []model.Event
-	calls int
+	next  string
+	pages []string
 }
 
-func (c *searchCalendar) Search(context.Context, string) ([]model.Event, error) {
-	c.calls++
-	return c.found, nil
+func (c *searchCalendar) Search(_ context.Context, _, page string) (model.EventPage, error) {
+	c.pages = append(c.pages, page)
+	return model.EventPage{Events: c.found, Next: c.next}, nil
 }
 
 func TestCalendarSearchScreensEachFoundEventInOrder(t *testing.T) {
@@ -120,7 +122,8 @@ func TestCalendarSearchScreensEachFoundEventInOrder(t *testing.T) {
 	}
 	s := &subjectScreener{verdicts: map[string]model.Verdict{"hidden subject": model.Error}}
 	g, _, _ := policyGuard(t, &mailbox{}, &searchCalendar{found: found}, s, allowAll)
-	got, err := g.CalendarSearch(t.Context(), "budget")
+	page, err := g.CalendarSearch(t.Context(), "budget", "")
+	got := page.Events
 	if err != nil || len(got) != 2 || got[0].ID != "b" || got[1].ID != "a" || len(s.screened) != 2 {
 		t.Fatalf("got=%+v err=%v screened=%v", got, err, s.screened)
 	}
@@ -140,7 +143,7 @@ func TestCalendarSearchFailsClosedOnAResultThatBreaksTheContract(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := &subjectScreener{}
 			g, _, _ := policyGuard(t, &mailbox{}, &searchCalendar{found: found}, s, allowAll)
-			if got, err := g.CalendarSearch(t.Context(), "budget"); err != guard.GuardError("ValueError") || got != nil || len(s.screened) != 0 {
+			if got, err := g.CalendarSearch(t.Context(), "budget", ""); err != guard.GuardError("ValueError") || got.Events != nil || len(s.screened) != 0 {
 				t.Fatalf("got=%+v err=%v screened=%v", got, err, s.screened)
 			}
 		})
@@ -150,7 +153,32 @@ func TestCalendarSearchFailsClosedOnAResultThatBreaksTheContract(t *testing.T) {
 func TestCalendarSearchRefusesEmptyTextBeforeTheCalendar(t *testing.T) {
 	cal := &searchCalendar{}
 	g, _, _ := policyGuard(t, &mailbox{}, cal, &subjectScreener{}, allowAll)
-	if _, err := g.CalendarSearch(t.Context(), ""); err != guard.GuardError("calendar search needs text") || cal.calls != 0 {
-		t.Fatalf("err=%v calls=%d", err, cal.calls)
+	if _, err := g.CalendarSearch(t.Context(), "", ""); err != guard.GuardError("calendar search needs text") || len(cal.pages) != 0 {
+		t.Fatalf("err=%v pages=%v", err, cal.pages)
+	}
+}
+
+// The guard re-checks the page before the calendar and checks the next-page marker as List does.
+func TestCalendarSearchChecksThePageAndTheNextMarker(t *testing.T) {
+	e := model.Event{ID: "a", Start: now, End: now.Add(time.Hour), Body: ptr(""), ContentType: ptr(model.Text)}
+	cal := &searchCalendar{found: []model.Event{e}, next: "20"}
+	s := &subjectScreener{}
+	g, _, _ := policyGuard(t, &mailbox{}, cal, s, allowAll)
+	if got, err := g.CalendarSearch(t.Context(), "budget", "10"); err != nil || len(got.Events) != 1 || got.NextPage != "20" || cal.pages[0] != "10" {
+		t.Fatalf("got=%+v err=%v pages=%v", got, err, cal.pages)
+	}
+	for _, page := range []string{"1 0", "\u00e9", strings.Repeat("1", model.MaxPage+1)} {
+		if got, err := g.CalendarSearch(t.Context(), "budget", page); err != guard.GuardError("invalid request") || got.Events != nil || len(cal.pages) != 1 {
+			t.Errorf("page %.20q: %d events, %v, pages=%d", page, len(got.Events), err, len(cal.pages))
+		}
+	}
+	for _, next := range []string{"2 0", "\x1b[31m", strings.Repeat("1", model.MaxPage+1)} {
+		cal.next = next
+		if got, err := g.CalendarSearch(t.Context(), "budget", ""); err != guard.GuardError("ValueError") || got.Events != nil || got.NextPage != "" {
+			t.Errorf("next %.20q: %d events, next %.20q, %v", next, len(got.Events), got.NextPage, err)
+		}
+	}
+	if len(s.screened) != 1 {
+		t.Fatalf("an event of a refused page was screened: %v", s.screened)
 	}
 }

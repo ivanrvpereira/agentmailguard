@@ -37,6 +37,13 @@ type MailSummary struct {
 	Error       *string            `json:"error,omitempty"`
 }
 
+// MailPage is one page of mail.list or mail.search. NextPage is the provider's marker for the next page, not
+// message text, at every verdict; the guard checks it with model.ValidPage. It is absent on the last page.
+type MailPage struct {
+	Messages []MailSummary `json:"messages"`
+	NextPage string        `json:"next_page,omitempty"`
+}
+
 type MailView struct {
 	MailSummary
 	Body      *string            `json:"body,omitempty"`

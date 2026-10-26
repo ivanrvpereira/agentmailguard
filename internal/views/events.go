@@ -35,6 +35,12 @@ type CalendarView struct {
 	Error       *string            `json:"error,omitempty"`
 }
 
+// CalendarPage is one page of calendar.search. NextPage is as in MailPage.
+type CalendarPage struct {
+	Events   []CalendarView `json:"events"`
+	NextPage string         `json:"next_page,omitempty"`
+}
+
 func joinURL(s *string) *string {
 	if s == nil || !strings.HasPrefix(*s, "https://") {
 		return nil

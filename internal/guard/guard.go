@@ -146,9 +146,9 @@ func (g *Guard) cached(ctx context.Context, ids []string) (map[string]cache.Row,
 }
 
 func hidden(v model.Verdict) bool { return v == model.Red || v == model.Yellow || v == model.Sealed }
-func checkCount(n int) error {
-	if n < 1 || n > 100 {
-		return GuardError("count must be between 1 and 100")
+func checkPage(p model.PageRequest) error {
+	if p.Size < 0 || !model.ValidPage(p.Page) {
+		return GuardError("invalid request")
 	}
 	return nil
 }
@@ -329,25 +329,35 @@ func (g *Guard) summaries(ctx context.Context, messages []model.Message, categor
 	}
 	return out, nil
 }
-func (g *Guard) List(ctx context.Context, folder string, count, skip int) ([]views.MailSummary, error) {
-	if err := checkCount(count); err != nil {
-		return nil, err
-	}
-	if skip < 0 {
-		return nil, GuardError("skip must be 0 or more")
+
+// List screens one page of folder. The provider's next-page marker is provider data: one that model.ValidPage
+// refuses fails the page.
+func (g *Guard) List(ctx context.Context, folder string, page model.PageRequest) (views.MailPage, error) {
+	if err := checkPage(page); err != nil {
+		return views.MailPage{}, err
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return views.MailPage{}, err
 	}
-	messages, err := g.mailbox.List(ctx, folder, count, skip, false)
+	found, err := g.mailbox.List(ctx, folder, page, false)
 	if err != nil {
-		return nil, safeErr(ctx, err)
+		return views.MailPage{}, safeErr(ctx, err)
+	}
+	return g.mailPage(ctx, found)
+}
+func (g *Guard) mailPage(ctx context.Context, found model.MessagePage) (views.MailPage, error) {
+	if !model.ValidPage(found.Next) {
+		return views.MailPage{}, GuardError("ValueError")
 	}
 	categories, err := g.Categories(ctx)
 	if err != nil {
-		return nil, err
+		return views.MailPage{}, err
 	}
-	return g.summaries(ctx, messages, categories)
+	out, err := g.summaries(ctx, found.Messages, categories)
+	if err != nil {
+		return views.MailPage{}, err
+	}
+	return views.MailPage{Messages: out, NextPage: found.Next}, nil
 }
 func (g *Guard) read(ctx context.Context, id string) (model.Message, cache.Row, *content.Rendered, error) {
 	rows, err := g.cached(ctx, []string{id})

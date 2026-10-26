@@ -127,6 +127,35 @@ type NewDraft struct {
 	Subject, Body string
 }
 
+// PageRequest asks for one page of a list or search. Size 0 sends no size, so the provider's default page size
+// applies. Page "" is the first page; otherwise it is the Next of an earlier result for the same request: untrusted
+// agent input that the adapter checks for form; the Microsoft 365 mail adapter also refuses one from another request.
+type PageRequest struct {
+	Size int
+	Page string
+}
+
+// MessagePage is one page of messages. Next is "" on the last page, else the provider's marker for the next page.
+type MessagePage struct {
+	Messages []Message
+	Next     string
+}
+
+// EventPage is one page of events. Next is "" on the last page, else the provider's marker for the next page.
+type EventPage struct {
+	Events []Event
+	Next   string
+}
+
+// MaxPage bounds the length of a page marker, from the agent and from the provider.
+const MaxPage = 16 << 10
+
+// ValidPage reports whether s can be a page marker: at most MaxPage bytes of printable ASCII without spaces. "" is
+// no marker.
+func ValidPage(s string) bool {
+	return len(s) <= MaxPage && !strings.ContainsFunc(s, func(r rune) bool { return r <= ' ' || r > '~' })
+}
+
 // Error must contain only a safe error code/status, never a provider response body.
 // ApprovalID is set only by the guard, for an action stored for approval (Error "pending").
 type MutationResult struct {
@@ -153,8 +182,8 @@ type InboxScan struct {
 // ScanInbox reads all pages before returning, metadata only, excluding drafts,
 // with since <= received_at < until (nil until means no upper bound).
 type Mailbox interface {
-	List(ctx context.Context, folder FolderID, count, skip int, body bool) ([]Message, error)
-	Search(ctx context.Context, query SearchQuery, count int, body bool) ([]Message, error)
+	List(ctx context.Context, folder FolderID, page PageRequest, body bool) (MessagePage, error)
+	Search(ctx context.Context, query SearchQuery, page PageRequest, body bool) (MessagePage, error)
 	Get(ctx context.Context, ids []MessageID, body bool) ([]Message, error)
 	// Thread returns every message of the conversation that the provider gives, newest first, from every folder
 	// (trash, spam or junk, sent, and drafts included), metadata only like List. An unknown thread is the adapter's
@@ -184,9 +213,10 @@ type Mailbox interface {
 type Calendar interface {
 	List(ctx context.Context, start, end time.Time) ([]Event, error)
 	Get(ctx context.Context, id EventID) (Event, error)
-	// Search returns the events that the provider's own search finds for text, one page in the provider's
-	// default size and order, each with every field that Get reads.
-	Search(ctx context.Context, text string) ([]Event, error)
+	// Search returns one page of the events that the provider's own search finds for text, in the provider's
+	// default size and order, each with every field that Get reads. page is "" for the first page, else the Next
+	// of an earlier result for the same text: untrusted, so the adapter refuses a marker of the wrong form.
+	Search(ctx context.Context, text, page string) (EventPage, error)
 }
 
 type NewEvent struct {

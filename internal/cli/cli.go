@@ -268,12 +268,18 @@ func (r *runner) call(c *cobra.Command, op string, p map[string]any, pretty bool
 		}
 		text = styleText(views.ToText(v), v.Verdict) + "\n"
 	case pretty && (op == "mail.list" || op == "mail.search"):
-		var items []views.MailSummary
-		if json.Unmarshal(b, &items) != nil {
+		var page struct {
+			Messages *[]views.MailSummary `json:"messages"`
+			NextPage string               `json:"next_page"`
+		}
+		if json.Unmarshal(b, &page) != nil || page.Messages == nil {
 			r.code = failure(r.stderr, "invalid server response")
 			return errDone
 		}
-		text = summaryTable(items) + "\n"
+		text = summaryTable(*page.Messages) + "\n"
+		if page.NextPage != "" {
+			text += "next_page: " + terminalSafe(page.NextPage) + "\n"
+		}
 	default:
 		var indented bytes.Buffer
 		if json.Indent(&indented, bytes.TrimSpace(b), "", "  ") != nil {
@@ -466,16 +472,32 @@ func mailCmd(r *runner) *cobra.Command {
 	return c
 }
 
+// paging adds --count and --page to a list or search. The parameters carry each only when the command line sets it,
+// so the provider's default page size applies without --count.
+func paging(c *cobra.Command, count *int, page *string) {
+	c.Flags().IntVar(count, "count", 0, "number of messages per page; default: the provider's (Gmail 100, Microsoft 365 10)")
+	c.Flags().StringVar(page, "page", "", "next_page of an earlier result; repeat the same options")
+}
+
+// paged copies --count and --page into the parameters when the command line set them.
+func paged(c *cobra.Command, p map[string]any, count int, page *string) {
+	if c.Flags().Changed("count") {
+		p["count"] = count
+	}
+	optional(c, p, "page", page)
+}
+
 func mailListCmd(r *runner) *cobra.Command {
-	folder, count, skip := "inbox", 25, 0
+	folder, count, page := "inbox", 0, ""
 	pretty := false
-	c := r.leaf("list", "List screened messages in a folder", 0, 0, func(c *cobra.Command, _ []string) error {
-		return r.call(c, "mail.list", map[string]any{"folder": folder, "count": count, "skip": skip}, pretty)
+	c := r.leaf("list", "List one page of screened messages in a folder", 0, 0, func(c *cobra.Command, _ []string) error {
+		p := map[string]any{"folder": folder}
+		paged(c, p, count, &page)
+		return r.call(c, "mail.list", p, pretty)
 	})
 	negated(c, "pretty", "render the messages as a table instead of JSON", &pretty)
-	c.Flags().StringVar(&folder, "folder", folder, "folder name or identifier")
-	c.Flags().IntVar(&count, "count", count, "number of messages to return")
-	c.Flags().IntVar(&skip, "skip", skip, "number of messages to skip")
+	c.Flags().StringVar(&folder, "folder", folder, "folder name or identifier; the Inbox by default, our choice because the providers differ without a folder")
+	paging(c, &count, &page)
 	return c
 }
 
@@ -498,11 +520,12 @@ func mailThreadCmd(r *runner) *cobra.Command {
 func isDate(v string) bool { _, e := time.Parse("2006-01-02", v); return e == nil }
 
 func mailSearchCmd(r *runner) *cobra.Command {
-	var text, from, to, subject, after, before, folder string
-	count := 25
+	var text, from, to, subject, after, before, folder, page string
+	count := 0
 	pretty := false
-	c := r.leaf("search", "Search screened messages", 0, 0, func(c *cobra.Command, _ []string) error {
-		p := map[string]any{"count": count}
+	c := r.leaf("search", "Search screened messages, one page at a time", 0, 0, func(c *cobra.Command, _ []string) error {
+		p := map[string]any{}
+		paged(c, p, count, &page)
 		optional(c, p, "text", &text)
 		optional(c, p, "from", &from)
 		optional(c, p, "to", &to)
@@ -523,7 +546,7 @@ func mailSearchCmd(r *runner) *cobra.Command {
 	c.Flags().StringVar(&after, "after", "", "earliest date YYYY-MM-DD")
 	c.Flags().StringVar(&before, "before", "", "latest date YYYY-MM-DD")
 	c.Flags().StringVar(&folder, "folder", "", "folder identifier to search")
-	c.Flags().IntVar(&count, "count", count, "number of messages to return")
+	paging(c, &count, &page)
 	return c
 }
 
@@ -619,9 +642,13 @@ func calendarCmd(r *runner) *cobra.Command {
 	get := r.leaf("get ID", "Show one calendar event", 1, 1, func(c *cobra.Command, args []string) error {
 		return r.call(c, "calendar.get", map[string]any{"id": args[0]}, false)
 	})
-	search := r.leaf("search TEXT", "Search calendar events with the provider's own search", 1, 1, func(c *cobra.Command, args []string) error {
-		return r.call(c, "calendar.search", map[string]any{"text": args[0]}, false)
+	page := ""
+	search := r.leaf("search TEXT", "Search calendar events with the provider's own search, one page at a time", 1, 1, func(c *cobra.Command, args []string) error {
+		p := map[string]any{"text": args[0]}
+		optional(c, p, "page", &page)
+		return r.call(c, "calendar.search", p, false)
 	})
+	search.Flags().StringVar(&page, "page", "", "next_page of an earlier result for the same TEXT")
 	c := group(r, "calendar", "Read calendar events and M365 or fake availability, and send meeting notifications")
 	c.AddCommand(list, get, search, calendarAvailabilityCmd(r), calendarInviteCmd(r), calendarUpdateCmd(r), calendarCancelCmd(r), calendarRespondCmd(r))
 	return c
