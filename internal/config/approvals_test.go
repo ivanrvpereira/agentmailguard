@@ -56,8 +56,7 @@ func TestInvalidApprovalsNamesKeyPathWithoutValue(t *testing.T) {
 			if want := "invalid approvals: " + tc.path; err == nil || err.Error() != want {
 				t.Fatalf("error=%v, want %q", err, want)
 			}
-			var typed config.ApprovalsError
-			if !errors.As(err, &typed) {
+			if _, ok := errors.AsType[config.ApprovalsError](err); !ok {
 				t.Fatalf("error %T is not an ApprovalsError", err)
 			}
 		})

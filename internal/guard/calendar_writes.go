@@ -94,13 +94,13 @@ func (g *Guard) CalendarUpdate(ctx context.Context, id string, change model.Even
 			start = *change.Start
 		}
 		if duration > 0 {
-			change.End = pointer(start.Add(duration))
+			change.End = new(start.Add(duration))
 		} else if change.Start != nil && change.End == nil {
 			kept := event.End.Sub(event.Start)
 			if !calendarRangeValid(event.Start, event.End) || !event.Start.Add(kept).Equal(event.End) {
 				return GuardError("invalid request")
 			}
-			change.End = pointer(start.Add(kept))
+			change.End = new(start.Add(kept))
 		}
 		if change.Start != nil || change.End != nil {
 			end := event.End

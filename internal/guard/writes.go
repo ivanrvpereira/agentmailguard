@@ -48,12 +48,12 @@ func normalize(ids []string, results []model.MutationResult, organizer bool) []m
 		r.ApprovalID = nil
 		if counts[id] != 1 {
 			r.OK = false
-			r.Error = pointer("failed")
+			r.Error = new("failed")
 		}
 		if r.OK {
 			r.Error = nil
 		} else if organizer || r.Error == nil {
-			r.Error = pointer("failed")
+			r.Error = new("failed")
 		} else {
 			r.Error = safeText(r.Error)
 		}
@@ -90,7 +90,7 @@ func (g *Guard) audited(ctx context.Context, op audit.Operation, ids []string, h
 	if err != nil {
 		results = make([]model.MutationResult, 0, len(send))
 		for _, id := range send {
-			results = append(results, model.MutationResult{ID: id, Error: pointer(safeCode(err))})
+			results = append(results, model.MutationResult{ID: id, Error: new(safeCode(err))})
 		}
 	} else {
 		results = normalize(send, results, opts.Rule != nil)
@@ -223,7 +223,7 @@ func (g *Guard) authorizedWrite(ctx context.Context, ids []string, rule string, 
 		if row, ok := rows[id]; ok && row.Verdict == verdict {
 			allowed = append(allowed, id)
 		} else {
-			results = append(results, model.MutationResult{ID: id, Error: pointer("failed")})
+			results = append(results, model.MutationResult{ID: id, Error: new("failed")})
 		}
 	}
 	if len(allowed) != 0 {
@@ -286,7 +286,7 @@ func (g *Guard) compose(ctx context.Context, op audit.Operation, source string, 
 	}
 	var ref *string
 	if op != audit.DraftNew && op != audit.MailSend {
-		ref = pointer(source)
+		ref = new(source)
 	}
 	d := decision{value: g.base(ctx, key)}
 	if ref != nil && op != audit.DraftUpdate {

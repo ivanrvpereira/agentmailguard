@@ -126,7 +126,7 @@ func allAuditRecords(t *testing.T, path string) []map[string]any {
 		t.Fatal("content leaked to audit")
 	}
 	out := []map[string]any{}
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
 		var r map[string]any
 		if err := json.Unmarshal([]byte(line), &r); err != nil {
 			t.Fatal(err)

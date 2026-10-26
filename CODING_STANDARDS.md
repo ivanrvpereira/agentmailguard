@@ -108,4 +108,3 @@ Fowler's code smells yield to these conventions:
 These rules are mechanical. Check them until a test or CI job enforces each one, then delete its line. The tool in brackets is the one that can enforce it. Repository-wide checks go in `internal/standards`.
 
 - Files under the server home are created `0600` in `0700` directories, with an explicit `Chmod` after open, as in `cache` and `audit`. Modes are literals at the call site, because gosec reads only literals. [`gosec` G301 set to `0700`, G302, G306]
-- New code uses the idioms that `go fix` applies: `wg.Go`, `for range n`, `slices` and `maps` helpers, `strings.SplitSeq`, and `t.Context()` in tests. [`go fix -diff ./...` in CI, after existing code is migrated]

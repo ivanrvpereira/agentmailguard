@@ -51,7 +51,7 @@ func TestJevFlagHoldsAnAllowedActionUntilApproval(t *testing.T) {
 	if status != 200 || match == nil || strings.Contains(body, "0.62") || strings.Contains(strings.ToLower(body), "jev") || len(graph.recorded()) != 0 {
 		t.Fatalf("%d %s writes=%v", status, body, graph.recorded())
 	}
-	if item := storedArgs(t, home, match[1]); !reflect.DeepEqual(item.Jev, &model.ActionCheck{Flag: true, Score: ptr(0.62)}) {
+	if item := storedArgs(t, home, match[1]); !reflect.DeepEqual(item.Jev, &model.ActionCheck{Flag: true, Score: new(0.62)}) {
 		t.Fatalf("stored jev=%+v", item.Jev)
 	}
 	text, records := auditOf(t, home)
@@ -68,5 +68,3 @@ func TestJevFlagHoldsAnAllowedActionUntilApproval(t *testing.T) {
 		t.Fatalf("approved run: checks=%d writes=%v", len(api.checks()), graph.recorded())
 	}
 }
-
-func ptr[T any](v T) *T { return &v }

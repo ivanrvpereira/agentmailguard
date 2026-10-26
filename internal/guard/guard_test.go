@@ -15,9 +15,10 @@ import (
 
 var now = time.Date(2026, 9, 28, 15, 30, 0, 0, time.UTC)
 
-func ptr[T any](v T) *T { return &v }
+//go:fix inline
+func ptr[T any](v T) *T { return new(v) }
 func message(id string) model.Message {
-	return model.Message{ID: id, Subject: id, Sender: model.Address{Name: "DISPLAYNAME", Address: "alice@example.com"}, ReceivedAt: now.Add(-24 * time.Hour), Body: ptr("BODYTEXT https://example.com/report"), ContentType: ptr(model.Text), Auth: &model.AuthResults{SPF: ptr("pass")}, Flag: model.NoFlag, Categories: []string{"Work", "Planted"}}
+	return model.Message{ID: id, Subject: id, Sender: model.Address{Name: "DISPLAYNAME", Address: "alice@example.com"}, ReceivedAt: now.Add(-24 * time.Hour), Body: new("BODYTEXT https://example.com/report"), ContentType: ptr(model.Text), Auth: &model.AuthResults{SPF: new("pass")}, Flag: model.NoFlag, Categories: []string{"Work", "Planted"}}
 }
 
 type fetch struct {
@@ -100,7 +101,7 @@ func setup(t *testing.T, b model.Mailbox, s model.Screener) (*guard.Guard, *cach
 }
 func TestLinksResolveSafeURLsAndRefuseSecretsIndependently(t *testing.T) {
 	m := message("m1")
-	m.Body = ptr("https://example.com/report https://example.com/reset?token=secret")
+	m.Body = new("https://example.com/report https://example.com/reset?token=secret")
 	b := &mailbox{messages: []model.Message{m}, listedBodies: true}
 	s := &screener{verdict: model.Green}
 	g, _, _ := setup(t, b, s)

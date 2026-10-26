@@ -57,7 +57,7 @@ func TestOrganizerNormalizesUnsolicitedMissingAndDuplicateResults(t *testing.T) 
 		base.messages = append(base.messages, m)
 		base.scan.Messages = append(base.scan.Messages, model.InboxEntry{ID: id, ReceivedAt: m.ReceivedAt})
 	}
-	b := &outcomeBox{organizerBox: base, categoryResults: []model.MutationResult{{ID: "CANARY unsolicited", OK: true}, {ID: "duplicate", Error: ptr("CANARY raw")}, {ID: "duplicate", OK: true}, {ID: "good", OK: true}}}
+	b := &outcomeBox{organizerBox: base, categoryResults: []model.MutationResult{{ID: "CANARY unsolicited", OK: true}, {ID: "duplicate", Error: new("CANARY raw")}, {ID: "duplicate", OK: true}, {ID: "good", OK: true}}}
 	g, _, path := setup(t, b, s)
 	report, err := g.Organize(context.Background(), now.Add(-7*24*time.Hour), orgRules(), now, true, nil)
 	if err != nil {
@@ -142,7 +142,7 @@ func TestOrganizerFiltersHalfOpenScanAndPreservesFractionalAge(t *testing.T) {
 	}
 	// The provider scan can repeat an ID; body reads still return exactly one message per ID.
 	b.messages = b.messages[:4]
-	b.scan.Failures = []model.ScanFailure{{ID: ptr("scan-bad"), Error: "Graph error InvalidMetadata"}, {ID: ptr("scan-bad"), Error: "Graph error InvalidMetadata"}, {Error: "CANARY bad page"}}
+	b.scan.Failures = []model.ScanFailure{{ID: new("scan-bad"), Error: "Graph error InvalidMetadata"}, {ID: new("scan-bad"), Error: "Graph error InvalidMetadata"}, {Error: "CANARY bad page"}}
 	r := orgRules()
 	r.Rules[0].MinAgeHours = 48
 	g, _, path := setup(t, b, s)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/cli"
+	"github.com/ivanrvpereira/agentmailguard/internal/server"
 )
 
 // stateful reports whether reading k would let the environment change what a command does. The color
@@ -242,6 +244,18 @@ func TestUsageAndHelpNeedNoServerOrState(t *testing.T) {
 		for _, want := range tc.want {
 			if code != 0 || !strings.Contains(out.String(), want) {
 				t.Fatalf("help for %v is missing %s", tc.args, want)
+			}
+		}
+	}
+}
+
+func TestOptionsFormattingIsRedacted(t *testing.T) {
+	lookup := func(string) string { return "SYNTHETIC-PASSWORD" }
+	opts := cli.Options{LookupEnv: lookup, Server: server.Options{LookupEnv: lookup}}
+	for _, value := range []any{opts, &opts} {
+		for _, verb := range []string{"%v", "%+v", "%#v", "%s"} {
+			if printed := fmt.Sprintf(verb, value); printed != "CLIOptions{redacted}" {
+				t.Errorf("%s bypasses redaction for %T: %s", verb, value, printed)
 			}
 		}
 	}

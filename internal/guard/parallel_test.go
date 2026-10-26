@@ -146,8 +146,7 @@ func batchIDs() []string {
 func TestClassifyParallelJevPreservesOrderedIndependentOutcomes(t *testing.T) {
 	s := newCoordinatedJev(t)
 	g, _, path := setup(t, concurrentMailbox{}, s)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	type result struct {
 		items []guard.Classified
 		err   error
@@ -187,8 +186,7 @@ func TestMailParallelJevPreservesOrderedIndependentOutcomes(t *testing.T) {
 				b.messages = append(b.messages, message(id))
 			}
 			g, _, path := setup(t, b, s)
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := t.Context()
 			type result struct {
 				items []views.MailSummary
 				err   error
@@ -200,7 +198,7 @@ func TestMailParallelJevPreservesOrderedIndependentOutcomes(t *testing.T) {
 				if surface == "List" {
 					items, err = g.List(ctx, "inbox", 40, 0)
 				} else {
-					items, err = g.Search(ctx, model.SearchQuery{Text: ptr("synthetic")}, 40)
+					items, err = g.Search(ctx, model.SearchQuery{Text: new("synthetic")}, 40)
 				}
 				done <- result{items, err}
 			}()
@@ -244,11 +242,10 @@ func TestCalendarParallelJevPreservesOrderedIndependentOutcomes(t *testing.T) {
 	cal := batchCalendar{}
 	ids := batchIDs()
 	for _, id := range ids {
-		cal.events = append(cal.events, model.Event{ID: id, Subject: id, Start: now, End: now.Add(time.Hour), Body: ptr("synthetic"), ContentType: ptr(model.Text)})
+		cal.events = append(cal.events, model.Event{ID: id, Subject: id, Start: now, End: now.Add(time.Hour), Body: new("synthetic"), ContentType: ptr(model.Text)})
 	}
 	g := guard.New("work", b, cal, s, c, audit.New(path), guard.Options{})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	type result struct {
 		items []views.CalendarView
 		err   error
@@ -322,7 +319,7 @@ func TestParallelJevCancellationDrainsAndStopsQueuedItems(t *testing.T) {
 			cal := batchCalendar{}
 			for _, id := range batchIDs() {
 				b.messages = append(b.messages, message(id))
-				cal.events = append(cal.events, model.Event{ID: id, Subject: id, Start: now, End: now.Add(time.Hour), Body: ptr("synthetic"), ContentType: ptr(model.Text)})
+				cal.events = append(cal.events, model.Event{ID: id, Subject: id, Start: now, End: now.Add(time.Hour), Body: new("synthetic"), ContentType: ptr(model.Text)})
 			}
 			_, c, path := setup(t, b, s)
 			g := guard.New("work", b, cal, s, c, audit.New(path), guard.Options{})
@@ -337,7 +334,7 @@ func TestParallelJevCancellationDrainsAndStopsQueuedItems(t *testing.T) {
 				case "List":
 					_, err = g.List(ctx, "inbox", 40, 0)
 				case "Search":
-					_, err = g.Search(ctx, model.SearchQuery{Text: ptr("synthetic")}, 40)
+					_, err = g.Search(ctx, model.SearchQuery{Text: new("synthetic")}, 40)
 				case "CalendarList":
 					_, err = g.CalendarList(ctx, now, now.Add(time.Hour))
 				}

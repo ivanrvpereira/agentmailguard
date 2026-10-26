@@ -72,7 +72,7 @@ func TestJevSeesOnlyTheAgentFieldsOfEachAction(t *testing.T) {
 			return err
 		}, actionCall{"calendar.invite", "sends meeting invitations to the attendees", map[string]any{"to": []any{"a@example.test"}, "subject": "Plan", "body": "Agenda", "location": "Room 1", "start": "2026-09-29T15:30:00Z", "end": "2026-09-29T16:30:00Z", "online": true}}},
 		{"calendar.update", func(ctx context.Context, g *guard.Guard) error {
-			return g.CalendarUpdate(ctx, "e1", model.EventChange{Subject: ptr("Moved"), Start: &start, AddAttendees: []string{"c@example.test"}}, 30*time.Minute)
+			return g.CalendarUpdate(ctx, "e1", model.EventChange{Subject: new("Moved"), Start: &start, AddAttendees: []string{"c@example.test"}}, 30*time.Minute)
 		}, actionCall{"calendar.update", "changes a meeting and notifies the attendees", map[string]any{"subject": "Moved", "start": "2026-09-29T15:30:00Z", "duration": "30m0s", "add": []any{"c@example.test"}}}},
 		{"calendar.respond", func(ctx context.Context, g *guard.Guard) error {
 			return g.CalendarRespond(ctx, "e1", model.EventResponse{Response: model.ResponseDecline, Comment: "Running late"})
@@ -126,7 +126,7 @@ func TestJevFlagTurnsAllowIntoPending(t *testing.T) {
 		t.Fatalf("draft=%v writes=%v", err, w.calls)
 	}
 	item, err := c.GetPending(ctx, pending.ApprovalID)
-	if err != nil || !reflect.DeepEqual(item.Jev, &model.ActionCheck{Flag: true, Score: ptr(0.62)}) {
+	if err != nil || !reflect.DeepEqual(item.Jev, &model.ActionCheck{Flag: true, Score: new(0.62)}) {
 		t.Fatalf("stored jev=%+v %v", item.Jev, err)
 	}
 	records := policyRecords(t, path)
@@ -153,14 +153,14 @@ func TestFailedJevCheckTurnsAllowIntoPending(t *testing.T) {
 	for name, s := range map[string]*actionScreener{
 		"failed check":  {subjectScreener: &subjectScreener{}, check: model.ActionFailure("TimeoutError")},
 		"adapter error": {subjectScreener: &subjectScreener{}, err: errors.New("CANARY")},
-		"invalid score": {subjectScreener: &subjectScreener{}, check: model.ActionCheck{Score: ptr(1.5)}},
+		"invalid score": {subjectScreener: &subjectScreener{}, check: model.ActionCheck{Score: new(1.5)}},
 		"zero result":   {subjectScreener: &subjectScreener{}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cal := meetingWriter()
 			g, c, path := policyGuard(t, &mailbox{}, cal, s, allowAll)
 			ctx := context.Background()
-			err := g.CalendarUpdate(ctx, "e1", model.EventChange{Subject: ptr("CANARY")}, 0)
+			err := g.CalendarUpdate(ctx, "e1", model.EventChange{Subject: new("CANARY")}, 0)
 			var pending guard.PendingError
 			if !errors.As(err, &pending) || len(cal.ids) != 0 {
 				t.Fatalf("update=%v writes=%v", err, cal.ids)
@@ -207,7 +207,7 @@ func TestApproveAsksJevAndStaysPending(t *testing.T) {
 		t.Fatalf("draft=%v checks=%d", err, len(s.checked()))
 	}
 	item, err := c.GetPending(ctx, pending.ApprovalID)
-	if err != nil || !reflect.DeepEqual(item.Jev, &model.ActionCheck{Flag: false, Score: ptr(0.08)}) {
+	if err != nil || !reflect.DeepEqual(item.Jev, &model.ActionCheck{Flag: false, Score: new(0.08)}) {
 		t.Fatalf("stored jev=%+v %v", item.Jev, err)
 	}
 	if records := policyRecords(t, path); !reflect.DeepEqual(records[0]["reasons"], []any{"policy"}) {

@@ -145,8 +145,7 @@ func (a *nativeAPI) graph(w http.ResponseWriter, r *http.Request) {
 			response(w, e)
 		}
 	default:
-		if strings.HasPrefix(r.URL.Path, "/me/messages/") {
-			id := strings.TrimPrefix(r.URL.Path, "/me/messages/")
+		if id, ok := strings.CutPrefix(r.URL.Path, "/me/messages/"); ok {
 			if id == "gone" {
 				w.WriteHeader(404)
 				return

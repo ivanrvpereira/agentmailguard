@@ -344,7 +344,7 @@ func (g *Guard) trashPolicy(ctx context.Context, ids []string, rule *string) (ma
 			if err := g.recordDecision(ctx, audit.Trash, keyTrash, d, &id, nil, rule); err != nil {
 				return nil, nil, err
 			}
-			held[id] = model.MutationResult{ID: id, Error: pointer(string(refused(keyTrash)))}
+			held[id] = model.MutationResult{ID: id, Error: new(string(refused(keyTrash)))}
 		}
 	}
 	return held, allowed, nil
@@ -401,14 +401,14 @@ func stamp3339(t *time.Time) *string {
 	if t == nil {
 		return nil
 	}
-	return pointer(t.Format(time.RFC3339Nano))
+	return new(t.Format(time.RFC3339Nano))
 }
 
 // updateArgs gives only the fields of the original request: optional fields that were not given stay out.
 func updateArgs(id string, change model.EventChange, duration time.Duration) changeArgs {
 	args := changeArgs{ID: id, Subject: change.Subject, Location: change.Location, Start: stamp3339(change.Start), End: stamp3339(change.End)}
 	if duration > 0 {
-		args.Duration = pointer(duration.String())
+		args.Duration = new(duration.String())
 	}
 	if len(change.AddAttendees) > 0 {
 		args.Add = change.AddAttendees
@@ -417,7 +417,7 @@ func updateArgs(id string, change model.EventChange, duration time.Duration) cha
 		args.Remove = change.RemoveAttendees
 	}
 	if change.Online {
-		args.Online = pointer(true)
+		args.Online = new(true)
 	}
 	return args
 }

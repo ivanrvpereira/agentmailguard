@@ -44,7 +44,7 @@ func joinURL(s *string) *string {
 			return nil
 		}
 	}
-	return pointer(*s)
+	return new(*s)
 }
 func attendees(as []model.Attendee, full bool) []Attendee {
 	result := make([]Attendee, 0, len(as))
@@ -52,7 +52,7 @@ func attendees(as []model.Attendee, full bool) []Attendee {
 		item := Attendee{Address: Address{Address: content.CleanSubject(a.Address.Address)}}
 		if full {
 			item.Address = address(a.Address)
-			item.Response = pointer(content.CleanSubject(a.Response))
+			item.Response = new(content.CleanSubject(a.Response))
 		}
 		result = append(result, item)
 	}
@@ -84,25 +84,25 @@ func EventView(e model.Event, screening model.Screening, r *content.Rendered, ca
 		if r == nil && !e.IsPrivate {
 			return CalendarView{}, errors.New("green event view needs the rendered body")
 		}
-		result.Subject = pointer(content.CleanSubject(e.Subject))
-		result.AllDay = pointer(e.IsAllDay)
+		result.Subject = new(content.CleanSubject(e.Subject))
+		result.AllDay = new(e.IsAllDay)
 		result.Recurrence = e.Recurrence
-		result.Location = pointer(content.CleanSubject(e.Location))
+		result.Location = new(content.CleanSubject(e.Location))
 		result.Organizer = address(e.Organizer)
-		result.Attendees = pointer(attendees(e.Attendees, true))
+		result.Attendees = new(attendees(e.Attendees, true))
 		result.JoinURL = joinURL(e.JoinURL)
-		result.Attachments = pointer(cleanStrings(e.Attachments))
-		result.Categories = pointer(listed(e.Categories, categories))
-		result.ShowAs = pointer(e.ShowAs)
-		result.Cancelled = pointer(e.IsCancelled)
+		result.Attachments = new(cleanStrings(e.Attachments))
+		result.Categories = new(listed(e.Categories, categories))
+		result.ShowAs = new(e.ShowAs)
+		result.Cancelled = new(e.IsCancelled)
 		if r != nil && !e.IsPrivate {
-			result.Body = pointer(r.Markdown)
-			result.Links = pointer(r.Domains())
-			result.Truncated = pointer(r.Truncated)
+			result.Body = new(r.Markdown)
+			result.Links = new(r.Domains())
+			result.Truncated = new(r.Truncated)
 		}
 	case model.Yellow:
-		result.Subject = pointer(content.CleanSubject(e.Subject))
-		result.Attendees = pointer(attendees(e.Attendees, false))
+		result.Subject = new(content.CleanSubject(e.Subject))
+		result.Attendees = new(attendees(e.Attendees, false))
 	case model.Error:
 		result.Error = safeError(screening.Error)
 	}

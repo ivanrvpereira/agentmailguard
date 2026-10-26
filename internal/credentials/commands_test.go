@@ -236,8 +236,7 @@ func TestMigrationSerializesTargetCheckAndWrite(t *testing.T) {
 	results := make(chan error, 2)
 	var wg sync.WaitGroup
 	for range 2 {
-		wg.Add(1)
-		go func() { defer wg.Done(); results <- source.Migrate(ctx, credentials.New(p, home, nil)) }()
+		wg.Go(func() { results <- source.Migrate(ctx, credentials.New(p, home, nil)) })
 	}
 	wg.Wait()
 	close(results)

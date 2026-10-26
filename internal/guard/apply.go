@@ -131,7 +131,7 @@ func (g *Guard) apply(ctx context.Context, lines []*Plan, r rules.Rules, resolve
 			complete = complete && code == "ok"
 		}
 		if line.Move != nil {
-			line.Move.Result = pointer(moved[line.ID])
+			line.Move.Result = new(moved[line.ID])
 			complete = complete && moved[line.ID] == "ok"
 		}
 		if complete {

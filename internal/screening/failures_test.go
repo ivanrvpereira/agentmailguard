@@ -202,14 +202,12 @@ func TestAtMostEightAndDeadlineStartsAtActualRequest(t *testing.T) {
 	s := screening.New(screening.Options{Credentials: keyStore(), HTTPClient: client})
 	var wg sync.WaitGroup
 	for range 40 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			r, err := s.Screen(context.Background(), nil)
 			if err != nil || r.Verdict != model.Green {
 				t.Error("parallel screening failed")
 			}
-		}()
+		})
 	}
 	for range 8 {
 		select {
@@ -258,14 +256,12 @@ func TestLazyKeyResolutionRetriesFailureCachesSuccess(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	for range 20 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			r, err := s.Screen(context.Background(), nil)
 			if err != nil || r.Verdict != model.Green {
 				t.Error("key retry failed")
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if loads.Load() != 2 {

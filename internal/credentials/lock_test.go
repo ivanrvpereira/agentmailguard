@@ -48,7 +48,7 @@ func TestConcurrentStoresPreserveEveryEntry(t *testing.T) {
 	errs := make(chan error, 2)
 	for i, s := range stores {
 		go func() {
-			for j := 0; j < 10; j++ {
+			for j := range 10 {
 				if err := s.SaveOAuth(ctx, "gmail", fmt.Sprintf("%d-%d", i, j), credentials.OAuth{RefreshToken: "synthetic"}); err != nil {
 					errs <- err
 					return
@@ -62,8 +62,8 @@ func TestConcurrentStoresPreserveEveryEntry(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for i := 0; i < 2; i++ {
-		for j := 0; j < 10; j++ {
+	for i := range 2 {
+		for j := range 10 {
 			if _, err := stores[0].LoadOAuth(ctx, "gmail", fmt.Sprintf("%d-%d", i, j)); err != nil {
 				t.Fatal("concurrent save lost an entry")
 			}

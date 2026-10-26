@@ -56,7 +56,7 @@ func TestEmptyPolicyDeniesEveryPolicyWrite(t *testing.T) {
 	g, _, _ := policyGuard(t, w, cal, s, config.Policy{})
 	ctx := context.Background()
 	got, err := g.Trash(ctx, []string{"m1"})
-	if err != nil || !reflect.DeepEqual(got, []model.MutationResult{{ID: "m1", Error: ptr("refused by policy: mail_trash")}}) {
+	if err != nil || !reflect.DeepEqual(got, []model.MutationResult{{ID: "m1", Error: new("refused by policy: mail_trash")}}) {
 		t.Fatalf("trash=%+v %v", got, err)
 	}
 	if _, err := g.DraftNew(ctx, model.NewDraft{To: []string{"a@example.test"}}); err == nil || err.Error() != "refused by policy: mail_draft" {
@@ -88,11 +88,11 @@ func (s *subjectScreener) Screen(_ context.Context, state map[string]any) (model
 	s.screened = append(s.screened, subject)
 	switch v := s.verdicts[subject]; v {
 	case model.Error:
-		return model.Screening{Verdict: model.Error, Error: ptr("Error")}, nil
+		return model.Screening{Verdict: model.Error, Error: new("Error")}, nil
 	case "":
-		return model.Screening{Verdict: model.Green, Score: ptr(0.0)}, nil
+		return model.Screening{Verdict: model.Green, Score: new(0.0)}, nil
 	default:
-		return model.Screening{Verdict: v, Score: ptr(0.0)}, nil
+		return model.Screening{Verdict: v, Score: new(0.0)}, nil
 	}
 }
 
@@ -114,7 +114,7 @@ func messages(ids ...string) []model.Message {
 	return out
 }
 func refusal(id, key string) model.MutationResult {
-	return model.MutationResult{ID: id, Error: ptr("refused by policy: " + key)}
+	return model.MutationResult{ID: id, Error: new("refused by policy: " + key)}
 }
 
 func TestDefaultPolicyTrashesAndDraftsGreenMail(t *testing.T) {
@@ -375,7 +375,7 @@ func TestCalendarApproveStoresOnlyAWritableAction(t *testing.T) {
 		t.Run(op+"/recurring", func(t *testing.T) {
 			cal := meetingWriter()
 			cal.event.IsOrganizer = op != "respond"
-			cal.event.Recurrence = ptr("weekly")
+			cal.event.Recurrence = new("weekly")
 			g, _, path := policyGuard(t, &mailbox{}, cal, &subjectScreener{}, approve)
 			err := callCalendarWrite(context.Background(), g, op)
 			if err == nil || err.Error() != "calendar write refused: recurring events are not supported" {

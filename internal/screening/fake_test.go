@@ -28,9 +28,9 @@ func TestFakeScreensByMarker(t *testing.T) {
 func TestFakeFlagsActionsThatMentionAPasswordAndMarksEachCheck(t *testing.T) {
 	s := screening.NewFake()
 	for body, want := range map[string]model.ActionCheck{
-		"See you at noon":              {Flag: false, Score: ptr(.05), Fake: true},
-		"Your new password is hunter2": {Flag: true, Score: ptr(.9), Fake: true},
-		"SCREENFAIL":                   {Flag: true, Error: ptr("TypeSafeAPIError 503"), Fake: true},
+		"See you at noon":              {Flag: false, Score: new(.05), Fake: true},
+		"Your new password is hunter2": {Flag: true, Score: new(.9), Fake: true},
+		"SCREENFAIL":                   {Flag: true, Error: new("TypeSafeAPIError 503"), Fake: true},
 	} {
 		got, err := s.CheckAction(t.Context(), "mail.send", "sends mail", map[string]any{"body": body})
 		if err != nil || !reflect.DeepEqual(got, want) {

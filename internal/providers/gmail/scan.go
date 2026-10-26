@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -71,11 +72,9 @@ func (m *mailbox) ScanInbox(ctx context.Context, since time.Time, until *time.Ti
 			invalid()
 			return
 		}
-		for _, l := range labels {
-			if l == "" {
-				invalid()
-				return
-			}
+		if slices.Contains(labels, "") {
+			invalid()
+			return
 		}
 		received, err := timestamp(stringField(v, "internalDate"))
 		if err != nil {

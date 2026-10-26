@@ -117,7 +117,7 @@ func (s *Server) approvalStatus(ctx context.Context, params json.RawMessage) (an
 		ID string `json:"id"`
 	}
 	if strict(params, &p, "id") != nil || !approvalIDPattern.MatchString(p.ID) {
-		return nil, invalid
+		return nil, errInvalid
 	}
 	item, err := s.cache.GetPending(ctx, p.ID)
 	if err != nil {

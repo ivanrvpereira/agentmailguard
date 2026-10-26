@@ -2,6 +2,7 @@ package guard
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"time"
 
@@ -95,7 +96,7 @@ func stamp(at time.Time) string {
 func noWork(since time.Time, until *time.Time) Report {
 	report := Report{Planned: []Plan{}, Errors: []ReportError{}, Warnings: []Warning{}, Since: stamp(since)}
 	if until != nil {
-		report.Until = pointer(stamp(*until))
+		report.Until = new(stamp(*until))
 	}
 	return report
 }
@@ -110,12 +111,12 @@ func resolve(r rules.Rules, folders []model.Folder, categories []string) (map[st
 		var target *string
 		if rule.Kind == rules.Category {
 			if slices.Contains(categories, rule.Target) {
-				target = pointer(rule.Target)
+				target = new(rule.Target)
 			}
 		} else if rule.Target == "archive" || rule.Target == "trash" {
-			target = pointer(rule.Target)
+			target = new(rule.Target)
 		} else if name, ok := names[rule.Target]; ok {
-			target = pointer(name)
+			target = new(name)
 		}
 		resolved[rule.Name] = target
 		if target == nil {
@@ -140,7 +141,7 @@ func plan(row *cache.Row, r rules.Rules, resolved map[string]*string, now, recei
 			ready := time.Unix(received.Unix()+rule.MinAgeHours*3600, int64(received.Nanosecond())).UTC()
 			line.Move = &MovePlan{Rule: rule.Name, To: resolved[rule.Name]}
 			if now.Before(ready) {
-				line.Move.After = pointer(stamp(ready))
+				line.Move.After = new(stamp(ready))
 			}
 		}
 	}
@@ -269,13 +270,13 @@ func (g *Guard) Organize(ctx context.Context, since time.Time, r rules.Rules, no
 			code = row.Error
 		}
 		if code != nil {
-			report.Errors = append(report.Errors, ReportError{pointer(result.ID), *code})
+			report.Errors = append(report.Errors, ReportError{new(result.ID), *code})
 			failed[result.ID] = row
 			continue
 		}
 		line, err := plan(row, r, resolved, now, received[result.ID])
 		if err != nil {
-			report.Errors = append(report.Errors, ReportError{pointer(result.ID), "plan " + safeCode(err)})
+			report.Errors = append(report.Errors, ReportError{new(result.ID), "plan " + safeCode(err)})
 			failed[result.ID] = row
 		} else if line != nil {
 			report.Planned = append(report.Planned, *line)
@@ -294,7 +295,7 @@ func (g *Guard) Organize(ctx context.Context, since time.Time, r rules.Rules, no
 				}
 				line.CategoryResults = &results
 				if line.Move != nil {
-					line.Move.Result = pointer("scan failed")
+					line.Move.Result = new("scan failed")
 				}
 			} else {
 				lines = append(lines, line)
@@ -306,9 +307,7 @@ func (g *Guard) Organize(ctx context.Context, since time.Time, r rules.Rules, no
 				done[id] = true
 			}
 		}
-		for id, row := range retag {
-			final[id] = row
-		}
+		maps.Copy(final, retag)
 		if ctx.Err() == nil {
 			for id := range g.tag(ctx, ids, final, scanFailed, categories, &report) {
 				broken[id] = true
@@ -320,7 +319,7 @@ func (g *Guard) Organize(ctx context.Context, since time.Time, r rules.Rules, no
 		for _, id := range ids {
 			if done[id] {
 				if err := g.markApplied(persistCtx, id, now, noop[id]); err != nil {
-					report.Errors = append(report.Errors, ReportError{pointer(id), "cache " + safeCode(err)})
+					report.Errors = append(report.Errors, ReportError{new(id), "cache " + safeCode(err)})
 					broken[id] = true
 				}
 			}

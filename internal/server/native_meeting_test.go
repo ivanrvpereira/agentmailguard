@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -83,18 +84,14 @@ func (g *meetingGraph) handle(w http.ResponseWriter, r *http.Request) {
 		g.created++
 		id = "created-" + strconv.Itoa(g.created)
 		e := map[string]any{"id": id, "isOrganizer": true, "organizer": map[string]any{"emailAddress": map[string]any{"address": "work@example.test"}}}
-		for k, v := range body {
-			e[k] = v
-		}
+		maps.Copy(e, body)
 		if body["isOnlineMeeting"] == true {
 			e["onlineMeeting"] = map[string]any{"joinUrl": "https://teams.example.test/join/" + id}
 		}
 		g.events[id] = e
 		response(w, map[string]any{"id": id})
 	case r.Method == "PATCH" && g.events[id] != nil && action == "":
-		for k, v := range body {
-			g.events[id][k] = v
-		}
+		maps.Copy(g.events[id], body)
 		if body["isOnlineMeeting"] == true {
 			g.events[id]["onlineMeeting"] = map[string]any{"joinUrl": "https://teams.example.test/join/" + id}
 		}
@@ -113,9 +110,7 @@ func syntheticEvent(id string, organizer bool, extra map[string]any) map[string]
 	e := map[string]any{"id": id, "subject": "private-subject-" + id, "isOrganizer": organizer, "organizer": map[string]any{"emailAddress": map[string]any{"address": "organizer@example.test"}},
 		"start": map[string]string{"dateTime": "2026-10-12T09:00:00", "timeZone": "UTC"}, "end": map[string]string{"dateTime": "2026-10-12T10:00:00", "timeZone": "UTC"},
 		"body": map[string]string{"contentType": "text", "content": "private-body-" + id}, "attendees": []any{map[string]any{"emailAddress": map[string]any{"address": "work@example.test"}, "type": "required"}}}
-	for k, v := range extra {
-		e[k] = v
-	}
+	maps.Copy(e, extra)
 	return e
 }
 

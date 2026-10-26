@@ -27,7 +27,7 @@ func TestCheckActionAsksOneSuspiciousQuestion(t *testing.T) {
 	defer server.Close()
 	s := screening.New(screening.Options{HTTPClient: server.Client(), Endpoint: server.URL, Credentials: keyStore()})
 	got, err := s.CheckAction(context.Background(), "draft.new", "creates a draft that the user may send later", state)
-	if err != nil || !reflect.DeepEqual(got, model.ActionCheck{Flag: true, Score: ptr(0.62)}) {
+	if err != nil || !reflect.DeepEqual(got, model.ActionCheck{Flag: true, Score: new(0.62)}) {
 		t.Fatalf("check=%+v %v", got, err)
 	}
 	want := map[string]any{
@@ -53,8 +53,8 @@ func TestCheckActionFlagsFromTheThreshold(t *testing.T) {
 		answer string
 		want   model.ActionCheck
 	}{
-		{"0.49", model.ActionCheck{Flag: false, Score: ptr(0.49)}},
-		{"0.5", model.ActionCheck{Flag: true, Score: ptr(0.5)}},
+		{"0.49", model.ActionCheck{Flag: false, Score: new(0.49)}},
+		{"0.5", model.ActionCheck{Flag: true, Score: new(0.5)}},
 	} {
 		client := &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
 			return response(`{"model":"jev","usage":{},"answers":{"suspicious":{"type":"noul","noul":` + tc.answer + `}}}`), nil
@@ -100,7 +100,7 @@ func TestCheckActionFailuresAreFailedChecks(t *testing.T) {
 			}
 			s := screening.New(screening.Options{HTTPClient: client, Credentials: store, Timeout: time.Second})
 			got, err := s.CheckAction(context.Background(), "calendar.invite", "sends meeting invitations to the attendees", map[string]any{"subject": "x"})
-			if err != nil || !reflect.DeepEqual(got, model.ActionCheck{Flag: true, Error: ptr(tc.want)}) {
+			if err != nil || !reflect.DeepEqual(got, model.ActionCheck{Flag: true, Error: new(tc.want)}) {
 				t.Fatalf("check=%+v %v", got, err)
 			}
 		})
@@ -124,5 +124,3 @@ func TestCheckActionCancelledReturnsTheContextError(t *testing.T) {
 		t.Fatalf("check=%+v %v", got, err)
 	}
 }
-
-func ptr[T any](v T) *T { return &v }

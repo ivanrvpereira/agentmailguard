@@ -9,11 +9,11 @@ import (
 )
 
 func TestCalendarPolicy(t *testing.T) {
-	event := model.Event{ID: "id", Subject: "Subject <b>", Location: "Location", Organizer: model.Address{Name: "NAME", Address: "o@example.test"}, Attendees: []model.Attendee{{Address: model.Address{Name: "ATTENDEE", Address: "a@example.test"}, Response: "accepted"}}, JoinURL: ptr("https://meet.example.test/join"), Categories: []string{"listed", "unlisted"}}
+	event := model.Event{ID: "id", Subject: "Subject <b>", Location: "Location", Organizer: model.Address{Name: "NAME", Address: "o@example.test"}, Attendees: []model.Attendee{{Address: model.Address{Name: "ATTENDEE", Address: "a@example.test"}, Response: "accepted"}}, JoinURL: new("https://meet.example.test/join"), Categories: []string{"listed", "unlisted"}}
 	rendered := content.Rendered{Markdown: "BODY", Links: map[string]string{"L1": "https://example.test/TOKEN"}}
 	for _, verdict := range []model.Verdict{model.Green, model.Yellow, model.Red, model.Sealed, model.Error} {
 		t.Run(string(verdict), func(t *testing.T) {
-			v, err := views.EventView(event, model.Screening{Verdict: verdict, Error: ptr("TimeoutError")}, &rendered, []string{"listed"})
+			v, err := views.EventView(event, model.Screening{Verdict: verdict, Error: new("TimeoutError")}, &rendered, []string{"listed"})
 			if err != nil {
 				t.Fatal(err)
 			}

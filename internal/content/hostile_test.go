@@ -136,7 +136,7 @@ func TestUnicodeTruncationAndOmittedLinks(t *testing.T) {
 		t.Fatal("exact cap truncated")
 	}
 	var b strings.Builder
-	for i := 0; i < 2000; i++ {
+	for i := range 2000 {
 		fmt.Fprintf(&b, `<p>Paragraph %d text <a href="https://x.example/%d">link %d</a></p>`, i, i, i)
 	}
 	body = b.String()
