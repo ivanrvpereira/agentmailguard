@@ -358,6 +358,9 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 				*d.out = &t
 			}
 		}
+		if !q.RangeValid() {
+			return nil, errInvalid
+		}
 		call = func(a *account) (any, error) {
 			return a.guard.Search(ctx, q, model.PageRequest{Size: p.Count, Page: p.Page})
 		}

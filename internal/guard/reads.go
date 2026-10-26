@@ -61,6 +61,9 @@ func (g *Guard) Search(ctx context.Context, q model.SearchQuery, page model.Page
 	if !nonempty(q.Text) && !nonempty(q.Sender) && !nonempty(q.To) && !nonempty(q.Subject) && q.After == nil && q.Before == nil {
 		return views.MailPage{}, GuardError("search needs at least one of text, from, to, subject, after, before")
 	}
+	if !q.RangeValid() {
+		return views.MailPage{}, GuardError("invalid request")
+	}
 	if err := ctx.Err(); err != nil {
 		return views.MailPage{}, err
 	}

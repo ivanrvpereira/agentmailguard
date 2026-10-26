@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/guard"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
@@ -134,6 +135,11 @@ func TestSearchByRecipientAloneIsASearchTerm(t *testing.T) {
 	_, err = summaries(g.Search(t.Context(), model.SearchQuery{To: ptr(""), Folder: ptr("inbox")}, model.PageRequest{}))
 	if err == nil || err.Error() != "search needs at least one of text, from, to, subject, after, before" {
 		t.Fatalf("search without a term returned %v", err)
+	}
+	day := time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC)
+	_, err = summaries(g.Search(t.Context(), model.SearchQuery{After: &day, Before: &day}, model.PageRequest{}))
+	if err != guard.GuardError("invalid request") {
+		t.Fatalf("search with Before not after After returned %v", err)
 	}
 }
 

@@ -126,6 +126,11 @@ type SearchQuery struct {
 	Folder                    *FolderID
 }
 
+// RangeValid reports whether the bounds leave time for a match: Before, when both are set, is after After.
+func (q SearchQuery) RangeValid() bool {
+	return q.After == nil || q.Before == nil || q.Before.After(*q.After)
+}
+
 // UnknownReceived is the ReceivedAt that adapters set when the provider gives no received time.
 var UnknownReceived = time.Unix(0, 0).UTC()
 

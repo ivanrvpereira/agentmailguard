@@ -41,7 +41,7 @@ func TestMailSearchTakesExactRFC3339BoundsAndRefusesDays(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &page); status != 200 || err != nil || !reflect.DeepEqual(page.Messages, []struct{ ID string }{{"at-eight"}}) {
 		t.Fatalf("exact bounds: %d %s", status, body)
 	}
-	for _, params := range []string{`{"after":"2026-10-06"}`, `{"before":"2026-10-07"}`, `{"after":"2026-10-06 08:00"}`} {
+	for _, params := range []string{`{"after":"2026-10-06"}`, `{"before":"2026-10-07"}`, `{"after":"2026-10-06 08:00"}`, `{"after":"2026-10-07T00:00:00Z","before":"2026-10-06T00:00:00Z"}`, `{"after":"2026-10-06T00:00:00Z","before":"2026-10-06T00:00:00Z"}`} {
 		if status, body := accountRPC(t, s, "mail.search", "demo", params); status != 400 || body != `{"error":"invalid request"}` {
 			t.Errorf("%s: %d %s", params, status, body)
 		}

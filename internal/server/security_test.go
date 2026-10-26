@@ -61,7 +61,7 @@ func TestHTTPBoundsBrowserAndDeniedSurface(t *testing.T) {
 		{"POST", "/v1/call", "application/json", "", `{"operation":"mail.get","params":{"id":123}}`, 400},
 		{"POST", "/v1/call", "application/json", "", `{"operation":"mail.get","params":{"id":null}}`, 400},
 		{"POST", "/v1/call", "application/json", "", `{"operation":"stats","account":null,"params":{}}`, 400},
-		{"POST", "/v1/call", "application/json", "", `{"operation":"mail.list","params":{"skip":2147483647}}`, 400},
+		{"POST", "/v1/call", "application/json", "", `{"operation":"mail.list","params":{"count":9223372036854775808}}`, 400},
 	} {
 		req, _ := http.NewRequest(tc.method, h.URL+tc.path, strings.NewReader(tc.body))
 		req.Header.Set("Content-Type", tc.typ)

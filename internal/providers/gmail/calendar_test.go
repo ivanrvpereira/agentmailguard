@@ -2,6 +2,7 @@ package gmail_test
 
 import (
 	"context"
+	"fmt"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
 	"net/http"
@@ -112,5 +113,30 @@ func TestCalendarSearchSkipsDeletedRecurringInstances(t *testing.T) {
 	events := page.Events
 	if err != nil || len(events) != 1 || events[0].ID != "ev" {
 		t.Fatalf("events=%+v err=%v", events, err)
+	}
+}
+
+// Search sends no maxResults, so Google's default page of 250 events applies (events.list); a longer page is
+// refused before any event is used.
+func TestCalendarSearchRefusesAPageLongerThanTheDefault(t *testing.T) {
+	var n int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		items := []any{}
+		for i := range n {
+			e := calendarEvent()
+			e["id"] = fmt.Sprintf("ev%d", i)
+			items = append(items, e)
+		}
+		respond(w, map[string]any{"items": items})
+	}))
+	defer server.Close()
+	c := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), CalendarURL: server.URL}).Calendar()
+	n = 250
+	if page, err := c.Search(context.Background(), "agenda", ""); err != nil || len(page.Events) != 250 {
+		t.Fatalf("250 events: %d %v", len(page.Events), err)
+	}
+	n = 251
+	if page, err := c.Search(context.Background(), "agenda", ""); err != model.MailboxError("Calendar error InvalidPage") || page.Events != nil {
+		t.Fatalf("251 events: %d %v", len(page.Events), err)
 	}
 }

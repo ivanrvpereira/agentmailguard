@@ -143,10 +143,15 @@ func (c *calendar) List(ctx context.Context, start, end time.Time) ([]model.Even
 	}
 }
 
+// searchPage is events.list's default page size, which applies without maxResults
+// (https://developers.google.com/workspace/calendar/api/v3/reference/events/list).
+const searchPage = 250
+
 // Search reads one page of events.list with q and the page as pageToken only, so Google's default page size and
 // order apply (https://developers.google.com/workspace/calendar/api/v3/reference/events/list). Its items are full
 // events, except that a deleted instance of a recurring event comes as a cancelled entry without a start; it is
-// skipped. The next page is nextPageToken; one equal to the page is refused, as it would never end.
+// skipped. The next page is nextPageToken; one equal to the page is refused, as it would never end. Without
+// maxResults the page holds at most the default of searchPage events, so a longer page is refused.
 func (c *calendar) Search(ctx context.Context, text, page string) (model.EventPage, error) {
 	q := url.Values{"q": {text}}
 	if page != "" {
@@ -159,6 +164,9 @@ func (c *calendar) Search(ctx context.Context, text, page string) (model.EventPa
 	a, err := items(v, "items", "Calendar")
 	if err != nil {
 		return model.EventPage{}, err
+	}
+	if len(a) > searchPage {
+		return model.EventPage{}, failure("Calendar", "InvalidPage")
 	}
 	out := []model.Event{}
 	for _, raw := range a {
