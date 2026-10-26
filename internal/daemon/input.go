@@ -53,12 +53,15 @@ func passwordLine(ctx context.Context, stdin io.Reader) (string, error) {
 			}
 		}
 	}()
+	// Cancellation wins: a read that fails because the user canceled can finish at the same time as ctx.
 	select {
 	case <-ctx.Done():
-		return "", errors.New("credential password entry canceled")
 	case r := <-done:
-		return r.password, r.err
+		if ctx.Err() == nil {
+			return r.password, r.err
+		}
 	}
+	return "", errors.New("credential password entry canceled")
 }
 
 // hideInput turns off echo when stdin is a terminal. restore puts the saved terminal state back
