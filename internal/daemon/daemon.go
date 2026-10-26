@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,7 +37,9 @@ type Options struct {
 	Notify func(pid int) error
 	// Reloads delivers reload requests to serve; nil listens for SIGUSR1.
 	Reloads <-chan os.Signal
-	Now     func() time.Time
+	// Listen opens the API and console listeners of serve; nil is net.Listen.
+	Listen func(network, address string) (net.Listener, error)
+	Now    func() time.Time
 }
 
 func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "DaemonOptions{redacted}") }

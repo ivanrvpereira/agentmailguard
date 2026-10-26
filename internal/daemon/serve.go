@@ -59,7 +59,11 @@ func (r *runner) serve(ctx context.Context, listen string) int {
 		return r.fail(e.Error())
 	}
 	defer release()
-	listener, e := net.Listen("tcp", listen)
+	open := r.opts.Listen
+	if open == nil {
+		open = net.Listen
+	}
+	listener, e := open("tcp", listen)
 	if e != nil {
 		return r.fail("listener unavailable")
 	}
@@ -94,7 +98,7 @@ func (r *runner) serve(ctx context.Context, listen string) int {
 		return r.fail("start refused; fix the items above and start the daemon again")
 	}
 	address := s.ConsoleAddress()
-	consoleListener, e := net.Listen("tcp", address)
+	consoleListener, e := open("tcp", address)
 	if e != nil {
 		return r.fail("console listener unavailable")
 	}

@@ -117,11 +117,7 @@ func consoleConfig(listen string) string {
 
 func TestServeWarnsWhenTheApprovalConsoleListensBeyondLoopback(t *testing.T) {
 	t.Parallel()
-	_, port, err := net.SplitHostPort(freeAddress(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	d := startServe(t, writeHome(t, consoleConfig("0.0.0.0:"+port)), "127.0.0.1:0", daemon.Options{Platform: &keychain{}})
+	d := startServe(t, writeHome(t, consoleConfig(reserve(t, "0.0.0.0"))), "127.0.0.1:0", daemon.Options{Platform: &keychain{}})
 	if text := d.log.String(); !strings.Contains(text, "WARNING: the approval console listens beyond loopback. Use an HTTPS tunnel such as tailscale serve.\napproval console listening\n") {
 		t.Fatalf("log=%q", text)
 	}

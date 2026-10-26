@@ -162,20 +162,62 @@ func amgd(t *testing.T, home string, opts daemon.Options, stdin string, args ...
 	if opts.Stdin == nil {
 		opts.Stdin = strings.NewReader(stdin)
 	}
+	if opts.Listen == nil {
+		opts.Listen = listenReserved
+	}
 	var out, errout bytes.Buffer
 	code := daemon.Run(ctx, append([]string{"--home", home}, args...), &out, &errout, opts)
 	return code, out.String(), errout.String()
 }
 
-// freeAddress returns a loopback address that nothing listens on.
-func freeAddress(t *testing.T) string {
+// reserved holds listeners that tests opened for serve, by address. Parallel tests open ports all the time, so a
+// port that a test closes and serve opens again later can be taken in between.
+var reserved = struct {
+	sync.Mutex
+	listeners map[string]net.Listener
+}{listeners: map[string]net.Listener{}}
+
+// freeAddress returns a loopback address for serve. The port stays open until serve takes its listener through
+// listenReserved, so no other test can take it; the test closes a listener that serve did not take.
+func freeAddress(t *testing.T) string { return reserve(t, "127.0.0.1") }
+
+// reserve opens a listener on a free port of host and returns its address, host:port.
+func reserve(t *testing.T, host string) string {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	l, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
-	return l.Addr().String()
+	_, port, err := net.SplitHostPort(l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := net.JoinHostPort(host, port)
+	reserved.Lock()
+	reserved.listeners[address] = l
+	reserved.Unlock()
+	t.Cleanup(func() {
+		if l := takeReserved(address); l != nil {
+			_ = l.Close()
+		}
+	})
+	return address
+}
+
+func takeReserved(address string) net.Listener {
+	reserved.Lock()
+	defer reserved.Unlock()
+	l := reserved.listeners[address]
+	delete(reserved.listeners, address)
+	return l
+}
+
+// listenReserved is the Listen seam of serve: it hands over a reserved listener, else it opens the address.
+func listenReserved(network, address string) (net.Listener, error) {
+	if l := takeReserved(address); l != nil {
+		return l, nil
+	}
+	return net.Listen(network, address)
 }
 
 // daemonLog is the stderr of an in-process amgd serve. await waits for text in it.
@@ -264,6 +306,9 @@ func runServe(t *testing.T, home, listen string, opts daemon.Options) *daemonRun
 	}
 	if opts.Stdin == nil {
 		opts.Stdin = strings.NewReader("")
+	}
+	if opts.Listen == nil {
+		opts.Listen = listenReserved
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	d := &daemonRun{log: newDaemonLog(), cancel: cancel, exit: make(chan int, 1)}
