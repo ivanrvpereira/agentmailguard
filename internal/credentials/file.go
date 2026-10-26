@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 
@@ -17,6 +18,7 @@ import (
 var ErrDecrypt = errors.New("wrong password or damaged file")
 var ErrPasswordMissing = errors.New("password missing")
 var ErrInvalidPassword = errors.New("invalid credential password")
+var ErrUnresolvedPassword = errors.New("credential password is an unresolved op:// reference; run the command through op run")
 
 const PasswordEnvironment = "AMG_CREDENTIALS_PASSWORD"
 
@@ -35,6 +37,10 @@ func TakePasswordEnv(lookup func(string) string) (string, bool) {
 func ValidatePassword(password string) error {
 	if password == "" {
 		return ErrPasswordMissing
+	}
+	// The reference text is public; a file encrypted with it would have no real password.
+	if strings.HasPrefix(password, "op://") {
+		return ErrUnresolvedPassword
 	}
 	if len(password) > 4096 || !utf8.ValidString(password) {
 		return ErrInvalidPassword

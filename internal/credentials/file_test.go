@@ -56,6 +56,7 @@ func TestFileStoreHostileInputs(t *testing.T) {
 		{"malformed-json", encryptedFixture(t, `{"version":1,`), "synthetic-password", credentials.ErrDecrypt},
 		{"missing-password", valid, "", credentials.ErrPasswordMissing},
 		{"control-password", valid, "private-\x1b[31m", credentials.ErrInvalidPassword},
+		{"unresolved-reference", valid, "op://development/amg/password", credentials.ErrUnresolvedPassword},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -191,5 +192,18 @@ func TestFileStoreEncryptedRoundTrip(t *testing.T) {
 	}
 	if got := fmt.Sprintf("%+v %#v", s, s); bytes.Contains([]byte(got), []byte("synthetic-password")) {
 		t.Fatal("store formatting exposed password")
+	}
+}
+
+// A shell that exports the 1Password reference without op run passes the reference text itself.
+// It must never become the key of a new credential file.
+func TestUnresolvedSecretReferenceNeverCreatesAFile(t *testing.T) {
+	home := t.TempDir()
+	s := credentials.NewFile(home, "op://development/amg/password")
+	if err := s.SaveScreeningKey(context.Background(), "synthetic-key"); err != credentials.ErrUnresolvedPassword {
+		t.Fatalf("save error=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "credentials.age")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("credential file created: %v", err)
 	}
 }

@@ -307,7 +307,7 @@ func safeError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	for _, known := range []error{ErrNotFound, ErrUnsupportedVersion, ErrInvalidRecord, ErrDecrypt, ErrPasswordMissing, ErrInvalidPassword} {
+	for _, known := range []error{ErrNotFound, ErrUnsupportedVersion, ErrInvalidRecord, ErrDecrypt, ErrPasswordMissing, ErrInvalidPassword, ErrUnresolvedPassword} {
 		if errors.Is(err, known) {
 			return known
 		}

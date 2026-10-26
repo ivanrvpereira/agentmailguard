@@ -317,6 +317,20 @@ The program unsets the password variable after reading it, before it starts chil
 Unsetting the variable does not remove the initial environment exposure or erase the password from process memory.
 Do not put passwords in command arguments, shell history, or configuration files.
 A secret manager can supply the environment variable or stdin.
+A password that starts with `op://` is refused: it is an unresolved 1Password secret reference, not a password.
+
+With 1Password and mise, put the secret reference in a git-ignored `.env` that `mise.toml` loads (`_.file = ".env"`), and run `amgd` through `op run`:
+
+```sh
+# .env
+AMG_CREDENTIALS_PASSWORD=op://development/AMG_CREDENTIALS_PASSWORD/password
+```
+
+```sh
+op run -- amgd serve
+```
+
+Without `op run`, `amgd` gets the reference text and refuses it.
 
 Run `amgd config set screening.api_key` on the daemon host to save the screening key.
 Terminal input disables echo. Non-terminal stdin supplies the key as one line.
