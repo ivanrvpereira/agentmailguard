@@ -102,7 +102,7 @@ func TestApproveStoresTheSendInItsAPIShape(t *testing.T) {
 	policy := defaultPolicy
 	policy.Base.MailSend = config.Approve
 	params := map[string]string{
-		"mail.send":    `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body"}`,
+		"mail.send":    `{"to":["CANARY@example.test"],"cc":[],"bcc":[],"subject":"CANARY subject","body":"CANARY body","html":false}`,
 		"mail.reply":   `{"id":"m1","body":"CANARY reply"}`,
 		"mail.forward": `{"id":"m1","to":["CANARY@example.test"]}`,
 	}
@@ -152,7 +152,7 @@ func TestSendFromASealedSourceIsAlwaysRefused(t *testing.T) {
 
 func TestJevFlagHoldsAnAllowedSend(t *testing.T) {
 	wants := map[string]map[string]any{
-		"mail.send":    {"to": []any{"CANARY@example.test"}, "subject": "CANARY subject", "body": "CANARY body"},
+		"mail.send":    {"to": []any{"CANARY@example.test"}, "cc": []any{}, "bcc": []any{}, "subject": "CANARY subject", "body": "CANARY body", "html": false},
 		"mail.reply":   {"body": "CANARY reply"},
 		"mail.forward": {"to": []any{"CANARY@example.test"}, "forwarded_message": map[string]any{"subject": "m1", "body": "BODYTEXT [L1]"}},
 	}
@@ -206,5 +206,33 @@ func TestFailedSendIsNotAudited(t *testing.T) {
 	}
 	if len(auditRecords(t, path)) != 0 {
 		t.Fatal("failed send has an operation record")
+	}
+}
+
+// The guard re-checks that a send has a recipient: one without To, CC, or BCC is an invalid request that
+// reaches no policy decision, no Jev check, and no provider.
+func TestSendWithoutARecipientIsInvalid(t *testing.T) {
+	w := &writer{mailbox: &mailbox{}}
+	s := scoring(0)
+	g, _, path := policyGuard(t, w, nil, s, allowAll)
+	if err := g.SendNew(context.Background(), model.NewDraft{Subject: "CANARY subject", Body: "CANARY body"}); err == nil || err.Error() != "invalid request" {
+		t.Fatalf("send=%v", err)
+	}
+	if len(w.calls) != 0 || len(s.checked()) != 0 || len(allAuditRecords(t, path)) != 0 {
+		t.Fatalf("writes=%v checks=%v records=%v", w.calls, s.checked(), allAuditRecords(t, path))
+	}
+}
+
+// DraftNew returns the draft that the provider made; a result without an ID fails closed.
+func TestDraftNewReturnsTheProviderDraftAndRefusesOneWithoutID(t *testing.T) {
+	made := model.DraftResult{ID: "d9", ThreadID: "t9", To: []string{"a@example.test"}, CC: []string{}, BCC: []string{"b@example.test"}, Subject: "Hi"}
+	w := &writer{mailbox: &mailbox{}, draft: &made}
+	g, _, _ := policyGuard(t, w, nil, scoring(0), allowAll)
+	if got, err := g.DraftNew(context.Background(), model.NewDraft{To: []string{"a@example.test"}}); err != nil || !reflect.DeepEqual(got, made) {
+		t.Fatalf("draft=%+v %v", got, err)
+	}
+	w.draft = &model.DraftResult{ThreadID: "t9"}
+	if _, err := g.DraftNew(context.Background(), model.NewDraft{To: []string{"a@example.test"}}); err == nil || err.Error() != "ValueError" {
+		t.Fatalf("draft without ID: %v", err)
 	}
 }

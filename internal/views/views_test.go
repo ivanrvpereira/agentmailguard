@@ -24,7 +24,7 @@ func jsonFields(t *testing.T, v any) map[string]any {
 	return fields
 }
 func TestMailVerdictViews(t *testing.T) {
-	message := model.Message{ID: "id", Sender: model.Address{Name: "SECRET-NAME", Address: "a@example.test"}, Subject: "SECRET-SUBJECT", To: []model.Address{}, CC: []model.Address{}, Attachments: []string{}, ReceivedAt: time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC), Flag: model.NoFlag, Categories: []string{"listed", "SECRET-CATEGORY"}, Body: new("RAW-BODY")}
+	message := model.Message{ID: "id", Sender: model.Address{Name: "SECRET-NAME", Address: "a@example.test"}, Subject: "SECRET-SUBJECT", To: []model.Address{}, CC: []model.Address{}, BCC: []model.Address{{Address: "hidden@example.test"}}, Attachments: []string{}, ReceivedAt: time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC), Flag: model.NoFlag, Categories: []string{"listed", "SECRET-CATEGORY"}, Body: new("RAW-BODY")}
 	rendered := content.Rendered{Markdown: "VISIBLE-BODY", Links: map[string]string{"L1": "https://example.test/SECRET-TOKEN"}}
 	for _, verdict := range []model.Verdict{model.Green, model.Yellow, model.Sealed, model.Red, model.Error} {
 		t.Run(string(verdict), func(t *testing.T) {
@@ -52,13 +52,13 @@ func TestMailVerdictViews(t *testing.T) {
 				}
 			}
 			if verdict == model.Green || verdict == model.Yellow {
-				for _, key := range []string{"sender", "subject", "to", "cc", "attachments"} {
+				for _, key := range []string{"sender", "subject", "to", "cc", "bcc", "attachments"} {
 					if _, ok := fields[key]; !ok {
 						t.Errorf("missing header %s", key)
 					}
 				}
 			} else {
-				for _, key := range []string{"subject", "to", "cc", "attachments"} {
+				for _, key := range []string{"subject", "to", "cc", "bcc", "attachments"} {
 					if _, ok := fields[key]; ok {
 						t.Errorf("leaked header %s", key)
 					}
@@ -107,7 +107,7 @@ func TestMailVerdictViews(t *testing.T) {
 	if fields["body"] != "" || fields["subject"] != "" || fields["truncated"] != false {
 		t.Fatal("available empty fields omitted")
 	}
-	for _, key := range []string{"to", "cc", "attachments", "categories"} {
+	for _, key := range []string{"to", "cc", "bcc", "attachments", "categories"} {
 		a, ok := fields[key].([]any)
 		if !ok || len(a) != 0 {
 			t.Errorf("%s not empty array: %v", key, fields[key])

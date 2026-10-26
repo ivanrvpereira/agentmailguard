@@ -24,11 +24,11 @@ By default, the daemon sends requests to OpenRouter's System One endpoint for mo
 The [`[screening]`](#screening) table can set another endpoint and model, which then receives the same data.
 The fake screening engine sends nothing, but it is only for tests and local work.
 
-- Mail requests include rendered body text, subject, sender and recipient identities, attachment names, authentication results, and link domains.
+- Mail requests include rendered body text, subject, sender and recipient identities (To, Cc, and the Bcc of drafts and sent mail where the provider gives it), attachment names, authentication results, and link domains.
 - Calendar requests include subject, organizer, attendees, location, recurrence, meeting join URLs, and other event metadata.
 - Private-event bodies are excluded, but private-event metadata and accepted meeting join URLs are still included.
 - Organization requests include the rule instructions used for classification.
-- [Action checks](#jev-action-check) include the recipients, subject, body, comment, and event fields that the agent wrote, and for a forward the subject and body of the forwarded message.
+- [Action checks](#jev-action-check) include the recipients (To, Cc, and Bcc), subject, body (HTML as its source), HTML flag, comment, and event fields that the agent wrote, and for a forward the subject and body of the forwarded message.
 
 These transfers occur before the verdict.
 Content hidden from the agent can still reach the screening service.
@@ -224,7 +224,7 @@ sqlite3 ~/.agentmailguard/fake-provider.db "INSERT INTO messages (account, id, s
 sqlite3 ~/.agentmailguard/fake-provider.db "SELECT id, folder, subject, origin FROM messages WHERE account = 'demo@fake.invalid';"
 ```
 
-Trash and archive are moves to the `trash` and `archive` folders; nothing is ever deleted. Drafts go to `drafts`. `mail send`, `mail reply`, and `mail forward` store the message in `sent`, with `origin` (`new`, `reply`, or `forward`) and `source_id`. Nothing leaves the machine.
+Trash and archive are moves to the `trash` and `archive` folders; nothing is ever deleted. Drafts go to `drafts`. `mail send`, `mail reply`, and `mail forward` store the message in `sent`, with `origin` (`new`, `reply`, or `forward`) and `source_id`. Nothing leaves the machine. New drafts and sends keep their To, Cc, and Bcc lists in `to_addresses`, `cc_addresses`, and `bcc_addresses`, and `content_type` is `html` for an `--html` body. A `fake-provider.db` made before the `bcc_addresses` column existed gets the column when the daemon first opens it.
 
 To seed a conversation, give its messages the same `thread_id`. A message whose `thread_id` is NULL is its own conversation, and its `thread_id` in results is its message ID. Reply and forward drafts, and sent replies and forwards, join the conversation of their source message; new drafts and new sends are their own conversation. A `fake-provider.db` made before the `thread_id` column existed gets the column when the daemon first opens it. For example, a reply from Ana in the conversation of `m1`:
 
@@ -484,8 +484,8 @@ An explicit empty value, such as `draft update ID --body ''`, is not the same as
 | Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID`, `calendar search TEXT [--page NEXT_PAGE]` |
 | Availability (Microsoft 365 and fake, read-only) | `calendar availability --to ADDRESS [--to ADDRESS] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'` |
 | Meetings (send notifications) | `calendar invite --to ADDRESS --subject TEXT --start 'YYYY-MM-DD HH:MM' --duration 30m\|--end 'YYYY-MM-DD HH:MM' [--optional ADDRESS] [--body TEXT] [--location TEXT] [--no-online]`, `calendar update ID [--subject TEXT] [--location TEXT] [--body TEXT] [--start TIME] [--duration D\|--end TIME] [--add-attendee ADDRESS] [--remove-attendee ADDRESS] [--online]`, `calendar cancel ID [--comment TEXT]`, `calendar respond ID --response accept\|tentative\|decline [--comment TEXT\|--no-notify]` |
-| Mail send (sends at once) | `mail send --to ADDRESS --subject TEXT --body TEXT`, `mail reply ID --body TEXT`, `mail forward ID --to ADDRESS` |
-| Drafts (no send) | `draft new --to ADDRESS --subject TEXT --body TEXT`, `draft reply ID --body TEXT`, `draft forward ID --to ADDRESS`, `draft update ID --body TEXT` |
+| Mail send (sends at once) | `mail send [--to ADDRESS] [--cc ADDRESS] [--bcc ADDRESS] [--subject TEXT] [--body TEXT] [--html]`, `mail reply ID --body TEXT`, `mail forward ID --to ADDRESS` |
+| Drafts (no send) | `draft new [--to ADDRESS] [--cc ADDRESS] [--bcc ADDRESS] [--subject TEXT] [--body TEXT] [--html]`, `draft reply ID --body TEXT`, `draft forward ID --to ADDRESS`, `draft update ID --body TEXT` |
 
 Successful commands print the operation's JSON result.
 `mail list`, `mail search`, and `calendar search` return one page: `{"messages": [...], "next_page": "..."}`, with `"events"` for `calendar search`. `next_page` is present only when the provider has more results. To read the next page, always repeat the same command with the same options and add `--page VALUE`. The daemon checks the form of the value and otherwise passes it to the provider as is; only for Microsoft 365 mail does it also refuse a next link from other options.
@@ -500,6 +500,9 @@ Dates follow one rule: a day runs from 00:00 to the end of the day on the clock 
 On Gmail, `mail search` sends the times in Unix seconds (`after:` and `before:`), because Gmail reads a date there as midnight Pacific time ([Gmail API filtering](https://developers.google.com/workspace/gmail/api/guides/filtering)); the guide does not say whether the boundary second matches, so the daemon asks for one more second on each side. On Microsoft 365, KQL `received` takes only a day, in UTC when no time zone is set ([MS-KQL Date Tokens](https://learn.microsoft.com/en-us/openspecs/sharepoint_protocols/ms-kql/21b23dbb-6c49-4d35-86e4-80fb1d66b301)), so the daemon asks for one more UTC day on each side. On both, the daemon then drops the messages received outside the exact times, and messages without a received time, so a page can hold fewer messages than `--count`, and `next_page` still continues the same search.
 `mail thread` prints JSON only. It returns the messages of the conversation as a plain list of `mail list` messages, without pages, newest first, from every folder, including trash, spam or junk, sent mail, and drafts. Gmail returns the whole thread (`threads.get`); on Microsoft 365 the daemon reads every page of the `conversationId` query. An unknown thread fails. Read bodies with `mail get`.
 `calendar search TEXT` uses the provider's own search: Google Calendar `events.list` with `q` on Gmail, and the Microsoft Search API (`POST /search/query` for events) on Microsoft 365. It returns one page in the provider's default size and order, with `next_page` as above, and has no date range. Each event is screened as `calendar get` screens it, and the result has the fields of a `calendar list` result. The provider matches the text on its side, so a hidden subject or body can decide whether an event is in the result. The fake provider matches the subject, body, location, organizer, and attendees, ignoring case.
+`draft new` takes every option as optional, as the mail apps do, and `--to`, `--cc`, and `--bcc` can each be repeated. `--bcc` adds hidden recipients: the other recipients do not see them. The body is plain text with its line breaks unless `--html` is given; with `--html`, the body is HTML that the daemon sends unchanged, without cleaning or checking it.
+`draft new` returns `{"id", "thread_id", "to", "cc", "bcc", "subject"}`: the draft ID, its conversation ID (left out when the provider gives none), and its recipients and subject. On Microsoft 365, they come from the message that Graph returns; on Gmail, the IDs come from Gmail's answer and the recipients and subject from the message that the daemon built.
+`mail get` also shows `bcc` on drafts and sent mail, where the provider gives it, at the verdicts that show `to` and `cc`.
 Draft update returns the resulting draft ID, which can change on Gmail.
 `mail send`, `mail reply`, and `mail forward` return `{"ok": true}`. The providers give no ID for a sent message.
 `calendar invite` returns the new event ID. The other meeting commands return the event ID and `"ok": true`.
@@ -586,7 +589,7 @@ Before an action runs, Jev checks the text that the agent wrote for it. The agen
 
 - Checked actions: `draft new`, `draft reply`, `draft update`, `draft forward`, `mail send`, `mail reply`, `mail forward`, `calendar invite`, and `calendar update`. `calendar respond` and `calendar cancel` are checked only when they have a comment, so `calendar respond --no-notify` is never checked.
 - Not checked: `mail trash`, rule moves, and the commands without a policy key.
-- Jev sees the operation name, a fixed description of what the action does, and the action fields that the agent gave: recipients (for `calendar invite`, also the `--optional` attendees), subject, body (for `calendar update`, the new `--body`), comment, response, and event fields. It never sees a message or event ID.
+- Jev sees the operation name, a fixed description of what the action does, and the action fields that the agent gave: recipients (for `draft new` and `mail send`, To, Cc, and Bcc; for `calendar invite`, also the `--optional` attendees), subject, body (for `calendar update`, the new `--body`; an `--html` body as its HTML source, not rendered), the HTML flag, comment, response, and event fields. It never sees a message or event ID.
 - For `draft forward` and `mail forward`, Jev also sees the subject and body of the forwarded message, read through the screened read path. If the daemon cannot read this text, for example because the message is not `green`, the check fails.
 
 The check comes after the policy decision:
@@ -616,7 +619,7 @@ A denied ID gets `"ok": false` and `"error": "refused by policy: mail_trash"`.
 An ID that needs approval gets `"ok": false`, `"error": "pending"`, and an `approval_id`, but no `url`. Each such ID is its own pending item.
 
 `approvals status ID` returns `{"state":"..."}` for a pending item. The state is `pending`, `running`, `done`, `denied`, or `failed`.
-A `done` item also has `result`: the normal result of the command.
+A `done` item also has `result`: the normal result of the command, except that a `draft new` result keeps only `id` and `thread_id`, because the stored result holds no mail content.
 The output never shows the stored request arguments.
 An unknown ID fails with `approval not found` and exit code `1`.
 
@@ -670,8 +673,8 @@ Until you set the [console password](#console-password), the console answers eve
 
 The browser asks for a username and the password. The console ignores the username.
 
-- The list page `/` shows all pending items, newest first, and then the 50 most recently changed other items. Each row shows the account, the operation, the recipients, the subject, the state, and the age.
-- The item page `/a/ID` shows the account, the operation, the state, the times, and every stored request field as plain text. Links in the text are never links on the page.
+- The list page `/` shows all pending items, newest first, and then the 50 most recently changed other items. Each row shows the account, the operation, the recipients (To, then `cc:` and `bcc (hidden):` lists), the subject, the state, and the age.
+- The item page `/a/ID` shows the account, the operation, the state, the times, and every stored request field as plain text, with `to`, `cc`, and `bcc` first. `bcc` is labeled `bcc (hidden recipients)`: these people get the message, and the other recipients do not see them. An `--html` body is labeled `body (HTML source, not rendered)` and shows as source text. Links in the text are never links on the page.
 - For an action on an existing message, the item page also shows the sender, subject, received date, and verdict of the message. For an action on an event, it shows the subject, start, end, and organizer. The daemon reads these through the screened read path and never shows a body. If the read fails, the page shows `not available`, and you can still decide.
 - The item page also shows the result of the [Jev action check](#jev-action-check), if a check ran.
 - A pending item has **Approve** and **Deny** buttons.
@@ -734,7 +737,7 @@ With `approve`, each send waits in the [approval console](#approval-console) and
 
 The commands take the same options as the matching draft commands:
 
-- `mail send --to ADDRESS [--to ADDRESS] --subject TEXT --body TEXT` sends a new plain-text message. `--subject` and `--body` can be empty, but you must give them.
+- `mail send [--to ADDRESS]... [--cc ADDRESS]... [--bcc ADDRESS]... [--subject TEXT] [--body TEXT] [--html]` sends a new message. It needs at least one recipient in `--to`, `--cc`, or `--bcc`; a send with only `--bcc` recipients is valid. `--subject` and `--body` are optional and default to empty. The body is plain text with its line breaks unless `--html` is given; an `--html` body goes unchanged, without cleaning or checking.
 - `mail reply ID --body TEXT` sends a reply to the sender of the message. On Gmail, the reply goes to the `Reply-To` address if the message has one, and the reply quotes the original text. It does not go to the other recipients.
 - `mail forward ID --to ADDRESS [--to ADDRESS]` forwards the message with no added text. On Gmail, the original message is attached unchanged.
 
@@ -882,8 +885,8 @@ The calendar range has no maximum: Microsoft Graph `calendarView` needs a start 
 
 | Verdict | Visible mail content |
 | --- | --- |
-| green | Cleaned headers, body, attachment names, and link IDs |
-| yellow | Cleaned headers, attachment names, and reason, without body |
+| green | Cleaned headers (sender, subject, To, Cc, and in `mail get` Bcc), body, attachment names, and link IDs |
+| yellow | Cleaned headers (sender, subject, To, Cc, and in `mail get` Bcc), attachment names, and reason, without body |
 | red or sealed | Sender address, date, and reason, without display name or subject |
 | error | Date and safe error code, without sender, subject, or body |
 
@@ -918,6 +921,7 @@ The API has no operation that changes credentials, the console password, account
 Meeting times on the HTTP interface are RFC 3339 timestamps. `calendar.update` also accepts a Go `duration` string.
 Date bounds on the HTTP interface are exact RFC 3339 times, never days: `mail.search` `after` (included) and `before` (excluded, later than `after` when both are given), `mail.organize` `since` (required, not later than the daemon clock) and `until` (excluded, later than `since`), and `calendar.list` `start` (included) and `end` (excluded, later than `start`). A date without a time is refused. The CLI computes these times from days, as [Commands and output](#commands-and-output) describes.
 `calendar.invite` takes an optional `optional` address list, `calendar.update` an optional `body`, and `calendar.respond` an optional boolean `no_notify`.
+`draft.new` and `mail.send` take the optional address lists `to`, `cc`, and `bcc`, the optional strings `subject` and `body` (empty when absent), and the optional boolean `html`. `mail.send` without an address in `to`, `cc`, or `bcc` is refused as `invalid request` before any policy decision.
 The `account` field is optional, and `params` must be an object.
 Unknown operations or fields, duplicate keys, malformed JSON, trailing JSON, null fields, invalid types, and oversized requests are refused.
 There is no HTTP login, token, key, raw-message, classification, rules-mutation, or approval endpoint. Only the [approval console](#approval-console), on its own address, approves or denies pending items.
@@ -928,7 +932,7 @@ A policy refusal returns HTTP 500 with `{"error":"refused by policy: KEY"}`.
 Requests are limited to 1 MiB and 16 JSON nesting levels.
 The client bounds responses at 64 MiB and never follows redirects or retries requests, including stale-connection write replay.
 Mail list and search take an optional `count` of 0 or more; 0 or no count sends no size, so the provider's default applies. They and `calendar.search` take an optional `page`: the `next_page` of an earlier result, at most 16 KiB of printable ASCII without spaces. A `next_page` from the provider that breaks these bounds fails the call. On Gmail the page is the provider's `pageToken`; a Gmail `calendar.search` page with more than the `events.list` default of 250 events fails. On Microsoft 365 a mail page is Graph's whole `@odata.nextLink`, which the daemon follows only with Graph's origin, the path of the same options, each query value of those options, and otherwise only `$top`, `$skip`, and `$skiptoken`; a calendar page is the Microsoft Search `from` offset.
-Manual mutations need at least one ID, and recipient and attendee lists at least one address; the daemon sets no maximum on these lists, because the provider refuses what it does not accept and the request size limit bounds them.
+Manual mutations need at least one ID, and recipient and attendee lists at least one address, except the `to`, `cc`, and `bcc` lists of `draft.new` and `mail.send`, which can be empty (a `mail.send` needs one address among them); the daemon sets no maximum on these lists, because the provider refuses what it does not accept and the request size limit bounds them.
 IDs and search strings are limited to 4,096 bytes.
 Stats accepts 1 to 365,000 days.
 
@@ -948,7 +952,8 @@ After each test, the daemon log, `audit.jsonl`, and every table of `cache.db` ex
 
 Not verified against real providers or services:
 
-- mail sends, replies, and forwards;
+- mail sends, replies, and forwards, including Cc, Bcc, and `--html` bodies on new drafts and sends;
+- the Bcc that `mail get` reads from drafts and sent mail (Graph `bccRecipients`, the Gmail `Bcc` header);
 - meeting invites, updates, cancellations, and responses;
 - provider acceptance of generated drafts;
 - `mail thread` on a Microsoft 365 conversation with a message in Junk Email (checked live on 2026-10-26: Gmail threads with drafts, and Microsoft 365 conversations across Inbox, Sent Items, Drafts, Deleted Items, and other folders; `calendar search` on both providers was checked the same day);

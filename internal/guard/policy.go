@@ -354,9 +354,19 @@ type idsArgs struct {
 }
 type newDraftArgs struct {
 	To      []string `json:"to"`
+	CC      []string `json:"cc"`
+	BCC     []string `json:"bcc"`
 	Subject string   `json:"subject"`
 	Body    string   `json:"body"`
+	HTML    bool     `json:"html"`
 }
+
+// newArgs stores every field of a new message. A nil list becomes an empty list, because the API refuses null.
+func newArgs(d model.NewDraft) newDraftArgs {
+	list := func(v []string) []string { return append([]string{}, v...) }
+	return newDraftArgs{list(d.To), list(d.CC), list(d.BCC), d.Subject, d.Body, d.HTML}
+}
+
 type bodyArgs struct {
 	ID   string `json:"id"`
 	Body string `json:"body"`

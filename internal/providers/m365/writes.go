@@ -38,9 +38,14 @@ func (b *mailbox) post(ctx context.Context, path string, body map[string]any) (o
 	return b.c.request(ctx, http.MethodPost, b.c.endpoint(path, nil), body, false)
 }
 
-// textMessage is the Graph message of a new plain-text message.
-func textMessage(draft model.NewDraft) map[string]any {
-	return map[string]any{"subject": draft.Subject, "body": map[string]string{"contentType": "text", "content": draft.Body}, "toRecipients": recipients(draft.To)}
+// newMessage is the Graph message of a new message: its recipients, and a body of contentType text or html
+// (https://learn.microsoft.com/en-us/graph/api/resources/itembody?view=graph-rest-1.0).
+func newMessage(draft model.NewDraft) map[string]any {
+	kind := "text"
+	if draft.HTML {
+		kind = "html"
+	}
+	return map[string]any{"subject": draft.Subject, "body": map[string]string{"contentType": kind, "content": draft.Body}, "toRecipients": recipients(draft.To), "ccRecipients": recipients(draft.CC), "bccRecipients": recipients(draft.BCC)}
 }
 func (b *mailbox) draft(ctx context.Context, path string, body map[string]any) (string, error) {
 	d, err := b.post(ctx, path, body)
@@ -53,8 +58,28 @@ func (b *mailbox) draft(ctx context.Context, path string, body map[string]any) (
 	}
 	return id, nil
 }
-func (b *mailbox) DraftNew(ctx context.Context, draft model.NewDraft) (string, error) {
-	return b.draft(ctx, "/me/messages", textMessage(draft))
+
+// DraftNew reads the result from the message that Graph creates and returns
+// (https://learn.microsoft.com/en-us/graph/api/user-post-messages?view=graph-rest-1.0).
+func (b *mailbox) DraftNew(ctx context.Context, draft model.NewDraft) (model.DraftResult, error) {
+	d, err := b.post(ctx, "/me/messages", newMessage(draft))
+	if err != nil {
+		return model.DraftResult{}, err
+	}
+	out := model.DraftResult{ID: text(d, "id"), ThreadID: text(d, "conversationId"), To: emails(d, "toRecipients"), CC: emails(d, "ccRecipients"), BCC: emails(d, "bccRecipients"), Subject: text(d, "subject")}
+	if out.ID == "" {
+		return model.DraftResult{}, invalidMetadata
+	}
+	return out, nil
+}
+
+// emails gives the addresses of a recipient list.
+func emails(d object, k string) []string {
+	out := []string{}
+	for _, a := range addresses(d, k) {
+		out = append(out, a.Address)
+	}
+	return out
 }
 func (b *mailbox) DraftReply(ctx context.Context, id, comment string) (string, error) {
 	return b.draft(ctx, "/me/messages/"+escapeID(id)+"/createReply", map[string]any{"comment": comment})
@@ -69,7 +94,7 @@ func (b *mailbox) send(ctx context.Context, path string, body map[string]any) er
 	return err
 }
 func (b *mailbox) SendNew(ctx context.Context, draft model.NewDraft) error {
-	return b.send(ctx, "/me/sendMail", map[string]any{"message": textMessage(draft), "saveToSentItems": true})
+	return b.send(ctx, "/me/sendMail", map[string]any{"message": newMessage(draft), "saveToSentItems": true})
 }
 func (b *mailbox) SendReply(ctx context.Context, id, comment string) error {
 	return b.send(ctx, "/me/messages/"+escapeID(id)+"/reply", map[string]any{"comment": comment})

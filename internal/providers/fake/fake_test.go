@@ -80,7 +80,7 @@ func TestListReturnsFolderMessagesNewestFirstWithoutBodies(t *testing.T) {
 	if got[0].Body != nil || got[0].ContentType != nil || got[0].Auth != nil {
 		t.Fatal("metadata list carried body or auth")
 	}
-	want := model.Message{ID: "new", ThreadID: "new", Sender: model.Address{Name: "Bob", Address: "bob@example.test"}, Subject: "Lunch plans", ReceivedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC), To: []model.Address{{Address: "demo@fake.test"}}, CC: []model.Address{}, Folders: []string{"inbox"}, Attachments: []string{}, Flag: model.NoFlag, Categories: []string{}}
+	want := model.Message{ID: "new", ThreadID: "new", Sender: model.Address{Name: "Bob", Address: "bob@example.test"}, Subject: "Lunch plans", ReceivedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC), To: []model.Address{{Address: "demo@fake.test"}}, CC: []model.Address{}, BCC: []model.Address{}, Folders: []string{"inbox"}, Attachments: []string{}, Flag: model.NoFlag, Categories: []string{}}
 	got[0].ReceivedAt = got[0].ReceivedAt.UTC()
 	if !reflect.DeepEqual(got[0], want) {
 		t.Fatalf("message=%+v", got[0])
@@ -280,10 +280,11 @@ func TestStatusGivesTheAccountAddressWithoutScopes(t *testing.T) {
 func TestDraftsLandInDraftsFromTheAccountAddress(t *testing.T) {
 	m, _ := mailbox(t)
 	ctx := context.Background()
-	created, err := m.DraftNew(ctx, model.NewDraft{To: []string{"ana@example.test"}, Subject: "Hello", Body: "first"})
+	draft, err := m.DraftNew(ctx, model.NewDraft{To: []string{"ana@example.test"}, Subject: "Hello", Body: "first"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	created := draft.ID
 	reply, err := m.DraftReply(ctx, "old", "Thanks")
 	if err != nil {
 		t.Fatal(err)
@@ -480,10 +481,11 @@ func TestRepliesAndForwardsJoinTheSourceConversationAndNewMailStartsItsOwn(t *te
 	m, home := mailbox(t)
 	ctx := t.Context()
 	seed(t, home, `UPDATE messages SET thread_id = 'invoices' WHERE id = 'old'`)
-	created, err := m.DraftNew(ctx, model.NewDraft{To: []string{"ana@example.test"}, Subject: "Hello", Body: "first"})
+	draft, err := m.DraftNew(ctx, model.NewDraft{To: []string{"ana@example.test"}, Subject: "Hello", Body: "first"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	created := draft.ID
 	reply, err := m.DraftReply(ctx, "old", "Thanks")
 	if err != nil {
 		t.Fatal(err)
@@ -630,5 +632,43 @@ func TestListAndSearchReturnOnePageAndTheNextMarker(t *testing.T) {
 				t.Errorf("%s %+v accepted: %v", name, p, ids(got.Messages))
 			}
 		}
+	}
+}
+
+// A fake-provider.db made before the bcc_addresses column gets it on the first open, and new mail keeps its
+// To, CC, and BCC lists and its body type. The draft result is the new message in its own conversation.
+func TestOlderDatabaseGetsTheBccColumnAndNewMailKeepsEveryRecipientList(t *testing.T) {
+	home := t.TempDir()
+	seed(t, home, `ALTER TABLE messages DROP COLUMN bcc_addresses`)
+	m := fake.New("demo@fake.test", home, func() time.Time { return now }).Mailbox()
+	ctx := t.Context()
+	d := model.NewDraft{To: []string{"ana@example.test"}, CC: []string{"cy@example.test"}, BCC: []string{"ed@example.test", "flo@example.test"}, Subject: "Hello", Body: "<p>Hi</p>", HTML: true}
+	draft, err := m.DraftNew(ctx, d)
+	if want := (model.DraftResult{ID: draft.ID, ThreadID: draft.ID, To: d.To, CC: d.CC, BCC: d.BCC, Subject: "Hello"}); err != nil || draft.ID == "" || !reflect.DeepEqual(draft, want) {
+		t.Fatalf("draft=%+v err=%v", draft, err)
+	}
+	if err := m.SendNew(ctx, model.NewDraft{BCC: []string{"ed@example.test"}, Body: "line one\nline two"}); err != nil {
+		t.Fatal(err)
+	}
+	sent, err := messages(m.List(ctx, "sent", model.PageRequest{}, true))
+	if err != nil || len(sent) != 1 {
+		t.Fatalf("sent=%v err=%v", sent, err)
+	}
+	got, err := m.Get(ctx, []string{draft.ID}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := func(as ...string) []model.Address {
+		out := []model.Address{}
+		for _, a := range as {
+			out = append(out, model.Address{Address: a})
+		}
+		return out
+	}
+	if g := got[0]; !reflect.DeepEqual([][]model.Address{g.To, g.CC, g.BCC}, [][]model.Address{address("ana@example.test"), address("cy@example.test"), address("ed@example.test", "flo@example.test")}) || *g.ContentType != model.HTML || *g.Body != "<p>Hi</p>" {
+		t.Fatalf("draft=%+v", g)
+	}
+	if s := sent[0]; !reflect.DeepEqual([][]model.Address{s.To, s.CC, s.BCC}, [][]model.Address{address(), address(), address("ed@example.test")}) || *s.ContentType != model.Text || *s.Body != "line one\nline two" {
+		t.Fatalf("sent=%+v", s)
 	}
 }

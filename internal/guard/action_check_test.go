@@ -53,7 +53,10 @@ func TestJevSeesOnlyTheAgentFieldsOfEachAction(t *testing.T) {
 		{"draft.new", func(ctx context.Context, g *guard.Guard) error {
 			_, err := g.DraftNew(ctx, model.NewDraft{To: []string{"a@example.test"}, Subject: "Lunch", Body: "See you"})
 			return err
-		}, actionCall{"draft.new", "creates a draft that the user may send later", map[string]any{"to": []any{"a@example.test"}, "subject": "Lunch", "body": "See you"}}},
+		}, actionCall{"draft.new", "creates a draft that the user may send later", map[string]any{"to": []any{"a@example.test"}, "cc": []any{}, "bcc": []any{}, "subject": "Lunch", "body": "See you", "html": false}}},
+		{"mail.send", func(ctx context.Context, g *guard.Guard) error {
+			return g.SendNew(ctx, model.NewDraft{CC: []string{"c@example.test"}, BCC: []string{"d@example.test"}, Body: "<p>See <a href=\"https://example.test/x\">you</a></p>", HTML: true})
+		}, actionCall{"mail.send", "sends an email to the listed recipients", map[string]any{"to": []any{}, "cc": []any{"c@example.test"}, "bcc": []any{"d@example.test"}, "subject": "", "body": "<p>See <a href=\"https://example.test/x\">you</a></p>", "html": true}}},
 		{"draft.reply", func(ctx context.Context, g *guard.Guard) error {
 			_, err := g.DraftReply(ctx, "m1", "Thanks")
 			return err

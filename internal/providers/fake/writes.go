@@ -168,7 +168,7 @@ func (b *mailbox) Categorize(ctx context.Context, ids []string, add, remove []st
 // outgoing is a message that the account writes: a draft, or a sent message. A nil thread makes it its own
 // conversation.
 type outgoing struct {
-	to                         []string
+	to, cc, bcc                []string
 	subject, body, contentType string
 	attachments                []string
 	origin                     string
@@ -176,7 +176,11 @@ type outgoing struct {
 }
 
 func created(d model.NewDraft) outgoing {
-	return outgoing{to: d.To, subject: d.Subject, body: d.Body, contentType: string(model.Text), origin: "new"}
+	kind := model.Text
+	if d.HTML {
+		kind = model.HTML
+	}
+	return outgoing{to: d.To, cc: d.CC, bcc: d.BCC, subject: d.Subject, body: d.Body, contentType: string(kind), origin: "new"}
 }
 
 // reply answers the source sender with the comment as body.
@@ -199,6 +203,15 @@ func (b *mailbox) forward(ctx context.Context, id string, to []string) (outgoing
 	return outgoing{to: to, subject: "Fw: " + m.Subject, body: *m.Body, contentType: string(*m.ContentType), attachments: m.Attachments, origin: "forward", source: &id, thread: &m.ThreadID}, nil
 }
 
+// jsonList is the JSON array text of a list column; nil is the empty array.
+func jsonList(v []string) string {
+	if v == nil {
+		v = []string{}
+	}
+	out, _ := json.Marshal(v)
+	return string(out)
+}
+
 // insert stores o with one INSERT, as a draft in drafts or as a sent message in sent. A generated ID is
 // random; the primary key refuses, never overwrites, a row with the same ID.
 func (b *mailbox) insert(ctx context.Context, o outgoing, draft bool) (string, error) {
@@ -215,24 +228,23 @@ func (b *mailbox) insert(ctx context.Context, o outgoing, draft bool) (string, e
 	if draft {
 		folder = "drafts"
 	}
-	if o.to == nil {
-		o.to = []string{}
-	}
-	if o.attachments == nil {
-		o.attachments = []string{}
-	}
-	to, _ := json.Marshal(o.to)
-	attachments, _ := json.Marshal(o.attachments)
-	_, err = db.ExecContext(ctx, `INSERT INTO messages (account, id, folder, sender_name, sender_address, to_addresses, subject, body, content_type, received_at, is_draft, is_read, attachments, origin, source_id, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
-		b.p.account, id, folder, from.Name, from.Address, string(to), o.subject, o.body, o.contentType, b.p.now().UTC().Format(time.RFC3339Nano), draft, string(attachments), o.origin, o.source, o.thread)
+	to, cc, bcc, attachments := jsonList(o.to), jsonList(o.cc), jsonList(o.bcc), jsonList(o.attachments)
+	_, err = db.ExecContext(ctx, `INSERT INTO messages (account, id, folder, sender_name, sender_address, to_addresses, cc_addresses, bcc_addresses, subject, body, content_type, received_at, is_draft, is_read, attachments, origin, source_id, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+		b.p.account, id, folder, from.Name, from.Address, to, cc, bcc, o.subject, o.body, o.contentType, b.p.now().UTC().Format(time.RFC3339Nano), draft, attachments, o.origin, o.source, o.thread)
 	if err != nil {
 		return "", storageError
 	}
 	return id, nil
 }
 
-func (b *mailbox) DraftNew(ctx context.Context, d model.NewDraft) (string, error) {
-	return b.insert(ctx, created(d), true)
+// DraftNew makes a draft in its own conversation, so its thread ID is its message ID.
+func (b *mailbox) DraftNew(ctx context.Context, d model.NewDraft) (model.DraftResult, error) {
+	o := created(d)
+	id, err := b.insert(ctx, o, true)
+	if err != nil {
+		return model.DraftResult{}, err
+	}
+	return model.DraftResult{ID: id, ThreadID: id, To: o.to, CC: o.cc, BCC: o.bcc, Subject: o.subject}, nil
 }
 func (b *mailbox) DraftReply(ctx context.Context, id, comment string) (string, error) {
 	o, err := b.reply(ctx, id, comment)

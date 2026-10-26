@@ -83,12 +83,12 @@ func TestNewAndReplyDraftsSafeHeadersAndThreading(t *testing.T) {
 	}))
 	defer server.Close()
 	c := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), GmailURL: server.URL})
-	id, err := c.Mailbox().DraftNew(context.Background(), model.NewDraft{To: []string{"a@example.test\r\nBcc: evil@example.test"}, Subject: "Hi\nBcc: evil@example.test", Body: "Body"})
-	if err != nil || id != "created" {
-		t.Fatal(id, err)
+	draft, err := c.Mailbox().DraftNew(context.Background(), model.NewDraft{To: []string{"a@example.test\r\nBcc: evil@example.test"}, Subject: "Hi\nBcc: evil@example.test", Body: "Body"})
+	if err != nil || draft.ID != "created" {
+		t.Fatal(draft, err)
 	}
 	mode = "reply"
-	id, err = c.Mailbox().DraftReply(context.Background(), "original", "Thanks")
+	id, err := c.Mailbox().DraftReply(context.Background(), "original", "Thanks")
 	if err != nil || id != "created" {
 		t.Fatal(id, err)
 	}

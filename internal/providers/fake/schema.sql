@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS categories (
 
 -- messages holds all mail. Nothing is ever deleted: trash and archive are moves to those folders.
 -- received_at is the time of the insert unless the row gives one.
--- to_addresses and cc_addresses: JSON arrays of addresses, for example ["ana@example.test"].
+-- to_addresses, cc_addresses, and bcc_addresses: JSON arrays of addresses, for example ["ana@example.test"].
+-- content_type: text keeps the body as plain text with its line breaks; html marks the body as HTML source.
 -- categories: JSON array of category names. attachments: JSON array of file names.
 -- spf, dkim, dmarc, compauth: authentication results such as pass or fail; compauth_reason: digits.
 -- origin and source_id: how the server made the message (new, reply, or forward) and the source message ID.
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS messages (
 	sender_address TEXT NOT NULL DEFAULT '',
 	to_addresses TEXT NOT NULL DEFAULT '[]',
 	cc_addresses TEXT NOT NULL DEFAULT '[]',
+	bcc_addresses TEXT NOT NULL DEFAULT '[]',
 	subject TEXT NOT NULL DEFAULT '',
 	body TEXT NOT NULL DEFAULT '',
 	content_type TEXT NOT NULL DEFAULT 'text' CHECK (content_type IN ('text', 'html')),

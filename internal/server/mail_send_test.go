@@ -4,7 +4,9 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -88,7 +90,7 @@ func TestAllowedMailSendPostsOnceAndReturnsOK(t *testing.T) {
 func TestInvalidMailSendParamsAreRefusedBeforeAccountAccess(t *testing.T) {
 	d, reads, writes := policyDaemon(t, sendAllow)
 	for op, params := range map[string][]string{
-		"mail.send":    {`{}`, `{"to":[],"subject":"s","body":"b"}`, `{"to":["a@example.test"],"body":"b"}`, `{"to":["a@example.test"],"subject":"s"}`, `{"to":["a@example.test"],"subject":"s","body":"b","cc":["x"]}`},
+		"mail.send":    {`{}`, `{"to":[],"cc":[],"bcc":[],"subject":"s","body":"b"}`, `{"bcc":[""]}`, `{"to":["a@example.test"],"html":"yes"}`, `{"to":["a@example.test"],"from":"x"}`, `{"to":["a@example.test"],"cc":null}`},
 		"mail.reply":   {`{}`, `{"id":"m1"}`, `{"id":"","body":"b"}`, `{"id":"m1","body":"b","to":["x"]}`},
 		"mail.forward": {`{}`, `{"id":"m1"}`, `{"id":"m1","to":[]}`, `{"id":"m1","to":["a"],"body":"b"}`},
 	} {
@@ -173,4 +175,50 @@ func TestConsoleShowsTheSourceOfAReplyOrForwardSend(t *testing.T) {
 	if f.writes() != 0 {
 		t.Fatalf("provider writes=%d", f.writes())
 	}
+}
+
+// draftGraph is a fake Graph API whose sendMail answers 202 and whose new draft is a message with a hostile subject
+// and recipient address. It records the path of each request.
+func draftGraph(paths *[]string, mu *sync.Mutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		*paths = append(*paths, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		if r.URL.Path == "/me/sendMail" {
+			w.WriteHeader(202)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"d1","conversationId":"conv","subject":"CANARY\u200b see https://evil.example.test/x","toRecipients":[{"emailAddress":{"address":"a@example.test\u0007"}}],"ccRecipients":[],"bccRecipients":[{"emailAddress":{"address":"b@example.test"}}]}`)
+	}
+}
+
+// draft.new and mail.send take every param as optional, a send needs only a recipient, and the draft result
+// comes from the provider's answer with every text field cleaned and the IDs as given.
+func TestNewMessageParamsReachTheProviderAndTheDraftResultIsCleaned(t *testing.T) {
+	var paths []string
+	var mu sync.Mutex
+	d := graphDaemon(t, "[policy]\nmail_send='allow'\nmail_draft='allow'\n", writeGrant, draftGraph(&paths, &mu), newNativeAPI())
+	if status, body := accountRPC(t, d.s, "draft.new", "work", `{"to":["a@example.test"],"bcc":["b@example.test"],"body":"<p>x</p>","html":true}`); status != 200 || body != `{"id":"d1","thread_id":"conv","to":["a@example.test"],"cc":[],"bcc":["b@example.test"],"subject":"CANARY see [link removed]"}` {
+		t.Fatalf("draft.new: %d %s", status, body)
+	}
+	if status, body := accountRPC(t, d.s, "mail.send", "work", `{"bcc":["b@example.test"]}`); status != 200 || body != `{"ok":true}` {
+		t.Fatalf("mail.send: %d %s", status, body)
+	}
+	if want := []string{"POST /me/messages", "POST /me/sendMail"}; !reflect.DeepEqual(paths, want) {
+		t.Fatalf("provider requests=%v", paths)
+	}
+}
+
+// The stored result of an approved draft.new keeps only the draft and thread IDs: the subject and the
+// recipients are mail content, which the pending result never holds.
+func TestApprovedDraftStoresOnlyItsIDs(t *testing.T) {
+	var paths []string
+	var mu sync.Mutex
+	d := graphDaemon(t, "[policy]\nmail_draft='approve'\n", writeGrant, draftGraph(&paths, &mu), newNativeAPI())
+	id := pend(t, d.s, "draft.new", `{"to":["a@example.test"],"cc":["c@example.test"],"bcc":["b@example.test"],"subject":"CANARY subject","body":"CANARY body"}`)[0]
+	if err := d.s.Approve(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	assertState(t, d.s, id, `{"state":"done","result":{"id":"d1","thread_id":"conv"}}`)
 }

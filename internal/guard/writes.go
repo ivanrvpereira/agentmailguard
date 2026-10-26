@@ -333,8 +333,19 @@ func (g *Guard) compose(ctx context.Context, op audit.Operation, source string, 
 	}
 	return id, nil
 }
-func (g *Guard) DraftNew(ctx context.Context, draft model.NewDraft) (string, error) {
-	return g.compose(ctx, audit.DraftNew, "", newDraftArgs{draft.To, draft.Subject, draft.Body}, func() (string, error) { return g.mailbox.DraftNew(ctx, draft) })
+
+// DraftNew returns the draft that the provider made. compose refuses a result without an ID.
+func (g *Guard) DraftNew(ctx context.Context, draft model.NewDraft) (model.DraftResult, error) {
+	var made model.DraftResult
+	_, err := g.compose(ctx, audit.DraftNew, "", newArgs(draft), func() (string, error) {
+		var err error
+		made, err = g.mailbox.DraftNew(ctx, draft)
+		return made.ID, err
+	})
+	if err != nil {
+		return model.DraftResult{}, err
+	}
+	return made, nil
 }
 func (g *Guard) DraftReply(ctx context.Context, id, comment string) (string, error) {
 	return g.compose(ctx, audit.DraftReply, id, bodyArgs{id, comment}, func() (string, error) { return g.mailbox.DraftReply(ctx, id, comment) })
@@ -347,9 +358,13 @@ func (g *Guard) DraftUpdate(ctx context.Context, id, body string) (string, error
 }
 
 // SendNew, SendReply, and SendForward send mail at once under the mail_send decision. Their params and
-// stored args are those of the matching draft operation.
+// stored args are those of the matching draft operation. SendNew refuses a send without a recipient before any
+// policy decision.
 func (g *Guard) SendNew(ctx context.Context, draft model.NewDraft) error {
-	_, err := g.compose(ctx, audit.MailSend, "", newDraftArgs{draft.To, draft.Subject, draft.Body}, func() (string, error) { return "", g.mailbox.SendNew(ctx, draft) })
+	if !draft.Addressed() {
+		return GuardError("invalid request")
+	}
+	_, err := g.compose(ctx, audit.MailSend, "", newArgs(draft), func() (string, error) { return "", g.mailbox.SendNew(ctx, draft) })
 	return err
 }
 func (g *Guard) SendReply(ctx context.Context, id, comment string) error {

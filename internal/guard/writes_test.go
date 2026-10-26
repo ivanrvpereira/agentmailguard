@@ -21,6 +21,7 @@ type writer struct {
 	trashed          []string
 	flags            []model.FlagState
 	updates          []struct{ id, body string }
+	draft            *model.DraftResult // the DraftNew result; nil gives ID d1
 	err              error
 	entered, release chan struct{}
 }
@@ -70,9 +71,12 @@ func (w *writer) Categorize(_ context.Context, ids, _, _ []string) ([]model.Muta
 func (w *writer) Folders(context.Context) ([]model.Folder, error) {
 	return []model.Folder{{ID: "f1", Name: "Finance"}, {ID: "del", Name: "Deleted Items", Trash: true}}, nil
 }
-func (w *writer) DraftNew(context.Context, model.NewDraft) (string, error) {
+func (w *writer) DraftNew(context.Context, model.NewDraft) (model.DraftResult, error) {
 	_, err := w.write("draft_new", nil)
-	return "d1", err
+	if w.draft != nil {
+		return *w.draft, err
+	}
+	return model.DraftResult{ID: "d1"}, err
 }
 func (w *writer) DraftReply(context.Context, string, string) (string, error) {
 	_, err := w.write("draft_reply", nil)

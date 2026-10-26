@@ -232,8 +232,17 @@ func (c *console) list(ctx context.Context, w http.ResponseWriter) {
 		if args["to"] == nil {
 			recipients = texts(args["add"])
 		}
+		groups := []string{}
+		if len(recipients) > 0 {
+			groups = append(groups, strings.Join(recipients, ", "))
+		}
+		for _, g := range []struct{ key, label string }{{"cc", "cc: "}, {"bcc", "bcc (hidden): "}} {
+			if list := texts(args[g.key]); len(list) > 0 {
+				groups = append(groups, g.label+strings.Join(list, ", "))
+			}
+		}
 		subject, _ := args["subject"].(string)
-		rows = append(rows, listRow{ID: item.ID, Account: item.Account, Op: item.Op, Recipients: strings.Join(recipients, ", "), Subject: subject, Age: age(now.Sub(item.Created)), State: item.State})
+		rows = append(rows, listRow{ID: item.ID, Account: item.Account, Op: item.Op, Recipients: strings.Join(groups, "; "), Subject: subject, Age: age(now.Sub(item.Created)), State: item.State})
 	}
 	render(w, 200, "list", rows)
 }
@@ -280,11 +289,39 @@ func (c *console) item(ctx context.Context, w http.ResponseWriter, id string, st
 	}
 	page.Jev = jevText(item.Jev)
 	args := storedFields(item.Args)
-	for _, key := range slices.Sorted(maps.Keys(args)) {
-		page.Args = append(page.Args, field{key, texts(args[key])})
-	}
+	page.Args = requestFields(args)
 	page.RefKind, page.Ref, page.RefMissing = c.reference(ctx, item, args)
 	render(w, status, "item", page)
+}
+
+// requestFields shows each stored argument under its name: the recipients to, cc, and bcc first, bcc marked as
+// hidden recipients, and an HTML body marked as source text, which the page escapes and never renders.
+func requestFields(args map[string]any) []field {
+	labels := map[string]string{"bcc": "bcc (hidden recipients)"}
+	if args["html"] == true {
+		labels["body"] = "body (HTML source, not rendered)"
+	}
+	recipients := []string{"to", "cc", "bcc"}
+	keys := []string{}
+	for _, key := range recipients {
+		if _, ok := args[key]; ok {
+			keys = append(keys, key)
+		}
+	}
+	for _, key := range slices.Sorted(maps.Keys(args)) {
+		if !slices.Contains(recipients, key) {
+			keys = append(keys, key)
+		}
+	}
+	out := make([]field, 0, len(keys))
+	for _, key := range keys {
+		label, ok := labels[key]
+		if !ok {
+			label = key
+		}
+		out = append(out, field{label, texts(args[key])})
+	}
+	return out
 }
 
 // reference reads the message or event that the action names through the guarded read path. Only the
@@ -478,7 +515,7 @@ button{font-size:1.1rem;padding:.8rem 1.6rem;border-radius:.4rem;border:1px soli
 {{define "list"}}{{template "head"}}
 <h1>Approvals</h1>
 {{if .}}<table>
-<tr><th>Action</th><th class="wide">Account</th><th>To</th><th>Subject</th><th>State</th><th class="wide">Age</th></tr>
+<tr><th>Action</th><th class="wide">Account</th><th>Recipients</th><th>Subject</th><th>State</th><th class="wide">Age</th></tr>
 {{range .}}<tr><td><a href="/a/{{.ID}}">{{.Op}}</a></td><td class="wide">{{.Account}}</td><td>{{.Recipients}}</td><td>{{.Subject}}</td><td class="state {{.State}}">{{.State}}</td><td class="wide">{{.Age}}</td></tr>
 {{end}}</table>{{else}}<p>No actions wait for approval.</p>{{end}}
 </main></body></html>{{end}}

@@ -131,7 +131,10 @@ func TestDefaultPolicyTrashesAndDraftsGreenMail(t *testing.T) {
 		t.Fatalf("trash=%+v %v", got, err)
 	}
 	for _, call := range []func() (string, error){
-		func() (string, error) { return g.DraftNew(ctx, model.NewDraft{To: []string{"a@example.test"}}) },
+		func() (string, error) {
+			d, err := g.DraftNew(ctx, model.NewDraft{To: []string{"a@example.test"}})
+			return d.ID, err
+		},
 		func() (string, error) { return g.DraftReply(ctx, "m2", "reply") },
 		func() (string, error) { return g.DraftForward(ctx, "m2", []string{"a@example.test"}) },
 		func() (string, error) { return g.DraftUpdate(ctx, "d1", "body") },

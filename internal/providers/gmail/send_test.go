@@ -201,3 +201,58 @@ func TestFailedSendIsNotRetried(t *testing.T) {
 		}
 	}
 }
+
+// A new draft and a new send carry To, Cc, and Bcc headers and a text/html part when the body is HTML. The draft
+// result gives the message ID and thread ID from drafts.create, and the recipients and subject that were built.
+func TestNewMessagesCarryCcBccAndTheHTMLPart(t *testing.T) {
+	requests := []string{}
+	c := sendClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		var m *mail.Message
+		if r.URL.Path == "/drafts" {
+			m, _ = draftMIME(t, r)
+		} else {
+			m, _ = sentMIME(t, r)
+		}
+		if m.Header.Get("To") != "a@example.test, b@example.test" || m.Header.Get("Cc") != "c@example.test" || m.Header.Get("Bcc") != "d@example.test, e@example.test" || m.Header.Get("Subject") != "Hi" {
+			t.Errorf("recipient headers: %+v", m.Header)
+		}
+		if m.Header.Get("Content-Type") != "text/html; charset=utf-8" || draftText(t, m) != "<p>Hi <b>there</b></p>\n" {
+			t.Errorf("html part: %+v", m.Header)
+		}
+		if r.URL.Path == "/drafts" {
+			respond(w, map[string]any{"id": "r1", "message": map[string]any{"id": "created", "threadId": "t1", "labelIds": []string{"DRAFT"}}})
+			return
+		}
+		respond(w, map[string]string{"id": "sent", "threadId": "t"})
+	})
+	d := model.NewDraft{To: []string{"a@example.test", "b@example.test"}, CC: []string{"c@example.test"}, BCC: []string{"d@example.test", "e@example.test"}, Subject: "Hi", Body: "<p>Hi <b>there</b></p>", HTML: true}
+	draft, err := c.Mailbox().DraftNew(context.Background(), d)
+	want := model.DraftResult{ID: "created", ThreadID: "t1", To: d.To, CC: d.CC, BCC: d.BCC, Subject: "Hi"}
+	if err != nil || !reflect.DeepEqual(draft, want) {
+		t.Fatalf("draft=%+v %v", draft, err)
+	}
+	if err := c.Mailbox().SendNew(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(requests, []string{"POST /drafts", "POST /messages/send"}) {
+		t.Fatalf("requests=%v", requests)
+	}
+}
+
+// A message read from Gmail carries its Bcc header, which Gmail keeps on drafts and sent mail.
+func TestGetReadsTheBccHeader(t *testing.T) {
+	c := sendClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/labels" {
+			respond(w, map[string]any{})
+			return
+		}
+		p := part("text/plain", "Body")
+		p["headers"] = []map[string]string{{"name": "To", "value": "a@example.test"}, {"name": "Bcc", "value": "Ed <ed@example.test>, flo@example.test"}}
+		respond(w, message("m", p))
+	})
+	got, err := c.Mailbox().Get(context.Background(), []string{"m"}, false)
+	if err != nil || len(got) != 1 || !reflect.DeepEqual(got[0].BCC, []model.Address{{Name: "Ed", Address: "ed@example.test"}, {Address: "flo@example.test"}}) {
+		t.Fatalf("got=%+v %v", got, err)
+	}
+}

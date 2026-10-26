@@ -289,8 +289,11 @@ type scheduleDTO struct {
 }
 type newParam struct {
 	To      []string `json:"to"`
-	Subject *string  `json:"subject"`
-	Body    *string  `json:"body"`
+	CC      []string `json:"cc"`
+	BCC     []string `json:"bcc"`
+	Subject string   `json:"subject"`
+	Body    string   `json:"body"`
+	HTML    bool     `json:"html"`
 }
 type bodyParam struct {
 	ID   string  `json:"id"`
@@ -329,6 +332,22 @@ type folderDTO struct {
 }
 type draftDTO struct {
 	ID string `json:"id"`
+}
+
+// draftIDsDTO names a draft: its provider IDs, which are not mail content. thread_id is left out when the
+// provider gave none.
+type draftIDsDTO struct {
+	ID       string `json:"id"`
+	ThreadID string `json:"thread_id,omitempty"`
+}
+
+// newDraftDTO is the result of draft.new: the draft that the provider made.
+type newDraftDTO struct {
+	draftIDsDTO
+	To      []string `json:"to"`
+	CC      []string `json:"cc"`
+	BCC     []string `json:"bcc"`
+	Subject string   `json:"subject"`
 }
 
 // okDTO is the result of a send: providers give no ID for a sent message.
@@ -458,19 +477,38 @@ func calendarAvailability(ctx context.Context, _ *Server, raw json.RawMessage) (
 	}, guard.CalendarAvailabilityUnsupported, nil
 }
 
-// newMessage is the decoder of mail.send (send) and draft.new: both need to, subject, and body.
+// newMessage is the decoder of mail.send (send) and draft.new. Every param is optional; a send needs a
+// recipient in to, cc, or bcc.
 func newMessage(send bool) decoder {
 	return func(ctx context.Context, _ *Server, raw json.RawMessage) (call, guard.GuardError, error) {
 		var p newParam
-		if params(raw, &p) != nil || !listValid(p.To, 1, noMax) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) {
+		if params(raw, &p) != nil || !listValid(p.To, 0, noMax) || !listValid(p.CC, 0, noMax) || !listValid(p.BCC, 0, noMax) || !validString(p.Subject, 65536, true) || !validString(p.Body, MaxRequestBytes, true) {
 			return nil, "", errInvalid
 		}
-		draft := model.NewDraft{To: p.To, Subject: *p.Subject, Body: *p.Body}
+		draft := model.NewDraft{To: p.To, CC: p.CC, BCC: p.BCC, Subject: p.Subject, Body: p.Body, HTML: p.HTML}
+		if send && !draft.Addressed() {
+			return nil, "", errInvalid
+		}
 		if send {
 			return func(a *account) (any, error) { return sent(a.guard.SendNew(ctx, draft)) }, "", nil
 		}
-		return func(a *account) (any, error) { id, e := a.guard.DraftNew(ctx, draft); return draftDTO{id}, e }, "", nil
+		return func(a *account) (any, error) {
+			d, e := a.guard.DraftNew(ctx, draft)
+			if e != nil {
+				return nil, e
+			}
+			return newDraftDTO{draftIDsDTO{d.ID, d.ThreadID}, cleaned(d.To), cleaned(d.CC), cleaned(d.BCC), content.CleanSubject(d.Subject)}, nil
+		}, "", nil
 	}
+}
+
+// cleaned cleans each string of a provider list; nil gives an empty list.
+func cleaned(v []string) []string {
+	out := make([]string, 0, len(v))
+	for _, s := range v {
+		out = append(out, content.CleanSubject(s))
+	}
+	return out
 }
 
 // bodyMessage is the decoder of draft.reply, draft.update, and mail.reply: one message ID and a body.

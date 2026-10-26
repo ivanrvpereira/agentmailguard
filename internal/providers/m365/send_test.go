@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
@@ -42,7 +43,7 @@ func TestSendsPostTheGraphSendActionsAndAccept202(t *testing.T) {
 		return out
 	}
 	want := []map[string]any{
-		{"message": map[string]any{"subject": "Hi", "body": map[string]any{"contentType": "text", "content": "text"}, "toRecipients": to("a@example.test", "b@example.test")}, "saveToSentItems": true},
+		{"message": map[string]any{"subject": "Hi", "body": map[string]any{"contentType": "text", "content": "text"}, "toRecipients": to("a@example.test", "b@example.test"), "ccRecipients": to(), "bccRecipients": to()}, "saveToSentItems": true},
 		{"comment": "thanks"},
 		{"comment": "", "toRecipients": to("c@example.test")},
 	}
@@ -77,5 +78,64 @@ func TestFailedSendIsNotRetried(t *testing.T) {
 				t.Fatalf("status %d: %d requests for one send", status, requests-before)
 			}
 		}
+	}
+}
+
+// A new draft and a new send carry To, Cc, and Bcc recipients and the HTML body type. The draft result is read
+// from the message that Graph returns.
+func TestNewMessagesCarryCcBccAndTheHTMLBodyType(t *testing.T) {
+	var paths []string
+	var bodies []map[string]any
+	recipient := func(name, address string) map[string]any {
+		return map[string]any{"emailAddress": map[string]any{"name": name, "address": address}}
+	}
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.EscapedPath())
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		bodies = append(bodies, body)
+		if r.URL.Path == "/v1.0/me/sendMail" {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		jsonResponse(w, map[string]any{"id": "d1", "conversationId": "conv", "subject": "Hi", "isDraft": true,
+			"toRecipients": []any{recipient("a@example.test", "a@example.test")}, "ccRecipients": []any{recipient("C", "c@example.test")}, "bccRecipients": []any{recipient("d@example.test", "d@example.test"), recipient("", "e@example.test")}})
+	})
+	b := c.Mailbox()
+	d := model.NewDraft{To: []string{"a@example.test"}, CC: []string{"c@example.test"}, BCC: []string{"d@example.test", "e@example.test"}, Subject: "Hi", Body: "<p>Hi</p>", HTML: true}
+	draft, err := b.DraftNew(t.Context(), d)
+	if want := (model.DraftResult{ID: "d1", ThreadID: "conv", To: d.To, CC: d.CC, BCC: d.BCC, Subject: "Hi"}); err != nil || !reflect.DeepEqual(draft, want) {
+		t.Fatalf("draft=%+v %v", draft, err)
+	}
+	if err := b.SendNew(t.Context(), d); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"POST /v1.0/me/messages", "POST /v1.0/me/sendMail"}; !reflect.DeepEqual(paths, want) {
+		t.Fatalf("endpoints %v", paths)
+	}
+	to := func(addresses ...string) []any {
+		out := []any{}
+		for _, a := range addresses {
+			out = append(out, map[string]any{"emailAddress": map[string]any{"address": a}})
+		}
+		return out
+	}
+	message := map[string]any{"subject": "Hi", "body": map[string]any{"contentType": "html", "content": "<p>Hi</p>"}, "toRecipients": to("a@example.test"), "ccRecipients": to("c@example.test"), "bccRecipients": to("d@example.test", "e@example.test")}
+	if want := []map[string]any{message, {"message": message, "saveToSentItems": true}}; !reflect.DeepEqual(bodies, want) {
+		t.Fatalf("bodies %v", bodies)
+	}
+}
+
+// A Graph message carries its bccRecipients, which Graph gives for drafts and sent mail.
+func TestGetReadsTheBccRecipients(t *testing.T) {
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Query().Get("$select"), ",bccRecipients,") {
+			t.Errorf("select=%s", r.URL.Query().Get("$select"))
+		}
+		jsonResponse(w, map[string]any{"id": "m", "isDraft": true, "bccRecipients": []any{map[string]any{"emailAddress": map[string]any{"name": "Ed", "address": "ed@example.test"}}}})
+	})
+	got, err := c.Mailbox().Get(t.Context(), []string{"m"}, false)
+	if err != nil || len(got) != 1 || !reflect.DeepEqual(got[0].BCC, []model.Address{{Name: "Ed", Address: "ed@example.test"}}) {
+		t.Fatalf("got=%+v %v", got, err)
 	}
 }

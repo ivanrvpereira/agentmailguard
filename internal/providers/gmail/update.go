@@ -78,7 +78,7 @@ func (m *mailbox) DraftUpdate(ctx context.Context, id, body string) (string, err
 	for _, name := range []string{"To", "Cc", "Bcc", "Subject"} {
 		kept = append(kept, header{name, headerValue(v.Payload.Headers, name)})
 	}
-	raw, err := plainMessage(kept, body, nil)
+	raw, err := textMessage(kept, body, false, nil)
 	if err != nil {
 		return "", err
 	}

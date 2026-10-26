@@ -45,14 +45,20 @@ func mimeHeaders(headers []header, ids []string) ([]byte, error) {
 	b.WriteString("MIME-Version: 1.0\r\n")
 	return b.Bytes(), nil
 }
-func plainMessage(headers []header, body string, ids []string) ([]byte, error) {
+
+// textMessage is a one-part message: a text/plain body, or with html a text/html body of the HTML source as given.
+func textMessage(headers []header, body string, html bool, ids []string) ([]byte, error) {
 	head, err := mimeHeaders(headers, ids)
 	if err != nil {
 		return nil, err
 	}
+	kind := "text/plain"
+	if html {
+		kind = "text/html"
+	}
 	var b bytes.Buffer
 	b.Write(head)
-	b.WriteString("Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n")
+	b.WriteString("Content-Type: " + kind + "; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n")
 	body = strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "\r", "\n")
 	if !strings.HasSuffix(body, "\n") {
 		body += "\n"
@@ -67,12 +73,19 @@ func plainMessage(headers []header, body string, ids []string) ([]byte, error) {
 	return b.Bytes(), nil
 }
 func draftID(v map[string]json.RawMessage) (string, error) {
+	id, _, err := draftMessage(v)
+	return id, err
+}
+
+// draftMessage gives the message ID and thread ID of a Draft resource, which drafts.create and drafts.update
+// return (https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.drafts#Draft).
+func draftMessage(v map[string]json.RawMessage) (id, thread string, err error) {
 	obj, err := object(v["message"], "Gmail")
-	id := stringField(obj, "id")
+	id = stringField(obj, "id")
 	if err != nil || strings.TrimSpace(id) == "" {
-		return "", failure("Gmail", "InvalidMetadata")
+		return "", "", failure("Gmail", "InvalidMetadata")
 	}
-	return id, nil
+	return id, stringField(obj, "threadId"), nil
 }
 
 // rawMessage is the Gmail Message resource of raw MIME, in the thread when thread is not nil.
@@ -83,12 +96,14 @@ func rawMessage(raw []byte, thread *string) map[string]any {
 	}
 	return message
 }
-func (m *mailbox) createDraft(ctx context.Context, raw []byte, thread *string) (string, error) {
+
+// createDraft gives the message ID and thread ID of the new draft.
+func (m *mailbox) createDraft(ctx context.Context, raw []byte, thread *string) (string, string, error) {
 	v, err := m.c.write(ctx, "POST", m.c.options.GmailURL+"/drafts", map[string]any{"message": rawMessage(raw, thread)})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return draftID(v)
+	return draftMessage(v)
 }
 
 // sendRaw sends raw MIME at once. The request helper never repeats a POST, so a failed send is never sent again.
@@ -96,15 +111,25 @@ func (m *mailbox) sendRaw(ctx context.Context, raw []byte, thread *string) error
 	_, err := m.c.write(ctx, "POST", m.c.options.GmailURL+"/messages/send", rawMessage(raw, thread))
 	return err
 }
+
+// newMessage builds the MIME of a new message. Gmail sends to the To, Cc, and Bcc headers
+// (https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/send).
 func newMessage(draft model.NewDraft) ([]byte, error) {
-	return plainMessage([]header{{"To", strings.Join(draft.To, ", ")}, {"Subject", draft.Subject}}, draft.Body, nil)
+	headers := []header{{"To", strings.Join(draft.To, ", ")}, {"Cc", strings.Join(draft.CC, ", ")}, {"Bcc", strings.Join(draft.BCC, ", ")}, {"Subject", draft.Subject}}
+	return textMessage(headers, draft.Body, draft.HTML, nil)
 }
-func (m *mailbox) DraftNew(ctx context.Context, draft model.NewDraft) (string, error) {
+
+// DraftNew gives the draft's message and thread IDs from Gmail's answer, and the recipients and subject that it built.
+func (m *mailbox) DraftNew(ctx context.Context, draft model.NewDraft) (model.DraftResult, error) {
 	raw, err := newMessage(draft)
 	if err != nil {
-		return "", err
+		return model.DraftResult{}, err
 	}
-	return m.createDraft(ctx, raw, nil)
+	id, thread, err := m.createDraft(ctx, raw, nil)
+	if err != nil {
+		return model.DraftResult{}, err
+	}
+	return model.DraftResult{ID: id, ThreadID: thread, To: draft.To, CC: draft.CC, BCC: draft.BCC, Subject: draft.Subject}, nil
 }
 func (m *mailbox) SendNew(ctx context.Context, draft model.NewDraft) error {
 	raw, err := newMessage(draft)
@@ -162,7 +187,8 @@ func (m *mailbox) DraftReply(ctx context.Context, id, comment string) (string, e
 	if err != nil {
 		return "", err
 	}
-	return m.createDraft(ctx, raw, &thread)
+	draft, _, err := m.createDraft(ctx, raw, &thread)
+	return draft, err
 }
 func (m *mailbox) SendReply(ctx context.Context, id, comment string) error {
 	raw, thread, err := m.reply(ctx, id, comment)
@@ -218,7 +244,7 @@ func (m *mailbox) reply(ctx context.Context, id, comment string) ([]byte, string
 		lines[i] = "> " + lines[i]
 	}
 	body := comment + "\n\nOn " + original.ReceivedAt.Format("2006-01-02 15:04") + " UTC, " + original.Sender.Address + " wrote:\n" + strings.Join(lines, "\n") + "\n"
-	raw, err := plainMessage([]header{{"To", to}, {"Subject", subject}}, body, ids)
+	raw, err := textMessage([]header{{"To", to}, {"Subject", subject}}, body, false, ids)
 	if err != nil {
 		return nil, "", err
 	}

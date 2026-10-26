@@ -326,7 +326,7 @@ func TestThreadReadsEveryPageOfTheConversationFilterNewestFirst(t *testing.T) {
 		return url.Values{
 			"$filter":  {filter},
 			"$orderby": {"receivedDateTime desc"},
-			"$select":  {"id,from,sender,subject,receivedDateTime,toRecipients,ccRecipients,parentFolderId,conversationId,isDraft,isRead,flag,categories"},
+			"$select":  {"id,from,sender,subject,receivedDateTime,toRecipients,ccRecipients,bccRecipients,parentFolderId,conversationId,isDraft,isRead,flag,categories"},
 			"$expand":  {"attachments($select=name)"},
 		}
 	}
@@ -345,7 +345,7 @@ const messagesPath = "/v1.0/me/mailFolders/inbox/messages"
 
 func inboxQuery() url.Values {
 	return url.Values{
-		"$select":  {"id,from,sender,subject,receivedDateTime,toRecipients,ccRecipients,parentFolderId,conversationId,isDraft,isRead,flag,categories"},
+		"$select":  {"id,from,sender,subject,receivedDateTime,toRecipients,ccRecipients,bccRecipients,parentFolderId,conversationId,isDraft,isRead,flag,categories"},
 		"$expand":  {"attachments($select=name)"},
 		"$orderby": {"receivedDateTime desc"},
 	}

@@ -32,7 +32,7 @@ func TestJevGetsTheActionFieldsOnly(t *testing.T) {
 	questions, _ := checks[0]["questions"].(map[string]any)
 	question, _ := questions["suspicious"].(map[string]any)
 	instructions, _ := question["instructions"].(string)
-	if !reflect.DeepEqual(checks[0]["state"], map[string]any{"to": []any{"CANARY@example.test"}, "subject": "CANARY subject", "body": "CANARY body"}) ||
+	if !reflect.DeepEqual(checks[0]["state"], map[string]any{"to": []any{"CANARY@example.test"}, "cc": []any{}, "bcc": []any{}, "subject": "CANARY subject", "body": "CANARY body", "html": false}) ||
 		len(questions) != 1 || question["type"] != "noul" ||
 		!strings.Contains(instructions, "The agent requested this action: draft.new — creates a draft that the user may send later.") {
 		t.Fatalf("check request=%v", checks[0])

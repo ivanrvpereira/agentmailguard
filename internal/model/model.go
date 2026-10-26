@@ -79,6 +79,7 @@ type Message struct {
 	Subject         string
 	ReceivedAt      time.Time
 	To, CC          []Address
+	BCC             []Address // filled where the provider returns it: drafts and sent mail
 	Folders         []FolderID
 	Attachments     []string
 	IsDraft, IsRead bool
@@ -143,9 +144,25 @@ func (q SearchQuery) Received(t time.Time) bool {
 	return !t.Equal(UnknownReceived) && (q.After == nil || !t.Before(*q.After)) && (q.Before == nil || t.Before(*q.Before))
 }
 
+// NewDraft is a new message. Every field is optional for a draft; a send needs a recipient (Addressed). HTML marks
+// Body as HTML source, sent unchanged; otherwise Body is plain text.
 type NewDraft struct {
-	To            []string
+	To, CC, BCC   []string
 	Subject, Body string
+	HTML          bool
+}
+
+// Addressed reports a recipient in To, CC, or BCC, which a send needs: both providers refuse a send without one.
+func (d NewDraft) Addressed() bool { return len(d.To)+len(d.CC)+len(d.BCC) > 0 }
+
+// DraftResult is the draft that a provider made: its message ID, its conversation (empty: the provider gave
+// none), and its recipients and subject, from the provider's answer or from what the adapter built. Like all
+// provider data, it is untrusted.
+type DraftResult struct {
+	ID          MessageID
+	ThreadID    ThreadID
+	To, CC, BCC []string
+	Subject     string
 }
 
 // PageRequest asks for one page of a list or search. Size 0 sends no size, so the provider's default page size
@@ -219,7 +236,7 @@ type Mailbox interface {
 	Flag(ctx context.Context, ids []MessageID, state FlagState) ([]MutationResult, error)
 	Categorize(ctx context.Context, ids []MessageID, add, remove []string) ([]MutationResult, error)
 	Categories(ctx context.Context) ([]string, error)
-	DraftNew(ctx context.Context, draft NewDraft) (MessageID, error)
+	DraftNew(ctx context.Context, draft NewDraft) (DraftResult, error)
 	DraftReply(ctx context.Context, id MessageID, comment string) (MessageID, error)
 	// DraftForward must be provider-built; unsupported providers must fail, not substitute a new draft.
 	DraftForward(ctx context.Context, id MessageID, to []string) (MessageID, error)

@@ -17,7 +17,7 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
-const meta = "id,from,sender,subject,receivedDateTime,toRecipients,ccRecipients,parentFolderId,conversationId,isDraft,isRead,flag,categories"
+const meta = "id,from,sender,subject,receivedDateTime,toRecipients,ccRecipients,bccRecipients,parentFolderId,conversationId,isDraft,isRead,flag,categories"
 const attachments = "attachments($select=name)"
 
 type mailbox struct{ c *Client }
@@ -66,7 +66,7 @@ func content(d object) (*string, *model.ContentType) {
 	return value, typ
 }
 func message(d object, body bool) (model.Message, error) {
-	m := model.Message{ID: text(d, "id"), ThreadID: text(d, "conversationId"), Subject: text(d, "subject"), IsDraft: boolean(d, "isDraft"), IsRead: boolean(d, "isRead"), Flag: model.NoFlag, Categories: stringsAt(d, "categories"), Attachments: names(d), To: addresses(d, "toRecipients"), CC: addresses(d, "ccRecipients"), ReceivedAt: model.UnknownReceived, Folders: []string{}}
+	m := model.Message{ID: text(d, "id"), ThreadID: text(d, "conversationId"), Subject: text(d, "subject"), IsDraft: boolean(d, "isDraft"), IsRead: boolean(d, "isRead"), Flag: model.NoFlag, Categories: stringsAt(d, "categories"), Attachments: names(d), To: addresses(d, "toRecipients"), CC: addresses(d, "ccRecipients"), BCC: addresses(d, "bccRecipients"), ReceivedAt: model.UnknownReceived, Folders: []string{}}
 	if m.ID == "" {
 		return m, invalidMetadata
 	}

@@ -152,6 +152,96 @@ func TestScreeningFlagMakesAnAllowedWriteWaitForApproval(t *testing.T) {
 	}
 }
 
+// newDraft is the result of draft new.
+type newDraft struct {
+	ID       string   `json:"id"`
+	ThreadID string   `json:"thread_id"`
+	To       []string `json:"to"`
+	CC       []string `json:"cc"`
+	BCC      []string `json:"bcc"`
+	Subject  string   `json:"subject"`
+}
+
+// A new draft takes repeated To, CC, and BCC recipients and an HTML body, and every field is optional. The
+// result names the draft and its recipients, and mail get shows the BCC of the draft like its To and CC.
+func TestDraftNewTakesEveryRecipientListAndAnHTMLBody(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	draft := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--to", "bob@example.test", "--cc", "cy@example.test", "--cc", "di@example.test",
+		"--bcc", "ed@example.test", "--bcc", "flo@example.test", "--subject", "canary-subject-html", "--body", "<p>canary-body-html</p>", "--html"))
+	want := newDraft{draft.ID, draft.ID, []string{"ana@example.test", "bob@example.test"}, []string{"cy@example.test", "di@example.test"}, []string{"ed@example.test", "flo@example.test"}, "canary-subject-html"}
+	if draft.ID == "" || !reflect.DeepEqual(draft, want) {
+		t.Fatalf("draft=%+v", draft)
+	}
+	stored := s.column(`SELECT folder || ' ' || is_draft || ' ' || to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || content_type || ' ' || body FROM messages WHERE id = ?`, draft.ID)
+	if !reflect.DeepEqual(stored, []string{`drafts 1 ["ana@example.test","bob@example.test"] ["cy@example.test","di@example.test"] ["ed@example.test","flo@example.test"] html <p>canary-body-html</p>`}) {
+		t.Fatalf("stored draft: %v", stored)
+	}
+	view := decode[struct {
+		Verdict string
+		BCC     []struct{ Address string } `json:"bcc"`
+	}](t, s.ok("mail", "get", draft.ID))
+	if view.Verdict != "green" || fmt.Sprint(view.BCC) != "[{ed@example.test} {flo@example.test}]" {
+		t.Fatalf("mail get: %+v", view)
+	}
+
+	// Without options, the draft is empty plain text, as the apps allow.
+	empty := decode[newDraft](t, s.ok("draft", "new"))
+	if empty.ID == "" || !reflect.DeepEqual(empty, newDraft{empty.ID, empty.ID, []string{}, []string{}, []string{}, ""}) {
+		t.Fatalf("empty draft=%+v", empty)
+	}
+	plain := decode[newDraft](t, s.ok("draft", "new", "--body", "canary-body-line-one\ncanary-body-line-two")).ID
+	if got := s.column(`SELECT content_type || ' ' || body FROM messages WHERE id = ?`, plain); !reflect.DeepEqual(got, []string{"text canary-body-line-one\ncanary-body-line-two"}) {
+		t.Fatalf("plain draft: %q", got)
+	}
+}
+
+// A send needs a recipient in To, CC, or BCC; one with only BCC recipients goes out. A send without any
+// recipient is invalid usage and reaches no policy decision.
+func TestSendNeedsARecipientAndCanGoOnlyToBcc(t *testing.T) {
+	t.Parallel()
+	s := start(t, sendAllowed)
+	before := s.dump()
+	if out, errout, code := s.amg("mail", "send", "--subject", "canary-subject-nobody", "--body", "canary-body-nobody"); code != 2 || out != "" || errout == "" {
+		t.Fatalf("send without a recipient: exit %d stdout %q stderr %q", code, out, errout)
+	}
+	s.assertTables(before)
+	if got := s.auditEvents("policy"); len(got) != 0 {
+		t.Fatalf("policy records of an invalid send: %v", got)
+	}
+	if out := s.ok("mail", "send", "--bcc", "ana@example.test", "--subject", "canary-subject-bcc", "--body", "canary-body-bcc"); !decode[struct{ OK bool }](t, out).OK {
+		t.Fatalf("bcc send: %s", out)
+	}
+	if got := s.column(`SELECT to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || content_type FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{`[] [] ["ana@example.test"] text`}) {
+		t.Fatalf("sent: %v", got)
+	}
+}
+
+const sendAllowed = "[policy]\nmail_send='allow'\n"
+
+// The approval console shows each recipient list of a waiting send, marks the BCC recipients as hidden, and
+// shows an HTML body as its source text. The approved run sends the stored lists and the HTML body unchanged.
+func TestApprovalPageShowsToCcAndMarkedBcc(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='approve'\n")
+	p := s.held("mail", "send", "--to", "ana@example.test", "--cc", "cy@example.test", "--bcc", "ed@example.test", "--subject", "canary-subject-console", "--body", "<b>canary-body-console</b>", "--html")
+	_, list := s.consoleGet(consolePassword, "/")
+	if !strings.Contains(list, "ana@example.test; cc: cy@example.test; bcc (hidden): ed@example.test") {
+		t.Fatalf("list misses the recipients:\n%s", list)
+	}
+	_, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID)
+	for _, want := range []string{"<dt>to</dt><dd><pre>ana@example.test</pre></dd>", "<dt>cc</dt><dd><pre>cy@example.test</pre></dd>", "<dt>bcc (hidden recipients)</dt><dd><pre>ed@example.test</pre></dd>",
+		"<dt>body (HTML source, not rendered)</dt><dd><pre>&lt;b&gt;canary-body-console&lt;/b&gt;</pre></dd>"} {
+		if !strings.Contains(item, want) {
+			t.Errorf("item page misses %q:\n%s", want, item)
+		}
+	}
+	s.approve(p.ApprovalID)
+	if got := s.column(`SELECT to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || content_type || ' ' || body FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{`["ana@example.test"] ["cy@example.test"] ["ed@example.test"] html <b>canary-body-console</b>`}) {
+		t.Fatalf("sent: %v", got)
+	}
+}
+
 // A reply or forward of a sealed or error message is refused even when the policy allows drafts and sends.
 func TestRepliesAndForwardsOfASealedMessageAreAlwaysRefused(t *testing.T) {
 	t.Parallel()
