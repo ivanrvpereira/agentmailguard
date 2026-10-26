@@ -79,9 +79,13 @@ func (a *nativeAPI) graph(w http.ResponseWriter, r *http.Request) {
 			io.WriteString(w, `{"error":{"message":"private-provider-canary"}}`)
 			return
 		}
-		if r.Method == "PATCH" {
-			w.WriteHeader(204)
-		} else {
+		switch {
+		case r.Method == "PATCH":
+			// Graph answers a PATCH of a message with the updated message.
+			response(w, map[string]any{"id": strings.TrimPrefix(r.URL.Path, "/me/messages/")})
+		case strings.HasSuffix(r.URL.Path, "/createReply") || strings.HasSuffix(r.URL.Path, "/createReplyAll"):
+			response(w, map[string]any{"id": "draft-1", "body": map[string]string{"contentType": "html", "content": "<html><body><div>quoted</div></body></html>"}})
+		default:
 			response(w, map[string]any{"id": "draft-1"})
 		}
 		return
@@ -422,7 +426,7 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 	api.mu.Lock()
 	writes := append([]externalWrite{}, api.writes...)
 	api.mu.Unlock()
-	foundNew, foundReply, foundForward := false, false, false
+	foundNew, replied, foundReply, foundForward := false, false, false, false
 	flags := map[string]bool{}
 	for _, w := range writes {
 		if f, ok := w.body["flag"].(map[string]any); ok {
@@ -431,8 +435,12 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 		if w.path == "/me/messages" && w.method == "POST" {
 			foundNew = w.body["subject"] == "private-draft-subject" && w.body["body"].(map[string]any)["content"] == "private-draft-body" && reflect.DeepEqual(w.body["toRecipients"], []any{map[string]any{"emailAddress": map[string]any{"address": "first@example.test"}}, map[string]any{"emailAddress": map[string]any{"address": "second@example.test"}}})
 		}
+		// The reply draft is createReply without a body, then a PATCH of the agent's text into Graph's quote.
 		if strings.HasSuffix(w.path, "/createReply") {
-			foundReply = w.path == "/me/messages/r/createReply" && w.body["comment"] == "private-reply-body"
+			replied = w.path == "/me/messages/r/createReply" && len(w.body) == 0
+		}
+		if body, _ := w.body["body"].(map[string]any); replied && w.method == "PATCH" && w.path == "/me/messages/draft-1" && body["content"] == "<html><body>private-reply-body<div>quoted</div></body></html>" {
+			foundReply = true
 		}
 		if strings.HasSuffix(w.path, "/createForward") {
 			foundForward = w.path == "/me/messages/g/createForward" && reflect.DeepEqual(w.body["message"].(map[string]any)["toRecipients"], []any{map[string]any{"emailAddress": map[string]any{"address": "first@example.test"}}, map[string]any{"emailAddress": map[string]any{"address": "second@example.test"}}})

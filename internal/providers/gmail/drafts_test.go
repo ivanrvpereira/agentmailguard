@@ -72,7 +72,7 @@ func TestNewAndReplyDraftsSafeHeadersAndThreading(t *testing.T) {
 			}
 		} else {
 			subject, _ := new(mime.WordDecoder).DecodeHeader(m.Header.Get("Subject"))
-			if subject != "Re: café" || m.Header.Get("To") != "list@example.test" || m.Header.Get("In-Reply-To") != "<m@example.test>" || strings.Join(strings.Fields(m.Header.Get("References")), " ") != "<r@example.test> <m@example.test>" || payload["threadId"] != "thread" {
+			if subject != "Re: café" || m.Header.Get("To") != "<list@example.test>" || m.Header.Get("In-Reply-To") != "<m@example.test>" || strings.Join(strings.Fields(m.Header.Get("References")), " ") != "<r@example.test> <m@example.test>" || payload["threadId"] != "thread" {
 				t.Errorf("reply headers: %+v", m.Header)
 			}
 			if got := draftText(t, m); got != "Thanks\n\nOn 2026-09-01 00:00 UTC, alice@example.test wrote:\n> One\n> Two \n> x\n" {
@@ -88,9 +88,9 @@ func TestNewAndReplyDraftsSafeHeadersAndThreading(t *testing.T) {
 		t.Fatal(draft, err)
 	}
 	mode = "reply"
-	id, err := c.Mailbox().DraftReply(context.Background(), "original", "Thanks")
-	if err != nil || id != "created" {
-		t.Fatal(id, err)
+	reply, err := c.Mailbox().DraftReply(context.Background(), "original", model.Reply{Body: "Thanks"})
+	if err != nil || reply.ID != "created" {
+		t.Fatal(reply, err)
 	}
 	_, err = c.Mailbox().DraftNew(context.Background(), model.NewDraft{To: []string{"=?utf-8?q?x=0D=0ABcc:_evil@example.test?= <a@example.test>"}})
 	if err == nil || writes != 2 {

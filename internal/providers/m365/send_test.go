@@ -26,13 +26,10 @@ func TestSendsPostTheGraphSendActionsAndAccept202(t *testing.T) {
 	if err := b.SendNew(ctx, model.NewDraft{To: []string{"a@example.test", "b@example.test"}, Subject: "Hi", Body: "text"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.SendReply(ctx, "m/1", "thanks"); err != nil {
-		t.Fatal(err)
-	}
 	if err := b.SendForward(ctx, "m/1", []string{"c@example.test"}); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"POST /v1.0/me/sendMail", "POST /v1.0/me/messages/m%2F1/reply", "POST /v1.0/me/messages/m%2F1/forward"}; !reflect.DeepEqual(paths, want) {
+	if want := []string{"POST /v1.0/me/sendMail", "POST /v1.0/me/messages/m%2F1/forward"}; !reflect.DeepEqual(paths, want) {
 		t.Fatalf("endpoints %v", paths)
 	}
 	to := func(addresses ...string) []any {
@@ -44,7 +41,6 @@ func TestSendsPostTheGraphSendActionsAndAccept202(t *testing.T) {
 	}
 	want := []map[string]any{
 		{"message": map[string]any{"subject": "Hi", "body": map[string]any{"contentType": "text", "content": "text"}, "toRecipients": to("a@example.test", "b@example.test"), "ccRecipients": to(), "bccRecipients": to()}, "saveToSentItems": true},
-		{"comment": "thanks"},
 		{"comment": "", "toRecipients": to("c@example.test")},
 	}
 	if !reflect.DeepEqual(bodies, want) {
@@ -67,7 +63,7 @@ func TestFailedSendIsNotRetried(t *testing.T) {
 			func() error {
 				return b.SendNew(ctx, model.NewDraft{To: []string{"a@example.test"}, Subject: "s", Body: "b"})
 			},
-			func() error { return b.SendReply(ctx, "m1", "b") },
+			func() error { return b.SendReply(ctx, "m1", model.Reply{Body: "b"}) },
 			func() error { return b.SendForward(ctx, "m1", []string{"a@example.test"}) },
 		} {
 			before := requests

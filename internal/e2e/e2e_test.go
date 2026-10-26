@@ -242,6 +242,98 @@ func TestApprovalPageShowsToCcAndMarkedBcc(t *testing.T) {
 	}
 }
 
+// seedTeam adds the message team: from ana, to the account and bob, copied to cy, the account in capitals, and bob
+// again in capitals, with the Reply-To that the fake provider does not have, so a reply goes to the sender.
+func (s *server) seedTeam() {
+	s.t.Helper()
+	s.exec(`INSERT INTO messages (account, id, sender_name, sender_address, to_addresses, cc_addresses, subject, body) VALUES
+		('demo@fake.invalid', 'team', 'canary-name-ana', 'ana@example.test', '["demo@fake.invalid", "bob@example.test"]', '["cy@example.test", "DEMO@fake.invalid", "BOB@example.test"]', 'canary-subject-team', 'canary-body-team: a <b>plan</b>')`)
+}
+
+// A reply all draft goes to the sender and copies everyone on the original except the account, each address once
+// ignoring case, plus the agent's CC and BCC. An HTML reply keeps the quoted original below the agent's HTML, and
+// the reply stays in the conversation. The result of a green source names the draft, its recipients, and subject.
+func TestReplyAllDraftAddsTheAgentCcAndBccAndQuotesBelowHTML(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	s.seedTeam()
+	draft := decode[newDraft](t, s.ok("draft", "reply", "team", "--all", "--cc", "di@example.test", "--cc", "CY@example.test", "--bcc", "ed@example.test", "--body", "<p>canary-body-reply-all</p>", "--html"))
+	want := newDraft{draft.ID, "team", []string{"ana@example.test"}, []string{"bob@example.test", "cy@example.test", "di@example.test"}, []string{"ed@example.test"}, "Re: canary-subject-team"}
+	if draft.ID == "" || !reflect.DeepEqual(draft, want) {
+		t.Fatalf("draft=%+v", draft)
+	}
+	stored := s.column(`SELECT folder || ' ' || thread_id || ' ' || to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || content_type || ' ' || body FROM messages WHERE id = ?`, draft.ID)
+	if !reflect.DeepEqual(stored, []string{`drafts team ["ana@example.test"] ["bob@example.test","cy@example.test","di@example.test"] ["ed@example.test"] html <p>canary-body-reply-all</p><blockquote>canary-body-team: a &lt;b&gt;plan&lt;/b&gt;</blockquote>`}) {
+		t.Fatalf("stored draft: %v", stored)
+	}
+	// Without --all, the reply goes to the sender only, with the agent's CC.
+	single := decode[newDraft](t, s.ok("draft", "reply", "team", "--cc", "di@example.test"))
+	if !reflect.DeepEqual([][]string{single.To, single.CC, single.BCC}, [][]string{{"ana@example.test"}, {"di@example.test"}, {}}) {
+		t.Fatalf("reply=%+v", single)
+	}
+}
+
+// The draft result of a reply to a red message names only the draft: its recipients and subject come from a message
+// whose headers are hidden.
+func TestReplyDraftOfARedMessageGivesOnlyItsIDs(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	out := s.ok("draft", "reply", "phish", "--all", "--body", "canary-body-reply-red")
+	got := decode[map[string]any](t, out)
+	id, _ := got["id"].(string)
+	if want := map[string]any{"id": id, "thread_id": "phish"}; id == "" || !reflect.DeepEqual(got, want) {
+		t.Fatalf("draft=%s", out)
+	}
+}
+
+// mail reply --all sends at once under allow, to the recipients that reply all picks plus the agent's CC and BCC.
+func TestMailReplyAllSendsToEveryoneAndTheAgentCopies(t *testing.T) {
+	t.Parallel()
+	s := start(t, sendAllowed)
+	s.seedTeam()
+	if out := s.ok("mail", "reply", "team", "--all", "--cc", "di@example.test", "--bcc", "ed@example.test", "--body", "canary-body-reply-sent"); !decode[struct{ OK bool }](t, out).OK {
+		t.Fatalf("reply: %s", out)
+	}
+	if got := s.column(`SELECT thread_id || ' ' || to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || content_type || ' ' || body FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{`team ["ana@example.test"] ["bob@example.test","cy@example.test","di@example.test"] ["ed@example.test"] text canary-body-reply-sent`}) {
+		t.Fatalf("sent: %v", got)
+	}
+}
+
+// The approval page of a waiting reply shows the recipients worked out from the original, with the agent's CC
+// added and its BCC marked as hidden. The approved run sends to them. An approved reply draft stores only its IDs.
+func TestApprovalPageShowsTheReplyRecipients(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='approve'\nmail_draft='approve'\n")
+	s.seedTeam()
+	p := s.held("mail", "reply", "team", "--all", "--cc", "di@example.test", "--bcc", "ed@example.test", "--body", "canary-body-reply-held")
+	_, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID)
+	for _, want := range []string{"<h2>Reply recipients</h2>", "<dt>to</dt><dd><pre>ana@example.test</pre></dd>",
+		"<dt>cc</dt><dd><pre>bob@example.test</pre><pre>cy@example.test</pre><pre>di@example.test</pre></dd>", "<dt>bcc (hidden recipients)</dt><dd><pre>ed@example.test</pre></dd>"} {
+		if !strings.Contains(item, want) {
+			t.Errorf("item page misses %q:\n%s", want, item)
+		}
+	}
+	s.approve(p.ApprovalID)
+	if got := s.column(`SELECT to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{`["ana@example.test"] ["bob@example.test","cy@example.test","di@example.test"] ["ed@example.test"]`}) {
+		t.Fatalf("sent: %v", got)
+	}
+	d := s.held("draft", "reply", "team", "--all", "--body", "canary-body-reply-draft")
+	s.approve(d.ApprovalID)
+	status := decode[struct {
+		State  string
+		Result map[string]any
+	}](t, s.ok("approvals", "status", d.ApprovalID))
+	if id, _ := status.Result["id"].(string); status.State != "done" || id == "" || !reflect.DeepEqual(status.Result, map[string]any{"id": id, "thread_id": "team"}) {
+		t.Fatalf("approved draft: %+v", status)
+	}
+	// When the original can no longer be read, the page says so instead of showing no recipients.
+	gone := s.held("mail", "reply", "team", "--body", "canary-body-reply-gone")
+	s.exec(`UPDATE messages SET account = 'someone-else' WHERE id = 'team'`)
+	if _, item := s.consoleGet(consolePassword, "/a/"+gone.ApprovalID); !strings.Contains(item, "<p>Reply recipients could not be read.</p>") || strings.Contains(item, "<dt>to</dt><dd><pre>ana@example.test") {
+		t.Fatalf("item page of an unreadable original:\n%s", item)
+	}
+}
+
 // A reply or forward of a sealed or error message is refused even when the policy allows drafts and sends.
 func TestRepliesAndForwardsOfASealedMessageAreAlwaysRefused(t *testing.T) {
 	t.Parallel()

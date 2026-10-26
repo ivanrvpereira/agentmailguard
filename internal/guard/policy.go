@@ -109,8 +109,9 @@ var actionEffects = map[string]string{
 }
 
 // checkAction asks Jev about the agent fields of args, for an action that the policy does not deny. A forward
-// also gives Jev the text of the forwarded message; if that text is unavailable, the check fails. A flag or
-// a failed check changes allow to approve; approve stays approve. An approved run is never checked again.
+// also gives Jev the text of the forwarded message, and a reply the recipients that it goes to (reply_recipients);
+// if they are unavailable, the check fails. A flag or a failed check changes allow to approve; approve stays
+// approve. An approved run is never checked again.
 func (g *Guard) checkAction(ctx context.Context, op audit.Operation, key string, d decision, args any) (decision, error) {
 	if approved(ctx) || d.value == config.Deny {
 		return d, nil
@@ -118,6 +119,12 @@ func (g *Guard) checkAction(ctx context.Context, op audit.Operation, key string,
 	state, err := actionFields(args)
 	if forward, ok := args.(forwardArgs); ok && err == nil {
 		state["forwarded_message"], err = g.forwardedText(ctx, forward.ID)
+	}
+	if reply, ok := args.(replyArgs); ok && err == nil {
+		var to model.Recipients
+		if to, err = g.ReplyRecipients(ctx, reply.ID, reply.All); err == nil {
+			state["reply_recipients"] = map[string]any{"to": to.To, "cc": to.CC}
+		}
 	}
 	if ctx.Err() != nil {
 		return d, ctx.Err()
@@ -180,7 +187,8 @@ func actionFields(args any) (map[string]any, error) {
 	return fields, nil
 }
 
-// sourceUnavailable is the failed-check code when the text of a forwarded message cannot be read.
+// sourceUnavailable is the failed-check code when the text of a forwarded message, or the recipients of a reply,
+// cannot be read.
 const sourceUnavailable = GuardError("SourceUnavailableError")
 
 // forwardedText reads the subject and rendered body of the message to forward through the screened read
@@ -365,6 +373,21 @@ type newDraftArgs struct {
 func newArgs(d model.NewDraft) newDraftArgs {
 	list := func(v []string) []string { return append([]string{}, v...) }
 	return newDraftArgs{list(d.To), list(d.CC), list(d.BCC), d.Subject, d.Body, d.HTML}
+}
+
+type replyArgs struct {
+	ID   string   `json:"id"`
+	Body string   `json:"body"`
+	HTML bool     `json:"html"`
+	All  bool     `json:"all"`
+	CC   []string `json:"cc"`
+	BCC  []string `json:"bcc"`
+}
+
+// newReplyArgs stores every field of a reply. A nil list becomes an empty list, because the API refuses null.
+func newReplyArgs(id string, r model.Reply) replyArgs {
+	list := func(v []string) []string { return append([]string{}, v...) }
+	return replyArgs{id, r.Body, r.HTML, r.All, list(r.CC), list(r.BCC)}
 }
 
 type bodyArgs struct {

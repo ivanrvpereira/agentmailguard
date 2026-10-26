@@ -81,7 +81,7 @@ func TestPendingResultLinksToTheApprovalConsole(t *testing.T) {
 }
 
 // A held action waits as pending and reaches the provider only for reads: the event checks, the verdict lookup of
-// the reply source, and the forwarded message of the Jev check. TestApprovedActionMakesTheSameWriteAsTheAllowedCall runs the stored requests.
+// the reply source, and the reply recipients and the forwarded message of the Jev check. TestApprovedActionMakesTheSameWriteAsTheAllowedCall runs the stored requests.
 func TestPolicyApproveHoldsTheActionWithoutAProviderWrite(t *testing.T) {
 	d, reads, writes := policyDaemon(t, "[policy]\nmail_draft='approve'\ncalendar_invite='approve'\ncalendar_update='approve'\ncalendar_cancel='approve'\ncalendar_respond='approve'\n")
 	for _, tc := range []struct{ op, params string }{
@@ -107,8 +107,8 @@ func TestPolicyApproveHoldsTheActionWithoutAProviderWrite(t *testing.T) {
 	if writes.Load() != 0 {
 		t.Fatalf("approve wrote to the provider %d times", writes.Load())
 	}
-	if reads.Load() != 6 {
-		t.Fatalf("reads=%d; want one event check per update, cancel, and respond, one screening of the reply source, and one read of the forwarded message for the Jev check", reads.Load())
+	if reads.Load() != 7 {
+		t.Fatalf("reads=%d; want one event check per update, cancel, and respond, one screening of the reply source, and one read of the reply recipients and one of the forwarded message for the Jev check", reads.Load())
 	}
 }
 

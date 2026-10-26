@@ -22,6 +22,7 @@ type writer struct {
 	flags            []model.FlagState
 	updates          []struct{ id, body string }
 	draft            *model.DraftResult // the DraftNew result; nil gives ID d1
+	recipientsErr    error              // the ReplyRecipients error; nil gives the recipients of replyRecipients
 	err              error
 	entered, release chan struct{}
 }
@@ -78,9 +79,25 @@ func (w *writer) DraftNew(context.Context, model.NewDraft) (model.DraftResult, e
 	}
 	return model.DraftResult{ID: "d1"}, err
 }
-func (w *writer) DraftReply(context.Context, string, string) (string, error) {
+func (w *writer) DraftReply(context.Context, string, model.Reply) (model.DraftResult, error) {
 	_, err := w.write("draft_reply", nil)
-	return "d2", err
+	return model.DraftResult{ID: "d2"}, err
+}
+
+// replyRecipients are the reply recipients that writer gives: the sender, and with all also bo@example.test, so
+// that a test sees which all flag was asked for.
+func replyRecipients(all bool) model.Recipients {
+	r := model.Recipients{To: []string{"ana@example.test"}, CC: []string{}, BCC: []string{}}
+	if all {
+		r.CC = []string{"bo@example.test"}
+	}
+	return r
+}
+func (w *writer) ReplyRecipients(_ context.Context, _ string, all bool) (model.Recipients, error) {
+	if w.recipientsErr != nil {
+		return model.Recipients{}, w.recipientsErr
+	}
+	return replyRecipients(all), nil
 }
 func (w *writer) DraftForward(context.Context, string, []string) (string, error) {
 	_, err := w.write("draft_forward", nil)
@@ -195,7 +212,7 @@ func TestEveryManualRouteAndDraftHasContentFreeAudit(t *testing.T) {
 		func() error {
 			_, e := g.DraftNew(ctx, model.NewDraft{To: []string{"CANARY@example.com"}, Subject: "CANARY", Body: "CANARY"})
 			return e
-		}, func() error { _, e := g.DraftReply(ctx, "m1", "CANARY"); return e }, func() error { _, e := g.DraftForward(ctx, "m1", []string{"CANARY@example.com"}); return e }, func() error { _, e := g.DraftUpdate(ctx, "d1", "CANARY"); return e },
+		}, func() error { _, _, e := g.DraftReply(ctx, "m1", model.Reply{Body: "CANARY"}); return e }, func() error { _, e := g.DraftForward(ctx, "m1", []string{"CANARY@example.com"}); return e }, func() error { _, e := g.DraftUpdate(ctx, "d1", "CANARY"); return e },
 	}
 	for _, call := range calls {
 		if err := call(); err != nil {

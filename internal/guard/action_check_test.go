@@ -58,10 +58,11 @@ func TestJevSeesOnlyTheAgentFieldsOfEachAction(t *testing.T) {
 			return g.SendNew(ctx, model.NewDraft{CC: []string{"c@example.test"}, BCC: []string{"d@example.test"}, Body: "<p>See <a href=\"https://example.test/x\">you</a></p>", HTML: true})
 		}, actionCall{"mail.send", "sends an email to the listed recipients", map[string]any{"to": []any{}, "cc": []any{"c@example.test"}, "bcc": []any{"d@example.test"}, "subject": "", "body": "<p>See <a href=\"https://example.test/x\">you</a></p>", "html": true}}},
 		{"draft.reply", func(ctx context.Context, g *guard.Guard) error {
-			_, err := g.DraftReply(ctx, "m1", "Thanks")
+			_, _, err := g.DraftReply(ctx, "m1", model.Reply{Body: "<p>Thanks</p>", HTML: true, All: true, CC: []string{"c@example.test"}, BCC: []string{"d@example.test"}})
 			return err
 		},
-			actionCall{"draft.reply", "creates a draft that the user may send later", map[string]any{"body": "Thanks"}}},
+			actionCall{"draft.reply", "creates a draft that the user may send later", map[string]any{"body": "<p>Thanks</p>", "html": true, "all": true, "cc": []any{"c@example.test"}, "bcc": []any{"d@example.test"},
+				"reply_recipients": map[string]any{"to": []string{"ana@example.test"}, "cc": []string{"bo@example.test"}}}}},
 		{"draft.update", func(ctx context.Context, g *guard.Guard) error {
 			_, err := g.DraftUpdate(ctx, "d1", "New body")
 			return err
@@ -266,6 +267,42 @@ func TestForwardWithoutSourceTextIsPending(t *testing.T) {
 			}
 			item, err := c.GetPending(ctx, pending.ApprovalID)
 			if err != nil || item.Jev == nil || item.Jev.Error == nil || item.Jev.Score != nil {
+				t.Fatalf("stored jev=%+v %v", item.Jev, err)
+			}
+			if records := policyRecords(t, path); !reflect.DeepEqual(records[0]["reasons"], []any{"policy", "jev_error"}) {
+				t.Fatalf("records=%v", records)
+			}
+		})
+	}
+}
+
+// A reply whose recipients cannot be worked out from the original fails the Jev check: an allowed reply waits for
+// approval, never runs, and Jev is not asked without them.
+func TestReplyWithoutRecipientsIsPending(t *testing.T) {
+	for _, tc := range []struct {
+		op   string
+		call func(context.Context, *guard.Guard) error
+	}{
+		{"draft.reply", func(ctx context.Context, g *guard.Guard) error {
+			_, _, err := g.DraftReply(ctx, "m1", model.Reply{Body: "CANARY", All: true})
+			return err
+		}},
+		{"mail.reply", func(ctx context.Context, g *guard.Guard) error {
+			return g.SendReply(ctx, "m1", model.Reply{Body: "CANARY"})
+		}},
+	} {
+		t.Run(tc.op, func(t *testing.T) {
+			s := scoring(0.08)
+			w := &writer{mailbox: &mailbox{messages: messages("m1")}, recipientsErr: model.MailboxError("Graph error 404")}
+			g, c, path := policyGuard(t, w, nil, s, allowAll)
+			ctx := context.Background()
+			err := tc.call(ctx, g)
+			var pending guard.PendingError
+			if !errors.As(err, &pending) || len(w.calls) != 0 || len(s.checked()) != 0 {
+				t.Fatalf("reply=%v writes=%v checks=%+v", err, w.calls, s.checked())
+			}
+			item, err := c.GetPending(ctx, pending.ApprovalID)
+			if err != nil || item.Jev == nil || item.Jev.Error == nil || *item.Jev.Error != "SourceUnavailableError" {
 				t.Fatalf("stored jev=%+v %v", item.Jev, err)
 			}
 			if records := policyRecords(t, path); !reflect.DeepEqual(records[0]["reasons"], []any{"policy", "jev_error"}) {

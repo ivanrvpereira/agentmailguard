@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -66,6 +67,11 @@ func (b *mailbox) DraftNew(ctx context.Context, draft model.NewDraft) (model.Dra
 	if err != nil {
 		return model.DraftResult{}, err
 	}
+	return draftResult(d)
+}
+
+// draftResult reads a draft result from a message that Graph returned. A message without an ID fails.
+func draftResult(d object) (model.DraftResult, error) {
 	out := model.DraftResult{ID: text(d, "id"), ThreadID: text(d, "conversationId"), To: emails(d, "toRecipients"), CC: emails(d, "ccRecipients"), BCC: emails(d, "bccRecipients"), Subject: text(d, "subject")}
 	if out.ID == "" {
 		return model.DraftResult{}, invalidMetadata
@@ -81,8 +87,113 @@ func emails(d object, k string) []string {
 	}
 	return out
 }
-func (b *mailbox) DraftReply(ctx context.Context, id, comment string) (string, error) {
-	return b.draft(ctx, "/me/messages/"+escapeID(id)+"/createReply", map[string]any{"comment": comment})
+
+// DraftReply gives the reply draft as Graph answered the last write.
+func (b *mailbox) DraftReply(ctx context.Context, id string, reply model.Reply) (model.DraftResult, error) {
+	d, err := b.reply(ctx, id, reply, false)
+	if err != nil {
+		return model.DraftResult{}, err
+	}
+	return draftResult(d)
+}
+
+// reply makes the reply draft of message id with createReply, or createReplyAll for all, with no comment and no
+// body: Graph then writes the quoted original and picks the recipients, as Outlook does
+// (https://learn.microsoft.com/en-us/graph/api/message-createreplyall?view=graph-rest-1.0). Graph does not document
+// how a comment renders or how CC and BCC given there combine with its own, so one PATCH of the draft
+// (https://learn.microsoft.com/en-us/graph/api/message-update?view=graph-rest-1.0) adds the agent's body above the
+// quote and the agent's CC and BCC to Microsoft's lists; it is left out when it would change nothing. With send,
+// the draft is then sent (https://learn.microsoft.com/en-us/graph/api/message-send?view=graph-rest-1.0). Every write
+// goes once under the mutation gate. A failed step returns its error and stops, so nothing is sent after it; the
+// draft may stay in Drafts. reply gives Graph's answer of the create or the PATCH.
+func (b *mailbox) reply(ctx context.Context, id string, reply model.Reply, send bool) (object, error) {
+	if !b.c.lockMutation(ctx) {
+		return nil, requestFailed
+	}
+	defer func() { <-b.c.mutationGate }()
+	action := "/createReply"
+	if reply.All {
+		action = "/createReplyAll"
+	}
+	d, err := b.c.request(ctx, http.MethodPost, b.c.endpoint("/me/messages/"+escapeID(id)+action, nil), map[string]any{}, false)
+	if err != nil {
+		return nil, err
+	}
+	draft := text(d, "id")
+	if draft == "" {
+		return nil, invalidMetadata
+	}
+	patch := map[string]any{}
+	if reply.Body != "" {
+		body := obj(d, "body")
+		if patch["body"], err = replyBody(text(body, "contentType"), text(body, "content"), reply); err != nil {
+			return nil, err
+		}
+	}
+	listed := model.Recipients{To: emails(d, "toRecipients"), CC: emails(d, "ccRecipients"), BCC: emails(d, "bccRecipients")}
+	if merged := listed.With(reply.CC, reply.BCC); len(merged.CC) > len(listed.CC) || len(merged.BCC) > len(listed.BCC) {
+		patch["ccRecipients"], patch["bccRecipients"] = recipients(merged.CC), recipients(merged.BCC)
+	}
+	path := b.c.endpoint("/me/messages/"+escapeID(draft), nil)
+	if len(patch) > 0 {
+		if d, err = b.c.request(ctx, http.MethodPatch, path, patch, false); err != nil {
+			return nil, err
+		}
+		if text(d, "id") != draft {
+			return nil, invalidMetadata
+		}
+	}
+	if !send {
+		return d, nil
+	}
+	if ctx.Err() != nil {
+		return nil, requestFailed
+	}
+	_, err = b.c.request(ctx, http.MethodPost, b.c.endpoint("/me/messages/"+escapeID(draft)+"/send", nil), nil, false)
+	return d, err
+}
+
+// bodyTag is the opening body tag of an HTML document.
+var bodyTag = regexp.MustCompile(`(?i)<body\b[^>]*>`)
+
+// replyBody is the body of a reply draft whose quoted original Graph wrote as content of type kind. In an HTML quote,
+// the agent's HTML, or its text escaped with its line breaks, goes right after the opening body tag (at the start
+// without one). Above a plain-text quote, text goes with a blank line; HTML makes the body HTML with the escaped quote
+// below.
+func replyBody(kind, quote string, reply model.Reply) (map[string]string, error) {
+	switch strings.ToLower(kind) {
+	case "html":
+		agent := reply.Body
+		if !reply.HTML {
+			agent = model.HTMLBody(agent)
+		}
+		at := 0
+		if tag := bodyTag.FindStringIndex(quote); tag != nil {
+			at = tag[1]
+		}
+		return map[string]string{"contentType": "html", "content": quote[:at] + agent + quote[at:]}, nil
+	case "text":
+		if reply.HTML {
+			return map[string]string{"contentType": "html", "content": reply.Body + model.HTMLBody("\n\n"+quote)}, nil
+		}
+		return map[string]string{"contentType": "text", "content": reply.Body + "\n\n" + quote}, nil
+	}
+	return nil, invalidMetadata
+}
+
+// ReplyRecipients reads the original's sender, Reply-To, To, and CC and applies model.ReplyRecipients with the
+// account's address as the own address. A message from that address is one that the account sent.
+func (b *mailbox) ReplyRecipients(ctx context.Context, id string, all bool) (model.Recipients, error) {
+	d, err := b.c.get(ctx, b.c.endpoint("/me/messages/"+escapeID(id), url.Values{"$select": {"from,replyTo,toRecipients,ccRecipients"}}), false)
+	if err != nil {
+		return model.Recipients{}, err
+	}
+	if text(d, "id") == "" {
+		return model.Recipients{}, invalidMetadata
+	}
+	from, own := address(obj(d, "from")).Address, b.c.account.Email
+	src := model.ReplySource{From: []string{from}, ReplyTo: emails(d, "replyTo"), To: emails(d, "toRecipients"), CC: emails(d, "ccRecipients"), Sent: strings.EqualFold(from, own)}
+	return model.ReplyRecipients(src, all, []string{own}), nil
 }
 func (b *mailbox) DraftForward(ctx context.Context, id string, to []string) (string, error) {
 	return b.draft(ctx, "/me/messages/"+escapeID(id)+"/createForward", map[string]any{"comment": "", "message": map[string]any{"toRecipients": recipients(to)}})
@@ -96,8 +207,9 @@ func (b *mailbox) send(ctx context.Context, path string, body map[string]any) er
 func (b *mailbox) SendNew(ctx context.Context, draft model.NewDraft) error {
 	return b.send(ctx, "/me/sendMail", map[string]any{"message": newMessage(draft), "saveToSentItems": true})
 }
-func (b *mailbox) SendReply(ctx context.Context, id, comment string) error {
-	return b.send(ctx, "/me/messages/"+escapeID(id)+"/reply", map[string]any{"comment": comment})
+func (b *mailbox) SendReply(ctx context.Context, id string, reply model.Reply) error {
+	_, err := b.reply(ctx, id, reply, true)
+	return err
 }
 func (b *mailbox) SendForward(ctx context.Context, id string, to []string) error {
 	return b.send(ctx, "/me/messages/"+escapeID(id)+"/forward", map[string]any{"comment": "", "toRecipients": recipients(to)})

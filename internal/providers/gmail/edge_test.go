@@ -92,14 +92,14 @@ func TestDraftReplyPrefersPlainAndOwnSentTo(t *testing.T) {
 			return
 		}
 		msg, _ := draftMIME(t, r)
-		if msg.Header.Get("To") != "own-recipient@example.test" || msg.Header.Get("Subject") != "RE: Subject" || msg.Header.Get("References") != "" || !strings.HasSuffix(draftText(t, msg), "> PLAIN\n") {
+		if msg.Header.Get("To") != "<own-recipient@example.test>" || msg.Header.Get("Subject") != "RE: Subject" || msg.Header.Get("References") != "" || !strings.HasSuffix(draftText(t, msg), "> PLAIN\n") {
 			t.Error("own sent reply")
 		}
 		respond(w, map[string]any{"message": map[string]string{"id": "created"}})
 	}))
 	defer server.Close()
 	c := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), GmailURL: server.URL})
-	if _, err := c.Mailbox().DraftReply(context.Background(), "m", "Thanks"); err != nil {
+	if _, err := c.Mailbox().DraftReply(context.Background(), "m", model.Reply{Body: "Thanks"}); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -11,11 +11,25 @@ import (
 	"testing"
 )
 
-// sendParams are valid params of the three send operations, in the shape of the matching draft operations.
-var sendParams = []struct{ op, params, path string }{
-	{"mail.send", `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body"}`, "/me/sendMail"},
-	{"mail.reply", `{"id":"m1","body":"CANARY reply"}`, "/me/messages/m1/reply"},
-	{"mail.forward", `{"id":"m1","to":["a@example.test","b@example.test"]}`, "/me/messages/m1/forward"},
+// sendParams are valid params of the three send operations, in the shape of the matching draft operations, and
+// the paths of the Graph writes that each makes. A reply is a reply draft (approvalGraph names it w1), its PATCH,
+// and its send.
+var sendParams = []struct {
+	op, params string
+	paths      []string
+}{
+	{"mail.send", `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body"}`, []string{"/me/sendMail"}},
+	{"mail.reply", `{"id":"m1","body":"CANARY reply"}`, []string{"/me/messages/m1/createReply", "/me/messages/w1", "/me/messages/w1/send"}},
+	{"mail.forward", `{"id":"m1","to":["a@example.test","b@example.test"]}`, []string{"/me/messages/m1/forward"}},
+}
+
+// writePaths are the paths of the recorded writes.
+func writePaths(writes []meetingRequest) []string {
+	out := []string{}
+	for _, w := range writes {
+		out = append(out, w.Path)
+	}
+	return out
 }
 
 func TestMailSendDefaultPolicyRefusesBeforeProviderAccess(t *testing.T) {
@@ -79,7 +93,7 @@ func TestAllowedMailSendPostsOnceAndReturnsOK(t *testing.T) {
 			if status != 200 || body != `{"ok":true}` {
 				t.Fatalf("%d %s", status, body)
 			}
-			if got := graph.recorded(); len(got) != 1 || got[0].Method != "POST" || got[0].Path != tc.path {
+			if got := graph.recorded(); !reflect.DeepEqual(writePaths(got), tc.paths) || got[len(got)-1].Method != "POST" {
 				t.Fatalf("provider writes=%+v", got)
 			}
 			assertAudited(t, d.home, strings.Replace(tc.op, ".", "_", 1))
@@ -91,7 +105,7 @@ func TestInvalidMailSendParamsAreRefusedBeforeAccountAccess(t *testing.T) {
 	d, reads, writes := policyDaemon(t, sendAllow)
 	for op, params := range map[string][]string{
 		"mail.send":    {`{}`, `{"to":[],"cc":[],"bcc":[],"subject":"s","body":"b"}`, `{"bcc":[""]}`, `{"to":["a@example.test"],"html":"yes"}`, `{"to":["a@example.test"],"from":"x"}`, `{"to":["a@example.test"],"cc":null}`},
-		"mail.reply":   {`{}`, `{"id":"m1"}`, `{"id":"","body":"b"}`, `{"id":"m1","body":"b","to":["x"]}`},
+		"mail.reply":   {`{}`, `{"body":"b"}`, `{"id":"","body":"b"}`, `{"id":"m1","body":"b","to":["x"]}`, `{"id":"m1","all":"yes"}`, `{"id":"m1","cc":[""]}`, `{"id":"m1","bcc":null}`},
 		"mail.forward": {`{}`, `{"id":"m1"}`, `{"id":"m1","to":[]}`, `{"id":"m1","to":["a"],"body":"b"}`},
 	} {
 		for _, p := range params {
@@ -121,7 +135,7 @@ func TestApprovedMailSendSendsOnceAndStoresOK(t *testing.T) {
 			if err := d.s.Approve(context.Background(), id); err == nil {
 				t.Fatal("second approve ran")
 			}
-			if got := graph.recorded(); len(got) != 1 || got[0].Path != tc.path {
+			if got := graph.recorded(); !reflect.DeepEqual(writePaths(got), tc.paths) {
 				t.Fatalf("provider writes=%+v", got)
 			}
 			assertState(t, d.s, id, `{"state":"done","result":{"ok":true}}`)

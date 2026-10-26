@@ -183,14 +183,46 @@ func created(d model.NewDraft) outgoing {
 	return outgoing{to: d.To, cc: d.CC, bcc: d.BCC, subject: d.Subject, body: d.Body, contentType: string(kind), origin: "new"}
 }
 
-// reply answers the source sender with the comment as body.
-func (b *mailbox) reply(ctx context.Context, id, comment string) (outgoing, error) {
-	source, err := b.Get(ctx, []string{id}, false)
+// reply answers the source by the Gmail rule (ReplyRecipients) plus the agent's CC and BCC. A plain-text reply
+// body is the agent's text; an HTML reply keeps the quoted original below the agent's HTML.
+func (b *mailbox) reply(ctx context.Context, id string, r model.Reply) (outgoing, error) {
+	source, err := b.Get(ctx, []string{id}, true)
 	if err != nil {
 		return outgoing{}, err
 	}
 	m := source[0]
-	return outgoing{to: []string{m.Sender.Address}, subject: "Re: " + m.Subject, body: comment, contentType: string(model.Text), origin: "reply", source: &id, thread: &m.ThreadID}, nil
+	to := b.replyRecipients(m, r.All).With(r.CC, r.BCC)
+	body, kind := r.Body, model.Text
+	if r.HTML {
+		quote := *m.Body
+		if *m.ContentType != model.HTML {
+			quote = model.HTMLBody(quote)
+		}
+		body, kind = r.Body+"<blockquote>"+quote+"</blockquote>", model.HTML
+	}
+	return outgoing{to: to.To, cc: to.CC, bcc: to.BCC, subject: "Re: " + m.Subject, body: body, contentType: string(kind), origin: "reply", source: &id, thread: &m.ThreadID}, nil
+}
+
+// replyRecipients applies model.ReplyRecipients to m with the account's address as the own address. The fake has
+// no Reply-To; a message in sent is one that the account sent.
+func (b *mailbox) replyRecipients(m model.Message, all bool) model.Recipients {
+	bare := func(list []model.Address) []string {
+		out := []string{}
+		for _, a := range list {
+			out = append(out, a.Address)
+		}
+		return out
+	}
+	src := model.ReplySource{From: []string{m.Sender.Address}, To: bare(m.To), CC: bare(m.CC), Sent: slices.Contains(m.Folders, "sent")}
+	return model.ReplyRecipients(src, all, []string{b.p.account})
+}
+
+func (b *mailbox) ReplyRecipients(ctx context.Context, id string, all bool) (model.Recipients, error) {
+	source, err := b.Get(ctx, []string{id}, false)
+	if err != nil {
+		return model.Recipients{}, err
+	}
+	return b.replyRecipients(source[0], all), nil
 }
 
 // forward carries the source body and attachments to new recipients.
@@ -246,12 +278,16 @@ func (b *mailbox) DraftNew(ctx context.Context, d model.NewDraft) (model.DraftRe
 	}
 	return model.DraftResult{ID: id, ThreadID: id, To: o.to, CC: o.cc, BCC: o.bcc, Subject: o.subject}, nil
 }
-func (b *mailbox) DraftReply(ctx context.Context, id, comment string) (string, error) {
-	o, err := b.reply(ctx, id, comment)
+func (b *mailbox) DraftReply(ctx context.Context, id string, r model.Reply) (model.DraftResult, error) {
+	o, err := b.reply(ctx, id, r)
 	if err != nil {
-		return "", err
+		return model.DraftResult{}, err
 	}
-	return b.insert(ctx, o, true)
+	draft, err := b.insert(ctx, o, true)
+	if err != nil {
+		return model.DraftResult{}, err
+	}
+	return model.DraftResult{ID: draft, ThreadID: *o.thread, To: o.to, CC: o.cc, BCC: o.bcc, Subject: o.subject}, nil
 }
 func (b *mailbox) DraftForward(ctx context.Context, id string, to []string) (string, error) {
 	o, err := b.forward(ctx, id, to)
@@ -285,8 +321,8 @@ func (b *mailbox) SendNew(ctx context.Context, d model.NewDraft) error {
 	_, err := b.insert(ctx, created(d), false)
 	return err
 }
-func (b *mailbox) SendReply(ctx context.Context, id, comment string) error {
-	o, err := b.reply(ctx, id, comment)
+func (b *mailbox) SendReply(ctx context.Context, id string, r model.Reply) error {
+	o, err := b.reply(ctx, id, r)
 	if err == nil {
 		_, err = b.insert(ctx, o, false)
 	}

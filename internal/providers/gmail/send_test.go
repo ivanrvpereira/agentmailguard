@@ -84,7 +84,7 @@ func TestSendReplyPostsTheQuotedReplyInTheThread(t *testing.T) {
 		if payload["threadId"] != "thread" || len(payload) != 2 {
 			t.Errorf("thread: %v", payload)
 		}
-		if m.Header.Get("Subject") != "Re: Plan" || m.Header.Get("To") != "Alice <alice@example.test>" || m.Header.Get("In-Reply-To") != "<m@example.test>" || strings.Join(strings.Fields(m.Header.Get("References")), " ") != "<r@example.test> <m@example.test>" {
+		if m.Header.Get("Subject") != "Re: Plan" || m.Header.Get("To") != "<alice@example.test>" || m.Header.Get("In-Reply-To") != "<m@example.test>" || strings.Join(strings.Fields(m.Header.Get("References")), " ") != "<r@example.test> <m@example.test>" {
 			t.Errorf("reply headers: %+v", m.Header)
 		}
 		if got := draftText(t, m); got != "Thanks\n\nOn 2026-09-01 00:00 UTC, alice@example.test wrote:\n> One\n> Two\n" {
@@ -92,7 +92,7 @@ func TestSendReplyPostsTheQuotedReplyInTheThread(t *testing.T) {
 		}
 		respond(w, map[string]string{"id": "sent"})
 	})
-	if err := c.Mailbox().SendReply(context.Background(), "original", "Thanks"); err != nil || sends != 1 {
+	if err := c.Mailbox().SendReply(context.Background(), "original", model.Reply{Body: "Thanks"}); err != nil || sends != 1 {
 		t.Fatalf("send=%v requests=%d", err, sends)
 	}
 }
@@ -153,7 +153,7 @@ func TestSendRefusesADraftSource(t *testing.T) {
 		respond(w, m)
 	})
 	b := c.Mailbox()
-	if err := b.SendReply(context.Background(), "d1", "x"); err == nil {
+	if err := b.SendReply(context.Background(), "d1", model.Reply{Body: "x"}); err == nil {
 		t.Fatal("reply to a draft sent")
 	}
 	if err := b.SendForward(context.Background(), "d1", []string{"a@example.test"}); err == nil {
@@ -188,7 +188,7 @@ func TestFailedSendIsNotRetried(t *testing.T) {
 			func() error {
 				return b.SendNew(ctx, model.NewDraft{To: []string{"a@example.test"}, Subject: "s", Body: "b"})
 			},
-			func() error { return b.SendReply(ctx, "o1", "b") },
+			func() error { return b.SendReply(ctx, "o1", model.Reply{Body: "b"}) },
 			func() error { return b.SendForward(ctx, "o1", []string{"a@example.test"}) },
 		} {
 			before := sends

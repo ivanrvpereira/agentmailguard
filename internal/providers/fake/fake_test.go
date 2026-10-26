@@ -285,7 +285,8 @@ func TestDraftsLandInDraftsFromTheAccountAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	created := draft.ID
-	reply, err := m.DraftReply(ctx, "old", "Thanks")
+	replied, err := m.DraftReply(ctx, "old", model.Reply{Body: "Thanks"})
+	reply := replied.ID
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +326,7 @@ func TestDraftsLandInDraftsFromTheAccountAddress(t *testing.T) {
 		}
 	}
 	for _, call := range []func() error{
-		func() error { _, err := m.DraftReply(ctx, "gone", "x"); return err },
+		func() error { _, err := m.DraftReply(ctx, "gone", model.Reply{Body: "x"}); return err },
 		func() error { _, err := m.DraftForward(ctx, "theirs", []string{"x@example.test"}); return err },
 	} {
 		if call() == nil {
@@ -341,14 +342,14 @@ func TestSendsLandInSentAndRecordKindAndSource(t *testing.T) {
 		func() error {
 			return m.SendNew(ctx, model.NewDraft{To: []string{"ana@example.test"}, Subject: "Hello", Body: "hi"})
 		},
-		func() error { return m.SendReply(ctx, "old", "Thanks") },
+		func() error { return m.SendReply(ctx, "old", model.Reply{Body: "Thanks"}) },
 		func() error { return m.SendForward(ctx, "new", []string{"x@example.test"}) },
 	} {
 		if err := call(); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if m.SendReply(ctx, "gone", "x") == nil {
+	if m.SendReply(ctx, "gone", model.Reply{Body: "x"}) == nil {
 		t.Fatal("reply to a missing message accepted")
 	}
 	sent, err := messages(m.List(ctx, "sent", model.PageRequest{}, false))
@@ -486,7 +487,8 @@ func TestRepliesAndForwardsJoinTheSourceConversationAndNewMailStartsItsOwn(t *te
 		t.Fatal(err)
 	}
 	created := draft.ID
-	reply, err := m.DraftReply(ctx, "old", "Thanks")
+	replied, err := m.DraftReply(ctx, "old", model.Reply{Body: "Thanks"})
+	reply := replied.ID
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +507,7 @@ func TestRepliesAndForwardsJoinTheSourceConversationAndNewMailStartsItsOwn(t *te
 		func() error {
 			return m.SendNew(ctx, model.NewDraft{To: []string{"ana@example.test"}, Subject: "Hello", Body: "hi"})
 		},
-		func() error { return m.SendReply(ctx, "old", "Thanks") },
+		func() error { return m.SendReply(ctx, "old", model.Reply{Body: "Thanks"}) },
 		func() error { return m.SendForward(ctx, "new", []string{"x@example.test"}) },
 	} {
 		if err := send(); err != nil {
@@ -551,7 +553,8 @@ func TestDatabaseFromBeforeThreadsOpensAndKeepsItsMail(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(threads(list), map[string]string{"old": "old"}) {
 		t.Fatalf("list threads=%v err=%v", threads(list), err)
 	}
-	reply, err := m.DraftReply(ctx, "old", "Thanks")
+	replied, err := m.DraftReply(ctx, "old", model.Reply{Body: "Thanks"})
+	reply := replied.ID
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,5 +673,37 @@ func TestOlderDatabaseGetsTheBccColumnAndNewMailKeepsEveryRecipientList(t *testi
 	}
 	if s := sent[0]; !reflect.DeepEqual([][]model.Address{s.To, s.CC, s.BCC}, [][]model.Address{address(), address(), address("ed@example.test")}) || *s.ContentType != model.Text || *s.Body != "line one\nline two" {
 		t.Fatalf("sent=%+v", s)
+	}
+}
+
+// Reply all follows the Gmail rule: the sender, and the original To and CC as copies, without the account's address
+// and without duplicates ignoring case; for a sent message, the original To and CC. The agent's CC and BCC are added.
+// An HTML reply keeps the quoted original below the agent's HTML. ReplyRecipients gives the same recipients.
+func TestReplyAllFollowsTheGmailRuleAndHTMLRepliesQuoteTheOriginal(t *testing.T) {
+	m, home := mailbox(t)
+	ctx := t.Context()
+	seed(t, home, `UPDATE messages SET to_addresses = '["DEMO@fake.test", "bo@example.test"]', cc_addresses = '["Bo@Example.test", "cy@example.test"]' WHERE id = 'old'`,
+		`INSERT INTO messages (account, id, folder, sender_address, to_addresses, cc_addresses, subject, body, received_at) VALUES ('demo@fake.test', 'mine', 'sent', 'demo@fake.test', '["dan@example.test", "demo@fake.test"]', '["eve@example.test"]', 'Plan', 'see <you>', '2026-03-02T09:00:00Z')`)
+	if got, err := m.ReplyRecipients(ctx, "old", true); err != nil || !reflect.DeepEqual(got, model.Recipients{To: []string{"ana@example.test"}, CC: []string{"bo@example.test", "cy@example.test"}, BCC: []string{}}) {
+		t.Fatalf("recipients=%+v %v", got, err)
+	}
+	draft, err := m.DraftReply(ctx, "old", model.Reply{Body: "Thanks", All: true, CC: []string{"CY@example.test", "flo@example.test"}, BCC: []string{"gus@example.test"}})
+	want := model.DraftResult{ID: draft.ID, ThreadID: "old", To: []string{"ana@example.test"}, CC: []string{"bo@example.test", "cy@example.test", "flo@example.test"}, BCC: []string{"gus@example.test"}, Subject: "Re: Old report"}
+	if err != nil || draft.ID == "" || !reflect.DeepEqual(draft, want) {
+		t.Fatalf("draft=%+v %v", draft, err)
+	}
+	sent, err := m.DraftReply(ctx, "mine", model.Reply{Body: "<p>Hi</p>", HTML: true, All: true})
+	if err != nil || !reflect.DeepEqual([][]string{sent.To, sent.CC}, [][]string{{"dan@example.test"}, {"eve@example.test"}}) {
+		t.Fatalf("sent reply=%+v %v", sent, err)
+	}
+	got, err := m.Get(ctx, []string{draft.ID, sent.ID}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := got[0]; !reflect.DeepEqual(g.BCC, []model.Address{{Address: "gus@example.test"}}) || *g.Body != "Thanks" || *g.ContentType != model.Text {
+		t.Fatalf("draft=%+v", g)
+	}
+	if g := got[1]; *g.ContentType != model.HTML || *g.Body != "<p>Hi</p><blockquote>see &lt;you&gt;</blockquote>" {
+		t.Fatalf("html reply=%q", *g.Body)
 	}
 }

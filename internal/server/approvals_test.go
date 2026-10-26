@@ -20,7 +20,8 @@ import (
 )
 
 // approvalGraph is a fake Graph API. A GET returns the current event. Every other request is a write:
-// it is recorded and answered with {"id":"w1"}, or with failStatus when that is set.
+// it is recorded and answered with {"id":"w1"}, a reply draft also with Graph's quoted body, or with failStatus
+// when that is set.
 type approvalGraph struct {
 	mu         sync.Mutex
 	writes     []meetingRequest
@@ -49,6 +50,10 @@ func (g *approvalGraph) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if status := g.failStatus.Load(); status != 0 {
 		w.WriteHeader(int(status))
 		io.WriteString(w, `{"error":{"code":"CANARY"}}`)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/createReply") || strings.HasSuffix(r.URL.Path, "/createReplyAll") {
+		io.WriteString(w, `{"id":"w1","body":{"contentType":"html","content":"<html><body>quoted</body></html>"}}`)
 		return
 	}
 	io.WriteString(w, `{"id":"w1"}`)
@@ -131,28 +136,31 @@ func greenMessage(t *testing.T, id string) string {
 	return string(data)
 }
 
-// The same call under an allow policy gives the expected provider write and result. A stored draft result keeps
-// only the draft IDs (stored).
+// The same call under an allow policy gives the expected provider writes and result: one write, and for a reply
+// draft the createReply and its PATCH. A stored draft result keeps only the draft IDs (stored).
 func TestApprovedActionMakesTheSameWriteAsTheAllowedCall(t *testing.T) {
-	for _, tc := range []struct{ name, op, params, event, stored string }{
-		{"draft.new", "draft.new", `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body"}`, organizerEvent, `{"id":"w1"}`},
+	for _, tc := range []struct {
+		name, op, params, event, stored string
+		writes                          int
+	}{
+		{"draft.new", "draft.new", `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body"}`, organizerEvent, `{"id":"w1"}`, 1},
 		// A reply or forward runs only when its source is not sealed, and the allowed forward only when Jev can read
 		// the forwarded text, so the Graph API serves a green message.
-		{"draft.reply", "draft.reply", `{"id":"m1","body":"CANARY reply"}`, greenMessage(t, "m1"), ""},
-		{"draft.forward", "draft.forward", `{"id":"m1","to":["a@example.test","b@example.test"]}`, greenMessage(t, "m1"), ""},
-		{"calendar.invite", "calendar.invite", `{"to":["a@example.test"],"subject":"CANARY","body":"CANARY body","start":"2026-10-09T09:00:00Z","end":"2026-10-09T10:00:00Z","location":"Room","online":false}`, organizerEvent, ""},
-		{"calendar.update duration and attendees", "calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","start":"2026-10-09T12:00:00+01:00","duration":"30m","add":["new@example.test"],"remove":["remove@example.test"],"online":true}`, organizerEvent, ""},
-		{"calendar.update start keeps duration", "calendar.update", `{"id":"e1","start":"2026-10-09T12:00:00+01:00"}`, organizerEvent, ""},
-		{"calendar.update end", "calendar.update", `{"id":"e1","end":"2026-10-09T11:30:00+01:00"}`, organizerEvent, ""},
-		{"calendar.update html body", "calendar.update", `{"id":"e1","body":"<b>CANARY</b> body","html":true}`, organizerEvent, ""},
-		{"calendar.cancel", "calendar.cancel", `{"id":"e1","comment":"CANARY comment"}`, organizerEvent, ""},
-		{"calendar.respond", "calendar.respond", `{"id":"e1","response":"tentative","comment":"CANARY comment"}`, attendeeEvent, ""},
+		{"draft.reply", "draft.reply", `{"id":"m1","body":"CANARY reply","all":true,"cc":["c@example.test"],"bcc":["d@example.test"],"html":true}`, greenMessage(t, "m1"), `{"id":"w1"}`, 2},
+		{"draft.forward", "draft.forward", `{"id":"m1","to":["a@example.test","b@example.test"]}`, greenMessage(t, "m1"), "", 1},
+		{"calendar.invite", "calendar.invite", `{"to":["a@example.test"],"subject":"CANARY","body":"CANARY body","start":"2026-10-09T09:00:00Z","end":"2026-10-09T10:00:00Z","location":"Room","online":false}`, organizerEvent, "", 1},
+		{"calendar.update duration and attendees", "calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","start":"2026-10-09T12:00:00+01:00","duration":"30m","add":["new@example.test"],"remove":["remove@example.test"],"online":true}`, organizerEvent, "", 1},
+		{"calendar.update start keeps duration", "calendar.update", `{"id":"e1","start":"2026-10-09T12:00:00+01:00"}`, organizerEvent, "", 1},
+		{"calendar.update end", "calendar.update", `{"id":"e1","end":"2026-10-09T11:30:00+01:00"}`, organizerEvent, "", 1},
+		{"calendar.update html body", "calendar.update", `{"id":"e1","body":"<b>CANARY</b> body","html":true}`, organizerEvent, "", 1},
+		{"calendar.cancel", "calendar.cancel", `{"id":"e1","comment":"CANARY comment"}`, organizerEvent, "", 1},
+		{"calendar.respond", "calendar.respond", `{"id":"e1","response":"tentative","comment":"CANARY comment"}`, attendeeEvent, "", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			allowed, allowedGraph := approvalDaemon(t, allowAll)
 			allowedGraph.event.Store(&tc.event)
 			status, want := accountRPC(t, allowed.s, tc.op, "work", tc.params)
-			if status != 200 || len(allowedGraph.recorded()) != 1 {
+			if status != 200 || len(allowedGraph.recorded()) != tc.writes {
 				t.Fatalf("allowed call: %d %s writes=%+v", status, want, allowedGraph.recorded())
 			}
 			d, graph := approvalDaemon(t, approveAll)
@@ -161,7 +169,7 @@ func TestApprovedActionMakesTheSameWriteAsTheAllowedCall(t *testing.T) {
 			if err := d.s.Approve(context.Background(), id); err != nil {
 				t.Fatal(err)
 			}
-			if got := graph.recorded(); len(got) != 1 || !reflect.DeepEqual(got[0], allowedGraph.recorded()[0]) {
+			if got := graph.recorded(); len(got) != tc.writes || !reflect.DeepEqual(got, allowedGraph.recorded()) {
 				t.Fatalf("approved writes=%+v; allowed=%+v", got, allowedGraph.recorded())
 			}
 			if tc.stored != "" {

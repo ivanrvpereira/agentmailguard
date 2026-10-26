@@ -165,6 +165,83 @@ type DraftResult struct {
 	Subject     string
 }
 
+// Reply is a reply to a message: Body (empty when absent) goes above the quoted original, plain text unless HTML,
+// which marks Body as HTML source sent unchanged. All replies to everyone on the original. CC and BCC are the
+// agent's extra recipients, added to the ones that the reply picks (Recipients.With), never replacing them.
+type Reply struct {
+	Body    string
+	HTML    bool
+	All     bool
+	CC, BCC []string
+}
+
+// ReplySource is what the reply-recipient rule reads from the original message: its bare addresses, and Sent when
+// the account sent it.
+type ReplySource struct {
+	From, ReplyTo, To, CC []string
+	Sent                  bool
+}
+
+// Recipients are the To, CC, and BCC addresses of a message.
+type Recipients struct{ To, CC, BCC []string }
+
+// ReplyRecipients is the reply-recipient rule, as Gmail on the web picks them. To is Reply-To, or From when there
+// is none; for a message that the account sent, To is the original To. Without all, CC is empty. With all, CC is
+// the original To and CC (for a sent message, the original CC), and the own addresses are removed from To and CC.
+// Each address appears once across To and CC, ignoring case. BCC is always empty: only the agent adds BCC.
+func ReplyRecipients(src ReplySource, all bool, own []string) Recipients {
+	to, cc := src.ReplyTo, []string{}
+	if len(to) == 0 {
+		to = src.From
+	}
+	switch {
+	case src.Sent:
+		to = src.To
+		if all {
+			cc = src.CC
+		}
+	case all:
+		cc = slices.Concat(src.To, src.CC)
+	}
+	seen := map[string]bool{}
+	if all {
+		for _, a := range own {
+			seen[strings.ToLower(a)] = true
+		}
+	}
+	pick := func(list []string) []string {
+		out := []string{}
+		for _, a := range list {
+			if k := strings.ToLower(a); a != "" && !seen[k] {
+				seen[k] = true
+				out = append(out, a)
+			}
+		}
+		return out
+	}
+	return Recipients{To: pick(to), CC: pick(cc), BCC: []string{}}
+}
+
+// With adds the agent's CC and BCC to r, never replacing an address of r: an address already in To, CC, or BCC,
+// ignoring case, is not added again.
+func (r Recipients) With(cc, bcc []string) Recipients {
+	seen := map[string]bool{}
+	for _, a := range slices.Concat(r.To, r.CC, r.BCC) {
+		seen[strings.ToLower(a)] = true
+	}
+	add := func(list, extra []string) []string {
+		out := append([]string{}, list...)
+		for _, a := range extra {
+			if k := strings.ToLower(a); !seen[k] {
+				seen[k] = true
+				out = append(out, a)
+			}
+		}
+		return out
+	}
+	return Recipients{To: append([]string{}, r.To...), CC: add(r.CC, cc), BCC: add(r.BCC, bcc)}
+}
+
 // PageRequest asks for one page of a list or search. Size 0 sends no size, so the provider's default page size
 // applies. Page "" is the first page; otherwise it is the Next of an earlier result for the same request: untrusted
 // agent input that the adapter checks for form; the Microsoft 365 mail adapter also refuses one from another request.
@@ -237,7 +314,13 @@ type Mailbox interface {
 	Categorize(ctx context.Context, ids []MessageID, add, remove []string) ([]MutationResult, error)
 	Categories(ctx context.Context) ([]string, error)
 	DraftNew(ctx context.Context, draft NewDraft) (DraftResult, error)
-	DraftReply(ctx context.Context, id MessageID, comment string) (MessageID, error)
+	// DraftReply and SendReply keep the reply in the conversation of message id. The reply goes to the recipients
+	// that the provider's reply picks plus the reply's CC and BCC; on Gmail and the fake provider those are
+	// ReplyRecipients.
+	DraftReply(ctx context.Context, id MessageID, reply Reply) (DraftResult, error)
+	// ReplyRecipients reads message id and gives the To and CC of a reply to it by the ReplyRecipients rule, with
+	// the account's own addresses; all is reply all. It writes nothing. BCC is empty.
+	ReplyRecipients(ctx context.Context, id MessageID, all bool) (Recipients, error)
 	// DraftForward must be provider-built; unsupported providers must fail, not substitute a new draft.
 	DraftForward(ctx context.Context, id MessageID, to []string) (MessageID, error)
 	// DraftUpdate is restricted to new drafts, and returns the possibly changed message ID.
@@ -245,7 +328,7 @@ type Mailbox interface {
 	// SendNew, SendReply, and SendForward send mail at once, with the same content as the matching draft
 	// operation. A send request that may have reached the provider is never sent again.
 	SendNew(ctx context.Context, draft NewDraft) error
-	SendReply(ctx context.Context, id MessageID, comment string) error
+	SendReply(ctx context.Context, id MessageID, reply Reply) error
 	SendForward(ctx context.Context, id MessageID, to []string) error
 }
 type Calendar interface {

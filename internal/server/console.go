@@ -261,7 +261,11 @@ type itemPage struct {
 	RefKind    string
 	Ref        []field
 	RefMissing bool
-	Pending    bool
+	// Reply is true for a reply. Recipients are who it goes to; RecipientsMissing is true when they could not be read.
+	Reply             bool
+	Recipients        []field
+	RecipientsMissing bool
+	Pending           bool
 }
 
 // referenceTimeout bounds the guarded read of the referenced message or event.
@@ -291,7 +295,30 @@ func (c *console) item(ctx context.Context, w http.ResponseWriter, id string, st
 	args := storedFields(item.Args)
 	page.Args = requestFields(args)
 	page.RefKind, page.Ref, page.RefMissing = c.reference(ctx, item, args)
+	if item.Op == "draft.reply" || item.Op == "mail.reply" {
+		page.Reply = true
+		page.Recipients, page.RecipientsMissing = c.replyRecipients(ctx, item, args)
+	}
 	render(w, status, "item", page)
+}
+
+// replyRecipients works out who a reply goes to: the To and CC that the guard reads from the original message, with
+// the request's cc and bcc added, bcc marked as hidden recipients. missing is true when they cannot be read.
+func (c *console) replyRecipients(ctx context.Context, item cache.Pending, args map[string]any) (out []field, missing bool) {
+	id, _ := args["id"].(string)
+	all, _ := args["all"].(bool)
+	st := c.s.current.Load()
+	if st == nil || st.accounts[item.Account] == nil || id == "" {
+		return nil, true
+	}
+	ctx, cancel := context.WithTimeout(ctx, referenceTimeout)
+	defer cancel()
+	r, err := st.accounts[item.Account].guard.ReplyRecipients(ctx, id, all)
+	if err != nil {
+		return nil, true
+	}
+	r = r.With(texts(args["cc"]), texts(args["bcc"]))
+	return []field{{"to", r.To}, {"cc", r.CC}, {"bcc (hidden recipients)", r.BCC}}, false
 }
 
 // requestFields shows each stored argument under its name: the recipients to, cc, and bcc first, bcc marked as
@@ -537,6 +564,9 @@ button{font-size:1.1rem;padding:.8rem 1.6rem;border-radius:.4rem;border:1px soli
 {{template "fields" .Args}}
 {{if .RefKind}}<h2>{{.RefKind}}</h2>
 {{if .RefMissing}}<p>{{.RefKind}} not available.</p>{{else}}{{template "fields" .Ref}}{{end}}{{end}}
+{{if .Reply}}<h2>Reply recipients</h2>
+{{if .RecipientsMissing}}<p>Reply recipients could not be read.</p>{{else}}<p>Worked out from the original message, with the cc and bcc of the request. Microsoft 365 picks its own list when it makes the reply.</p>
+{{template "fields" .Recipients}}{{end}}{{end}}
 {{if .Pending}}<form method="post" action="/a/{{.ID}}">
 <button class="approve" type="submit" name="decision" value="approve">Approve</button>
 <button class="deny" type="submit" name="decision" value="deny">Deny</button>

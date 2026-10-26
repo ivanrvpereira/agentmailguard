@@ -38,11 +38,7 @@ func TestDraftsCreateWithoutSendingAndUpdateOnlyNewDraft(t *testing.T) {
 	if draft.ID != "new-immutable" || err != nil {
 		t.Fatal(draft, err)
 	}
-	id, err := b.DraftReply(ctx, "m/1", "thanks")
-	if id != "new-immutable" || err != nil {
-		t.Fatal(id, err)
-	}
-	id, err = b.DraftForward(ctx, "m/1", []string{"b@example.test"})
+	id, err := b.DraftForward(ctx, "m/1", []string{"b@example.test"})
 	if id != "new-immutable" || err != nil {
 		t.Fatal(id, err)
 	}
@@ -50,10 +46,10 @@ func TestDraftsCreateWithoutSendingAndUpdateOnlyNewDraft(t *testing.T) {
 	if id != "draft" || err != nil {
 		t.Fatal(id, err)
 	}
-	if !reflect.DeepEqual(paths, []string{"POST /v1.0/me/messages", "POST /v1.0/me/messages/m%2F1/createReply", "POST /v1.0/me/messages/m%2F1/createForward", "PATCH /v1.0/me/messages/draft"}) {
+	if !reflect.DeepEqual(paths, []string{"POST /v1.0/me/messages", "POST /v1.0/me/messages/m%2F1/createForward", "PATCH /v1.0/me/messages/draft"}) {
 		t.Fatalf("unsafe endpoints %v", paths)
 	}
-	expected := []map[string]any{{"subject": "Hi", "body": map[string]any{"contentType": "text", "content": "text"}, "toRecipients": []any{map[string]any{"emailAddress": map[string]any{"address": "a@example.test"}}}, "ccRecipients": []any{}, "bccRecipients": []any{}}, {"comment": "thanks"}, {"comment": "", "message": map[string]any{"toRecipients": []any{map[string]any{"emailAddress": map[string]any{"address": "b@example.test"}}}}}, {"body": map[string]any{"contentType": "text", "content": "replacement"}}}
+	expected := []map[string]any{{"subject": "Hi", "body": map[string]any{"contentType": "text", "content": "text"}, "toRecipients": []any{map[string]any{"emailAddress": map[string]any{"address": "a@example.test"}}}, "ccRecipients": []any{}, "bccRecipients": []any{}}, {"comment": "", "message": map[string]any{"toRecipients": []any{map[string]any{"emailAddress": map[string]any{"address": "b@example.test"}}}}}, {"body": map[string]any{"contentType": "text", "content": "replacement"}}}
 	if !reflect.DeepEqual(bodies, expected) {
 		t.Fatalf("draft bodies %v", bodies)
 	}

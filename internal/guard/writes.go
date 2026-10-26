@@ -6,6 +6,7 @@ import (
 
 	"github.com/ivanrvpereira/agentmailguard/internal/audit"
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
+	"github.com/ivanrvpereira/agentmailguard/internal/content"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
@@ -347,8 +348,48 @@ func (g *Guard) DraftNew(ctx context.Context, draft model.NewDraft) (model.Draft
 	}
 	return made, nil
 }
-func (g *Guard) DraftReply(ctx context.Context, id, comment string) (string, error) {
-	return g.compose(ctx, audit.DraftReply, id, bodyArgs{id, comment}, func() (string, error) { return g.mailbox.DraftReply(ctx, id, comment) })
+
+// ReplyRecipients gives the To and CC that a reply to message id goes to, worked out from the original by the
+// adapter (all: reply all), each address cleaned. A provider whose reply picks its own recipients makes the final
+// list at send time. A failed read gives sourceUnavailable, never an empty list.
+func (g *Guard) ReplyRecipients(ctx context.Context, id string, all bool) (model.Recipients, error) {
+	if id == "" {
+		return model.Recipients{}, GuardError("invalid request")
+	}
+	r, err := g.mailbox.ReplyRecipients(ctx, id, all)
+	if ctx.Err() != nil {
+		return model.Recipients{}, ctx.Err()
+	}
+	if err != nil {
+		return model.Recipients{}, sourceUnavailable
+	}
+	clean := func(v []string) []string {
+		out := make([]string, 0, len(v))
+		for _, s := range v {
+			out = append(out, content.CleanSubject(s))
+		}
+		return out
+	}
+	return model.Recipients{To: clean(r.To), CC: clean(r.CC), BCC: []string{}}, nil
+}
+
+// DraftReply returns the reply draft that the provider made, and the screening verdict of its source from the
+// cache after the write: "" when there is none.
+func (g *Guard) DraftReply(ctx context.Context, id string, reply model.Reply) (model.DraftResult, model.Verdict, error) {
+	var made model.DraftResult
+	_, err := g.compose(ctx, audit.DraftReply, id, newReplyArgs(id, reply), func() (string, error) {
+		var err error
+		made, err = g.mailbox.DraftReply(ctx, id, reply)
+		return made.ID, err
+	})
+	if err != nil {
+		return model.DraftResult{}, "", err
+	}
+	var verdict model.Verdict
+	if rows, err := g.cached(ctx, []string{id}); err == nil {
+		verdict = rows[id].Verdict
+	}
+	return made, verdict, nil
 }
 func (g *Guard) DraftForward(ctx context.Context, id string, to []string) (string, error) {
 	return g.compose(ctx, audit.DraftForward, id, forwardArgs{id, to}, func() (string, error) { return g.mailbox.DraftForward(ctx, id, to) })
@@ -367,8 +408,8 @@ func (g *Guard) SendNew(ctx context.Context, draft model.NewDraft) error {
 	_, err := g.compose(ctx, audit.MailSend, "", newArgs(draft), func() (string, error) { return "", g.mailbox.SendNew(ctx, draft) })
 	return err
 }
-func (g *Guard) SendReply(ctx context.Context, id, comment string) error {
-	_, err := g.compose(ctx, audit.MailReply, id, bodyArgs{id, comment}, func() (string, error) { return "", g.mailbox.SendReply(ctx, id, comment) })
+func (g *Guard) SendReply(ctx context.Context, id string, reply model.Reply) error {
+	_, err := g.compose(ctx, audit.MailReply, id, newReplyArgs(id, reply), func() (string, error) { return "", g.mailbox.SendReply(ctx, id, reply) })
 	return err
 }
 func (g *Guard) SendForward(ctx context.Context, id string, to []string) error {

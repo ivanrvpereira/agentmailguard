@@ -16,7 +16,7 @@ func (w *writer) SendNew(context.Context, model.NewDraft) error {
 	_, err := w.write("mail_send", nil)
 	return err
 }
-func (w *writer) SendReply(context.Context, string, string) error {
+func (w *writer) SendReply(context.Context, string, model.Reply) error {
 	_, err := w.write("mail_reply", nil)
 	return err
 }
@@ -33,7 +33,9 @@ var sendCalls = []struct {
 	{"mail.send", func(ctx context.Context, g *guard.Guard) error {
 		return g.SendNew(ctx, model.NewDraft{To: []string{"CANARY@example.test"}, Subject: "CANARY subject", Body: "CANARY body"})
 	}},
-	{"mail.reply", func(ctx context.Context, g *guard.Guard) error { return g.SendReply(ctx, "m1", "CANARY reply") }},
+	{"mail.reply", func(ctx context.Context, g *guard.Guard) error {
+		return g.SendReply(ctx, "m1", model.Reply{Body: "CANARY reply"})
+	}},
 	{"mail.forward", func(ctx context.Context, g *guard.Guard) error {
 		return g.SendForward(ctx, "m1", []string{"CANARY@example.test"})
 	}},
@@ -103,7 +105,7 @@ func TestApproveStoresTheSendInItsAPIShape(t *testing.T) {
 	policy.Base.MailSend = config.Approve
 	params := map[string]string{
 		"mail.send":    `{"to":["CANARY@example.test"],"cc":[],"bcc":[],"subject":"CANARY subject","body":"CANARY body","html":false}`,
-		"mail.reply":   `{"id":"m1","body":"CANARY reply"}`,
+		"mail.reply":   `{"id":"m1","body":"CANARY reply","html":false,"all":false,"cc":[],"bcc":[]}`,
 		"mail.forward": `{"id":"m1","to":["CANARY@example.test"]}`,
 	}
 	for _, tc := range sendCalls {
@@ -153,7 +155,7 @@ func TestSendFromASealedSourceIsAlwaysRefused(t *testing.T) {
 func TestJevFlagHoldsAnAllowedSend(t *testing.T) {
 	wants := map[string]map[string]any{
 		"mail.send":    {"to": []any{"CANARY@example.test"}, "cc": []any{}, "bcc": []any{}, "subject": "CANARY subject", "body": "CANARY body", "html": false},
-		"mail.reply":   {"body": "CANARY reply"},
+		"mail.reply":   {"body": "CANARY reply", "html": false, "all": false, "cc": []any{}, "bcc": []any{}, "reply_recipients": map[string]any{"to": []string{"ana@example.test"}, "cc": []string{}}},
 		"mail.forward": {"to": []any{"CANARY@example.test"}, "forwarded_message": map[string]any{"subject": "m1", "body": "BODYTEXT [L1]"}},
 	}
 	for _, tc := range sendCalls {
