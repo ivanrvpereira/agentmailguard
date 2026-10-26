@@ -2,8 +2,6 @@ package guard_test
 
 import (
 	"context"
-	"reflect"
-	"slices"
 	"testing"
 	"time"
 
@@ -88,63 +86,12 @@ func TestPrivateEventsScreenEveryReadWithoutBody(t *testing.T) {
 			t.Fatal("private event body reached screener")
 		}
 	}
-	if _, err := g.CalendarList(context.Background(), now, now.Add(90*24*time.Hour+time.Hour), model.EventFilter{}); err != nil {
+	if _, err := g.CalendarList(context.Background(), now, now.Add(90*24*time.Hour+time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	for _, end := range []time.Time{now, now.Add(-time.Hour), now.Add(90*24*time.Hour + time.Hour + time.Nanosecond)} {
-		if _, err := g.CalendarList(context.Background(), now, end, model.EventFilter{}); err == nil {
+		if _, err := g.CalendarList(context.Background(), now, end); err == nil {
 			t.Fatal("invalid calendar range accepted")
 		}
-	}
-}
-
-// eventList is a calendar that lists its events in order.
-type eventList []model.Event
-
-func (l eventList) List(context.Context, time.Time, time.Time) ([]model.Event, error) { return l, nil }
-func (l eventList) Get(context.Context, string) (model.Event, error) {
-	return model.Event{}, model.MailboxError("NotFoundError")
-}
-
-func TestCalendarListFilterScreensAndReturnsOnlyMatchingEventsInOrder(t *testing.T) {
-	text, html := model.Text, model.HTML
-	events := eventList{
-		{ID: "subject", Subject: "Budget review", Start: now, End: now.Add(time.Hour), Organizer: model.Address{Name: "Ana Lima", Address: "a1@example.test"}, Attendees: []model.Attendee{{Address: model.Address{Name: "Bob", Address: "b1@example.test"}}}, Body: ptr("notes"), ContentType: &text},
-		{ID: "location", Subject: "Sync", Location: "Budget room", Start: now, End: now.Add(time.Hour), Organizer: model.Address{Address: "ana@example.test"}, Attendees: []model.Attendee{{Address: model.Address{Address: "carla@example.test"}}}, Body: ptr(""), ContentType: &text},
-		{ID: "body", Subject: "Plan", Start: now, End: now.Add(time.Hour), Organizer: model.Address{Name: "Olga", Address: "olga@example.test"}, Attendees: []model.Attendee{{Address: model.Address{Address: "bobby@example.test"}}}, Body: ptr("<p>The BUDGET plan</p>"), ContentType: &html},
-		{ID: "private", Subject: "Private", Start: now, End: now.Add(time.Hour), Organizer: model.Address{Address: "olga@example.test"}, IsPrivate: true, Body: ptr("budget"), ContentType: &text},
-	}
-	subjects := map[string]string{"Budget review": "subject", "Sync": "location", "Plan": "body", "Private": "private"}
-	all := []string{"subject", "location", "body", "private"}
-	for _, tc := range []struct {
-		name   string
-		filter model.EventFilter
-		want   []string
-	}{
-		{"no filter", model.EventFilter{}, all},
-		{"empty fields", model.EventFilter{Text: ptr(""), Organizer: ptr(""), Attendee: ptr("")}, all},
-		{"text in subject, location, or body, never a private body", model.EventFilter{Text: ptr("budget")}, []string{"subject", "location", "body"}},
-		{"organizer name or address", model.EventFilter{Organizer: ptr("ANA")}, []string{"subject", "location"}},
-		{"attendee name or address", model.EventFilter{Attendee: ptr("bob")}, []string{"subject", "body"}},
-		{"every field must match", model.EventFilter{Text: ptr("budget"), Organizer: ptr("olga")}, []string{"body"}},
-		{"no match", model.EventFilter{Attendee: ptr("nobody")}, []string{}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s := &subjectScreener{}
-			g, _, _ := policyGuard(t, &mailbox{}, events, s, allowAll)
-			got, err := g.CalendarList(t.Context(), now, now.Add(time.Hour), tc.filter)
-			ids := []string{}
-			for _, v := range got {
-				ids = append(ids, v.ID)
-			}
-			// Screening runs in parallel, so its order is not fixed.
-			screened := []string{}
-			for _, subject := range s.screened {
-				screened = append(screened, subjects[subject])
-			}
-			if err != nil || !reflect.DeepEqual(ids, tc.want) || !reflect.DeepEqual(slices.Sorted(slices.Values(screened)), slices.Sorted(slices.Values(tc.want))) {
-				t.Fatalf("listed=%v screened=%v err=%v, want %v", ids, screened, err, tc.want)
-			}
-		})
 	}
 }

@@ -186,34 +186,6 @@ type Calendar interface {
 	Get(ctx context.Context, id EventID) (Event, error)
 }
 
-// EventFilter selects listed events. A nil or empty field matches every event; a set field matches a
-// substring, ignoring case.
-type EventFilter struct{ Text, Organizer, Attendee *string }
-
-// Match reports whether e matches every set field. Text matches the subject, the location, or body, the
-// rendered body text, which never counts for a private event. Organizer matches the organizer's name or
-// address, and Attendee the name or address of any attendee.
-func (f EventFilter) Match(e Event, body string) bool {
-	if e.IsPrivate {
-		body = ""
-	}
-	if f.Text != nil && *f.Text != "" && !contains(*f.Text, e.Subject, e.Location, body) {
-		return false
-	}
-	if f.Organizer != nil && *f.Organizer != "" && !contains(*f.Organizer, e.Organizer.Name, e.Organizer.Address) {
-		return false
-	}
-	return f.Attendee == nil || *f.Attendee == "" || slices.ContainsFunc(e.Attendees, func(a Attendee) bool {
-		return contains(*f.Attendee, a.Address.Name, a.Address.Address)
-	})
-}
-
-// contains reports whether any of texts contains term, ignoring case.
-func contains(term string, texts ...string) bool {
-	term = strings.ToLower(term)
-	return slices.ContainsFunc(texts, func(s string) bool { return strings.Contains(strings.ToLower(s), term) })
-}
-
 type NewEvent struct {
 	Subject, Body, Location string
 	Start, End              time.Time

@@ -185,11 +185,8 @@ type organizeParam struct {
 	Apply bool    `json:"apply"`
 }
 type calendarParam struct {
-	Start     string  `json:"start"`
-	End       string  `json:"end"`
-	Text      *string `json:"text"`
-	Organizer *string `json:"organizer"`
-	Attendee  *string `json:"attendee"`
+	Start string `json:"start"`
+	End   string `json:"end"`
 }
 type availabilityParam struct {
 	To    []string `json:"to"`
@@ -444,13 +441,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		if e != nil || e2 != nil || !last.After(first) || last.Sub(first) > 90*24*time.Hour+time.Hour {
 			return nil, errInvalid
 		}
-		for _, v := range []*string{p.Text, p.Organizer, p.Attendee} {
-			if v != nil && !validString(*v, 4096, true) {
-				return nil, errInvalid
-			}
-		}
-		filter := model.EventFilter{Text: p.Text, Organizer: p.Organizer, Attendee: p.Attendee}
-		call = func(a *account) (any, error) { return a.guard.CalendarList(ctx, first, last, filter) }
+		call = func(a *account) (any, error) { return a.guard.CalendarList(ctx, first, last) }
 	case "calendar.availability":
 		var p availabilityParam
 		if params(r.Params, &p) != nil || !listValid(p.To, 1, model.MaxAvailabilityAddresses) {

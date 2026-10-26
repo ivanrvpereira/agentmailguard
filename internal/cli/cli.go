@@ -601,7 +601,7 @@ func mailOrganizeCmd(r *runner) *cobra.Command {
 }
 
 func calendarCmd(r *runner) *cobra.Command {
-	from, to, text, organizer, attendee := "today", "+7d", "", "", ""
+	from, to := "today", "+7d"
 	list := r.leaf("list", "List calendar events in a range", 0, 0, func(c *cobra.Command, _ []string) error {
 		now := r.now()
 		start, e := parseDay(from, now, now)
@@ -612,17 +612,10 @@ func calendarCmd(r *runner) *cobra.Command {
 		if e != nil {
 			return errUsage
 		}
-		p := map[string]any{"start": start.Format(time.RFC3339), "end": end.Format(time.RFC3339)}
-		optional(c, p, "text", &text)
-		optional(c, p, "organizer", &organizer)
-		optional(c, p, "attendee", &attendee)
-		return r.call(c, "calendar.list", p, false)
+		return r.call(c, "calendar.list", map[string]any{"start": start.Format(time.RFC3339), "end": end.Format(time.RFC3339)}, false)
 	})
 	list.Flags().StringVar(&from, "from", from, "start as today, +Nd, or YYYY-MM-DD")
 	list.Flags().StringVar(&to, "to", to, "end as today, +Nd, or YYYY-MM-DD")
-	list.Flags().StringVar(&text, "text", "", "text to match in the subject, location, or body (never the body of a private event)")
-	list.Flags().StringVar(&organizer, "organizer", "", "organizer name or address to match")
-	list.Flags().StringVar(&attendee, "attendee", "", "attendee name or address to match")
 	get := r.leaf("get ID", "Show one calendar event", 1, 1, func(c *cobra.Command, args []string) error {
 		return r.call(c, "calendar.get", map[string]any{"id": args[0]}, false)
 	})

@@ -44,15 +44,3 @@ func TestDecisionPrecedenceAndInvalidScores(t *testing.T) {
 		}
 	}
 }
-
-// The agent never sees the body of a private event, so a text filter must not reveal it either.
-func TestEventFilterNeverMatchesThePrivateBody(t *testing.T) {
-	text := "budget"
-	filter := model.EventFilter{Text: &text}
-	if !filter.Match(model.Event{}, "Budget review") {
-		t.Fatal("a public body did not match")
-	}
-	if filter.Match(model.Event{IsPrivate: true}, "Budget review") {
-		t.Fatal("a private body matched")
-	}
-}
