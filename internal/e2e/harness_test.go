@@ -140,23 +140,36 @@ func exitCode(err error) int {
 // serve runs amgd serve on the home and waits until it listens. All that the daemon writes to stderr goes to the
 // daemon log, with no line limit. Wait returns an error when the daemon fails, also when the race detector found
 // a data race (exit code 66), or when the copy of stderr fails; stop reports it.
+//
+// freeAddress closes its port before the daemon opens it, so another process can take the port in between. A
+// start that fails only for that reason runs again on a new free port, at most three times in all.
 func (s *server) serve() {
 	s.t.Helper()
-	listening, done := make(chan struct{}), make(chan error, 1)
-	cmd := exec.Command(amgdBinary, "--home", s.home, "serve", "--listen", s.api)
-	cmd.Env = s.serverEnv()
-	cmd.Stderr = &logWriter{s: s, listening: listening}
-	if err := cmd.Start(); err != nil {
-		s.t.Fatal(err)
-	}
-	go func() { done <- cmd.Wait() }()
-	select {
-	case <-listening:
-	case err := <-done:
-		s.t.Fatalf("daemon stopped: %v\n%s", err, s.logText())
-	case <-time.After(processTimeout):
-		_ = cmd.Process.Kill()
-		s.t.Fatalf("daemon did not listen\n%s", s.logText())
+	var cmd *exec.Cmd
+	var done chan error
+	for attempt := 1; ; attempt++ {
+		mark := s.logLen()
+		listening := make(chan struct{})
+		done = make(chan error, 1)
+		cmd = exec.Command(amgdBinary, "--home", s.home, "serve", "--listen", s.api)
+		cmd.Env = s.serverEnv()
+		cmd.Stderr = &logWriter{s: s, listening: listening}
+		if err := cmd.Start(); err != nil {
+			s.t.Fatal(err)
+		}
+		go func() { done <- cmd.Wait() }()
+		select {
+		case <-listening:
+		case err := <-done:
+			if attempt < 3 && s.movePort(mark) {
+				continue
+			}
+			s.t.Fatalf("daemon stopped: %v\n%s", err, s.logText())
+		case <-time.After(processTimeout):
+			_ = cmd.Process.Kill()
+			s.t.Fatalf("daemon did not listen\n%s", s.logText())
+		}
+		break
 	}
 	s.pid = cmd.Process.Pid
 	var once sync.Once
@@ -175,6 +188,43 @@ func (s *server) serve() {
 		})
 	}
 	s.t.Cleanup(s.stop)
+}
+
+// movePort handles a daemon start, logged after mark, that failed only because its API or console port was
+// taken: it moves that address to a new free port and removes the lines of the failed start from the log. It
+// reports whether it moved an address.
+func (s *server) movePort(mark int) bool {
+	s.t.Helper()
+	s.mu.Lock()
+	failed := s.log.String()[mark:]
+	s.mu.Unlock()
+	switch {
+	case strings.HasSuffix(failed, "error: listener unavailable\n"):
+		s.api = freeAddress(s.t)
+	case strings.HasSuffix(failed, "error: console listener unavailable\n"):
+		path := filepath.Join(s.home, "config.toml")
+		config, err := os.ReadFile(path)
+		if err != nil || !bytes.Contains(config, []byte(s.console)) {
+			s.t.Fatalf("console address %s not in config.toml: %v", s.console, err)
+		}
+		next := freeAddress(s.t)
+		if err := os.WriteFile(path, bytes.ReplaceAll(config, []byte(s.console), []byte(next)), 0600); err != nil {
+			s.t.Fatal(err)
+		}
+		s.console = next
+	default:
+		return false
+	}
+	s.mu.Lock()
+	s.log.Truncate(mark)
+	s.mu.Unlock()
+	return true
+}
+
+func (s *server) logLen() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.log.Len()
 }
 
 // logWriter appends all that the daemon writes to stderr to the daemon log, and closes listening when the daemon
