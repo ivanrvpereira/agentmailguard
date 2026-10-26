@@ -51,7 +51,8 @@ func (c *calendar) Get(ctx context.Context, id string) (model.Event, error) {
 
 // Search posts one Microsoft Search request for events in the primary calendar, without size, so Graph's default
 // page applies (https://learn.microsoft.com/en-us/graph/search-concept-events). A hit carries only some event
-// fields, so each hit is read again with Get.
+// fields, so each hit is read again with Get. Hit IDs come in the EWS format, which /me/events/{id} refuses (checked
+// live on 2026-10-26), so they are first translated to REST immutable IDs, the IDs that List and Get return.
 func (c *calendar) Search(ctx context.Context, query string) ([]model.Event, error) {
 	body := map[string]any{"requests": []any{map[string]any{"entityTypes": []string{"event"}, "query": map[string]any{"queryString": query}}}}
 	d, err := c.c.request(ctx, http.MethodPost, c.c.endpoint("/search/query", nil), body, true)
@@ -81,6 +82,13 @@ func (c *calendar) Search(ctx context.Context, query string) ([]model.Event, err
 			return nil, invalidMetadata
 		}
 	}
+	if len(ids) == 0 {
+		return []model.Event{}, nil
+	}
+	ids, err = c.translate(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]model.Event, len(ids))
 	errs := make([]error, len(ids))
 	var wg sync.WaitGroup
@@ -91,6 +99,31 @@ func (c *calendar) Search(ctx context.Context, query string) ([]model.Event, err
 	for _, err := range errs {
 		if err != nil {
 			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// translate turns EWS IDs into REST immutable IDs with one translateExchangeIds request
+// (https://learn.microsoft.com/en-us/graph/api/user-translateexchangeids). It fails unless every ID comes back
+// translated, in the request order.
+func (c *calendar) translate(ctx context.Context, ids []string) ([]string, error) {
+	body := map[string]any{"inputIds": ids, "sourceIdType": "ewsId", "targetIdType": "restImmutableEntryId"}
+	d, err := c.c.request(ctx, http.MethodPost, c.c.endpoint("/me/translateExchangeIds", nil), body, false)
+	if err != nil {
+		return nil, err
+	}
+	results, err := pageItems(d)
+	if err != nil {
+		return nil, err
+	}
+	if len(results) != len(ids) {
+		return nil, invalidMetadata
+	}
+	out := make([]string, len(ids))
+	for i, r := range results {
+		if out[i] = text(r, "targetId"); out[i] == "" || text(r, "sourceId") != ids[i] {
+			return nil, invalidMetadata
 		}
 	}
 	return out, nil
