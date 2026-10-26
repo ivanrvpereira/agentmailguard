@@ -20,14 +20,14 @@ env:
 
 jobs:
   checks:
-    name: Go (${{ matrix.os }}, ${{ matrix.go-version }})
-    # A local runner (gh local-runner) sets LINUX_RUNNER or MACOS_RUNNER while it runs; otherwise GitHub-hosted.
-    runs-on: ${{ (matrix.os == 'ubuntu-24.04' && vars.LINUX_RUNNER) || (matrix.os == 'macos-15' && vars.MACOS_RUNNER) || matrix.os }}
+    name: Go (${{ matrix.go-version }})
+    # Linux only: `make` on a Mac covers the macOS-only code (the Keychain backend and its tests).
+    # A local runner (gh local-runner) sets LINUX_RUNNER while it runs; otherwise GitHub-hosted.
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
         go-version: ["1.26.x", stable]
     steps:
       - name: Check out source
