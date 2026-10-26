@@ -283,17 +283,17 @@ func TestCalendarWriteFailureAndCancellationBoundaries(t *testing.T) {
 				defer cancel()
 				var cal model.Calendar = w
 				want := ""
-				written := false
+				written, canceled := false, false
 				switch mode {
 				case "readonly":
 					cal = w.calendar
 					want = "calendar writes are not supported for this account"
 				case "cancel before":
 					cancel()
-					want = context.Canceled.Error()
+					canceled = true
 				case "cancel after fetch":
 					w.afterGet = cancel
-					want = context.Canceled.Error()
+					canceled = true
 				case "cancel after success":
 					w.afterWrite = cancel
 					written = true
@@ -314,8 +314,8 @@ func TestCalendarWriteFailureAndCancellationBoundaries(t *testing.T) {
 					}
 				}
 				err := callCalendarWrite(ctx, g, op)
-				if want == "" && err != nil || want != "" && (err == nil || err.Error() != want) {
-					t.Fatalf("error=%v want=%q", err, want)
+				if canceled && !errors.Is(err, context.Canceled) || !canceled && (want == "" && err != nil || want != "" && (err == nil || err.Error() != want)) {
+					t.Fatalf("error=%v want=%q canceled=%t", err, want, canceled)
 				}
 				attempts := len(w.invites) + len(w.ids)
 				if written || mode == "provider failure" {
