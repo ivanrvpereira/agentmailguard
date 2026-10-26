@@ -77,7 +77,7 @@ type Config struct {
 	Accounts       []Account
 	Screening      Screening
 	Console        Console
-	// Backend is the credential store: keychain or file.
+	// Backend is the credential store: file (the default) or keychain.
 	Backend string
 }
 
@@ -175,7 +175,7 @@ func ValidEmail(email string) bool {
 }
 
 func validate(document map[string]any, exists bool) (Config, error) {
-	c := Config{Screening: Screening{Provider: "jev"}, Console: Console{Listen: DefaultConsoleListen}, Backend: "keychain", Accounts: []Account{}}
+	c := Config{Screening: Screening{Provider: "jev"}, Console: Console{Listen: DefaultConsoleListen}, Backend: "file", Accounts: []Account{}}
 	for _, key := range slices.Sorted(maps.Keys(document)) {
 		switch key {
 		case "version", "default_account", "accounts", "policy", "screening", "console", "credentials":
@@ -298,7 +298,7 @@ func account(alias string, value any, global Policy) (Account, error) {
 func credentialBackend(document map[string]any) (string, error) {
 	value, exists := document["credentials"]
 	if !exists {
-		return "keychain", nil
+		return "file", nil
 	}
 	table, ok := value.(map[string]any)
 	if !ok {

@@ -70,8 +70,8 @@ Provider OAuth credentials, the screening key, and the console password hash are
 `amg` uses the daemon API for every command and cannot load daemon credentials.
 `amgd config set` reads secrets from stdin only, never from arguments. The screening key and the console password never go to `config.toml`. The Gmail `client_secret` of a desktop app is not confidential and stays in `config.toml`.
 Every sign-in must return the email that `config.toml` has for the account. Otherwise `amgd` saves nothing, so an alias cannot silently point to another mailbox.
-macOS supports the native Keychain backend.
-Linux requires the password-encrypted file backend.
+The password-encrypted file backend is the default on macOS and Linux.
+macOS also supports the native Keychain backend.
 
 Keep the daemon home private and outside the source checkout.
 Do not commit configuration, encrypted credential files, databases, audit files, or environment files.

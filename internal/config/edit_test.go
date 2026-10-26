@@ -166,7 +166,7 @@ func TestListShowsEffectiveValuesAndMarksDefaults(t *testing.T) {
 		"accounts.home.client_secret":           {Key: "accounts.home.client_secret", Value: "set", Secret: true},
 		"accounts.work.email":                   {Key: "accounts.work.email", Value: "work@example.test"},
 		"console.listen":                        {Key: "console.listen", Value: "localhost:8788", Default: true},
-		"credentials.backend":                   {Key: "credentials.backend", Value: "keychain", Default: true},
+		"credentials.backend":                   {Key: "credentials.backend", Value: "file", Default: true},
 		"screening.provider":                    {Key: "screening.provider", Value: "jev", Default: true},
 		"screening.endpoint":                    {Key: "screening.endpoint", Default: true},
 		"screening.model":                       {Key: "screening.model", Default: true},

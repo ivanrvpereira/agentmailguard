@@ -198,7 +198,7 @@ For systemd and launchd, see [Run as a service](docs/setup.md#run-as-a-service).
 
 ## Fake provider
 
-A fake account has a local mailbox and calendar in a SQLite file. Use it to run real workflows through the real `amg` and daemon without a provider or a login. With the default Keychain backend, the daemon still reads the Keychain item at start, even for fake accounts. For a home without Keychain access, set `[credentials] backend = "file"` and `AMG_CREDENTIALS_PASSWORD`.
+A fake account has a local mailbox and calendar in a SQLite file. Use it to run real workflows through the real `amg` and daemon without a provider or a login. With the default file backend, set `AMG_CREDENTIALS_PASSWORD` or enter the password when `amgd` asks for it.
 
 ```sh
 amgd account add demo --provider fake
@@ -280,12 +280,13 @@ The optional configuration table selects the backend:
 
 ```toml
 [credentials]
-backend = "keychain" # Default. Use "file" for password-encrypted storage.
+backend = "file" # Default. Use "keychain" for the macOS Keychain.
 ```
 
-An absent table selects `keychain`.
-Linux requires `backend = "file"` because the native Keychain backend is macOS-only.
-On Linux, run `amgd config set credentials.backend file` on a new home before the first `amgd account add`.
+An absent table selects `file`.
+Linux supports only `file` because the native Keychain backend is macOS-only.
+On macOS, run `amgd config set credentials.backend keychain` on a new home before the first `amgd account add` to use the Keychain.
+Earlier versions selected `keychain` when the table was absent. A home that keeps its record in the Keychain must now set `backend = "keychain"`, or copy the record to the file backend as described in [Copy credentials to the other backend](#copy-credentials-to-the-other-backend).
 Any other key or value is a configuration error.
 Neither backend detects rollback: another process under the same user can restore an older valid credential record.
 
@@ -330,7 +331,8 @@ No `amg` command transfers a provider token or screening key to the daemon.
 ### Copy credentials to the other backend
 
 1. Stop the daemon.
-2. Run one command on the daemon host:
+2. Make sure `[credentials] backend` names the source backend. To copy from the Keychain on a home without the table, run `amgd config set credentials.backend keychain` first, because an absent table selects `file`.
+3. Run one command on the daemon host:
 
 ```sh
 amgd store migrate --to file
@@ -338,7 +340,7 @@ amgd store migrate --to file
 amgd store migrate --to keychain
 ```
 
-3. Start the daemon with the selected backend.
+4. Start the daemon with the selected backend.
 
 Migration copies the whole record from the configured backend to the other backend under the same-home lock.
 Then it sets `[credentials] backend` in `config.toml` to the new backend and prints `restart needed: credentials.backend changed`.

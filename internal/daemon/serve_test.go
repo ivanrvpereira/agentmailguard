@@ -36,7 +36,7 @@ func TestServeExposureWarningCheckListAndBoundedShutdown(t *testing.T) {
 		listen            string
 		warning, loggedIn bool
 	}{{"127.0.0.1:0", false, true}, {"0.0.0.0:0", true, true}, {"127.0.0.1:0", false, false}} {
-		home := writeHome(t, "version = 1\ndefault_account = 'work'\n[console]\nlisten = '"+freeAddress(t)+"'\n[accounts.work]\nprovider = 'm365'\nemail = 'synthetic@example.test'\nclient_id = 'synthetic'\ntenant_id = 'synthetic'\n")
+		home := writeHome(t, "version = 1\ndefault_account = 'work'\n[credentials]\nbackend = 'keychain'\n[console]\nlisten = '"+freeAddress(t)+"'\n[accounts.work]\nprovider = 'm365'\nemail = 'synthetic@example.test'\nclient_id = 'synthetic'\ntenant_id = 'synthetic'\n")
 		k := &keychain{}
 		store := credentials.New(k, home)
 		if err := store.SaveScreeningKey(t.Context(), "private-jev-canary"); err != nil {
@@ -77,7 +77,7 @@ func TestServeExposureWarningCheckListAndBoundedShutdown(t *testing.T) {
 
 func TestServeReportsRefusedSignInOnTheAccountLine(t *testing.T) {
 	t.Parallel()
-	home := writeHome(t, "version = 1\ndefault_account = 'good'\n[console]\nlisten = '"+freeAddress(t)+"'\n[accounts.good]\nprovider = 'gmail'\nemail = 'good@example.test'\nclient_id = 'synthetic'\nclient_secret = 'synthetic'\n[accounts.revoked]\nprovider = 'gmail'\nemail = 'revoked@example.test'\nclient_id = 'revoked'\nclient_secret = 'synthetic'\n")
+	home := writeHome(t, "version = 1\ndefault_account = 'good'\n[credentials]\nbackend = 'keychain'\n[console]\nlisten = '"+freeAddress(t)+"'\n[accounts.good]\nprovider = 'gmail'\nemail = 'good@example.test'\nclient_id = 'synthetic'\nclient_secret = 'synthetic'\n[accounts.revoked]\nprovider = 'gmail'\nemail = 'revoked@example.test'\nclient_id = 'revoked'\nclient_secret = 'synthetic'\n")
 	k := &keychain{}
 	store := credentials.New(k, home)
 	if err := store.SaveScreeningKey(t.Context(), "private-jev-canary"); err != nil {
@@ -112,7 +112,7 @@ func TestServeReportsRefusedSignInOnTheAccountLine(t *testing.T) {
 
 // consoleConfig is a home without accounts, with fake screening and the console on listen.
 func consoleConfig(listen string) string {
-	return "version = 1\n[screening]\nprovider = 'fake'\n[console]\nlisten = '" + listen + "'\n"
+	return "version = 1\n[screening]\nprovider = 'fake'\n[credentials]\nbackend = 'keychain'\n[console]\nlisten = '" + listen + "'\n"
 }
 
 func TestServeWarnsWhenTheApprovalConsoleListensBeyondLoopback(t *testing.T) {

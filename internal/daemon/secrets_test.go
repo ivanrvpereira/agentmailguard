@@ -12,7 +12,7 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/daemon"
 )
 
-const keychainConfig = "version = 1\n"
+const keychainConfig = "version = 1\n[credentials]\nbackend = 'keychain'\n"
 
 // setSecret runs amgd config set KEY with stdin on a new keychain home and returns the home and the result.
 func setSecret(t *testing.T, k *keychain, key, stdin string, args ...string) (string, int, string, string) {

@@ -63,7 +63,7 @@ func TestHomeDefaultEnvironmentAndExplicitOverride(t *testing.T) {
 
 func TestMissingFileIsAnEmptyConfiguration(t *testing.T) {
 	got, err := config.Load(context.Background(), filepath.Join(t.TempDir(), "config.toml"))
-	want := config.Config{Accounts: []config.Account{}, Screening: config.Screening{Provider: "jev"}, Console: config.Console{Listen: "localhost:8788"}, Backend: "keychain"}
+	want := config.Config{Accounts: []config.Account{}, Screening: config.Screening{Provider: "jev"}, Console: config.Console{Listen: "localhost:8788"}, Backend: "file"}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("config=%+v error=%v", got, err)
 	}
@@ -175,6 +175,15 @@ func TestCredentialsBackend(t *testing.T) {
 	got, err := parse(t, "version = 1\n[credentials]\nbackend = 'file'\n")
 	if err != nil || got.Backend != "file" {
 		t.Fatalf("config=%+v error=%v", got, err)
+	}
+	got, err = parse(t, "version = 1\n[credentials]\nbackend = 'keychain'\n")
+	if err != nil || got.Backend != "keychain" {
+		t.Fatalf("config=%+v error=%v", got, err)
+	}
+	// An absent table selects the password-encrypted file, which works on every supported host.
+	got, err = parse(t, "version = 1\n")
+	if err != nil || got.Backend != "file" {
+		t.Fatalf("default config=%+v error=%v", got, err)
 	}
 	for _, text := range []string{"[credentials]\nbackend = 'SECRET-CANARY'\n", "[credentials]\n"} {
 		_, err := parse(t, "version = 1\n"+text)

@@ -26,7 +26,7 @@ func TestLoadChecksEveryItemAndStartsWithAnAccountThatIsNotLoggedIn(t *testing.T
 	d := newDaemon(t, daemonSetup{config: "default_account = 'work'\n" + workTable + gmailTable, record: record(map[string]credentials.OAuth{"m365/" + workEmail: m365Login(m365Grant)}), jev: newNativeAPI()})
 	result, err := d.s.Load(context.Background(), func(context.Context) (string, error) { t.Fatal("prompted with a stored key"); return "", nil })
 	want := []server.CredentialCheck{
-		{Item: "credentials (keychain)", Status: "ok"},
+		{Item: "credentials (file)", Status: "ok"},
 		{Item: `account "gmail" (gmail)`, Status: "not logged in; commands for this account fail until amgd account login"},
 		{Item: `account "work" (m365)`, Status: "ok"},
 		{Item: "screening key", Status: "ok"},
@@ -49,12 +49,12 @@ func TestLoadRefusesAFailedCredentialStoreWithAFixedStatus(t *testing.T) {
 		name, config, item, status string
 		broken                     func(*fakeBackend)
 	}{
-		{"denied", "", "credentials (keychain)", "access denied", func(b *fakeBackend) { b.readErr = errors.New("private-backend-canary") }},
-		{"write denied", "", "credentials (keychain)", "access denied", func(b *fakeBackend) { b.writeErr = errors.New("private-backend-canary") }},
-		{"panic", "", "credentials (keychain)", "access denied", func(b *fakeBackend) { b.panics = true }},
+		{"denied", "", "credentials (file)", "access denied", func(b *fakeBackend) { b.readErr = errors.New("private-backend-canary") }},
+		{"write denied", "", "credentials (file)", "access denied", func(b *fakeBackend) { b.writeErr = errors.New("private-backend-canary") }},
+		{"panic", "", "credentials (file)", "access denied", func(b *fakeBackend) { b.panics = true }},
 		{"wrong password", "[credentials]\nbackend='file'\n", "credentials (file)", "wrong password or damaged file", func(b *fakeBackend) { b.readErr = credentials.ErrDecrypt }},
 		{"password missing", "[credentials]\nbackend='file'\n", "credentials (file)", "password missing", func(b *fakeBackend) { b.readErr = credentials.ErrPasswordMissing }},
-		{"unsupported version", "", "credentials (keychain)", "unsupported version", func(b *fakeBackend) {
+		{"unsupported version", "", "credentials (file)", "unsupported version", func(b *fakeBackend) {
 			b.data = []byte(`{"version":2,"oauth":{},"openrouter_key":"private-key-canary"}`)
 		}},
 	} {
@@ -156,7 +156,7 @@ func TestReloadAppliesChangesButRestartKeysWait(t *testing.T) {
 	graph := httptest.NewServer(http.HandlerFunc(newNativeAPI().graph))
 	defer graph.Close()
 	d := startDaemon(t, daemonSetup{config: workConfig + fakeScreen + draftApproveOnly, record: record(nil), options: server.Options{M365: m365Options(graph.URL)}})
-	d.writeConfig(t, workConfig+fakeScreen+"[policy]\nmail_draft='deny'\n[console]\nlisten='127.0.0.1:9000'\n[credentials]\nbackend='file'\n")
+	d.writeConfig(t, workConfig+fakeScreen+"[policy]\nmail_draft='deny'\n[console]\nlisten='127.0.0.1:9000'\n[credentials]\nbackend='keychain'\n")
 	if err := os.WriteFile(filepath.Join(d.home, "rules.toml"), []byte("[accounts.\""+otherEmail+"\".receipts]\ncategory='Receipts'\ninstructions='private-rule-canary'\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestReloadAppliesChangesButRestartKeysWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := d.reload(t)
-	if !reflect.DeepEqual(result.Restart, []string{"console.listen", "credentials.backend"}) || result.Checks[0] != (server.CredentialCheck{Item: "credentials (keychain)", Status: "ok"}) {
+	if !reflect.DeepEqual(result.Restart, []string{"console.listen", "credentials.backend"}) || result.Checks[0] != (server.CredentialCheck{Item: "credentials (file)", Status: "ok"}) {
 		t.Fatalf("result=%+v", result)
 	}
 	if d.s.ConsoleAddress() != "localhost:8788" {

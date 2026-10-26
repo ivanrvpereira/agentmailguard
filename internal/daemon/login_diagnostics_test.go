@@ -37,7 +37,7 @@ func checkLoginDiagnostic(t *testing.T, scenario loginScenario) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
 	defer cancel()
-	home := writeHome(t, "version = 1\ndefault_account = 'work'\n[accounts.work]\nprovider = 'm365'\nemail = 'synthetic@example.test'\nclient_id = 'synthetic'\ntenant_id = 'synthetic'\n")
+	home := writeHome(t, "version = 1\ndefault_account = 'work'\n[credentials]\nbackend = 'keychain'\n[accounts.work]\nprovider = 'm365'\nemail = 'synthetic@example.test'\nclient_id = 'synthetic'\ntenant_id = 'synthetic'\n")
 	var tokens, profiles atomic.Int32
 	scope := "User.Read Mail.ReadWrite Calendars.Read MailboxSettings.Read"
 	if scenario.mode == "scopes" {

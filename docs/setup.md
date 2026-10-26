@@ -22,10 +22,10 @@ mkdir -p ~/.agentmailguard
 chmod 700 ~/.agentmailguard
 ```
 
-2. Choose the credential backend. macOS defaults to Keychain. Linux requires the password-encrypted file backend. On Linux, select it before you add an account:
+2. Choose the credential backend. The default is the password-encrypted file backend, which works on macOS and Linux. To use the macOS Keychain instead, select it before you add an account:
 
 ```sh
-amgd config set credentials.backend file
+amgd config set credentials.backend keychain
 ```
 
 The home contains the account configuration, credential lock, cache, and audit file. See [Credential storage](../README.md#credential-storage) for both backends.

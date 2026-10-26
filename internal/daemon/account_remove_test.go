@@ -106,7 +106,7 @@ func TestAChangeWrittenToConfigOrStoreReloadsTheDaemonEvenWhenItsAuditFails(t *t
 		t.Run(strings.Join(tc.args[:3], " "), func(t *testing.T) {
 			t.Parallel()
 			api, console := freeAddress(t), freeAddress(t)
-			home := writeHome(t, "version = 1\ndefault_account = 'demo'\n[screening]\nprovider = 'fake'\n[console]\nlisten = '"+console+"'\n[policy]\nmail_draft = 'allow'\n[accounts.demo]\nprovider = 'fake'\nemail = 'demo@fake.invalid'\n[accounts.second]\nprovider = 'fake'\nemail = 'second@fake.invalid'\n")
+			home := writeHome(t, "version = 1\ndefault_account = 'demo'\n[credentials]\nbackend = 'keychain'\n[screening]\nprovider = 'fake'\n[console]\nlisten = '"+console+"'\n[policy]\nmail_draft = 'allow'\n[accounts.demo]\nprovider = 'fake'\nemail = 'demo@fake.invalid'\n[accounts.second]\nprovider = 'fake'\nemail = 'second@fake.invalid'\n")
 			k := &keychain{}
 			opts := providerOptions(k, newM365(t), nil, newClock())
 			if code, _, errout := amgd(t, home, opts, "", append([]string{"account", "add", "work"}, signInArgs["m365"]...)...); code != 0 {

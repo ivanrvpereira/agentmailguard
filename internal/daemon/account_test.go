@@ -20,7 +20,7 @@ var signInArgs = map[string][]string{
 // otherProvider is the provider that the refusal tests add the same email with.
 var otherProvider = map[string]string{"m365": "gmail", "gmail": "m365"}
 
-const accountConfig = "version = 1\n[screening]\nprovider = 'fake'\n"
+const accountConfig = "version = 1\n[credentials]\nbackend = 'keychain'\n[screening]\nprovider = 'fake'\n"
 
 func TestAccountAddTakesTheLowercaseEmailOfTheSignInAndRefusesAnEmailThatHasAnAccount(t *testing.T) {
 	for _, provider := range []string{"m365", "gmail"} {
