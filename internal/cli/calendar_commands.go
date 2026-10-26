@@ -36,7 +36,8 @@ func meetingEnd(c *cobra.Command, start time.Time, end string, duration time.Dur
 	return until, ok && until.After(start)
 }
 
-// calendarAvailabilityCmd mirrors the server limits: 1-20 distinct addresses and a window shorter than 62 days.
+// calendarAvailabilityCmd mirrors the server limits, which are Microsoft Graph's: 1-20 distinct addresses and a window
+// shorter than 62 days.
 func calendarAvailabilityCmd(r *runner) *cobra.Command {
 	var to []string
 	var start, end string

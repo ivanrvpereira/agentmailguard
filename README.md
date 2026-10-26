@@ -647,7 +647,7 @@ Every Gmail meeting command notifies all guests (`sendUpdates=all`).
 On Gmail, `calendar cancel` deletes the event and notifies the guests. Google keeps the deleted event on your calendar with the status `cancelled`, so it can be restored from the calendar trash for 30 days. The server never deletes an event permanently.
 Google sends no cancellation message. On Gmail, `calendar cancel --comment` fails with `calendar cancel refused: comments are not supported for this account`, before any credential or provider access. On Microsoft 365, the comment goes with the cancellation.
 
-Invites accept 1–100 required attendee addresses and at most 100 optional ones, and each update attendee list accepts at most 100 addresses.
+Invites need at least one required attendee address. The server sets no maximum on attendee lists: the provider refuses what it does not accept.
 
 The client does not retry a meeting request, and the server sends no transaction ID.
 A meeting command can return `operation failed` after the notification was sent, for example if the audit write fails.
@@ -716,7 +716,7 @@ Explicit `YYYY-MM-DD` dates cannot be in the future.
 `--until` is exclusive and must be later than `--since`.
 Calendar dates use the client's local date and timezone.
 For calendar queries, a relative `--to +Nd` starts from `--from`.
-The calendar range must be at most 90 days.
+The calendar range has no maximum: Microsoft Graph `calendarView` needs a start and an end but sets no maximum range.
 
 | Verdict | Visible mail content |
 | --- | --- |
@@ -762,8 +762,9 @@ A policy refusal returns HTTP 500 with `{"error":"refused by policy: KEY"}`.
 
 Requests are limited to 1 MiB and 16 JSON nesting levels.
 The client bounds responses at 64 MiB and never follows redirects or retries requests, including stale-connection write replay.
-Mail list and search counts range from 1 to 100, skip is at most 1,000,000, and manual mutations accept at most 50 IDs.
-Recipient and category lists accept at most 100 entries, and IDs and search strings are limited to 4,096 bytes.
+Mail list and search counts range from 1 to 100, and skip is at most 1,000,000.
+Manual mutations need at least one ID, and recipient and attendee lists at least one address; the server sets no maximum on these lists, because the provider refuses what it does not accept and the request size limit bounds them.
+Category lists accept at most 100 entries, and IDs and search strings are limited to 4,096 bytes.
 Stats accepts 1 to 365,000 days.
 
 The server admits at most 64 concurrent calls.

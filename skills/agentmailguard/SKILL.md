@@ -89,7 +89,7 @@ agentmailguard stats --days 30
 
 `calendar search TEXT` uses the provider's own search (Google Calendar on Gmail, Microsoft Search on Microsoft 365). It returns one page of matching events in the provider's order, with the fields of `calendar list`. It has no date range.
 
-Limits: `--count` 1–100, at most 50 IDs per mutation, at most 100 recipients, categories, or meeting attendees per list. `calendar availability` accepts 1–20 addresses and a window of less than 62 days.
+Limits: `--count` 1–100, at most 100 categories per list. Mutations, recipients, and meeting attendees have no limit of ours: the provider refuses what it does not accept. `calendar availability` accepts 1–20 addresses and a window of less than 62 days (Microsoft Graph limits).
 
 ## Verdicts
 
@@ -215,9 +215,9 @@ Done when the applied run's `stats` (`applied`, `tagged`, `skipped`, `failed`) a
 - **Server unreachable:** report it and stop. Do not run `serve` or look for another way into the mailbox.
 - **Forbidden commands:** never run `serve`, `auth login`, `auth set-screening-key`, `auth set-approval-password`, `auth migrate`, `auth change-password`, or `cache clear`, and never pass `--home`. Never read files in the server's home directory (`config.toml`, `credentials.*`, `cache.db`, `fake-provider.db`, `audit.jsonl`), and never call Microsoft Graph or the Gmail API directly. These bypass the guard.
 - **Organize dates** use the server clock and UTC midnight. `--until` is exclusive. Explicit dates cannot be in the future.
-- **Calendar dates** use the client's local timezone. `--to +Nd` counts from `--from`. The range is at most 90 days.
+- **Calendar dates** use the client's local timezone. `--to +Nd` counts from `--from`.
 - **Meeting refusals:** for `refused by policy: calendar_...`, see [Write policy results](#write-policy-results). `missing_scopes` means the login lacks the calendar write grant (`Calendars.ReadWrite` on Microsoft 365, `calendar.events.owned` on Gmail); the user must log in again on the server host and restart the server. Report other `calendar write refused` and `calendar response refused` errors as they are.
-- **Meeting size:** an invite accepts 1–100 `--to` attendees, at most 100 `--optional` attendees, and any length, and distribution lists are not detected. Check large or long meetings with the user.
+- **Meeting size:** an invite accepts any number of `--to` and `--optional` attendees, up to the provider's limit, and any length, and distribution lists are not detected. Check large or long meetings with the user.
 - **Empty `--body ''`** is a valid explicit value for `draft update`. It clears the body.
 - **Unread is not important.** Use content and sender, not only `is_read`, to prioritize.
 

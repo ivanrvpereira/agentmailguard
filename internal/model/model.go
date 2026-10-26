@@ -301,6 +301,8 @@ func AvailabilitySlots(start, end time.Time) int {
 }
 
 // Availability requests name 1 to MaxAvailabilityAddresses addresses for a range shorter than MaxAvailabilityRange.
+// These are Microsoft Graph getSchedule limits for one query
+// (https://learn.microsoft.com/en-us/graph/outlook-get-free-busy-schedule, "Limits and error conditions").
 const (
 	MaxAvailabilityAddresses = 20
 	MaxAvailabilityRange     = 62 * 24 * time.Hour

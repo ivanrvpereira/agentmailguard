@@ -90,10 +90,10 @@ func TestPrivateEventsScreenEveryReadWithoutBody(t *testing.T) {
 			t.Fatal("private event body reached screener")
 		}
 	}
-	if _, err := g.CalendarList(context.Background(), now, now.Add(90*24*time.Hour+time.Hour)); err != nil {
+	if _, err := g.CalendarList(context.Background(), now, now.AddDate(10, 0, 0)); err != nil {
 		t.Fatal(err)
 	}
-	for _, end := range []time.Time{now, now.Add(-time.Hour), now.Add(90*24*time.Hour + time.Hour + time.Nanosecond)} {
+	for _, end := range []time.Time{now, now.Add(-time.Hour)} {
 		if _, err := g.CalendarList(context.Background(), now, end); err == nil {
 			t.Fatal("invalid calendar range accepted")
 		}

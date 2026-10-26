@@ -30,9 +30,6 @@ func (g *Guard) CalendarList(ctx context.Context, start, end time.Time) ([]views
 	if !end.After(start) {
 		return nil, GuardError("calendar range: the end must be after the start")
 	}
-	if end.Sub(start) > 90*24*time.Hour+time.Hour {
-		return nil, GuardError("calendar range: at most 90 days")
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

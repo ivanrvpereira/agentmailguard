@@ -78,7 +78,7 @@ func calendarWriteCall(ctx context.Context, operation string, raw json.RawMessag
 		}, gmailRefusal, nil
 	case "calendar.update":
 		var p eventChangeParam
-		if params(raw, &p) != nil || !idValid(p.ID) || p.Online != nil && !*p.Online || !listValid(p.Add, 0, 100) || !listValid(p.Remove, 0, 100) || p.Subject != nil && !validString(*p.Subject, 65536, true) || p.Location != nil && !validString(*p.Location, 4096, true) || p.Body != nil && !validString(*p.Body, MaxRequestBytes, true) {
+		if params(raw, &p) != nil || !idValid(p.ID) || p.Online != nil && !*p.Online || !listValid(p.Add, 0, noMax) || !listValid(p.Remove, 0, noMax) || p.Subject != nil && !validString(*p.Subject, 65536, true) || p.Location != nil && !validString(*p.Location, 4096, true) || p.Body != nil && !validString(*p.Body, MaxRequestBytes, true) {
 			return nil, "", errInvalid
 		}
 		start, ok := optionalCalendarTime(p.Start)
@@ -104,7 +104,7 @@ func calendarWriteCall(ctx context.Context, operation string, raw json.RawMessag
 	case "calendar.invite":
 		// An online meeting is on unless the caller sends an explicit false.
 		p := inviteParam{Online: true}
-		if params(raw, &p) != nil || !listValid(p.To, 1, 100) || !listValid(p.Optional, 0, 100) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) || !validString(p.Location, 4096, true) {
+		if params(raw, &p) != nil || !listValid(p.To, 1, noMax) || !listValid(p.Optional, 0, noMax) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) || !validString(p.Location, 4096, true) {
 			return nil, "", errInvalid
 		}
 		start, ok := calendarTime(p.Start)

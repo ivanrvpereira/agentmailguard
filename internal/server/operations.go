@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -124,6 +125,11 @@ func params(b json.RawMessage, p any) error {
 	}
 	return strict(b, p, keys...)
 }
+
+// noMax is the max of a list that has no limit of ours: the provider refuses what it does not accept, and
+// MaxRequestBytes bounds the request.
+const noMax = math.MaxInt
+
 func listValid(v []string, min, max int) bool {
 	if len(v) < min || len(v) > max {
 		return false
@@ -378,7 +384,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		}
 	case "mail.archive", "mail.trash", "mail.read", "mail.unread":
 		var p idsParam
-		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, 50) {
+		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, noMax) {
 			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) {
@@ -393,19 +399,19 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		}
 	case "mail.move":
 		var p moveParam
-		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, 50) || !idValid(p.Folder) {
+		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, noMax) || !idValid(p.Folder) {
 			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) { return mutations(a.guard.Move(ctx, p.IDs, p.Folder)) }
 	case "mail.flag":
 		var p flagParam
-		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, 50) || (p.State != model.Flagged && p.State != model.NoFlag && p.State != model.Complete) {
+		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, noMax) || (p.State != model.Flagged && p.State != model.NoFlag && p.State != model.Complete) {
 			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) { return mutations(a.guard.Flag(ctx, p.IDs, p.State)) }
 	case "mail.categorize":
 		var p categoryParam
-		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, 50) || !listValid(p.Add, 0, 100) || !listValid(p.Remove, 0, 100) {
+		if params(r.Params, &p) != nil || !listValid(p.IDs, 1, noMax) || !listValid(p.Add, 0, 100) || !listValid(p.Remove, 0, 100) {
 			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) { return mutations(a.guard.Categorize(ctx, p.IDs, p.Add, p.Remove)) }
@@ -441,7 +447,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		}
 		first, e := time.Parse(time.RFC3339, p.Start)
 		last, e2 := time.Parse(time.RFC3339, p.End)
-		if e != nil || e2 != nil || !last.After(first) || last.Sub(first) > 90*24*time.Hour+time.Hour {
+		if e != nil || e2 != nil || !last.After(first) {
 			return nil, errInvalid
 		}
 		call = func(a *account) (any, error) { return a.guard.CalendarList(ctx, first, last) }
@@ -475,7 +481,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		}
 	case "draft.new", "mail.send":
 		var p newParam
-		if params(r.Params, &p) != nil || !listValid(p.To, 1, 100) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) {
+		if params(r.Params, &p) != nil || !listValid(p.To, 1, noMax) || p.Subject == nil || p.Body == nil || !validString(*p.Subject, 65536, true) || !validString(*p.Body, MaxRequestBytes, true) {
 			return nil, errInvalid
 		}
 		draft := model.NewDraft{To: p.To, Subject: *p.Subject, Body: *p.Body}
@@ -506,7 +512,7 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		}
 	case "draft.forward", "mail.forward":
 		var p forwardParam
-		if params(r.Params, &p) != nil || !idValid(p.ID) || !listValid(p.To, 1, 100) {
+		if params(r.Params, &p) != nil || !idValid(p.ID) || !listValid(p.To, 1, noMax) {
 			return nil, errInvalid
 		}
 		if r.Operation == "mail.forward" {

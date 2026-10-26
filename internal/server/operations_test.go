@@ -92,7 +92,7 @@ func TestValidatedAccountOperationsAndReload(t *testing.T) {
 		`{"operation":"draft.update","params":{"id":"x"}}`, `{"operation":"mail.archive","params":{"ids":[]}}`,
 		`{"operation":"mail.list","params":{"count":101}}`, `{"operation":"mail.flag","params":{"ids":["x"],"state":"urgent"}}`,
 		`{"operation":"mail.organize","params":{"since":"0d"}}`, `{"operation":"mail.organize","params":{"since":"2026-04-01"}}`,
-		`{"operation":"calendar.list","params":{"start":"2026-01-01T00:00:00Z","end":"2027-01-01T00:00:00Z"}}`,
+		`{"operation":"calendar.list","params":{"start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:00:00Z"}}`,
 	} {
 		status, _ := rpc(t, h.URL, body)
 		if status != 400 {

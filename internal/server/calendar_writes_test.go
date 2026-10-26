@@ -249,7 +249,6 @@ func TestCalendarHTTPRejectsInvalidInputBeforeAccountAccess(t *testing.T) {
 		"calendar.invite": {
 			`{}`, `{"to":[],"subject":"","body":"","start":"2026-10-09T09:00:00Z","end":"2026-10-09T10:00:00Z"}`,
 			strings.Replace(validCalendarParams["calendar.invite"], `"subject":"",`, "", 1), strings.Replace(validCalendarParams["calendar.invite"], `"body":"",`, "", 1),
-			strings.Replace(validCalendarParams["calendar.invite"], `["a@example.test"]`, `[`+strings.Repeat(`"a",`, 100)+`"a"]`, 1),
 			strings.Replace(validCalendarParams["calendar.invite"], `["a@example.test"]`, `[""]`, 1),
 			strings.Replace(validCalendarParams["calendar.invite"], `"subject":""`, `"subject":"`+strings.Repeat("s", 65537)+`"`, 1),
 			strings.Replace(validCalendarParams["calendar.invite"], `2026-10-09T10:00:00Z`, `2026-10-09T09:00:00Z`, 1),
@@ -261,7 +260,6 @@ func TestCalendarHTTPRejectsInvalidInputBeforeAccountAccess(t *testing.T) {
 			// An address is either required or optional.
 			strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"optional":["A@EXAMPLE.test"]}`,
 			strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"optional":[""]}`,
-			strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"optional":[` + strings.Repeat(`"b",`, 100) + `"b"]}`,
 			strings.TrimSuffix(validCalendarParams["calendar.invite"], "}") + `,"optional":"b@example.test"}`,
 		},
 		"calendar.update": {
@@ -272,7 +270,7 @@ func TestCalendarHTTPRejectsInvalidInputBeforeAccountAccess(t *testing.T) {
 			`{"id":"e1","start":"9999-12-31T23:45:00Z","duration":"1h"}`,
 			`{"id":"e1","end":"0000-10-09T09:00:00Z"}`,
 			`{"id":"e1","add":["SAME@example.test"],"remove":["same@example.test"]}`,
-			`{"id":"e1","add":[""]}`, `{"id":"e1","remove":[` + strings.Repeat(`"a",`, 100) + `"a"]}`,
+			`{"id":"e1","add":[""]}`,
 			`{"id":"e1","subject":"` + strings.Repeat("s", 65537) + `"}`, `{"id":"e1","location":"` + strings.Repeat("s", 4097) + `"}`,
 			// Updates can add an online meeting but never remove it.
 			`{"id":"e1","online":false}`, `{"id":"e1","subject":"","online":false}`, `{"id":"e1","online":"true"}`, `{"id":"e1","teams":true}`,
