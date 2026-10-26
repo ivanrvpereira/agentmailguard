@@ -785,8 +785,7 @@ Not verified against real providers or services:
 - mail sends, replies, and forwards;
 - meeting invites, updates, cancellations, and responses;
 - provider acceptance of generated drafts;
-- `mail thread` on a Microsoft 365 conversation with a message in Junk Email (checked live on 2026-10-26: Gmail threads with drafts, and Microsoft 365 conversations across Inbox, Sent Items, Drafts, Deleted Items, and other folders);
-- `calendar search`: the Microsoft Search request, and reading its hits as events;
+- `mail thread` on a Microsoft 365 conversation with a message in Junk Email (checked live on 2026-10-26: Gmail threads with drafts, and Microsoft 365 conversations across Inbox, Sent Items, Drafts, Deleted Items, and other folders; `calendar search` on both providers was checked the same day);
 - Microsoft 365 device-code login, which organization policies can also refuse;
 - requests to Jev cloud, or to any screening endpoint or model other than the default;
 - migration of a real Keychain record.
