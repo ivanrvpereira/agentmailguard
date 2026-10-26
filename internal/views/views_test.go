@@ -114,3 +114,64 @@ func TestMailVerdictViews(t *testing.T) {
 		}
 	}
 }
+
+// The pretty text shows the view's fields in a fixed order, skips empty rows, shows dates in local time, and lists
+// links in numeric order.
+func TestToTextShowsTheViewAsLabeledRows(t *testing.T) {
+	local := time.Local
+	time.Local = time.FixedZone("TST", 2*60*60)
+	t.Cleanup(func() { time.Local = local })
+	received := "2026-03-07T09:30:00+00:00"
+	green := views.MailView{
+		MailSummary: views.MailSummary{ID: "m1", ThreadID: "t1", Verdict: model.Green, ReceivedAt: received, IsRead: true, Flag: model.Flagged, Categories: []string{"Blue", "Red"},
+			Auth:   map[string]*string{"spf": new("pass"), "dkim": new("pass"), "dmarc": nil, "compauth": new(""), "compauth_reason": nil},
+			Sender: &views.Address{Name: new("Alice Example"), Address: "alice@example.test"},
+			To:     &[]views.Address{{Address: "bob@example.test"}, {Name: new(""), Address: "carol@example.test"}},
+			CC:     &[]views.Address{}, Subject: new("Quarterly numbers"), Attachments: &[]string{"report.pdf"}},
+		Body: new("Hello [L2] and [L10]."), Links: &map[string]string{"L10": "example.org", "L2": "example.test"}, Truncated: new(true),
+	}
+	red := views.MailView{MailSummary: views.MailSummary{ID: "m2", Verdict: model.Red, ReceivedAt: received, Auth: map[string]*string{}, Flag: model.NoFlag, Categories: []string{},
+		Sender: &views.Address{Address: "x@example.test"}, Reason: new("injection")}}
+	failed := views.MailView{MailSummary: views.MailSummary{ID: "m3", Verdict: model.Error, ReceivedAt: received, Auth: map[string]*string{}, Flag: model.NoFlag, Categories: []string{},
+		Reason: new("screening_error"), Error: new("TimeoutError")}}
+	for name, tc := range map[string]struct {
+		view views.MailView
+		want string
+	}{
+		"green": {green, `From:        Alice Example <alice@example.test>
+To:          bob@example.test, carol@example.test
+Subject:     Quarterly numbers
+Date:        2026-03-07 11:30 TST
+Verdict:     green
+Auth:        spf=pass dkim=pass
+Read:        yes
+Flag:        flagged
+Categories:  Blue, Red
+Attachments: report.pdf
+ID:          m1
+Thread:      t1
+
+Hello [L2] and [L10].
+
+(body truncated)
+
+[L2] example.test
+[L10] example.org`},
+		"red": {red, `From:        x@example.test
+Date:        2026-03-07 11:30 TST
+Verdict:     red (injection)
+Read:        no
+Flag:        none
+ID:          m2`},
+		"error": {failed, `Date:        2026-03-07 11:30 TST
+Verdict:     error (screening_error)
+Error:       TimeoutError
+Read:        no
+Flag:        none
+ID:          m3`},
+	} {
+		if got := views.ToText(tc.view); got != tc.want {
+			t.Errorf("%s:\n%s\nwant:\n%s", name, got, tc.want)
+		}
+	}
+}

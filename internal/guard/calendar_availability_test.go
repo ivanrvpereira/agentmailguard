@@ -2,6 +2,7 @@ package guard_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"reflect"
 	"strings"
@@ -94,24 +95,24 @@ func TestCalendarAvailabilityRefusesBeforeProviderAccess(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	for name, tc := range map[string]struct {
-		ctx        context.Context
 		addresses  []string
 		start, end time.Time
-		want       string
 	}{
-		"no addresses":      {context.Background(), nil, now, now.Add(time.Hour), "invalid request"},
-		"21 addresses":      {context.Background(), many, now, now.Add(time.Hour), "invalid request"},
-		"blank address":     {context.Background(), []string{"a@example.test", " "}, now, now.Add(time.Hour), "invalid request"},
-		"duplicate address": {context.Background(), []string{"a@example.test", "A@Example.Test"}, now, now.Add(time.Hour), "invalid request"},
-		"empty range":       {context.Background(), []string{"a@example.test"}, now, now, "invalid request"},
-		"reversed range":    {context.Background(), []string{"a@example.test"}, now, now.Add(-time.Hour), "invalid request"},
-		"62 days":           {context.Background(), []string{"a@example.test"}, now, now.Add(62 * 24 * time.Hour), "invalid request"},
-		"year zero":         {context.Background(), []string{"a@example.test"}, time.Date(0, 12, 31, 23, 0, 0, 0, time.UTC), time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), "invalid request"},
-		"canceled":          {canceled, []string{"a@example.test"}, now, now.Add(time.Hour), "context canceled"},
+		"no addresses":      {nil, now, now.Add(time.Hour)},
+		"21 addresses":      {many, now, now.Add(time.Hour)},
+		"blank address":     {[]string{"a@example.test", " "}, now, now.Add(time.Hour)},
+		"duplicate address": {[]string{"a@example.test", "A@Example.Test"}, now, now.Add(time.Hour)},
+		"empty range":       {[]string{"a@example.test"}, now, now},
+		"reversed range":    {[]string{"a@example.test"}, now, now.Add(-time.Hour)},
+		"62 days":           {[]string{"a@example.test"}, now, now.Add(62 * 24 * time.Hour)},
+		"year zero":         {[]string{"a@example.test"}, time.Date(0, 12, 31, 23, 0, 0, 0, time.UTC), time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)},
 	} {
-		if got, err := g.CalendarAvailability(tc.ctx, tc.addresses, tc.start, tc.end); got != nil || err == nil || err.Error() != tc.want {
+		if got, err := g.CalendarAvailability(context.Background(), tc.addresses, tc.start, tc.end); got != nil || err == nil || err.Error() != "invalid request" {
 			t.Errorf("%s: availability=%v err=%v", name, got, err)
 		}
+	}
+	if got, err := g.CalendarAvailability(canceled, []string{"a@example.test"}, now, now.Add(time.Hour)); got != nil || !errors.Is(err, context.Canceled) {
+		t.Errorf("canceled: availability=%v err=%v", got, err)
 	}
 	if len(cal.queries) != 0 {
 		t.Fatalf("refused queries reached the provider: %v", cal.queries)
