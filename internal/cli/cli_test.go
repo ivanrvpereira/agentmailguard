@@ -39,7 +39,7 @@ func TestCommandsUseHTTPWithoutLocalState(t *testing.T) {
 		{[]string{"auth", "status"}, "auth.status", `{}`},
 		{[]string{"mail", "list", "--folder", "f", "--count", "4", "--skip", "2"}, "mail.list", `{"folder":"f","count":4,"skip":2}`},
 		{[]string{"mail", "get", "m"}, "mail.get", `{"id":"m"}`},
-		{[]string{"mail", "thread", "t", "--count", "3"}, "mail.thread", `{"id":"t","count":3}`},
+		{[]string{"mail", "thread", "t"}, "mail.thread", `{"id":"t"}`},
 		{[]string{"mail", "search", "--text", "x", "--from", "alice", "--to", "bob", "--subject", "s", "--after", "2026-01-01", "--before", "2026-02-01", "--folder", "f", "--count", "9"}, "mail.search", `{"text":"x","from":"alice","to":"bob","subject":"s","after":"2026-01-01","before":"2026-02-01","folder":"f","count":9}`},
 		{[]string{"mail", "link", "m", "L1", "L2"}, "mail.link", `{"id":"m","links":["L1","L2"]}`},
 		{[]string{"mail", "link", "m", "--all"}, "mail.link", `{"id":"m","all":true}`},

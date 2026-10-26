@@ -120,22 +120,15 @@ func (b *mailbox) List(ctx context.Context, folder string, count, skip int, body
 }
 
 // Thread reads the conversation from every folder by the effective thread ID: a NULL thread_id is the message ID.
-// It reads one message more than count to learn whether older ones were left out.
-func (b *mailbox) Thread(ctx context.Context, thread string, count int) ([]model.Message, bool, error) {
-	if count < 1 {
-		return nil, false, invalid
-	}
-	out, err := b.query(ctx, false, `AND COALESCE(thread_id, id) = ? ORDER BY julianday(received_at) DESC, id DESC LIMIT ?`, thread, count+1)
+func (b *mailbox) Thread(ctx context.Context, thread string) ([]model.Message, error) {
+	out, err := b.query(ctx, false, `AND COALESCE(thread_id, id) = ?`+newest, thread)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if len(out) == 0 {
-		return nil, false, notFound
+		return nil, notFound
 	}
-	older := len(out) > count
-	out = out[:min(len(out), count)]
-	slices.Reverse(out)
-	return out, older, nil
+	return out, nil
 }
 
 func contains(value string, part *string) bool {

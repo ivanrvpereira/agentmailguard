@@ -572,7 +572,7 @@ func folders(messages []model.Message) map[string][]string {
 	return out
 }
 
-func TestThreadReturnsTheNewestMessagesOfTheConversationOldestFirstFromEveryFolder(t *testing.T) {
+func TestThreadReturnsEveryMessageOfTheConversationNewestFirstFromEveryFolder(t *testing.T) {
 	m, home := mailbox(t)
 	ctx := t.Context()
 	seed(t, home, `INSERT INTO messages (account, id, folder, sender_address, subject, received_at, is_draft, thread_id) VALUES
@@ -580,25 +580,18 @@ func TestThreadReturnsTheNewestMessagesOfTheConversationOldestFirstFromEveryFold
 		('demo', 'binned', 'trash', 'ana@example.test', 'Re: Old report', '2026-03-03T09:00:00+01:00', 0, 'old'),
 		('demo', 'reply-draft', 'drafts', 'demo@fake.test', 'Re: Old report', '2026-03-04T09:00:00Z', 1, 'old'),
 		('other', 'their-reply', 'inbox', 'ana@example.test', 'Re: Old report', '2026-03-05T09:00:00Z', 0, 'old')`)
-	got, older, err := m.Thread(ctx, "old", 25)
-	if err != nil || older || !reflect.DeepEqual(ids(got), []string{"old", "sent-reply", "binned", "reply-draft"}) {
-		t.Fatalf("ids=%v older=%v err=%v", ids(got), older, err)
+	got, err := m.Thread(ctx, "old")
+	if err != nil || !reflect.DeepEqual(ids(got), []string{"reply-draft", "binned", "sent-reply", "old"}) {
+		t.Fatalf("ids=%v err=%v", ids(got), err)
 	}
 	if want := map[string][]string{"old": {"inbox"}, "sent-reply": {"sent"}, "binned": {"trash"}, "reply-draft": {"drafts"}}; !reflect.DeepEqual(folders(got), want) {
 		t.Errorf("folders=%v", folders(got))
 	}
-	if got[0].Body != nil || got[0].Auth != nil || !got[3].IsDraft || got[3].ThreadID != "old" {
+	if got[3].Body != nil || got[3].Auth != nil || !got[0].IsDraft || got[0].ThreadID != "old" {
 		t.Errorf("messages=%+v", got)
 	}
-	got, older, err = m.Thread(ctx, "old", 2)
-	if err != nil || !older || !reflect.DeepEqual(ids(got), []string{"binned", "reply-draft"}) {
-		t.Fatalf("cut ids=%v older=%v err=%v", ids(got), older, err)
-	}
-	if got, older, err := m.Thread(ctx, "old", 4); err != nil || older || len(got) != 4 {
-		t.Fatalf("exact count ids=%v older=%v err=%v", ids(got), older, err)
-	}
 	for _, unknown := range []string{"gone", "theirs"} {
-		if got, _, err := m.Thread(ctx, unknown, 25); !errors.Is(err, model.MailboxError("NotFoundError")) || len(got) != 0 {
+		if got, err := m.Thread(ctx, unknown); !errors.Is(err, model.MailboxError("NotFoundError")) || len(got) != 0 {
 			t.Errorf("%s: ids=%v err=%v", unknown, ids(got), err)
 		}
 	}

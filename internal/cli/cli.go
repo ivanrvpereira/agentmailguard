@@ -489,12 +489,9 @@ func mailGetCmd(r *runner) *cobra.Command {
 }
 
 func mailThreadCmd(r *runner) *cobra.Command {
-	count := 25
-	c := r.leaf("thread THREAD_ID", "Show the screened messages of a conversation, oldest first", 1, 1, func(c *cobra.Command, args []string) error {
-		return r.call(c, "mail.thread", map[string]any{"id": args[0], "count": count}, false)
+	return r.leaf("thread THREAD_ID", "Show the screened messages of a conversation from every folder, newest first", 1, 1, func(c *cobra.Command, args []string) error {
+		return r.call(c, "mail.thread", map[string]any{"id": args[0]}, false)
 	})
-	c.Flags().IntVar(&count, "count", count, "number of newest messages to return")
-	return c
 }
 
 // isDate reports whether v is a calendar date the server accepts as a search bound.

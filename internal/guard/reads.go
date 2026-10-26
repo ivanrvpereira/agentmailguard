@@ -73,47 +73,40 @@ func (g *Guard) Search(ctx context.Context, q model.SearchQuery, count int) ([]v
 	return g.summaries(ctx, messages, categories)
 }
 
-// threadValid checks a Thread result against the model.Mailbox contract: one to count messages, all in the
-// requested thread, oldest first. summaries refuses empty and duplicate message IDs.
-func threadValid(messages []model.Message, thread string, count int) bool {
-	if len(messages) < 1 || len(messages) > count {
+// threadValid checks a Thread result against the model.Mailbox contract: at least one message, all in the
+// requested thread, newest first. summaries refuses empty and duplicate message IDs.
+func threadValid(messages []model.Message, thread string) bool {
+	if len(messages) < 1 {
 		return false
 	}
 	for i, m := range messages {
-		if m.ThreadID != thread || i > 0 && m.ReceivedAt.Before(messages[i-1].ReceivedAt) {
+		if m.ThreadID != thread || i > 0 && m.ReceivedAt.After(messages[i-1].ReceivedAt) {
 			return false
 		}
 	}
 	return true
 }
 
-// Thread screens the newest count messages of a conversation, oldest first, exactly as List screens a folder.
-func (g *Guard) Thread(ctx context.Context, thread string, count int) (views.Thread, error) {
-	if err := checkCount(count); err != nil {
-		return views.Thread{}, err
-	}
+// Thread screens the messages of a conversation, newest first, exactly as List screens a folder.
+func (g *Guard) Thread(ctx context.Context, thread string) ([]views.MailSummary, error) {
 	if thread == "" {
-		return views.Thread{}, GuardError("give a thread ID")
+		return nil, GuardError("give a thread ID")
 	}
 	if err := ctx.Err(); err != nil {
-		return views.Thread{}, err
+		return nil, err
 	}
-	messages, older, err := g.mailbox.Thread(ctx, thread, count)
+	messages, err := g.mailbox.Thread(ctx, thread)
 	if err != nil {
-		return views.Thread{}, safeErr(ctx, err)
+		return nil, safeErr(ctx, err)
 	}
-	if !threadValid(messages, thread, count) {
-		return views.Thread{}, GuardError("ValueError")
+	if !threadValid(messages, thread) {
+		return nil, GuardError("ValueError")
 	}
 	categories, err := g.Categories(ctx)
 	if err != nil {
-		return views.Thread{}, err
+		return nil, err
 	}
-	summaries, err := g.summaries(ctx, messages, categories)
-	if err != nil {
-		return views.Thread{}, err
-	}
-	return views.ThreadView(thread, messages, summaries, older), nil
+	return g.summaries(ctx, messages, categories)
 }
 func (g *Guard) Folders(ctx context.Context) ([]model.Folder, error) {
 	if err := ctx.Err(); err != nil {

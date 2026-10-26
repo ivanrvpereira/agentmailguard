@@ -149,8 +149,7 @@ type listParam struct {
 	Skip   int    `json:"skip"`
 }
 type threadParam struct {
-	ID    string `json:"id"`
-	Count int    `json:"count"`
+	ID string `json:"id"`
 }
 type searchParam struct {
 	Text    *string `json:"text"`
@@ -322,11 +321,11 @@ func (s *Server) accountCall(ctx context.Context, r request) (any, error) {
 		}
 		call = func(a *account) (any, error) { return a.guard.List(ctx, p.Folder, p.Count, p.Skip) }
 	case "mail.thread":
-		p := threadParam{Count: 25}
-		if params(r.Params, &p) != nil || !idValid(p.ID) || p.Count < 1 || p.Count > 100 {
+		var p threadParam
+		if params(r.Params, &p) != nil || !idValid(p.ID) {
 			return nil, errInvalid
 		}
-		call = func(a *account) (any, error) { return a.guard.Thread(ctx, p.ID, p.Count) }
+		call = func(a *account) (any, error) { return a.guard.Thread(ctx, p.ID) }
 	case "mail.search":
 		p := searchParam{Count: 25}
 		if params(r.Params, &p) != nil || p.Count < 1 || p.Count > 100 {

@@ -37,14 +37,6 @@ type MailSummary struct {
 	Error       *string            `json:"error,omitempty"`
 }
 
-// Thread is a conversation, oldest first. NewestReceivedAt is the received_at of its newest message; Older reports
-// that the conversation has older messages that were left out.
-type Thread struct {
-	ThreadID         string        `json:"thread_id"`
-	Messages         []MailSummary `json:"messages"`
-	NewestReceivedAt string        `json:"newest_received_at"`
-	Older            bool          `json:"older"`
-}
 type MailView struct {
 	MailSummary
 	Body      *string            `json:"body,omitempty"`
@@ -136,14 +128,6 @@ func Summary(m model.Message, row cache.Row, categories []string) MailSummary {
 	return result
 }
 
-// ThreadView pairs each message, oldest first, with its summary at the same index.
-func ThreadView(thread model.ThreadID, messages []model.Message, summaries []MailSummary, older bool) Thread {
-	result := Thread{ThreadID: thread, Messages: summaries, Older: older}
-	for _, m := range messages {
-		result.NewestReceivedAt = iso(m.ReceivedAt)
-	}
-	return result
-}
 func View(m model.Message, row cache.Row, categories []string, rendered *content.Rendered) (MailView, error) {
 	result := MailView{MailSummary: Summary(m, row, categories)}
 	if result.Verdict == model.Green {

@@ -10,17 +10,16 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
-// threadBox answers Thread with response and older, and serves every other read from the embedded mailbox.
+// threadBox answers Thread with response, and serves every other read from the embedded mailbox.
 type threadBox struct {
 	*mailbox
 	response []model.Message
-	older    bool
 	calls    int
 }
 
-func (b *threadBox) Thread(context.Context, string, int) ([]model.Message, bool, error) {
+func (b *threadBox) Thread(context.Context, string) ([]model.Message, error) {
 	b.calls++
-	return b.response, b.older, nil
+	return b.response, nil
 }
 
 // threadMessage is message id in conversation t1, received hours before now, in folder.
@@ -40,30 +39,24 @@ func metadata(messages ...model.Message) []model.Message {
 	return out
 }
 
-func TestThreadScreensEachMessageAsListDoesAndShowsItsFolders(t *testing.T) {
-	full := []model.Message{threadMessage("m1", 3, "sent"), threadMessage("m2", 2, "trash")}
-	b := &threadBox{mailbox: &mailbox{messages: full}, response: metadata(full...), older: true}
+func TestThreadScreensEachMessageAsListDoes(t *testing.T) {
+	full := []model.Message{threadMessage("m2", 2, "trash"), threadMessage("m1", 3, "sent")}
+	b := &threadBox{mailbox: &mailbox{messages: full}, response: metadata(full...)}
 	s := &screener{verdict: model.Red}
 	g, _, _ := setup(t, b, s)
 	ctx := t.Context()
-	got, err := g.Thread(ctx, "t1", 2)
-	if err != nil {
-		t.Fatal(err)
+	got, err := g.Thread(ctx, "t1")
+	if err != nil || len(got) != 2 || got[0].ID != "m2" || got[1].ID != "m1" || s.calls != 2 {
+		t.Fatalf("thread=%+v err=%v screenings=%d", got, err, s.calls)
 	}
-	if got.ThreadID != "t1" || got.NewestReceivedAt != "2026-09-28T13:30:00+00:00" || !got.Older || len(got.Messages) != 2 || s.calls != 2 {
-		t.Fatalf("thread=%+v screenings=%d", got, s.calls)
-	}
-	if !reflect.DeepEqual(got.Messages[0].Folders, []string{"sent"}) || !reflect.DeepEqual(got.Messages[1].Folders, []string{"trash"}) {
-		t.Fatalf("folders=%v %v", got.Messages[0].Folders, got.Messages[1].Folders)
-	}
-	for _, m := range got.Messages {
+	for _, m := range got {
 		if m.Verdict != model.Red || m.Subject != nil || m.Sender == nil || m.Sender.Name != nil || m.To != nil || m.Attachments != nil {
 			t.Fatalf("red message exposed hidden fields: %+v", m)
 		}
 	}
 	list, err := g.List(ctx, "inbox", 25, 0)
-	if err != nil || len(list) != 2 || !reflect.DeepEqual(list[0], got.Messages[0]) || !reflect.DeepEqual(list[1], got.Messages[1]) {
-		t.Fatalf("list=%+v thread=%+v err=%v", list, got.Messages, err)
+	if err != nil || !reflect.DeepEqual(list, got) {
+		t.Fatalf("list=%+v thread=%+v err=%v", list, got, err)
 	}
 }
 
@@ -72,40 +65,29 @@ func TestThreadFailsClosedOnAResultThatBreaksTheContract(t *testing.T) {
 	unnamed, other := m2, m2
 	unnamed.ID, other.ThreadID = "", "t2"
 	for name, response := range map[string][]model.Message{
-		"no messages":     nil,
-		"empty ID":        {m1, unnamed},
-		"duplicate ID":    {m1, m1},
-		"more than count": {m1, m2, m3},
-		"other thread":    {m1, other},
-		"newest first":    {m2, m1},
+		"no messages":  nil,
+		"empty ID":     {unnamed, m1},
+		"duplicate ID": {m1, m1},
+		"other thread": {other, m1},
+		"oldest first": {m2, m3},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := &threadBox{mailbox: &mailbox{messages: []model.Message{m1, m2, m3}}, response: metadata(response...)}
 			s := &screener{verdict: model.Green}
 			g, _, _ := setup(t, b, s)
-			got, err := g.Thread(t.Context(), "t1", 2)
-			if err != guard.GuardError("ValueError") || got.Messages != nil || s.calls != 0 {
+			got, err := g.Thread(t.Context(), "t1")
+			if err != guard.GuardError("ValueError") || got != nil || s.calls != 0 {
 				t.Fatalf("thread=%+v err=%v screenings=%d", got, err, s.calls)
 			}
 		})
 	}
 }
 
-func TestThreadRefusesABadCountOrAnEmptyThreadBeforeTheMailbox(t *testing.T) {
+func TestThreadRefusesAnEmptyThreadBeforeTheMailbox(t *testing.T) {
 	b := &threadBox{mailbox: &mailbox{}}
 	g, _, _ := setup(t, b, &screener{verdict: model.Green})
-	for _, tc := range []struct {
-		thread string
-		count  int
-		want   guard.GuardError
-	}{
-		{"t1", 0, "count must be between 1 and 100"},
-		{"t1", 101, "count must be between 1 and 100"},
-		{"", 25, "give a thread ID"},
-	} {
-		if _, err := g.Thread(t.Context(), tc.thread, tc.count); err != tc.want {
-			t.Errorf("%q %d: err=%v", tc.thread, tc.count, err)
-		}
+	if _, err := g.Thread(t.Context(), ""); err != guard.GuardError("give a thread ID") {
+		t.Errorf("err=%v", err)
 	}
 	if b.calls != 0 {
 		t.Fatalf("mailbox called %d times", b.calls)

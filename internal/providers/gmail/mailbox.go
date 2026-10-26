@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -193,38 +194,38 @@ func (m *mailbox) Search(ctx context.Context, query model.SearchQuery, count int
 	return m.Get(ctx, ids, true)
 }
 
-// Thread takes the message IDs of the conversation in the order of threads.get, oldest first, with every label,
-// spam and trash included (https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.threads/get).
-// It keeps the newest count and reads them as List does.
-func (m *mailbox) Thread(ctx context.Context, thread string, count int) ([]model.Message, bool, error) {
-	if count < 1 {
-		return nil, false, failure("Gmail", "ValueError")
-	}
+// Thread takes the message IDs of the whole conversation from threads.get, with every label, spam and trash
+// included (https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.threads/get), and reads them
+// as List does. The API does not document the order of the messages, so they are sorted by received time, newest
+// first; ties keep the reverse threads.get order.
+func (m *mailbox) Thread(ctx context.Context, thread string) ([]model.Message, error) {
 	v, err := m.c.get(ctx, "Gmail", m.c.options.GmailURL+"/threads/"+segment(thread), url.Values{"format": {"minimal"}})
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	a, err := items(v, "messages", "Gmail")
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	ids := []string{}
 	for _, raw := range a {
 		v, err := object(raw, "Gmail")
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
 		id := stringField(v, "id")
 		if strings.TrimSpace(id) == "" {
-			return nil, false, failure("Gmail", "InvalidMetadata")
+			return nil, failure("Gmail", "InvalidMetadata")
 		}
 		ids = append(ids, id)
 	}
-	out, err := m.Get(ctx, ids[max(0, len(ids)-count):], true)
+	slices.Reverse(ids)
+	out, err := m.Get(ctx, ids, true)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	return out, len(ids) > count, nil
+	slices.SortStableFunc(out, func(a, b model.Message) int { return b.ReceivedAt.Compare(a.ReceivedAt) })
+	return out, nil
 }
 
 // run limits goroutines as well as shared HTTP slots, while preserving caller order.

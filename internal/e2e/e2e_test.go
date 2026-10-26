@@ -262,26 +262,16 @@ func TestThreadShowsTheWholeConversationScreenedWithItsFolders(t *testing.T) {
 		Subject     *string
 		Folders     []string
 	}
-	type thread struct {
-		ThreadID         string `json:"thread_id"`
-		Messages         []message
-		NewestReceivedAt string `json:"newest_received_at"`
-		Older            bool
-	}
 	subject := func(s string) *string { return &s }
-	got := decode[thread](t, s.ok("mail", "thread", "lunch"))
+	got := decode[[]message](t, s.ok("mail", "thread", "lunch"))
 	want := []message{
-		{"phish", "red", nil, []string{"trash"}},
-		{"lunch", "green", subject("canary-subject-lunch"), []string{"inbox"}},
-		{"lunch-reply", "green", subject("canary-subject-lunch-reply"), []string{"sent"}},
 		{draft, "green", subject("Re: canary-subject-lunch"), []string{"drafts"}},
+		{"lunch-reply", "green", subject("canary-subject-lunch-reply"), []string{"sent"}},
+		{"lunch", "green", subject("canary-subject-lunch"), []string{"inbox"}},
+		{"phish", "red", nil, []string{"trash"}},
 	}
-	if got.ThreadID != "lunch" || got.Older || !reflect.DeepEqual(got.Messages, want) || got.NewestReceivedAt == "" {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("thread=%+v", got)
-	}
-	got = decode[thread](t, s.ok("mail", "thread", "lunch", "--count", "2"))
-	if !got.Older || !reflect.DeepEqual(got.Messages, want[2:]) {
-		t.Fatalf("newest two: %+v", got)
 	}
 	s.refused("operation failed", "mail", "thread", "nowhere")
 }

@@ -10,7 +10,6 @@ import (
 	"path"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -238,32 +237,28 @@ func TestSearchByRecipientMatchesToOrCc(t *testing.T) {
 	}
 }
 
-func TestThreadFiltersAllMessagesByConversationAndKeepsTheNewestOldestFirst(t *testing.T) {
-	newestFirst := []any{
-		map[string]any{"id": "n3", "conversationId": "c'1 &x", "receivedDateTime": "2026-03-03T09:00:00Z", "parentFolderId": "inbox-id"},
-		map[string]any{"id": "n2", "conversationId": "c'1 &x", "receivedDateTime": "2026-03-02T09:00:00Z", "parentFolderId": "deleted-id"},
-		map[string]any{"id": "n1", "conversationId": "c'1 &x", "receivedDateTime": "2026-03-01T09:00:00Z", "parentFolderId": "sent-id"},
-	}
-	// calls holds the $top and $filter of each request.
-	calls := [][2]string{}
+func TestThreadReadsEveryPageOfTheConversationFilterNewestFirst(t *testing.T) {
+	// requests holds the query of each request; the nextLink page is a token only.
+	requests := []url.Values{}
 	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		calls = append(calls, [2]string{q.Get("$top"), q.Get("$filter")})
-		want := url.Values{
-			"$filter":  {q.Get("$filter")},
-			"$top":     {q.Get("$top")},
-			"$orderby": {"receivedDateTime desc"},
-			"$select":  {"id,from,sender,subject,receivedDateTime,toRecipients,ccRecipients,parentFolderId,conversationId,isDraft,isRead,flag,categories"},
-			"$expand":  {"attachments($select=name)"},
+		requests = append(requests, q)
+		if r.Method != "GET" || r.URL.Path != "/v1.0/me/messages" {
+			t.Errorf("%s %s", r.Method, r.URL.Path)
 		}
-		if r.Method != "GET" || r.URL.Path != "/v1.0/me/messages" || !reflect.DeepEqual(q, want) {
-			t.Errorf("%s %s %v", r.Method, r.URL.Path, q)
+		switch {
+		case q.Get("page") == "2":
+			jsonResponse(w, map[string]any{"value": []any{
+				map[string]any{"id": "n1", "conversationId": "c'1 &x", "receivedDateTime": "2026-03-01T09:00:00Z", "parentFolderId": "sent-id"},
+			}})
+		case strings.Contains(q.Get("$filter"), "gone"):
+			jsonResponse(w, map[string]any{"value": []any{}})
+		default:
+			jsonResponse(w, map[string]any{"value": []any{
+				map[string]any{"id": "n3", "conversationId": "c'1 &x", "receivedDateTime": "2026-03-03T09:00:00Z", "parentFolderId": "drafts-id", "isDraft": true},
+				map[string]any{"id": "n2", "conversationId": "c'1 &x", "receivedDateTime": "2026-03-02T09:00:00Z", "parentFolderId": "deleted-id"},
+			}, "@odata.nextLink": "http://" + r.Host + "/v1.0/me/messages?page=2"})
 		}
-		top, _ := strconv.Atoi(q.Get("$top"))
-		if strings.Contains(q.Get("$filter"), "gone") {
-			top = 0
-		}
-		jsonResponse(w, map[string]any{"value": newestFirst[:min(top, len(newestFirst))]})
 	})
 	b := c.Mailbox()
 	ctx := t.Context()
@@ -274,22 +269,27 @@ func TestThreadFiltersAllMessagesByConversationAndKeepsTheNewestOldestFirst(t *t
 		}
 		return out
 	}
-	got, older, err := b.Thread(ctx, "c'1 &x", 2)
-	if err != nil || !older || !reflect.DeepEqual(ids(got), []string{"n2@deleted-id", "n3@inbox-id"}) || got[0].ThreadID != "c'1 &x" {
-		t.Fatalf("ids=%v older=%v err=%v", ids(got), older, err)
+	got, err := b.Thread(ctx, "c'1 &x")
+	if err != nil || !reflect.DeepEqual(ids(got), []string{"n3@drafts-id", "n2@deleted-id", "n1@sent-id"}) || got[0].ThreadID != "c'1 &x" || !got[0].IsDraft {
+		t.Fatalf("ids=%v err=%v", ids(got), err)
 	}
-	if got, older, err := b.Thread(ctx, "c'1 &x", 3); err != nil || older || !reflect.DeepEqual(ids(got), []string{"n1@sent-id", "n2@deleted-id", "n3@inbox-id"}) {
-		t.Fatalf("whole thread ids=%v older=%v err=%v", ids(got), older, err)
-	}
-	if got, _, err := b.Thread(ctx, "gone", 25); err != model.MailboxError("Graph error 404") || len(got) != 0 {
+	if got, err := b.Thread(ctx, "gone"); err != model.MailboxError("Graph error 404") || len(got) != 0 {
 		t.Fatalf("unknown thread: ids=%v err=%v", ids(got), err)
 	}
-	want := [][2]string{
-		{"3", "receivedDateTime ge 1900-01-01T00:00:00Z and conversationId eq 'c''1 &x'"},
-		{"4", "receivedDateTime ge 1900-01-01T00:00:00Z and conversationId eq 'c''1 &x'"},
-		{"26", "receivedDateTime ge 1900-01-01T00:00:00Z and conversationId eq 'gone'"},
+	first := func(filter string) url.Values {
+		return url.Values{
+			"$filter":  {filter},
+			"$orderby": {"receivedDateTime desc"},
+			"$select":  {"id,from,sender,subject,receivedDateTime,toRecipients,ccRecipients,parentFolderId,conversationId,isDraft,isRead,flag,categories"},
+			"$expand":  {"attachments($select=name)"},
+		}
 	}
-	if !reflect.DeepEqual(calls, want) {
-		t.Fatalf("calls=%q", calls)
+	want := []url.Values{
+		first("receivedDateTime ge 1900-01-01T00:00:00Z and conversationId eq 'c''1 &x'"),
+		{"page": {"2"}},
+		first("receivedDateTime ge 1900-01-01T00:00:00Z and conversationId eq 'gone'"),
+	}
+	if !reflect.DeepEqual(requests, want) {
+		t.Fatalf("requests=%v", requests)
 	}
 }
