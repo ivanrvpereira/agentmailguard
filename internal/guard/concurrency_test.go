@@ -51,7 +51,7 @@ func TestConcurrentOrganizerApplyClassifiesInParallelButMutatesOnce(t *testing.T
 		b.scan.Messages = append(b.scan.Messages, model.InboxEntry{ID: id, ReceivedAt: now})
 	}
 	g, _, path := setup(t, b, s)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), bound)
 	defer cancel()
 	start := make(chan struct{})
 	done := make(chan error, 8)
