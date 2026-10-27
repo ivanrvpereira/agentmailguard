@@ -105,6 +105,22 @@ func TestDraftUpdateRefusesAMessageThatIsNotADraftBeforeAnyPatch(t *testing.T) {
 	}
 }
 
+// A PATCH answer that is not the updated draft, with no ID or another message's ID, fails closed with a fixed code.
+func TestDraftUpdateRefusesAnAnswerForAnotherMessage(t *testing.T) {
+	for _, answer := range []map[string]string{{"conversationId": "conv"}, {"id": "other", "conversationId": "conv"}} {
+		c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "GET" {
+				jsonResponse(w, map[string]any{"id": "m", "isDraft": true})
+				return
+			}
+			jsonResponse(w, answer)
+		})
+		if id, thread, err := c.Mailbox().DraftUpdate(context.Background(), "m", model.DraftChange{Subject: new("New")}); err != model.MailboxError("Graph error InvalidMetadata") || id != "" || thread != "" {
+			t.Fatalf("answer %v: update=%q %q %v", answer, id, thread, err)
+		}
+	}
+}
+
 // A draft delete and a draft send check isDraft and then send one request: DELETE of the message, or POST of its send
 // action without a body. A message that is not a draft gets no write, and a failed write is not sent again.
 func TestDraftDeleteAndSendWriteOnceAfterTheDraftCheck(t *testing.T) {

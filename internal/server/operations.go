@@ -377,7 +377,7 @@ type newDraftDTO struct {
 
 // newDraft is the result DTO of a draft, with every text field cleaned and the IDs as given.
 func newDraft(d model.DraftResult) newDraftDTO {
-	return newDraftDTO{draftIDsDTO{d.ID, d.ThreadID}, cleaned(d.To), cleaned(d.CC), cleaned(d.BCC), content.CleanSubject(d.Subject)}
+	return newDraftDTO{draftIDsDTO{d.ID, d.ThreadID}, content.CleanList(d.To), content.CleanList(d.CC), content.CleanList(d.BCC), content.CleanSubject(d.Subject)}
 }
 
 // updatedDraftDTO is the result of draft.update: the draft's IDs, the message ID possibly new, and only the recipient
@@ -405,7 +405,7 @@ func updatedDraft(d guard.UpdatedDraft, c model.DraftChange) updatedDraftDTO {
 		if v == nil {
 			return nil
 		}
-		return new(cleaned(*v))
+		return new(content.CleanList(*v))
 	}
 	var subject *string
 	if c.Subject != nil {
@@ -571,15 +571,6 @@ func newMessage(send bool) decoder {
 			return newDraft(d), nil
 		}, "", nil
 	}
-}
-
-// cleaned cleans each string of a provider list; nil gives an empty list.
-func cleaned(v []string) []string {
-	out := make([]string, 0, len(v))
-	for _, s := range v {
-		out = append(out, content.CleanSubject(s))
-	}
-	return out
 }
 
 // replyMessage is the decoder of mail.reply (send) and draft.reply: one message ID; body, html, all, cc, and bcc

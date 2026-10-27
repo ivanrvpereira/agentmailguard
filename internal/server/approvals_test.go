@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -20,8 +21,8 @@ import (
 )
 
 // approvalGraph is a fake Graph API. A GET returns the current event. Every other request is a write:
-// it is recorded and answered with {"id":"w1"}, a reply draft also with Graph's quoted body, or with failStatus
-// when that is set.
+// it is recorded and answered with {"id":"w1"}, a reply draft also with Graph's quoted body, a PATCH with the
+// patched message as Graph answers it, or with failStatus when that is set.
 type approvalGraph struct {
 	mu         sync.Mutex
 	writes     []meetingRequest
@@ -54,6 +55,10 @@ func (g *approvalGraph) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasSuffix(r.URL.Path, "/createReply") || strings.HasSuffix(r.URL.Path, "/createReplyAll") || strings.HasSuffix(r.URL.Path, "/createForward") {
 		io.WriteString(w, `{"id":"w1","body":{"contentType":"html","content":"<html><body>quoted</body></html>"}}`)
+		return
+	}
+	if r.Method == "PATCH" {
+		json.NewEncoder(w).Encode(map[string]string{"id": path.Base(r.URL.Path)})
 		return
 	}
 	io.WriteString(w, `{"id":"w1"}`)

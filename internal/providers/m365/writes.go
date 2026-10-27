@@ -357,7 +357,7 @@ func (b *mailbox) DraftUpdate(ctx context.Context, id string, change model.Draft
 	if err != nil {
 		return "", "", err
 	}
-	if text(d, "id") == "" {
+	if text(d, "id") != id {
 		return "", "", invalidMetadata
 	}
 	return id, text(d, "conversationId"), nil

@@ -444,14 +444,7 @@ func (g *Guard) ReplyRecipients(ctx context.Context, id string, all bool) (model
 	if err != nil {
 		return model.Recipients{}, sourceUnavailable
 	}
-	clean := func(v []string) []string {
-		out := make([]string, 0, len(v))
-		for _, s := range v {
-			out = append(out, content.CleanSubject(s))
-		}
-		return out
-	}
-	return model.Recipients{To: clean(r.To), CC: clean(r.CC), BCC: []string{}}, nil
+	return model.Recipients{To: content.CleanList(r.To), CC: content.CleanList(r.CC), BCC: []string{}}, nil
 }
 
 // DraftReply returns the reply draft that the provider made, and the screening verdict of its source from the

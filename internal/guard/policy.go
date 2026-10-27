@@ -391,10 +391,12 @@ type newDraftArgs struct {
 	HTML    bool     `json:"html"`
 }
 
+// storedList copies an address list for stored args. A nil list becomes an empty list, because the API refuses null.
+func storedList(v []string) []string { return append([]string{}, v...) }
+
 // newArgs stores every field of a new message. A nil list becomes an empty list, because the API refuses null.
 func newArgs(d model.NewDraft) newDraftArgs {
-	list := func(v []string) []string { return append([]string{}, v...) }
-	return newDraftArgs{list(d.To), list(d.CC), list(d.BCC), d.Subject, d.Body, d.HTML}
+	return newDraftArgs{storedList(d.To), storedList(d.CC), storedList(d.BCC), d.Subject, d.Body, d.HTML}
 }
 
 type replyArgs struct {
@@ -408,8 +410,7 @@ type replyArgs struct {
 
 // newReplyArgs stores every field of a reply. A nil list becomes an empty list, because the API refuses null.
 func newReplyArgs(id string, r model.Reply) replyArgs {
-	list := func(v []string) []string { return append([]string{}, v...) }
-	return replyArgs{id, r.Body, r.HTML, r.All, list(r.CC), list(r.BCC)}
+	return replyArgs{id, r.Body, r.HTML, r.All, storedList(r.CC), storedList(r.BCC)}
 }
 
 type draftChangeArgs struct {
@@ -429,7 +430,7 @@ func newDraftChangeArgs(id string, c model.DraftChange) draftChangeArgs {
 		if v == nil {
 			return nil
 		}
-		return new(append([]string{}, *v...))
+		return new(storedList(*v))
 	}
 	return draftChangeArgs{id, list(c.To), list(c.CC), list(c.BCC), c.Subject, c.Body, c.HTML}
 }
@@ -445,8 +446,7 @@ type forwardArgs struct {
 
 // newForwardArgs stores every field of a forward. A nil list becomes an empty list, because the API refuses null.
 func newForwardArgs(id string, f model.Forward) forwardArgs {
-	list := func(v []string) []string { return append([]string{}, v...) }
-	return forwardArgs{id, list(f.To), list(f.CC), list(f.BCC), f.Body, f.HTML}
+	return forwardArgs{id, storedList(f.To), storedList(f.CC), storedList(f.BCC), f.Body, f.HTML}
 }
 
 type inviteArgs struct {
