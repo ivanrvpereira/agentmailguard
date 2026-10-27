@@ -58,9 +58,9 @@ The guard does not protect a human from fraud.
 
 Missing or invalid screening fails closed.
 The fake screening engine (`[screening] provider = "fake"`) judges by keywords only and is for tests and local work. If an account is not a fake account, `amgd serve` warns but does not refuse.
-Mail is sent only by `mail send`, `mail reply`, and `mail forward`, and only when the write policy allows it. The default policy denies sends.
+Mail is sent only by `mail send`, `mail reply`, `mail forward`, and `draft send`, and only when the write policy allows it. The default policy denies sends. A send is never retried.
 Meeting invitations, updates, cancellations, and responses send notifications to attendees. The default policy denies them.
-The command set never permanently deletes mail.
+The command set never permanently deletes mail, except a draft through `draft delete`: Gmail deletes drafts for good, and Microsoft 365 keeps the deleted item restorable. `draft delete` and `draft send` refuse a message that is not a draft.
 Read state, flag, categorize, archive, and move have no policy key. The daemon runs them for anyone who can reach the listener.
 Trash is a provider move, not permanent deletion.
 
@@ -77,7 +77,7 @@ Keep the daemon home private and outside the source checkout.
 Do not commit configuration, encrypted credential files, databases, audit files, or environment files.
 Local caches and audit logs exclude mail bodies, subjects, sender identities, rule instructions, and raw provider responses.
 There are two exceptions.
-First, an action that waits for approval stores its request arguments, such as recipients, subject, and body, in the `pending` table of `cache.db`.
+First, an action that waits for approval stores its request arguments, such as recipients, subject, and body, in the `pending` table of `cache.db`. A waiting draft send also stores there the draft fields that the Jev action check saw (To, Cc, Bcc, subject, and body).
 Second, the account key is stored in `config.toml`, `cache.db`, `audit.jsonl`, and `rules.toml`. The account key is the email of the account.
 Audit records of accounts, credentials, settings, and reloads contain account keys, key paths, and fixed codes only. A `config_changed` record has a value only for a key with fixed choices. It never has a secret.
 Environment variables and process memory still expose secrets to sufficiently privileged local processes.

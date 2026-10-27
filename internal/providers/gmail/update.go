@@ -14,6 +14,8 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
+// resolveDraft gives the ID of the draft resource that holds message id, from drafts.list. A message that no draft
+// holds is a DraftError.
 func (m *mailbox) resolveDraft(ctx context.Context, id string) (string, error) {
 	q := url.Values{"maxResults": {"500"}}
 	seen := map[string]bool{}
@@ -140,6 +142,30 @@ func (m *mailbox) DraftUpdate(ctx context.Context, id string, change model.Draft
 		return "", "", err
 	}
 	return draftMessage(data)
+}
+
+// DraftDelete deletes the draft that holds message id with drafts.delete, which deletes it for good and does not
+// trash it (https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.drafts/delete). A message that no
+// draft holds is refused before any write.
+func (m *mailbox) DraftDelete(ctx context.Context, id string) error {
+	draft, err := m.resolveDraft(ctx, id)
+	if err != nil {
+		return err
+	}
+	_, err = m.c.request(ctx, "Gmail", "DELETE", m.c.options.GmailURL+"/drafts/"+segment(draft), nil, nil, "")
+	return err
+}
+
+// DraftSend sends the draft that holds message id as it is with drafts.send and only the draft ID, which sends to the
+// To, Cc, and Bcc headers (https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.drafts/send). A
+// message that no draft holds is refused before any write. The request helper never repeats a POST.
+func (m *mailbox) DraftSend(ctx context.Context, id string) error {
+	draft, err := m.resolveDraft(ctx, id)
+	if err != nil {
+		return err
+	}
+	_, err = m.c.write(ctx, "POST", m.c.options.GmailURL+"/drafts/send", map[string]any{"id": draft})
+	return err
 }
 
 // topHeaders gives the header fields of block, the top-level header block of a draft, for its update. Each field

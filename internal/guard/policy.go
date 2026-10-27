@@ -11,8 +11,9 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
-// Policy keys. A key is the API operation name with "." changed to "_"; mail_draft covers all draft operations,
-// and mail_send covers mail.send, mail.reply, and mail.forward.
+// Policy keys. A key is the API operation name with "." changed to "_"; mail_draft covers the draft operations
+// draft.new, draft.reply, draft.forward, draft.update, and draft.delete, and mail_send covers mail.send, mail.reply,
+// mail.forward, and draft.send.
 const (
 	keyTrash = "mail_trash"
 	keyDraft = "mail_draft"
@@ -91,11 +92,13 @@ func (g *Guard) sealedDecision(key string) config.Decision {
 }
 
 // decision is the final policy decision for one action. sealed is true when the sealed decision made it stricter.
-// jev is the Jev action check, nil when no check ran.
+// jev is the Jev action check, nil when no check ran. draft is, for a draft send, the draft fields that the check
+// saw, which a pending item stores beside its args; nil for other actions.
 type decision struct {
 	value  config.Decision
 	sealed bool
 	jev    *model.ActionCheck
+	draft  *newDraftArgs
 }
 
 // actionEffects describes, by policy key, what an action does. Jev gets it beside the API operation name.
@@ -110,11 +113,14 @@ var actionEffects = map[string]string{
 
 // checkAction asks Jev about the agent fields of args, for an action that the policy does not deny. A forward
 // also gives Jev the text of the forwarded message, and a reply the recipients that it goes to (reply_recipients);
-// if they are unavailable, the check fails. A flag or a failed check changes allow to approve; approve stays
-// approve. An approved run is never checked again.
+// if they are unavailable, the check fails. A draft send gives Jev the draft fields of d instead of its args. A flag
+// or a failed check changes allow to approve; approve stays approve. An approved run is never checked again.
 func (g *Guard) checkAction(ctx context.Context, op audit.Operation, key string, d decision, args any) (decision, error) {
 	if approved(ctx) || d.value == config.Deny {
 		return d, nil
+	}
+	if d.draft != nil {
+		args = *d.draft
 	}
 	state, err := actionFields(args)
 	if forward, ok := args.(forwardArgs); ok && err == nil {
@@ -169,8 +175,8 @@ func validCheck(c model.ActionCheck) model.ActionCheck {
 	return v
 }
 
-// actionFields gives the agent fields of the stored args without the referenced ID. A response or a
-// cancellation without a comment carries no agent text and gives nil.
+// actionFields gives the agent fields of the stored args without the referenced ID. Args with only the ID, such as
+// a draft delete, and a response or a cancellation without a comment carry no agent text and give nil.
 func actionFields(args any) (map[string]any, error) {
 	data, err := json.Marshal(args)
 	if err != nil {
@@ -181,7 +187,7 @@ func actionFields(args any) (map[string]any, error) {
 		return nil, GuardError("ValueError")
 	}
 	delete(fields, "id")
-	if comment, ok := fields["comment"]; ok && comment == "" {
+	if comment, ok := fields["comment"]; (ok && comment == "") || len(fields) == 0 {
 		return nil, nil
 	}
 	return fields, nil
@@ -251,7 +257,7 @@ func (e PendingError) Error() string { return audit.Pending }
 // apiOperations maps audit operations to the API operation names that pending items and policy records use.
 var apiOperations = map[audit.Operation]string{
 	audit.Trash: "mail.trash", audit.DraftNew: "draft.new", audit.DraftReply: "draft.reply", audit.DraftForward: "draft.forward", audit.DraftUpdate: "draft.update",
-	audit.MailSend: "mail.send", audit.MailReply: "mail.reply", audit.MailForward: "mail.forward",
+	audit.DraftDelete: "draft.delete", audit.MailSend: "mail.send", audit.MailReply: "mail.reply", audit.MailForward: "mail.forward", audit.DraftSend: "draft.send",
 	audit.CalendarInvite: "calendar.invite", audit.CalendarUpdate: "calendar.update", audit.CalendarCancel: "calendar.cancel", audit.CalendarRespond: "calendar.respond",
 }
 
@@ -276,14 +282,21 @@ func (g *Guard) recordDecision(ctx context.Context, op audit.Operation, key stri
 	return nil
 }
 
-// hold stores an approve action with args in the shape of the API params, then records the decision and the
-// new item. If an audit write fails, the item is denied so that it can never run without its records.
+// hold stores an approve action with args in the shape of the API params, and the draft fields of a draft send,
+// then records the decision and the new item. If an audit write fails, the item is denied so that it can never run
+// without its records.
 func (g *Guard) hold(ctx context.Context, op audit.Operation, key string, d decision, id, rule *string, args any) (string, error) {
 	data, err := json.Marshal(args)
 	if err != nil {
 		return "", GuardError("ValueError")
 	}
-	approval, err := g.store.AddPending(ctx, g.account, apiOperations[op], data, d.jev, g.now())
+	var draft []byte
+	if d.draft != nil {
+		if draft, err = json.Marshal(d.draft); err != nil {
+			return "", GuardError("ValueError")
+		}
+	}
+	approval, err := g.store.AddPending(ctx, g.account, apiOperations[op], data, draft, d.jev, g.now())
 	if err != nil {
 		return "", safeErr(ctx, err)
 	}
@@ -359,6 +372,9 @@ func (g *Guard) trashPolicy(ctx context.Context, ids []string, rule *string) (ma
 // Stored args mirror the API params of each operation, so a stored action can run through the normal API call.
 type idsArgs struct {
 	IDs []string `json:"ids"`
+}
+type idArgs struct {
+	ID string `json:"id"`
 }
 type newDraftArgs struct {
 	To      []string `json:"to"`

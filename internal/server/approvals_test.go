@@ -152,6 +152,7 @@ func TestApprovedActionMakesTheSameWriteAsTheAllowedCall(t *testing.T) {
 		{"draft.reply", "draft.reply", `{"id":"m1","body":"CANARY reply","all":true,"cc":["c@example.test"],"bcc":["d@example.test"],"html":true}`, greenMessage(t, "m1"), `{"id":"w1"}`, 2},
 		{"draft.forward", "draft.forward", `{"id":"m1","to":["a@example.test","b@example.test"],"cc":["c@example.test"],"body":"CANARY note","html":true}`, greenMessage(t, "m1"), `{"id":"w1"}`, 2},
 		{"draft.update", "draft.update", `{"id":"d1","to":[],"bcc":["d@example.test"],"subject":"CANARY subject","body":"<b>CANARY</b>","html":true}`, draftJSON, `{"id":"d1"}`, 1},
+		{"draft.delete", "draft.delete", `{"id":"d1"}`, draftJSON, "", 1},
 		{"calendar.invite", "calendar.invite", `{"to":["a@example.test"],"subject":"CANARY","body":"CANARY body","start":"2026-10-09T09:00:00Z","end":"2026-10-09T10:00:00Z","location":"Room","online":false}`, organizerEvent, "", 1},
 		{"calendar.update duration and attendees", "calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","start":"2026-10-09T12:00:00+01:00","duration":"30m","add":["new@example.test"],"remove":["remove@example.test"],"online":true}`, organizerEvent, "", 1},
 		{"calendar.update start keeps duration", "calendar.update", `{"id":"e1","start":"2026-10-09T12:00:00+01:00"}`, organizerEvent, "", 1},

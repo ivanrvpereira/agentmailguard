@@ -27,6 +27,9 @@ const mailCache = `CREATE TABLE mail_cache (
 const pendingTable = `CREATE TABLE pending (id TEXT PRIMARY KEY NOT NULL, account TEXT NOT NULL, op TEXT NOT NULL, args TEXT NOT NULL, jev TEXT,
  state TEXT NOT NULL CHECK (state IN ('pending','running','done','denied','failed')), result TEXT, created TEXT NOT NULL, updated TEXT NOT NULL);`
 
+// draftColumn is what 002_pending_draft.sql adds: a database at version 2 has pendingTable and this column.
+const draftColumn = `ALTER TABLE pending ADD COLUMN draft TEXT;`
+
 func fixture(t *testing.T, version int, schema, after string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "cache.db")
@@ -55,7 +58,7 @@ func TestNewDatabaseGetsTheSchemaAndKeepsRowsAcrossOpens(t *testing.T) {
 	if err := c.MarkSecurityApplied(ctx, "work@example.test", "m1", model.Red); err != nil {
 		t.Fatal(err)
 	}
-	id, err := c.AddPending(ctx, "work@example.test", "mail.trash", []byte(`{}`), nil, received)
+	id, err := c.AddPending(ctx, "work@example.test", "mail.trash", []byte(`{}`), nil, nil, received)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +77,27 @@ func TestNewDatabaseGetsTheSchemaAndKeepsRowsAcrossOpens(t *testing.T) {
 	}
 	if p, err := c.GetPending(ctx, id); err != nil || p.State != cache.StatePending || p.Account != "work@example.test" {
 		t.Fatalf("pending after reopen: %+v %v", p, err)
+	}
+}
+
+// A cache at version 1 gains the draft column of the pending table. A stored action keeps its args and has no
+// draft fields, and a new draft send stores them.
+func TestVersionOneCacheGainsThePendingDraftColumn(t *testing.T) {
+	path := fixture(t, 1, mailCache+pendingTable, `INSERT INTO pending VALUES ('0123456789abcdef0123456789abcdef','work@example.test','mail.send','{"subject":"CANARY"}',NULL,'pending',NULL,'2026-09-25T10:00:00Z','2026-09-25T10:00:00Z');`)
+	c, err := cache.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if p, err := c.GetPending(ctx, "0123456789abcdef0123456789abcdef"); err != nil || string(p.Args) != `{"subject":"CANARY"}` || p.Draft != nil || p.State != cache.StatePending {
+		t.Fatalf("stored action after migration: %+v %v", p, err)
+	}
+	id, err := c.AddPending(ctx, "work@example.test", "draft.send", []byte(`{"id":"d1"}`), []byte(`{"subject":"CANARY"}`), nil, received)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, err := c.GetPending(ctx, id); err != nil || string(p.Draft) != `{"subject":"CANARY"}` {
+		t.Fatalf("draft send after migration: %+v %v", p, err)
 	}
 }
 
@@ -104,11 +128,13 @@ func TestRejectedMigrationsLeaveDatabaseUnchanged(t *testing.T) {
 	}{
 		// A home from before the email account key has a cache at version 5. It is refused, not changed.
 		{"old program's cache", 5, mailCache + pendingTable},
-		{"newer than this program", 2, mailCache + pendingTable},
-		{"claimed current missing pending table", 1, mailCache},
+		{"newer than this program", 3, mailCache + pendingTable + draftColumn},
+		{"claimed current missing pending table", 2, mailCache},
+		{"claimed current missing draft column", 2, mailCache + pendingTable},
 		{"negative version", -1, mailCache},
-		{"claimed current missing columns", 1, strings.ReplaceAll(mailCache, ", organization TEXT, organization_applied_at TEXT", "") + pendingTable},
-		{"current wrong upsert key", 1, strings.ReplaceAll(mailCache, ", PRIMARY KEY (account, message_id)", ", UNIQUE (account, message_id, verdict)") + pendingTable},
+		{"claimed current missing columns", 2, strings.ReplaceAll(mailCache, ", organization TEXT, organization_applied_at TEXT", "") + pendingTable + draftColumn},
+		{"current wrong upsert key", 2, strings.ReplaceAll(mailCache, ", PRIMARY KEY (account, message_id)", ", UNIQUE (account, message_id, verdict)") + pendingTable + draftColumn},
+		{"version 1 missing pending table", 1, mailCache},
 		{"script fails on an existing table", 0, strings.ReplaceAll(mailCache, "score REAL", "score TEXT, verdict2 TEXT, score2 REAL") + "CREATE TABLE pending (x TEXT);"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

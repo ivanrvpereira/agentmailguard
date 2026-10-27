@@ -18,9 +18,9 @@ import (
 )
 
 // draftServer serves the draft "draft id" that holds message m on the second page of drafts.list, m in full with the
-// payload and labels, and m in raw form as raw with the labels. upload gets each upload; other requests fail the
-// test. It records each request.
-func draftServer(t *testing.T, payload map[string]any, labels []string, raw string, upload func(w http.ResponseWriter, r *http.Request)) (*[]string, http.HandlerFunc) {
+// payload and labels, and m in raw form as raw with the labels. write gets each other request. It records each
+// request.
+func draftServer(t *testing.T, payload map[string]any, labels []string, raw string, write func(w http.ResponseWriter, r *http.Request)) (*[]string, http.HandlerFunc) {
 	requests := []string{}
 	return &requests, func(w http.ResponseWriter, r *http.Request) {
 		requests = append(requests, r.Method+" "+r.URL.Path+" "+r.URL.Query().Get("format"))
@@ -35,8 +35,8 @@ func draftServer(t *testing.T, payload map[string]any, labels []string, raw stri
 			respond(w, v)
 		case r.Method == "GET" && r.URL.Path == "/messages/m" && r.URL.Query().Get("format") == "raw":
 			respond(w, map[string]any{"id": "m", "threadId": "thread", "labelIds": labels, "raw": base64.URLEncoding.EncodeToString([]byte(raw))})
-		case r.Method == "PUT":
-			upload(w, r)
+		case r.Method != "GET":
+			write(w, r)
 		default:
 			t.Errorf("request %s %s", r.Method, r.URL)
 		}
@@ -303,5 +303,42 @@ func TestReadDraftMapsTheDraftFields(t *testing.T) {
 	_, h = draftServer(t, payload, []string{"DRAFT"}, "", nil)
 	if _, err := sendClient(t, h).Mailbox().ReadDraft(context.Background(), "m"); err == nil || strings.Contains(err.Error(), "broken") {
 		t.Fatalf("broken To accepted: %v", err)
+	}
+}
+
+// A draft delete and a draft send act on the draft that holds the message: drafts.delete of that draft, or
+// drafts.send with only its ID, each once. A failed write is not sent again, and a message that no draft holds gets no
+// write.
+func TestDraftDeleteAndSendActOnceOnTheDraftThatHoldsTheMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		call  func(model.Mailbox, string) error
+		write string
+	}{
+		{"delete", func(b model.Mailbox, id string) error { return b.DraftDelete(context.Background(), id) }, "DELETE /drafts/draft%20id "},
+		{"send", func(b model.Mailbox, id string) error { return b.DraftSend(context.Background(), id) }, `POST /drafts/send {"id":"draft id"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, status := range []int{http.StatusOK, http.StatusNoContent, http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+				writes := []string{}
+				requests, h := draftServer(t, nil, []string{"DRAFT"}, "", func(w http.ResponseWriter, r *http.Request) {
+					body, _ := io.ReadAll(r.Body)
+					writes = append(writes, r.Method+" "+r.URL.EscapedPath()+" "+string(body))
+					if status == http.StatusOK {
+						respond(w, map[string]any{"id": "sent", "threadId": "thread", "labelIds": []string{"SENT"}})
+						return
+					}
+					w.WriteHeader(status)
+				})
+				err := tc.call(sendClient(t, h).Mailbox(), "m")
+				if (err == nil) != (status < 300) || !reflect.DeepEqual(writes, []string{tc.write}) {
+					t.Fatalf("HTTP %d: err=%v writes=%q requests=%q", status, err, writes, *requests)
+				}
+			}
+			requests, h := draftServer(t, nil, []string{"DRAFT"}, "", func(w http.ResponseWriter, r *http.Request) { t.Errorf("write %s %s", r.Method, r.URL) })
+			if err := tc.call(sendClient(t, h).Mailbox(), "o2"); err == nil {
+				t.Fatalf("message without a draft accepted after %q", *requests)
+			}
+		})
 	}
 }

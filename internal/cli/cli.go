@@ -32,12 +32,13 @@ type Options struct {
 func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "CLIOptions{redacted}") }
 
 const notes = `amg talks to the agentmailguard daemon (amgd serve) over HTTP: -H or AMG_HOST, default http://127.0.0.1:8787.
-It never starts the daemon and never changes accounts, credentials, or settings: amgd does that on the daemon host. No permanent delete.
-mail send, reply, and forward send email at once, and calendar invite, update, cancel, and respond (unless --no-notify) send meeting notifications at once, when the write policy allows them (default: deny).
+It never starts the daemon and never changes accounts, credentials, or settings: amgd does that on the daemon host. No permanent delete, except draft delete on Gmail, which deletes the draft for good.
+mail send, reply, forward, and draft send send email at once, and calendar invite, update, cancel, and respond (unless --no-notify) send meeting notifications at once, when the write policy allows them (default: deny). A send is never retried.
 --bcc recipients are hidden: the other recipients do not see them. draft new, draft update, mail send, reply, forward, calendar invite, and calendar update bodies are plain text unless --html; HTML goes unchanged, without cleaning.
 A reply goes to the sender, and with --all also to everyone on the original; its --cc and --bcc are added to those recipients. It keeps the quoted original and the conversation.
 A forward puts its --body note above the original, carries the original's attachments, and keeps the conversation. draft forward needs no recipient; mail forward needs a --to, --cc, or --bcc.
 draft update changes only the given fields of any draft: a list replaces the old one and --to '' clears it; --body replaces the whole body, quoted original included. Gmail gives the draft a new ID: use the returned id.
+draft delete and draft send act only on a draft; draft send sends the draft as it is at the provider when it runs.
 Days in date options run from 00:00 to the end of the day on this machine's clock and time zone; the last day is included.
 Client authentication and built-in TLS are absent. Anyone who reaches the daemon can run every action that the write policy allows. Protect remote access with a tunnel.`
 
@@ -556,9 +557,15 @@ func calendarCmd(r *runner) *cobra.Command {
 }
 
 func draftCmd(r *runner) *cobra.Command {
-	c := group(r, "draft", "Create and update drafts without sending them")
+	c := group(r, "draft", "Create, update, and delete drafts, and send a draft")
+	del := r.leaf("delete ID", "Delete a draft: for good on Gmail, restorable on Microsoft 365 (write policy applies)", 1, 1, func(c *cobra.Command, args []string) error {
+		return r.call(c, "draft.delete", map[string]any{"id": args[0]}, false)
+	})
+	send := r.leaf("send ID", "Send a draft as it is at the provider when the send runs (write policy applies)", 1, 1, func(c *cobra.Command, args []string) error {
+		return r.call(c, "draft.send", map[string]any{"id": args[0]}, false)
+	})
 	c.AddCommand(newMessageCmd(r, "new", "draft.new", "Draft a new message"), replyCmd(r, "draft.reply", "Draft a reply to a message"),
-		forwardCmd(r, "draft.forward", "Draft a forward of a message"), draftUpdateCmd(r))
+		forwardCmd(r, "draft.forward", "Draft a forward of a message"), draftUpdateCmd(r), del, send)
 	return c
 }
 

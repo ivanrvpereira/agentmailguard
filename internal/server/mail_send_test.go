@@ -11,9 +11,9 @@ import (
 	"testing"
 )
 
-// sendParams are valid params of the three send operations, in the shape of the matching draft operations, and
-// the paths of the Graph writes that each makes. A reply or forward is a draft (approvalGraph names it w1), its
-// PATCH, and its send.
+// sendParams are valid params of the send operations, the first three in the shape of the matching draft
+// operations, and the paths of the Graph writes that each makes. A reply or forward is a draft (approvalGraph names it
+// w1), its PATCH, and its send; a draft send is the send of the draft d1.
 var sendParams = []struct {
 	op, params string
 	paths      []string
@@ -21,6 +21,16 @@ var sendParams = []struct {
 	{"mail.send", `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body"}`, []string{"/me/sendMail"}},
 	{"mail.reply", `{"id":"m1","body":"CANARY reply"}`, []string{"/me/messages/m1/createReply", "/me/messages/w1", "/me/messages/w1/send"}},
 	{"mail.forward", `{"id":"m1","to":["a@example.test","b@example.test"],"body":"CANARY note"}`, []string{"/me/messages/m1/createForward", "/me/messages/w1", "/me/messages/w1/send"}},
+	{"draft.send", `{"id":"d1"}`, []string{"/me/messages/d1/send"}},
+}
+
+// sendRead is the Graph JSON that a send of sendParams reads: the forward's Jev check reads the forwarded message,
+// which the fake Jev screens green, and a draft send reads the draft d1.
+func sendRead(t *testing.T, op string) string {
+	if op == "draft.send" {
+		return draftJSON
+	}
+	return greenMessage(t, "m1")
 }
 
 // writePaths are the paths of the recorded writes.
@@ -43,7 +53,7 @@ func TestMailSendDefaultPolicyRefusesBeforeProviderAccess(t *testing.T) {
 		t.Fatalf("provider accessed: reads=%d writes=%d", reads.Load(), writes.Load())
 	}
 	text, records := auditOf(t, d.home)
-	if strings.Contains(text, "CANARY") || strings.Contains(text, "example.test") || len(records) != 3 {
+	if strings.Contains(text, "CANARY") || strings.Contains(text, "example.test") || len(records) != len(sendParams) {
 		t.Fatalf("audit=%s", text)
 	}
 }
@@ -86,8 +96,7 @@ func TestAllowedMailSendPostsOnceAndReturnsOK(t *testing.T) {
 	for _, tc := range sendParams {
 		t.Run(tc.op, func(t *testing.T) {
 			d, graph := approvalDaemon(t, sendAllow)
-			// The forward's Jev check reads the forwarded message, which the fake Jev screens green.
-			event := greenMessage(t, "m1")
+			event := sendRead(t, tc.op)
 			graph.event.Store(&event)
 			status, body := accountRPC(t, d.s, tc.op, "work", tc.params)
 			if status != 200 || body != `{"ok":true}` {
@@ -106,6 +115,7 @@ func TestInvalidMailSendParamsAreRefusedBeforeAccountAccess(t *testing.T) {
 	for op, params := range map[string][]string{
 		"mail.send":    {`{}`, `{"to":[],"cc":[],"bcc":[],"subject":"s","body":"b"}`, `{"bcc":[""]}`, `{"to":["a@example.test"],"html":"yes"}`, `{"to":["a@example.test"],"from":"x"}`, `{"to":["a@example.test"],"cc":null}`},
 		"mail.reply":   {`{}`, `{"body":"b"}`, `{"id":"","body":"b"}`, `{"id":"m1","body":"b","to":["x"]}`, `{"id":"m1","all":"yes"}`, `{"id":"m1","cc":[""]}`, `{"id":"m1","bcc":null}`},
+		"draft.send":   {`{}`, `{"id":""}`, `{"id":"d1","body":"b"}`, `{"id":"d1","to":["a@example.test"]}`},
 		"mail.forward": {`{}`, `{"to":["a@example.test"]}`, `{"id":"m1"}`, `{"id":"m1","to":[],"cc":[],"bcc":[],"body":"b"}`, `{"id":"m1","to":["a@example.test"],"subject":"s"}`, `{"id":"m1","cc":[""]}`, `{"id":"m1","bcc":null}`, `{"id":"m1","to":["a@example.test"],"html":"yes"}`},
 	} {
 		for _, p := range params {
@@ -123,7 +133,7 @@ func TestApprovedMailSendSendsOnceAndStoresOK(t *testing.T) {
 	for _, tc := range sendParams {
 		t.Run(tc.op, func(t *testing.T) {
 			d, graph := approvalDaemon(t, "[policy]\nmail_send='approve'\n")
-			event := greenMessage(t, "m1")
+			event := sendRead(t, tc.op)
 			graph.event.Store(&event)
 			id := pend(t, d.s, tc.op, tc.params)[0]
 			if len(graph.recorded()) != 0 {
@@ -148,7 +158,7 @@ func TestApprovedMailSendSendsOnceAndStoresOK(t *testing.T) {
 }
 
 // A reply or forward from a sealed source is always refused, also when mail_send allows it. The fake Graph API
-// serves no message, and a failed verdict lookup counts as sealed.
+// serves no message, and a failed verdict lookup counts as sealed. A draft send has no sealed check.
 func TestMailSendFromASealedSourceIsAlwaysRefused(t *testing.T) {
 	var writes atomic.Int32
 	d := graphDaemon(t, sendAllow, writeGrant, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -158,7 +168,7 @@ func TestMailSendFromASealedSourceIsAlwaysRefused(t *testing.T) {
 		w.WriteHeader(404)
 		io.WriteString(w, `{}`)
 	}), newNativeAPI())
-	for _, tc := range sendParams[1:] {
+	for _, tc := range sendParams[1:3] {
 		if status, body := accountRPC(t, d.s, tc.op, "work", tc.params); status != 500 || body != `{"error":"refused by policy: mail_send"}` {
 			t.Errorf("%s: %d %s", tc.op, status, body)
 		}
@@ -252,5 +262,20 @@ func TestDraftUpdateResultHasOnlyTheGivenFieldsCleaned(t *testing.T) {
 	}
 	if want := []string{"GET /me/messages/d1", "GET /me/messages/d1", "PATCH /me/messages/d1"}; !reflect.DeepEqual(paths, want) {
 		t.Fatalf("provider requests=%v", paths)
+	}
+}
+
+// A draft delete or send of a message that is not a draft gives the agent its fixed refusal and writes nothing.
+func TestDraftDeleteAndSendOfAMessageThatIsNotADraftAreRefusedPublicly(t *testing.T) {
+	d, graph := approvalDaemon(t, "[policy]\nmail_draft='allow'\nmail_send='allow'\n")
+	event := greenMessage(t, "m1")
+	graph.event.Store(&event)
+	for op, want := range map[string]string{"draft.delete": "draft delete refused: not a draft", "draft.send": "draft send refused: not a draft"} {
+		if status, body := accountRPC(t, d.s, op, "work", `{"id":"m1"}`); status != 500 || body != `{"error":"`+want+`"}` {
+			t.Errorf("%s: %d %s", op, status, body)
+		}
+	}
+	if got := graph.recorded(); len(got) != 0 {
+		t.Fatalf("provider writes=%+v", got)
 	}
 }

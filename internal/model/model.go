@@ -369,6 +369,11 @@ type Mailbox interface {
 	// DraftUpdate applies change to draft id, any draft, and gives the draft's message ID, which may be new, and its
 	// conversation (empty: the provider gave none). It refuses a message that is not a draft before any write.
 	DraftUpdate(ctx context.Context, id MessageID, change DraftChange) (MessageID, ThreadID, error)
+	// DraftDelete deletes draft id the provider's way: Gmail deletes it for good, Microsoft 365 keeps it restorable.
+	// DraftSend sends draft id as it is at the provider. Both refuse a message that is not a draft before any write,
+	// and a request that may have reached the provider is never sent again.
+	DraftDelete(ctx context.Context, id MessageID) error
+	DraftSend(ctx context.Context, id MessageID) error
 	// SendNew, SendReply, and SendForward send mail at once, with the same content as the matching draft
 	// operation. A send request that may have reached the provider is never sent again.
 	SendNew(ctx context.Context, draft NewDraft) error

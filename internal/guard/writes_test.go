@@ -113,12 +113,26 @@ type draftUpdate struct {
 	change model.DraftChange
 }
 
+// draftContent is what ReadDraft gives for a draft.
+var draftContent = model.DraftContent{IsDraft: true, To: []string{"CANARY-to@example.test"}, CC: []string{}, BCC: []string{"CANARY-bcc@example.test"}, Subject: "CANARY subject", Body: "<p>CANARY body</p>", HTML: true}
+
 func (w *writer) ReadDraft(context.Context, string) (model.DraftContent, error) {
 	w.draftReads++
 	if w.draftErr != nil {
 		return model.DraftContent{}, w.draftErr
 	}
-	return model.DraftContent{IsDraft: !w.notDraft}, nil
+	if w.notDraft {
+		return model.DraftContent{}, nil
+	}
+	return draftContent, nil
+}
+func (w *writer) DraftDelete(context.Context, string) error {
+	_, err := w.write("draft_delete", nil)
+	return err
+}
+func (w *writer) DraftSend(context.Context, string) error {
+	_, err := w.write("draft_send", nil)
+	return err
 }
 func (w *writer) DraftUpdate(_ context.Context, id string, change model.DraftChange) (string, string, error) {
 	w.updates = append(w.updates, draftUpdate{id, change})
@@ -235,14 +249,14 @@ func TestEveryManualRouteAndDraftHasContentFreeAudit(t *testing.T) {
 		}, func() error {
 			_, _, e := g.DraftUpdate(ctx, "d1", model.DraftChange{Subject: new("CANARY"), Body: new("CANARY")})
 			return e
-		},
+		}, func() error { return g.DraftDelete(ctx, "d1") }, func() error { return g.DraftSend(ctx, "d1") },
 	}
 	for _, call := range calls {
 		if err := call(); err != nil {
 			t.Fatal(err)
 		}
 	}
-	want := []string{"trash", "move", "read", "unread", "flag", "categorize", "draft_new", "draft_reply", "draft_forward", "draft_update"}
+	want := []string{"trash", "move", "read", "unread", "flag", "categorize", "draft_new", "draft_reply", "draft_forward", "draft_update", "draft_delete", "draft_send"}
 	if !reflect.DeepEqual(w.calls, want) {
 		t.Fatalf("wrong operations: %v", w.calls)
 	}
@@ -263,6 +277,12 @@ func TestEveryManualRouteAndDraftHasContentFreeAudit(t *testing.T) {
 	}
 	if records[9]["draft_id"] != "d4" || !reflect.DeepEqual(records[9]["ids"], []any{"d1"}) {
 		t.Fatal("draft update lost source/result IDs")
+	}
+	// A draft delete or send records only the draft's ID.
+	for _, r := range records[10:] {
+		if r["draft_id"] != nil || !reflect.DeepEqual(r["ids"], []any{"d1"}) {
+			t.Fatalf("draft delete or send record=%v", r)
+		}
 	}
 	if s.calls != 1 {
 		t.Fatal("writes screened content")

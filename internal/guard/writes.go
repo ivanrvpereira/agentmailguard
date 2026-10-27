@@ -272,17 +272,19 @@ func (g *Guard) Categorize(ctx context.Context, ids, add, remove []string) ([]mo
 
 // compose applies the mail_draft decision to a draft operation, or the mail_send decision to a send, and the
 // Jev action check, then runs call. source is the message that the action references; a new message has
-// none. Reply and forward reference a received message, so the sealed decision applies to their source;
-// update acts on a draft and has no sealed check, but unless the policy denies it, it is refused before the Jev
-// check and any write when its source is not a draft (onlyDraft). Jev sees the agent fields, and for a forward
-// also the text of the forwarded message. call gives the draft ID; a send gives none, so its operation record has only the
-// source ID, or no ID for a new message.
+// none. Reply and forward reference a received message, so the sealed decision applies to their source.
+// Update, delete, and send of a draft act on a draft and have no sealed check, but unless the policy denies them,
+// they are refused before the Jev check and any write when their source is not a draft (onlyDraft); an approved run
+// checks again. Jev sees the agent fields, for a forward also the text of the forwarded message, and for a draft
+// send the draft's fields as read. A draft delete sends nothing and has no Jev check. call gives the draft ID of a
+// draft operation that makes or changes a draft; for other actions it gives none, so the operation record has only
+// the source ID, or no ID for a new message.
 func (g *Guard) compose(ctx context.Context, op audit.Operation, source string, args any, call func() (string, error)) (string, error) {
 	if err := g.acquire(ctx); err != nil {
 		return "", err
 	}
 	defer g.release()
-	send := op == audit.MailSend || op == audit.MailReply || op == audit.MailForward
+	send := op == audit.MailSend || op == audit.MailReply || op == audit.MailForward || op == audit.DraftSend
 	key := keyDraft
 	if send {
 		key = keySend
@@ -291,17 +293,23 @@ func (g *Guard) compose(ctx context.Context, op audit.Operation, source string, 
 	if op != audit.DraftNew && op != audit.MailSend {
 		ref = new(source)
 	}
+	onDraft := op == audit.DraftUpdate || op == audit.DraftDelete || op == audit.DraftSend
+	makesDraft := !send && op != audit.DraftDelete
 	d := decision{value: g.base(ctx, key)}
-	if ref != nil && op != audit.DraftUpdate {
+	if ref != nil && !onDraft {
 		decisions, err := g.decide(ctx, key, []string{source})
 		if err != nil {
 			return "", err
 		}
 		d = decisions[source]
 	}
-	if op == audit.DraftUpdate && d.value != config.Deny {
-		if err := g.onlyDraft(ctx, source); err != nil {
+	if onDraft && d.value != config.Deny {
+		draft, err := g.onlyDraft(ctx, op, source)
+		if err != nil {
 			return "", err
+		}
+		if op == audit.DraftSend {
+			d.draft = new(newArgs(model.NewDraft{To: draft.To, CC: draft.CC, BCC: draft.BCC, Subject: draft.Subject, Body: draft.Body, HTML: draft.HTML}))
 		}
 	}
 	d, err := g.checkAction(ctx, op, key, d, args)
@@ -318,7 +326,7 @@ func (g *Guard) compose(ctx context.Context, op audit.Operation, source string, 
 	if err != nil {
 		return "", safeErr(ctx, err)
 	}
-	if id == "" && !send {
+	if id == "" && makesDraft {
 		return "", GuardError("ValueError")
 	}
 	var results []model.MutationResult
@@ -326,10 +334,10 @@ func (g *Guard) compose(ctx context.Context, op audit.Operation, source string, 
 	switch {
 	case ref != nil:
 		results = []model.MutationResult{{ID: source, OK: true}}
-		if !send {
+		if makesDraft {
 			opts.DraftID = &id
 		}
-	case !send:
+	case makesDraft:
 		results = []model.MutationResult{{ID: id, OK: true}}
 	}
 	if err := g.recordDecision(ctx, op, key, d, ref, nil, nil); err != nil {
@@ -437,19 +445,46 @@ func (g *Guard) DraftUpdate(ctx context.Context, id string, change model.DraftCh
 	return draft, thread, err
 }
 
-// onlyDraft reads message id and refuses it unless it is a draft. A failed read fails closed with its safe code.
-func (g *Guard) onlyDraft(ctx context.Context, id string) error {
+// Public refusals of a draft write on a message that is not a draft.
+const (
+	DraftDeleteNotDraft = GuardError("draft delete refused: not a draft")
+	DraftSendNotDraft   = GuardError("draft send refused: not a draft")
+)
+
+// notDraftRefusals maps each draft write to its refusal of a message that is not a draft.
+var notDraftRefusals = map[audit.Operation]GuardError{audit.DraftUpdate: DraftUpdateNotDraft, audit.DraftDelete: DraftDeleteNotDraft, audit.DraftSend: DraftSendNotDraft}
+
+// onlyDraft reads message id for the draft write op and refuses it with the refusal of op unless it is a draft. A
+// failed read fails closed with its safe code.
+func (g *Guard) onlyDraft(ctx context.Context, op audit.Operation, id string) (model.DraftContent, error) {
 	draft, err := g.mailbox.ReadDraft(ctx, id)
 	if err != nil {
-		return safeErr(ctx, err)
+		return model.DraftContent{}, safeErr(ctx, err)
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return model.DraftContent{}, err
 	}
 	if !draft.IsDraft {
-		return DraftUpdateNotDraft
+		return model.DraftContent{}, notDraftRefusals[op]
 	}
-	return nil
+	return draft, nil
+}
+
+// DraftDelete deletes draft id under the mail_draft decision; DraftSend sends it as it is at the provider under the
+// mail_send decision. Their stored args are only the ID; a waiting send also stores the draft fields that Jev checked.
+func (g *Guard) DraftDelete(ctx context.Context, id string) error {
+	if id == "" {
+		return GuardError("invalid request")
+	}
+	_, err := g.compose(ctx, audit.DraftDelete, id, idArgs{id}, func() (string, error) { return "", g.mailbox.DraftDelete(ctx, id) })
+	return err
+}
+func (g *Guard) DraftSend(ctx context.Context, id string) error {
+	if id == "" {
+		return GuardError("invalid request")
+	}
+	_, err := g.compose(ctx, audit.DraftSend, id, idArgs{id}, func() (string, error) { return "", g.mailbox.DraftSend(ctx, id) })
+	return err
 }
 
 // SendNew, SendReply, and SendForward send mail at once under the mail_send decision. Their params and

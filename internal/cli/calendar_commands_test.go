@@ -174,7 +174,7 @@ func TestCalendarWriteUsageErrorsNeedNoServerOrState(t *testing.T) {
 
 func TestHelpStatesThatCalendarWritesSendNotifications(t *testing.T) {
 	code, out, errout := runOffline(t, "--help")
-	if code != 0 || errout != "" || strings.Contains(out, "No mail send") || !strings.Contains(out, "No permanent delete.") || !strings.Contains(out, "mail send, reply, and forward send email at once") || !strings.Contains(out, "send meeting notifications at once") {
+	if code != 0 || errout != "" || strings.Contains(out, "No mail send") || !strings.Contains(out, "No permanent delete, except draft delete on Gmail") || !strings.Contains(out, "mail send, reply, forward, and draft send send email at once") || !strings.Contains(out, "send meeting notifications at once") {
 		t.Fatalf("root help: exit=%d stdout=%q stderr=%q", code, out, errout)
 	}
 	// Meeting writes work on both providers.

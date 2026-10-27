@@ -340,6 +340,30 @@ func TestDraftsLandInDraftsFromTheAccountAddress(t *testing.T) {
 	}
 }
 
+// Draft delete and draft send act only on a draft: a received message is refused and stays as it is, and a missing
+// message is refused.
+func TestDraftDeleteAndSendRefuseAMessageThatIsNotADraft(t *testing.T) {
+	m, _ := mailbox(t)
+	ctx := context.Background()
+	before, err := m.Get(ctx, []string{"old"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, call := range map[string]func(string) error{
+		"delete": func(id string) error { return m.DraftDelete(ctx, id) },
+		"send":   func(id string) error { return m.DraftSend(ctx, id) },
+	} {
+		for _, id := range []string{"old", "gone"} {
+			if err := call(id); err == nil {
+				t.Errorf("%s of %s accepted", name, id)
+			}
+		}
+	}
+	if after, err := m.Get(ctx, []string{"old"}, true); err != nil || !reflect.DeepEqual(after, before) {
+		t.Fatalf("received message changed: %+v %v", after, err)
+	}
+}
+
 func TestSendsLandInSentAndRecordKindAndSource(t *testing.T) {
 	m, home := mailbox(t)
 	ctx := context.Background()

@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -51,6 +52,26 @@ func (s *server) auditEvents(events ...string) []map[string]any {
 		if slices.Contains(events, v["event"].(string)) {
 			delete(v, "time")
 			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// operations gives the operation records of audit.jsonl in order, each as its operation and its IDs.
+func (s *server) operations() []string {
+	s.t.Helper()
+	data, err := os.ReadFile(filepath.Join(s.home, "audit.jsonl"))
+	if err != nil && !os.IsNotExist(err) {
+		s.t.Fatal(err)
+	}
+	out := []string{}
+	for line := range strings.Lines(string(data)) {
+		var v map[string]any
+		if err := json.Unmarshal([]byte(line), &v); err != nil {
+			s.t.Fatal(err)
+		}
+		if _, ok := v["event"]; !ok {
+			out = append(out, fmt.Sprint(v["operation"], " ", v["ids"]))
 		}
 	}
 	return out

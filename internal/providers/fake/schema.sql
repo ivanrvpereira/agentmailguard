@@ -23,8 +23,9 @@ CREATE TABLE IF NOT EXISTS categories (
 	PRIMARY KEY (account, name)
 );
 
--- messages holds all mail. Nothing is ever deleted: trash and archive are moves to those folders.
--- received_at is the time of the insert unless the row gives one.
+-- messages holds all mail. Only draft delete deletes a row, a draft's; trash and archive are moves to those
+-- folders, and draft send moves the draft to sent.
+-- received_at is the time of the insert unless the row gives one; draft send sets it to the send time.
 -- to_addresses, cc_addresses, and bcc_addresses: JSON arrays of addresses, for example ["ana@example.test"].
 -- content_type: text keeps the body as plain text with its line breaks; html marks the body as HTML source.
 -- categories: JSON array of category names. attachments: JSON array of file names.

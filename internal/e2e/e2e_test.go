@@ -541,6 +541,113 @@ func TestApprovedDraftUpdateAppliesOnlyTheGivenFields(t *testing.T) {
 	}
 }
 
+// draft delete removes the draft under the default policy, with an operation record of its ID only. A received
+// message is never deleted: draft delete refuses it with a fixed text and changes nothing.
+func TestDraftDeleteRemovesTheDraftAndNeverOtherMail(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	id := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--subject", "canary-subject-delete", "--body", "canary-body-delete")).ID
+	if out := s.ok("draft", "delete", id); !decode[struct{ OK bool }](t, out).OK {
+		t.Fatalf("draft delete: %s", out)
+	}
+	if got := s.column(`SELECT id FROM messages WHERE id = ?`, id); len(got) != 0 {
+		t.Fatalf("deleted draft remains: %v", got)
+	}
+	if got := s.operations(); !reflect.DeepEqual(got, []string{"draft_new [" + id + "]", "draft_delete [" + id + "]"}) {
+		t.Fatalf("operation records=%v", got)
+	}
+	before := s.dump()
+	for _, received := range []string{"lunch", "phish"} {
+		s.refused("draft delete refused: not a draft", "draft", "delete", received)
+	}
+	s.refused("refused by policy: mail_send", "draft", "send", "lunch")
+	s.assertTables(before)
+	if got := s.operations(); len(got) != 2 {
+		t.Fatalf("refused deletes wrote operation records: %v", got)
+	}
+}
+
+// draft send under allow sends the draft as it is: it leaves drafts and lands in sent with every recipient list, and
+// the result is ok. A received message is refused with a fixed text, and under the default policy (deny) no draft is
+// sent.
+func TestDraftSendSendsTheDraftAndOnlyADraft(t *testing.T) {
+	t.Parallel()
+	s := start(t, sendAllowed)
+	id := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--cc", "cy@example.test", "--bcc", "ed@example.test", "--subject", "canary-subject-send", "--body", "<p>canary-body-send</p>", "--html")).ID
+	before := s.dump()
+	s.refused("draft send refused: not a draft", "draft", "send", "lunch")
+	s.assertTables(before)
+	if out := s.ok("draft", "send", id); !decode[struct{ OK bool }](t, out).OK {
+		t.Fatalf("draft send: %s", out)
+	}
+	if got := s.column(`SELECT folder || ' ' || is_draft || ' ' || to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || subject || ' ' || content_type || ' ' || body FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got,
+		[]string{`sent 0 ["ana@example.test"] ["cy@example.test"] ["ed@example.test"] canary-subject-send html <p>canary-body-send</p>`}) {
+		t.Fatalf("sent draft: %q", got)
+	}
+	if got := s.operations(); !reflect.DeepEqual(got, []string{"draft_new [" + id + "]", "draft_send [" + id + "]"}) {
+		t.Fatalf("operation records=%v", got)
+	}
+
+	denied := start(t, "")
+	draft := decode[newDraft](t, denied.ok("draft", "new", "--to", "ana@example.test", "--subject", "canary-subject-denied")).ID
+	before = denied.dump()
+	denied.refused("refused by policy: mail_send", "draft", "send", draft)
+	denied.assertTables(before)
+}
+
+// A draft send that waits for approval stores the draft fields that Jev checked: the approval list and page show its
+// recipients, bcc marked as hidden, its subject, and its HTML body as source text. The approved run sends the draft
+// as it is then, here after an update of its subject. An approved send whose draft is gone fails with a safe code and
+// sends nothing.
+func TestApprovedDraftSendShowsTheCheckedDraftAndSendsItOnce(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='approve'\n")
+	id := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--cc", "cy@example.test", "--bcc", "ed@example.test", "--subject", "canary-subject-checked", "--body", "<b>canary-body-checked</b>", "--html")).ID
+	p := s.held("draft", "send", id)
+	if got := s.column(`SELECT folder FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got, []string{"drafts"}) {
+		t.Fatalf("pending send ran: %v", got)
+	}
+	_, list := s.consoleGet(consolePassword, "/")
+	if !strings.Contains(list, "ana@example.test; cc: cy@example.test; bcc (hidden): ed@example.test") || !strings.Contains(list, "canary-subject-checked") {
+		t.Fatalf("list misses the draft fields:\n%s", list)
+	}
+	_, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID)
+	for _, want := range []string{"<dt>id</dt><dd><pre>" + id + "</pre></dd>", "<h2>Draft</h2>", "<dt>to</dt><dd><pre>ana@example.test</pre></dd>", "<dt>cc</dt><dd><pre>cy@example.test</pre></dd>",
+		"<dt>bcc (hidden recipients)</dt><dd><pre>ed@example.test</pre></dd>", "<dt>subject</dt><dd><pre>canary-subject-checked</pre></dd>",
+		"<dt>body (HTML source, not rendered)</dt><dd><pre>&lt;b&gt;canary-body-checked&lt;/b&gt;</pre></dd>"} {
+		if !strings.Contains(item, want) {
+			t.Errorf("item page misses %q:\n%s", want, item)
+		}
+	}
+	s.ok("draft", "update", id, "--subject", "canary-subject-changed")
+	s.approve(p.ApprovalID)
+	if got := s.column(`SELECT folder || ' ' || is_draft || ' ' || subject FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got, []string{"sent 0 canary-subject-changed"}) {
+		t.Fatalf("approved send: %v", got)
+	}
+	status := decode[struct {
+		State  string
+		Result map[string]any
+	}](t, s.ok("approvals", "status", p.ApprovalID))
+	if status.State != "done" || !reflect.DeepEqual(status.Result, map[string]any{"ok": true}) {
+		t.Fatalf("approved draft send: %+v", status)
+	}
+
+	gone := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--subject", "canary-subject-gone")).ID
+	p = s.held("draft", "send", gone)
+	s.ok("draft", "delete", gone)
+	sent := s.column(`SELECT id FROM messages WHERE folder = 'sent'`)
+	s.approve(p.ApprovalID)
+	if state := s.state(p.ApprovalID); state != "failed" {
+		t.Fatalf("approved send of a deleted draft: %s", state)
+	}
+	if got := s.column(`SELECT id FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, sent) {
+		t.Fatalf("approved send of a deleted draft sent %v", got)
+	}
+	if _, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID); !strings.Contains(item, "<dt>Error</dt><dd><pre>MailboxError</pre></dd>") {
+		t.Fatalf("failed item page:\n%s", item)
+	}
+}
+
 // A reply or forward of a sealed or error message is refused even when the policy allows drafts and sends.
 func TestRepliesAndForwardsOfASealedMessageAreAlwaysRefused(t *testing.T) {
 	t.Parallel()

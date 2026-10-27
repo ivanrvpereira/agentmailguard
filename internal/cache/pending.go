@@ -24,10 +24,11 @@ const (
 	StateFailed  PendingState = "failed"
 )
 
-// Pending is a stored write action. Args can contain message content.
+// Pending is a stored write action. Args and Draft can contain message content.
 type Pending struct {
 	ID, Account, Op  string
 	Args             json.RawMessage
+	Draft            json.RawMessage // a draft send: the draft fields that the Jev action check saw; nil for other actions
 	State            PendingState
 	Result           *string            // provider IDs on done, safe error code on failed
 	Jev              *model.ActionCheck // nil when no Jev action check ran
@@ -40,16 +41,23 @@ var (
 	ErrPendingHandled = errors.New("pending action already handled")
 )
 
-const pendingColumns = `id, account, op, args, jev, state, result, created, updated`
+const pendingColumns = `id, account, op, args, draft, jev, state, result, created, updated`
 
-// AddPending stores an action in state pending and returns its new random ID. jev is the result of the
-// Jev action check, nil when no check ran.
-func (c *Cache) AddPending(ctx context.Context, account, op string, args json.RawMessage, jev *model.ActionCheck, now time.Time) (string, error) {
+// AddPending stores an action in state pending and returns its new random ID. draft is the draft fields of a draft
+// send, nil for other actions. jev is the result of the Jev action check, nil when no check ran.
+func (c *Cache) AddPending(ctx context.Context, account, op string, args, draft json.RawMessage, jev *model.ActionCheck, now time.Time) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	if !json.Valid(args) {
 		return "", errors.New("pending action arguments are not valid JSON")
+	}
+	var fields *string
+	if draft != nil {
+		if !json.Valid(draft) {
+			return "", errors.New("pending draft fields are not valid JSON")
+		}
+		fields = new(string(draft))
 	}
 	var check *string
 	if jev != nil {
@@ -66,8 +74,8 @@ func (c *Cache) AddPending(ctx context.Context, account, op string, args json.Ra
 	}
 	id := hex.EncodeToString(random)
 	at := iso(now)
-	if _, err := c.db.ExecContext(ctx, `INSERT INTO pending (id, account, op, args, jev, state, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, account, op, string(args), check, StatePending, at, at); err != nil {
+	if _, err := c.db.ExecContext(ctx, `INSERT INTO pending (id, account, op, args, draft, jev, state, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, account, op, string(args), fields, check, StatePending, at, at); err != nil {
 		return "", errors.New("pending action write failed")
 	}
 	return id, nil
@@ -125,8 +133,8 @@ func (c *Cache) ListPending(ctx context.Context, resolvedLimit int) ([]Pending, 
 func scanPending(row interface{ Scan(...any) error }) (Pending, error) {
 	var p Pending
 	var args, created, updated string
-	var jev *string
-	err := row.Scan(&p.ID, &p.Account, &p.Op, &args, &jev, &p.State, &p.Result, &created, &updated)
+	var draft, jev *string
+	err := row.Scan(&p.ID, &p.Account, &p.Op, &args, &draft, &jev, &p.State, &p.Result, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Pending{}, ErrPendingNotFound
 	}
@@ -134,6 +142,9 @@ func scanPending(row interface{ Scan(...any) error }) (Pending, error) {
 		return Pending{}, errors.New("pending action read failed")
 	}
 	p.Args = json.RawMessage(args)
+	if draft != nil {
+		p.Draft = json.RawMessage(*draft)
+	}
 	if jev != nil {
 		p.Jev = &model.ActionCheck{}
 		if json.Unmarshal([]byte(*jev), p.Jev) != nil {

@@ -266,7 +266,7 @@ func (b *mailbox) SendReply(ctx context.Context, id string, reply model.Reply) e
 	return err
 }
 
-// notDraft refuses an update of a message that is not a draft.
+// notDraft refuses a draft write of a message that is not a draft.
 const notDraft = model.MailboxError("Graph error DraftError")
 
 // draftFlag reads isDraft, which must be a JSON boolean, of a message with an ID. Graph tells a draft from a sent
@@ -335,16 +335,8 @@ func (b *mailbox) DraftUpdate(ctx context.Context, id string, change model.Draft
 		return "", "", requestFailed
 	}
 	defer func() { <-b.c.mutationGate }()
-	d, err := b.c.get(ctx, b.c.endpoint("/me/messages/"+escapeID(id), url.Values{"$select": {"isDraft"}}), false)
-	if err != nil {
+	if err := b.onlyDraft(ctx, id); err != nil {
 		return "", "", err
-	}
-	draft, err := draftFlag(d)
-	if err != nil {
-		return "", "", err
-	}
-	if !draft {
-		return "", "", notDraft
 	}
 	patch := map[string]any{}
 	for _, list := range []struct {
@@ -361,16 +353,60 @@ func (b *mailbox) DraftUpdate(ctx context.Context, id string, change model.Draft
 	if change.Body != nil {
 		patch["body"] = itemBody(*change.Body, change.HTML)
 	}
-	if ctx.Err() != nil {
-		return "", "", requestFailed
-	}
-	if d, err = b.c.request(ctx, http.MethodPatch, b.c.endpoint("/me/messages/"+escapeID(id), nil), patch, false); err != nil {
+	d, err := b.c.request(ctx, http.MethodPatch, b.c.endpoint("/me/messages/"+escapeID(id), nil), patch, false)
+	if err != nil {
 		return "", "", err
 	}
 	if text(d, "id") == "" {
 		return "", "", invalidMetadata
 	}
 	return id, text(d, "conversationId"), nil
+}
+
+// onlyDraft reads isDraft of message id and refuses a message that is not a draft. The caller holds the mutation
+// gate, so the write that follows acts on the message that was checked.
+func (b *mailbox) onlyDraft(ctx context.Context, id string) error {
+	d, err := b.c.get(ctx, b.c.endpoint("/me/messages/"+escapeID(id), url.Values{"$select": {"isDraft"}}), false)
+	if err != nil {
+		return err
+	}
+	draft, err := draftFlag(d)
+	if err != nil {
+		return err
+	}
+	if !draft {
+		return notDraft
+	}
+	if ctx.Err() != nil {
+		return requestFailed
+	}
+	return nil
+}
+
+// draftWrite sends one request of method to path under the mutation gate after the draft check of message id. The
+// request helper never repeats it.
+func (b *mailbox) draftWrite(ctx context.Context, id, method, path string) error {
+	if !b.c.lockMutation(ctx) {
+		return requestFailed
+	}
+	defer func() { <-b.c.mutationGate }()
+	if err := b.onlyDraft(ctx, id); err != nil {
+		return err
+	}
+	_, err := b.c.request(ctx, method, b.c.endpoint(path, nil), nil, false)
+	return err
+}
+
+// DraftDelete deletes draft id with DELETE (https://learn.microsoft.com/en-us/graph/api/message-delete?view=graph-rest-1.0).
+// Graph has a separate permanentDelete for a permanent delete, so this one leaves the item restorable.
+func (b *mailbox) DraftDelete(ctx context.Context, id string) error {
+	return b.draftWrite(ctx, id, http.MethodDelete, "/me/messages/"+escapeID(id))
+}
+
+// DraftSend sends draft id as it is with its send action and no request body, which Graph answers with 202 Accepted
+// and saves in Sent Items (https://learn.microsoft.com/en-us/graph/api/message-send?view=graph-rest-1.0).
+func (b *mailbox) DraftSend(ctx context.Context, id string) error {
+	return b.draftWrite(ctx, id, http.MethodPost, "/me/messages/"+escapeID(id)+"/send")
 }
 func (b *mailbox) each(ctx context.Context, ids []string, call func(string) error) ([]model.MutationResult, error) {
 	// Serialize mutation operations for this account, including category read-modify-write.

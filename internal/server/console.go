@@ -227,6 +227,10 @@ func (c *console) list(ctx context.Context, w http.ResponseWriter) {
 	rows := make([]listRow, 0, len(items))
 	for _, item := range items {
 		args := storedFields(item.Args)
+		// A draft send names only its draft; its recipients and subject are the stored draft fields.
+		if item.Op == "draft.send" {
+			args = storedFields(item.Draft)
+		}
 		// Optional attendees receive the invitation too.
 		recipients := append(texts(args["to"]), texts(args["optional"])...)
 		if args["to"] == nil {
@@ -265,7 +269,10 @@ type itemPage struct {
 	Reply             bool
 	Recipients        []field
 	RecipientsMissing bool
-	Pending           bool
+	// DraftSend is true for a draft send. Draft is the stored draft fields that Jev checked, empty when none are stored.
+	DraftSend bool
+	Draft     []field
+	Pending   bool
 }
 
 // referenceTimeout bounds the guarded read of the referenced message or event.
@@ -298,6 +305,9 @@ func (c *console) item(ctx context.Context, w http.ResponseWriter, id string, st
 	if item.Op == "draft.reply" || item.Op == "mail.reply" {
 		page.Reply = true
 		page.Recipients, page.RecipientsMissing = c.replyRecipients(ctx, item, args)
+	}
+	if item.Op == "draft.send" {
+		page.DraftSend, page.Draft = true, requestFields(storedFields(item.Draft))
 	}
 	render(w, status, "item", page)
 }
@@ -363,7 +373,7 @@ func (c *console) reference(ctx context.Context, item cache.Pending, args map[st
 		}
 	case "calendar.update", "calendar.cancel", "calendar.respond":
 		op, kind = "calendar.get", "Event"
-	case "draft.reply", "draft.forward", "draft.update", "mail.reply", "mail.forward":
+	case "draft.reply", "draft.forward", "draft.update", "draft.delete", "mail.reply", "mail.forward":
 	default:
 		return "", nil, false
 	}
@@ -567,6 +577,9 @@ button{font-size:1.1rem;padding:.8rem 1.6rem;border-radius:.4rem;border:1px soli
 {{if .Reply}}<h2>Reply recipients</h2>
 {{if .RecipientsMissing}}<p>Reply recipients could not be read.</p>{{else}}<p>Worked out from the original message, with the cc and bcc of the request. Microsoft 365 picks its own list when it makes the reply.</p>
 {{template "fields" .Recipients}}{{end}}{{end}}
+{{if .DraftSend}}<h2>Draft</h2>
+{{if .Draft}}<p>The draft as the daemon read it for the Jev check when the agent asked to send it. The send sends the draft as it is at the provider when it runs.</p>
+{{template "fields" .Draft}}{{else}}<p>Draft fields not available.</p>{{end}}{{end}}
 {{if .Pending}}<form method="post" action="/a/{{.ID}}">
 <button class="approve" type="submit" name="decision" value="approve">Approve</button>
 <button class="deny" type="submit" name="decision" value="deny">Deny</button>

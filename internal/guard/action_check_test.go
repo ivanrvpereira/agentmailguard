@@ -124,6 +124,9 @@ func TestActionsWithoutAgentTextAreNotChecked(t *testing.T) {
 	if err := g.CalendarCancel(ctx, "e1", ""); err != nil {
 		t.Fatalf("cancel=%v", err)
 	}
+	if err := g.DraftDelete(ctx, "d1"); err != nil {
+		t.Fatalf("draft delete=%v", err)
+	}
 	cal.event.IsOrganizer = false
 	if err := g.CalendarRespond(ctx, "e1", model.EventResponse{Response: model.ResponseAccept}); err != nil {
 		t.Fatalf("respond=%v", err)

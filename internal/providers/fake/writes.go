@@ -329,7 +329,7 @@ func (b *mailbox) ReadDraft(ctx context.Context, id string) (model.DraftContent,
 	return model.DraftContent{IsDraft: true, To: bare(m.To), CC: bare(m.CC), BCC: bare(m.BCC), Subject: m.Subject, Body: *m.Body, HTML: *m.ContentType == model.HTML}, nil
 }
 
-// notDraft refuses an update of a message that is not a draft.
+// notDraft refuses a draft write of a message that is not a draft.
 const notDraft = model.MailboxError("DraftError")
 
 // DraftUpdate changes the given fields of any draft in one UPDATE; the draft keeps its ID.
@@ -372,6 +372,37 @@ func (b *mailbox) DraftUpdate(ctx context.Context, id string, change model.Draft
 		return "", "", storageError
 	}
 	return id, thread, nil
+}
+
+// DraftDelete removes the draft row, the one delete of the fake provider. A message that is not a draft stays.
+func (b *mailbox) DraftDelete(ctx context.Context, id string) error {
+	return b.draftWrite(ctx, id, `DELETE FROM messages WHERE account = ? AND id = ? AND is_draft = 1`)
+}
+
+// DraftSend moves the draft to sent as a sent message at the send time; the message keeps its ID. Nothing leaves the
+// machine.
+func (b *mailbox) DraftSend(ctx context.Context, id string) error {
+	return b.draftWrite(ctx, id, `UPDATE messages SET folder = 'sent', is_draft = 0, received_at = ? WHERE account = ? AND id = ? AND is_draft = 1`, b.p.now().UTC().Format(time.RFC3339Nano))
+}
+
+// draftWrite runs statement, whose last arguments are the account and the message ID, on draft id only. A missing
+// message is notFound, and a message that is not a draft is notDraft.
+func (b *mailbox) draftWrite(ctx context.Context, id, statement string, args ...any) error {
+	db, err := b.p.conn(ctx)
+	if err != nil {
+		return err
+	}
+	r, err := db.ExecContext(ctx, statement, append(args, b.p.account, id)...)
+	if err != nil {
+		return storageError
+	}
+	if n, err := r.RowsAffected(); err != nil || n == 0 {
+		if _, err := b.Get(ctx, []string{id}, false); err != nil {
+			return err
+		}
+		return notDraft
+	}
+	return nil
 }
 
 // Sends only store the message in sent. Nothing leaves the machine.

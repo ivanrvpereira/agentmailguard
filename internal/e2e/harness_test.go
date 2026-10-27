@@ -559,8 +559,8 @@ func (s *server) approve(approvalID string) {
 }
 
 // assertNoMailContent checks that no name, subject, body, address, or code from the seed or the tests reached
-// the daemon log, audit.jsonl, or a table of cache.db other than pending. Every name, subject, and body starts
-// with canary-, and every address is in one of the domains below. It runs after the daemon stopped.
+// the daemon log, audit.jsonl, or cache.db outside the args and draft columns of pending. Every name, subject, and
+// body starts with canary-, and every address is in one of the domains below. It runs after the daemon stopped.
 func (s *server) assertNoMailContent() {
 	s.t.Helper()
 	audit, err := os.ReadFile(filepath.Join(s.home, "audit.jsonl"))
@@ -578,9 +578,10 @@ func (s *server) assertNoMailContent() {
 	}
 }
 
-// cacheText opens cache.db read-only and returns, for each column of each table except pending, the non-NULL
-// values one per line, keyed "cache.db TABLE.COLUMN". pending is the one table that may hold mail content: the
-// request arguments of writes that wait for approval. cacheText returns nothing when the daemon made no cache.db.
+// cacheText opens cache.db read-only and returns, for each column of each table, the non-NULL values one per line,
+// keyed "cache.db TABLE.COLUMN", except the args and draft columns of pending: the only columns that may hold mail
+// content, the request arguments of writes that wait for approval and the draft fields that Jev checked for a
+// waiting draft send. cacheText returns nothing when the daemon made no cache.db.
 func (s *server) cacheText() map[string]string {
 	s.t.Helper()
 	path := filepath.Join(s.home, "cache.db")
@@ -596,11 +597,11 @@ func (s *server) cacheText() map[string]string {
 	defer db.Close()
 	out := map[string]string{}
 	for table, rows := range readTables(s.t, db) {
-		if table == "pending" {
-			continue
-		}
 		for _, row := range rows {
 			for column, value := range row {
+				if table == "pending" && (column == "args" || column == "draft") {
+					continue
+				}
 				if value != nil {
 					out["cache.db "+table+"."+column] += fmt.Sprint(value) + "\n"
 				}

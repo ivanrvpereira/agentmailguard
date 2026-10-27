@@ -147,12 +147,13 @@ func TestDefaultPolicyTrashesAndDraftsGreenMail(t *testing.T) {
 			id, _, err := g.DraftUpdate(ctx, "d1", model.DraftChange{Body: new("body")})
 			return id, err
 		},
+		func() (string, error) { return "", g.DraftDelete(ctx, "d1") },
 	} {
 		if _, err := call(); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if want := []string{"trash", "draft_new", "draft_reply", "draft_forward", "draft_update"}; !reflect.DeepEqual(w.calls, want) {
+	if want := []string{"trash", "draft_new", "draft_reply", "draft_forward", "draft_update", "draft_delete"}; !reflect.DeepEqual(w.calls, want) {
 		t.Fatalf("provider writes=%v want %v", w.calls, want)
 	}
 }
@@ -703,5 +704,67 @@ func TestDraftUpdateRefusesAMessageThatIsNotADraftBeforeAnyWrite(t *testing.T) {
 	g, _, _ := policyGuard(t, w, nil, scoring(0.08), config.Policy{})
 	if _, _, err := g.DraftUpdate(context.Background(), "m1", body); err == nil || err.Error() != "refused by policy: mail_draft" || w.draftReads != 0 {
 		t.Fatalf("denied update: %v reads=%d", err, w.draftReads)
+	}
+}
+
+// A draft delete (mail_draft) and a draft send (mail_send) read their message unless the policy denies them, and
+// refuse one that is not a draft with their fixed public text before the Jev check, any pending item, any record, and
+// any write. A failed read fails closed with a safe code. An approved run reads the draft again, so an approved send
+// of a draft that is gone or is no longer a draft sends nothing.
+func TestDraftDeleteAndSendRefuseAMessageThatIsNotADraftBeforeAnyWrite(t *testing.T) {
+	for _, op := range []struct {
+		name, refusal, denied string
+		call                  func(context.Context, *guard.Guard) error
+		set                   func(*config.Policy, config.Decision)
+	}{
+		{"delete", "draft delete refused: not a draft", "refused by policy: mail_draft", func(ctx context.Context, g *guard.Guard) error { return g.DraftDelete(ctx, "m1") },
+			func(p *config.Policy, d config.Decision) { p.Base.MailDraft = d }},
+		{"send", "draft send refused: not a draft", "refused by policy: mail_send", func(ctx context.Context, g *guard.Guard) error { return g.DraftSend(ctx, "m1") },
+			func(p *config.Policy, d config.Decision) { p.Base.MailSend = d }},
+	} {
+		for _, tc := range []struct {
+			name     string
+			decision config.Decision
+			approved bool
+			w        *writer
+			want     string
+		}{
+			{"not a draft", config.Allow, false, &writer{notDraft: true}, op.refusal},
+			{"not a draft under approve", config.Approve, false, &writer{notDraft: true}, op.refusal},
+			{"failed read", config.Allow, false, &writer{draftErr: model.MailboxError("CANARY provider text")}, "MailboxError"},
+			{"approved run of a message that is no longer a draft", config.Deny, true, &writer{notDraft: true}, op.refusal},
+			{"approved run of a draft that is gone", config.Deny, true, &writer{draftErr: model.MailboxError("NotFoundError")}, "MailboxError"},
+		} {
+			t.Run(op.name+" "+tc.name, func(t *testing.T) {
+				tc.w.mailbox = &mailbox{}
+				s := scoring(0.08)
+				policy := allowAll
+				op.set(&policy, tc.decision)
+				g, c, path := policyGuard(t, tc.w, nil, s, policy)
+				ctx := context.Background()
+				if tc.approved {
+					ctx = guard.WithApproval(ctx)
+				}
+				if err := op.call(ctx, g); err == nil || err.Error() != tc.want {
+					t.Fatalf("err=%v want %q", err, tc.want)
+				}
+				if tc.w.draftReads != 1 || len(tc.w.calls) != 0 || len(s.checked()) != 0 {
+					t.Fatalf("reads=%d writes=%v checks=%v", tc.w.draftReads, tc.w.calls, s.checked())
+				}
+				if items, err := c.ListPending(ctx, 10); err != nil || len(items) != 0 {
+					t.Fatalf("pending=%v %v", items, err)
+				}
+				if got := allAuditRecords(t, path); len(got) != 0 {
+					t.Fatalf("records=%v", got)
+				}
+			})
+		}
+		t.Run(op.name+" denied", func(t *testing.T) {
+			w := &writer{mailbox: &mailbox{}, notDraft: true}
+			g, _, _ := policyGuard(t, w, nil, scoring(0.08), config.Policy{})
+			if err := op.call(context.Background(), g); err == nil || err.Error() != op.denied || w.draftReads != 0 || len(w.calls) != 0 {
+				t.Fatalf("denied: %v reads=%d writes=%v", err, w.draftReads, w.calls)
+			}
+		})
 	}
 }

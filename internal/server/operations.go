@@ -24,7 +24,7 @@ import (
 // entry needs no grant beyond its login scopes.
 type providerGrants map[string][]string
 
-// mailSendGrants allow mail.send, mail.reply, and mail.forward. Gmail sends need no grant beyond gmail.modify.
+// mailSendGrants allow mail.send, mail.reply, mail.forward, and draft.send. Gmail sends need no grant beyond gmail.modify.
 var mailSendGrants = providerGrants{"m365": {"Mail.Send"}}
 
 // calendarWriteGrants allow the meeting writes. Gmail logins made before calendar writes have only the read-only grant.
@@ -45,7 +45,8 @@ func publicError(e error) (string, bool) {
 	if e, ok := e.(guard.GuardError); ok {
 		switch e {
 		case guard.CalendarWriteUnsupported, guard.CalendarAvailabilityUnsupported, guard.CalendarCancelCommentUnsupported, guard.CalendarNoNotifyUnsupported, "missing_scopes", "invalid request",
-			guard.CalendarRecurring, guard.CalendarCancelled, guard.CalendarOrganizerOnly, guard.CalendarOrganizerCannotRespond, guard.DraftUpdateNotDraft:
+			guard.CalendarRecurring, guard.CalendarCancelled, guard.CalendarOrganizerOnly, guard.CalendarOrganizerCannotRespond, guard.DraftUpdateNotDraft,
+			guard.DraftDeleteNotDraft, guard.DraftSendNotDraft:
 			return string(e), true
 		case "refused by policy: mail_draft", "refused by policy: mail_send", "refused by policy: calendar_invite", "refused by policy: calendar_update", "refused by policy: calendar_cancel", "refused by policy: calendar_respond":
 			return string(e), true
@@ -169,6 +170,12 @@ var operations = map[string]operation{
 	"draft.reply":   {decode: replyMessage(false)},
 	"draft.update":  {decode: draftUpdate},
 	"draft.forward": {decode: forwardMessage(false)},
+	"draft.delete": {decode: typed(idParam{}, func(p *idParam) bool { return idValid(p.ID) }, func(ctx context.Context, _ *Server, p idParam, a *account) (any, error) {
+		return sent(a.guard.DraftDelete(ctx, p.ID))
+	})},
+	"draft.send": {decode: typed(idParam{}, func(p *idParam) bool { return idValid(p.ID) }, func(ctx context.Context, _ *Server, p idParam, a *account) (any, error) {
+		return sent(a.guard.DraftSend(ctx, p.ID))
+	}), grants: mailSendGrants},
 	"calendar.get": {decode: typed(idParam{}, func(p *idParam) bool { return idValid(p.ID) }, func(ctx context.Context, _ *Server, p idParam, a *account) (any, error) {
 		return a.guard.CalendarGet(ctx, p.ID)
 	})},
@@ -405,7 +412,7 @@ func sourceContentShown(source model.Verdict) bool {
 	return source == model.Green || source == model.Yellow
 }
 
-// okDTO is the result of a send: providers give no ID for a sent message.
+// okDTO is the result of a send or a draft delete: providers give no ID for a sent message.
 type okDTO struct {
 	OK bool `json:"ok"`
 }
