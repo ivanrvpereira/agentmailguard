@@ -23,7 +23,7 @@ const (
 type approvalKey struct{}
 
 // WithApproval marks ctx for the run of an action that a person approved. A guard write with this context
-// skips the policy: it makes no decision, no sealed lookup, no policy record, and no pending item, and runs
+// skips the policy: it makes no decision, no sealed lookup, no policy record, and no pending action, and runs
 // as an allowed action with its normal operation record. Only the approval run may create this context.
 func WithApproval(ctx context.Context) context.Context {
 	return context.WithValue(ctx, approvalKey{}, true)
@@ -267,7 +267,7 @@ type PendingError struct{ ApprovalID string }
 
 func (e PendingError) Error() string { return audit.Pending }
 
-// apiOperations maps audit operations to the API operation names that pending items and policy records use.
+// apiOperations maps audit operations to the API operation names that pending actions and policy records use.
 var apiOperations = map[audit.Operation]string{
 	audit.Trash: "mail.trash", audit.DraftNew: "draft.new", audit.DraftReply: "draft.reply", audit.DraftForward: "draft.forward", audit.DraftUpdate: "draft.update",
 	audit.DraftDelete: "draft.delete", audit.MailSend: "mail.send", audit.MailReply: "mail.reply", audit.MailForward: "mail.forward", audit.DraftSend: "draft.send",
@@ -344,7 +344,7 @@ func (g *Guard) single(ctx context.Context, op audit.Operation, key string, d de
 }
 
 // trashPolicy decides each trash ID before any provider access. It records deny and approve decisions,
-// stores each approve ID as its own pending item, and returns the results of the IDs it held back and
+// stores each approve ID as its own pending action, and returns the results of the IDs it held back and
 // the distinct IDs that the policy allows.
 func (g *Guard) trashPolicy(ctx context.Context, ids []string, rule *string) (map[string]model.MutationResult, []string, error) {
 	unique := []string{}

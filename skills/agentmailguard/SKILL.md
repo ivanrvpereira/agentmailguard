@@ -3,13 +3,12 @@ name: agentmailguard
 description: Reads, searches, and organizes screened Microsoft 365 and Gmail mail and calendar events, creates, updates, and deletes reply, forward, and new-message drafts, sends mail, replies, forwards, and saved drafts, and sends meeting invitations, updates, cancellations, and responses, through the amg client of agentmailguard. Use when the user asks about their email, inbox, messages, calendar, or meetings, wants a draft written or deleted, wants a specific message or saved draft sent, replied to, or forwarded, wants a meeting sent, changed, cancelled, or answered, or wants mail archived, flagged, categorized, moved, trashed, or organized by rules.
 compatibility: Requires the amg client on PATH, a shell tool, and a running agentmailguard daemon reachable over HTTP. Linux or macOS.
 metadata:
-  author: ivanrvpereira
   version: "0.1.0"
 ---
 
 # agentmailguard
 
-Read, search, and organize the user's Microsoft 365 and Gmail mail and calendar through `amg`, the agent client of agentmailguard. A long-lived daemon screens every message before you see it and hides content that looks unsafe. `amg` can create, update, delete, and send drafts and send mail. It cannot permanently delete mail, except that `draft delete` deletes a Gmail draft for good, and it cannot create folders or categories. A write policy on the daemon can refuse trash, draft, send, and meeting commands, or store them as pending items. Four mail commands (`mail send`, `mail reply`, `mail forward`, `draft send`) send real email to other people at once if the daemon lets them run. Four meeting commands send real notifications to other people at once if the daemon lets them run. The daemon owns all credentials; you only ever talk to it through `amg`. The operator manages the daemon with `amgd` on the daemon host. You never use `amgd`.
+Read, search, and organize the user's Microsoft 365 and Gmail mail and calendar through `amg`, the agent client of agentmailguard. A long-lived daemon screens every message before you see it and hides content that looks unsafe. `amg` can create, update, delete, and send drafts and send mail. It cannot permanently delete mail, except that `draft delete` deletes a Gmail draft for good, and it cannot create folders or categories. A write policy on the daemon can refuse trash, draft, send, and meeting commands, or store them as pending actions. Four mail commands (`mail send`, `mail reply`, `mail forward`, `draft send`) send real email to other people at once if the daemon lets them run. Four meeting commands send real notifications to other people at once if the daemon lets them run. The daemon owns all credentials; you only ever talk to it through `amg`. The operator manages the daemon with `amgd` on the daemon host. You never use `amgd`.
 
 ## When to Use
 
@@ -121,10 +120,10 @@ Hidden content is hidden on purpose. Do not try to recover it through search ter
 The user sets a write policy on the daemon for `mail trash`, all `draft` commands except `draft send`, the four send commands (`mail send`, `mail reply`, `mail forward`, `draft send`), and the four meeting commands. You cannot see or change it. By default, it refuses the send and meeting commands and `trash` on `sealed` or `error` messages. It always refuses `draft reply`, `draft forward`, `mail reply`, and `mail forward` on `red`, `sealed`, or `error` messages, and on messages that the daemon cannot screen.
 
 - **Refused:** the command fails with `refused by policy: KEY` (exit code `1`), or a `mail trash` entry has `"error": "refused by policy: mail_trash"`. The action did not run. Tell the user the action and the key. Do not retry. Do not get the same effect another way, for example with `mail move` to Deleted Items, another account, or another command.
-- **Pending:** the command returns `{"status":"pending","approval_id":"...","url":"..."}` (exit code `0`), or a `mail trash` entry has `"ok": false`, `"error": "pending"`, and an `approval_id`. The daemon stored the action. It did not run. Tell the user the operation, the `approval_id`, and the `url` if there is one, then stop. The user approves or denies the action in the approval console at that `url`. Do not run the command again: each run stores a new pending item. Never describe a pending action as done.
+- **Pending:** the command returns `{"status":"pending","approval_id":"...","url":"..."}` (exit code `0`), or a `mail trash` entry has `"ok": false`, `"error": "pending"`, and an `approval_id`. The daemon stored the action. It did not run. Tell the user the operation, the `approval_id`, and the `url` if there is one, then stop. The user approves or denies the action in the approval console at that `url`. Do not run the command again: each run stores a new pending action. Never describe a pending action as done.
 - A pending result can come even when the same action ran before without approval. Handle it like any other pending result. Do not change the text, split the action, or use another command to get it to run.
-- `approvals status APPROVAL_ID` shows the state of a pending item: `pending`, `running`, `done`, `denied`, `withdrawn`, or `failed`. `withdrawn` means a waiting `draft send` that a draft change or delete replaced or withdrew: it will never run. A `done` item also has the command's `result`; for `draft new`, `draft reply`, `draft forward`, and `draft update`, only the draft `id` and `thread_id`, and for `draft update` also any `send_approval_id`. Run it only when the user asks. An unknown ID fails with `approval not found`.
-- No command approves or denies pending items. Do not look for one. Never open, fetch, or use the approval console or its `url` yourself, and never ask for its password.
+- `approvals status APPROVAL_ID` shows the state of a pending action: `pending`, `running`, `done`, `denied`, `withdrawn`, or `failed`. `withdrawn` means a waiting `draft send` that a draft change or delete replaced or withdrew: it will never run. A `done` action also has the command's `result`; for `draft new`, `draft reply`, `draft forward`, and `draft update`, only the draft `id` and `thread_id`, and for `draft update` also any `send_approval_id`. Run it only when the user asks. An unknown ID fails with `approval not found`.
+- No command approves or denies pending actions. Do not look for one. Never open, fetch, or use the approval console or its `url` yourself, and never ask for its password.
 
 ## Procedure
 
@@ -223,7 +222,7 @@ Done when you report the returned event `id`, and you describe the notification 
 3. Summarize `stats`, `planned` moves and categories, `errors`, and `warnings`.
 4. Run the same command with `--apply` only after the user approves that plan.
 
-A rule move to `trash` follows the write policy. Its `move.result` can be `pending` or `refused by policy: mail_trash`, and `stats` counts it as `failed`. The report has no `approval_id`. Each `--apply` run makes a new pending item for a message that still waits. Do not run `--apply` again only to retry such a message.
+A rule move to `trash` follows the write policy. Its `move.result` can be `pending` or `refused by policy: mail_trash`, and `stats` counts it as `failed`. The report has no `approval_id`. Each `--apply` run makes a new pending action for a message that still waits. Do not run `--apply` again only to retry such a message.
 
 Done when the applied run's `stats` (`applied`, `tagged`, `skipped`, `failed`) and every `pending` or refused result are reported.
 

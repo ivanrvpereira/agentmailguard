@@ -54,7 +54,7 @@ func ParseKey(c Config, name string) (Key, error) {
 		return Key{}, fmt.Errorf("%s is a secret; run amgd config set %s and give the value on stdin", name, name)
 	case name == "version":
 		return Key{}, errors.New("version is fixed; this program writes version = 1")
-	case name == "default_account", name == "screening.endpoint", name == "screening.model", name == "console.listen":
+	case name == "default_account", name == "screening.endpoint", name == "screening.model", name == "console.listen", name == "console.username":
 		return k, nil
 	case name == "screening.provider", name == "credentials.backend":
 		k.Choice = true
@@ -189,6 +189,7 @@ func List(ctx context.Context, path string) ([]Setting, error) {
 	add(c.Screening.Model, "screening", "model")
 	add(c.Console.Listen, "console", "listen")
 	add(strings.Join(c.Console.Hosts, ","), "console", "hosts")
+	add(c.Console.Username, "console", "username")
 	add(c.Backend, "credentials", "backend")
 	for _, a := range c.Accounts {
 		add(a.Provider, "accounts", a.Alias, "provider")

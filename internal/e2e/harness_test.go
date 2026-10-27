@@ -514,7 +514,7 @@ type pending struct {
 	URL        string `json:"url"`
 }
 
-// held runs a write command and fails the test unless the daemon stored it as a pending item.
+// held runs a write command and fails the test unless the daemon stored it as a pending action.
 func (s *server) held(args ...string) pending {
 	s.t.Helper()
 	p := decode[pending](s.t, s.ok(args...))
@@ -524,13 +524,13 @@ func (s *server) held(args ...string) pending {
 	return p
 }
 
-// state is the state of a pending item, from approvals status.
+// state is the state of a pending action, from approvals status.
 func (s *server) state(approvalID string) string {
 	s.t.Helper()
 	return decode[struct{ State string }](s.t, s.ok("approvals", "status", approvalID)).State
 }
 
-// decide approves or denies a pending item in the approval console, as the user does in a browser, and
+// decide approves or denies a pending action in the approval console, as the user does in a browser, and
 // returns the HTTP status.
 func (s *server) decide(approvalID, decision string) int {
 	s.t.Helper()
@@ -540,7 +540,7 @@ func (s *server) decide(approvalID, decision string) int {
 	}
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.Header.Set("Origin", "http://"+s.console)
-	r.SetBasicAuth("me", consolePassword)
+	r.SetBasicAuth("admin", consolePassword)
 	client := http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(r)
 	if err != nil {
@@ -550,7 +550,7 @@ func (s *server) decide(approvalID, decision string) int {
 	return resp.StatusCode
 }
 
-// approve approves a pending item and fails the test unless the console accepted the decision.
+// approve approves a pending action and fails the test unless the console accepted the decision.
 func (s *server) approve(approvalID string) {
 	s.t.Helper()
 	if code := s.decide(approvalID, "approve"); code != http.StatusSeeOther {

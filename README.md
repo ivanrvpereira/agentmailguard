@@ -72,7 +72,7 @@ To move a home from the earlier single `agentmailguard` program, see [Moving an 
 
 An account has an alias, for example `work`, and an email.
 The lowercase email is the account key: the name under which the daemon keeps the data of the account.
-The cache, pending items, stats, audit records, `rules.toml`, and the credential store use the account key.
+The cache, pending actions, stats, audit records, `rules.toml`, and the credential store use the account key.
 The alias is only a short name for the command line. It appears only in `config.toml`, in commands, and in their output.
 Every sign-in must return the email that `config.toml` has for the account. If it returns another email, `amgd` saves nothing.
 Microsoft 365 sign-in uses the `userPrincipalName` of the user, else `mail`. Gmail sign-in uses the `emailAddress` of the profile.
@@ -120,11 +120,11 @@ tenant_id = "<tenant-id>"
 Other account commands:
 
 - `amgd account login ALIAS` signs in again, for example after a login expired. It accepts only the email in `config.toml`. If you sign in as another user, it saves nothing and names `amgd account add`.
-- `amgd account remove ALIAS` removes the account and policy tables, the login, and the cached verdicts of the account. It denies the pending items of the account. Audit records and the rules of the account in `rules.toml` stay.
+- `amgd account remove ALIAS` removes the account and policy tables, the login, and the cached verdicts of the account. It denies the pending actions of the account. Audit records and the rules of the account in `rules.toml` stay.
 - `account remove` asks you to type the alias on a terminal. If stdin is not a terminal, add `--yes`.
 - `account remove` refuses the default account while other accounts exist. First run `amgd config set default_account OTHER_ALIAS`.
 - `account remove` does not call the provider. It prints where you can revoke the access of the application at the provider.
-- After `account remove`, make sure that the daemon log shows `reload ok`. If it shows `reload refused`, the daemon still serves the removed account with its old state, and the console can still approve its pending items. Fix the cause and run `amgd reload`, or stop the daemon.
+- After `account remove`, make sure that the daemon log shows `reload ok`. If it shows `reload refused`, the daemon still serves the removed account with its old state, and the console can still approve its pending actions. Fix the cause and run `amgd reload`, or stop the daemon.
 
 To rename an alias, edit the table name and `default_account` in `config.toml`, and then run `amgd reload`.
 No data is lost, because the data uses the email.
@@ -150,7 +150,7 @@ A key is a dotted path:
 - `policy.KEY`, `policy.sealed.mail_trash`, `accounts.ALIAS.policy.KEY`, and `accounts.ALIAS.policy.sealed.mail_trash`, for example `policy.mail_send`. See [Write policy](#write-policy).
 - `accounts.ALIAS.client_id`, `accounts.ALIAS.tenant_id` (Microsoft 365), and `accounts.ALIAS.client_secret` (Gmail).
 - `screening.provider`, `screening.endpoint`, and `screening.model`. See [Screening](#screening).
-- `console.listen` and `console.hosts`. `console.hosts` takes a comma-separated list. See [Console configuration](#console-configuration).
+- `console.listen`, `console.hosts`, and `console.username`. `console.hosts` takes a comma-separated list. See [Console configuration](#console-configuration).
 - `credentials.backend`. See [Credential storage](#credential-storage).
 
 `config set` refuses an unknown key or an invalid value, and the file stays unchanged.
@@ -510,7 +510,7 @@ On Gmail, `mail search` sends the times in Unix seconds (`after:` and `before:`)
 `draft delete ID` deletes any draft: on Gmail with `drafts.delete` on the draft that holds the message, which deletes it for good and does not trash it; on Microsoft 365 with Graph `DELETE` of the message, which keeps the item restorable (Graph has a separate permanent delete that the daemon never uses). `draft send ID` sends any draft as it is (see [Mail send](#mail-send)). Both refuse a message that is not a draft, with `draft delete refused: not a draft` or `draft send refused: not a draft`, before anything is written.
 `mail send`, `mail reply`, `mail forward`, `draft send`, and `draft delete` return `{"ok": true}`. The providers give no ID for a sent message.
 `calendar invite` returns the new event ID. The other meeting commands return the event ID and `"ok": true`.
-The [write policy](#write-policy) can refuse trash, draft, send, and meeting commands, or store them as pending items. See [Results](#results) for these results.
+The [write policy](#write-policy) can refuse trash, draft, send, and meeting commands, or store them as pending actions. See [Results](#results) for these results.
 There is no permanent-delete command for mail, and no folder creation, category creation, or arbitrary provider request command. Only `draft delete` deletes, and only a draft; on Gmail it deletes the draft for good.
 
 Exit code `0` means the call ran, including a mutation with failed per-ID results and a `pending` result.
@@ -524,12 +524,12 @@ The write policy in `config.toml` sets, for each account, what the daemon does w
 Each policy key has one of three decisions:
 
 - `allow`: the daemon runs the action now.
-- `approve`: the daemon stores the action as a pending item. The action does not run.
+- `approve`: the daemon stores the action as a pending action. The action does not run.
 - `deny`: the daemon refuses the action.
 
 **Caution:** Do not set `approve` unless the [console password](#console-password) is set.
-Only a person in the [approval console](#approval-console) can approve or deny a pending item. Without the password, the console refuses every request and a pending item stays pending.
-`amg` and the API cannot approve or deny. A draft change or delete through the API withdraws a waiting send of that draft and never runs or approves anything (see [Waiting sends and draft changes](#waiting-sends-and-draft-changes)). `approvals status ID` shows the state of a pending item. See [Results](#results).
+Only a person in the [approval console](#approval-console) can approve or deny a pending action. Without the password, the console refuses every request and a pending action stays pending.
+`amg` and the API cannot approve or deny. A draft change or delete through the API withdraws a waiting send of that draft and never runs or approves anything (see [Waiting sends and draft changes](#waiting-sends-and-draft-changes)). `approvals status ID` shows the state of a pending action. See [Results](#results).
 
 Example:
 
@@ -585,7 +585,7 @@ The daemon looks up the verdict only when the sealed decision is stricter than t
 
 If the message has no cached verdict, the daemon screens it first. A message that the daemon cannot screen counts as `sealed`.
 For replies and forwards of `green` and `yellow` messages, and for `mail trash` of `green`, `yellow`, and `red` messages, only the base decision applies.
-`draft new`, `draft update`, `draft delete`, `draft send`, and `mail send` do not reference a received message, so only the base decision applies. Unless the base decision is `deny`, `draft update`, `draft delete`, and `draft send` first read their message and refuse one that is not a draft, before the Jev action check and any pending item. An approved run reads the message again.
+`draft new`, `draft update`, `draft delete`, `draft send`, and `mail send` do not reference a received message, so only the base decision applies. Unless the base decision is `deny`, `draft update`, `draft delete`, and `draft send` first read their message and refuse one that is not a draft, before the Jev action check and any pending action. An approved run reads the message again.
 
 ### Jev action check
 
@@ -603,18 +603,18 @@ The check comes after the policy decision:
 - `deny` refuses the action. Jev does not see it.
 - If Jev flags the action, or the check fails, `allow` becomes `approve`, and the action waits in the [approval console](#approval-console). `approve` stays `approve`.
 - A missing screening key or a Jev outage makes every check fail, so every checked action waits for approval.
-- When a person approves an item, the daemon runs it without a second check.
+- When a person approves a pending action, the daemon runs it without a second check.
 
 Jev gives a score from 0 to 1. A score of 0.5 or more is a flag. This threshold is provisional and will change after tuning.
 The agent never sees the score or the flag. It gets the normal result or the normal `pending` result.
-The item page of the approval console shows the result, for example `Jev: flagged (score 0.62)`, `Jev: not flagged (score 0.08)`, or `Jev: check failed (TimeoutError)`.
+The action page of the approval console shows the result, for example `Jev: flagged (score 0.62)`, `Jev: not flagged (score 0.08)`, or `Jev: check failed (TimeoutError)`.
 If the [fake screening engine](#screening) made the check, the page shows `Fake check (keywords only):` instead of `Jev:`, for example `Fake check (keywords only): flagged (score 0.90)`. 
 
 ### Results
 
 - `allow`: the command gives its normal result.
 - `deny`: a draft, send, or meeting command fails with `refused by policy: KEY`, for example `refused by policy: calendar_invite`, with exit code `1`. The action does not run.
-- `approve`: a draft, send, or meeting command returns `{"status":"pending","approval_id":"...","url":"http://localhost:8788/a/..."}` with exit code `0`. The action does not run. The `url` is the page of this item in the approval console. It uses `[console].listen` (see [Console configuration](#console-configuration)).
+- `approve`: a draft, send, or meeting command returns `{"status":"pending","approval_id":"...","url":"http://localhost:8788/a/..."}` with exit code `0`. The action does not run. The `url` is the page of this action in the approval console. It uses `[console].listen` (see [Console configuration](#console-configuration)).
 
 The daemon validates a meeting action before it stores it.
 Thus an invalid time, a wrong role, or a recurring or cancelled event fails with the usual error, not `pending`.
@@ -622,17 +622,17 @@ Thus an invalid time, a wrong role, or a recurring or cancelled event fails with
 `mail trash` decides each message ID on its own.
 The daemon trashes the allowed IDs.
 A denied ID gets `"ok": false` and `"error": "refused by policy: mail_trash"`.
-An ID that needs approval gets `"ok": false`, `"error": "pending"`, and an `approval_id`, but no `url`. Each such ID is its own pending item.
+An ID that needs approval gets `"ok": false`, `"error": "pending"`, and an `approval_id`, but no `url`. Each such ID is its own pending action.
 
-`approvals status ID` returns `{"state":"..."}` for a pending item. The state is `pending`, `running`, `done`, `denied`, `withdrawn`, or `failed`. A `withdrawn` item is a waiting `draft send` that a draft change or delete withdrew; it never runs.
-A `done` item also has `result`: the normal result of the command, except that a `draft new`, `draft reply`, `draft forward`, or `draft update` result keeps only `id` and `thread_id`, and for `draft update` also `send_approval_id`, because the stored result holds no mail content.
+`approvals status ID` returns `{"state":"..."}` for a pending action. The state is `pending`, `running`, `done`, `denied`, `withdrawn`, or `failed`. A `withdrawn` action is a waiting `draft send` that a draft change or delete withdrew; it never runs.
+A `done` action also has `result`: the normal result of the command, except that a `draft new`, `draft reply`, `draft forward`, or `draft update` result keeps only `id` and `thread_id`, and for `draft update` also `send_approval_id`, because the stored result holds no mail content.
 The output never shows the stored request arguments.
 An unknown ID fails with `approval not found` and exit code `1`.
 
 A rule with `folder = "trash"` follows `mail_trash` for each message.
 In the `mail organize --apply` report, the `move.result` of such a message is `pending` or `refused by policy: mail_trash`.
 The report does not show the approval ID, and the stats count the message as `failed`.
-The message stays incomplete, so each later `--apply` run makes a new pending item for it.
+The message stays incomplete, so each later `--apply` run makes a new pending action for it.
 
 On Microsoft 365, `mail move` to Deleted Items or to a folder below it fails with `move refused: use mail.trash`.
 Use `mail trash` instead.
@@ -641,19 +641,21 @@ On Microsoft 365, `mail folders`, `mail move`, `mail organize`, and `rules list`
 
 ### Console configuration
 
-The optional `[console]` table in `config.toml` sets the address of the [approval console](#approval-console).
+The optional `[console]` table in `config.toml` sets the address of the [approval console](#approval-console) and the username of its sign-in.
 
 ```toml
 [console]
 listen = "localhost:8788"
 hosts = ["my-mac.example.ts.net"]
+username = "admin"
 ```
 
 - `listen`: `HOST:PORT`. The default is `localhost:8788`. The console listens on this address, and the pending `url` uses it.
 - `hosts`: extra host names that the console accepts, for example a Tailscale name. Each entry is a host name or IP address with an optional `:PORT`. An entry without a port matches a request without a port. Put an IPv6 address in brackets. The default is none.
+- `username`: the username that the console sign-in needs, with the [console password](#console-password). The default is `admin`. It has 1 to 64 characters: ASCII letters, digits, `.`, `_`, `-`, and `@`. It is not a secret.
 
-`amgd config set console.listen HOST:PORT` and `amgd config set console.hosts NAME1,NAME2` change the table.
-A new `hosts` list takes effect at the reload. A new `listen` address takes effect only when you start the daemon again: the command prints `restart needed: console.listen changed`.
+`amgd config set console.listen HOST:PORT`, `amgd config set console.hosts NAME1,NAME2`, and `amgd config set console.username NAME` change the table.
+A new `hosts` list and a new `username` take effect at the reload. A new `listen` address takes effect only when you start the daemon again: the command prints `restart needed: console.listen changed`.
 An invalid table stops `amgd serve` with `config.toml: KEY_PATH: PROBLEM`, for example `config.toml: console.listen: must be HOST:PORT`. The error never shows the value.
 
 ### Console password
@@ -666,57 +668,57 @@ On a terminal, echo is off and it asks for the new password twice.
 Non-terminal stdin supplies the lines in the same order without a confirmation: the file backend password (if `AMG_CREDENTIALS_PASSWORD` is absent), and then the new password.
 The password must be 8 to 72 bytes of valid UTF-8 without control characters.
 The command stores only a bcrypt hash of the password in the credential store (Keychain or the encrypted file). It never prints the password or the hash, and it does not accept them as arguments.
-It writes a `console_password_set` audit record and reloads the daemon. The new password takes effect at the reload, and the old password stops working at once. Make sure that the daemon log shows `reload ok`: after `reload refused`, the old password stays valid until a reload succeeds.
+It prints `Console password saved. Sign in to the console as USERNAME (console.username).`, writes a `console_password_set` audit record, and reloads the daemon. The new password takes effect at the reload, and the old password stops working at once. Make sure that the daemon log shows `reload ok`: after `reload refused`, the old password stays valid until a reload succeeds.
 
 The daemon reads the hash at start and at each reload. It shows `credential check: console password: ok` or `not set; the console refuses every request until amgd config set console.password`. A missing password does not stop the start.
 
 ### Approval console
 
-The approval console is a small web page where you approve or deny pending items.
+The approval console is a small web page where you approve or deny pending actions.
 It always listens, from the start of the daemon. At start, the daemon shows `approval console listening`.
 If the console address is taken, the daemon does not start and shows `console listener unavailable`.
 Until you set the [console password](#console-password), the console answers every request with HTTP 503 and `console password not set; run amgd config set console.password`. You do not have to restart the daemon after you set the password.
 
-The browser asks for a username and the password. The console ignores the username.
+The browser asks for a username and a password. Give the [console username](#console-configuration) (`admin` by default; `amgd config get console.username` shows it) and the [console password](#console-password).
 
-- The list page `/` shows all pending items, newest first, and then the 50 most recently changed other items, `withdrawn` items among them. Each row shows the account, the operation, the recipients (To, then `cc:` and `bcc (hidden):` lists), the subject, the state, and the age. For a draft send, the recipients and subject are those of the stored draft fields. A reply row starts its recipients with `reply` or, with `--all`, `reply all`, then the request's `cc:` and `bcc (hidden):` lists; the item page shows who the reply goes to.
-- The item page `/a/ID` shows the account, the operation, the state, the times, and every stored request field as plain text, with `to`, `cc`, and `bcc` first. `bcc` is labeled `bcc (hidden recipients)`: these people get the message, and the other recipients do not see them. An `--html` body is labeled `body (HTML source, not rendered)` and shows as source text. Links in the text are never links on the page.
-- For a reply, the item page also shows the recipients that the reply goes to under **Reply recipients**: the To and Cc worked out from the original message with the reply rule of [Mail send](#mail-send), plus the request's `cc`, and the request's `bcc` as `bcc (hidden recipients)`. The daemon reads the original when the page loads; if it cannot, the page shows `Reply recipients could not be read.` On Microsoft 365, Microsoft picks its own list when it makes the reply; it should match.
-- For a draft send, the item page also shows under **Draft** the draft fields that Jev checked, stored when the send began to wait: `to`, `cc`, `bcc (hidden recipients)`, `subject`, and `body` (an HTML body as `body (HTML source, not rendered)`), as plain text. The send sends the draft as it is at the provider when it runs, so a later change that the user makes in the mail app is not on the page. A change or delete of the draft by the agent withdraws the item instead (see [Waiting sends and draft changes](#waiting-sends-and-draft-changes)). If the draft is gone or is no longer a draft when the run starts, the run fails with a safe code and nothing is sent.
-- For an action on an existing message, the item page also shows the sender, subject, received date, and verdict of the message. For an action on an event, it shows the subject, start, end, and organizer. The daemon reads these through the screened read path and never shows a body. If the read fails, the page shows `not available`, and you can still decide.
-- The item page also shows the result of the [Jev action check](#jev-action-check), if a check ran.
-- A pending item has **Approve** and **Deny** buttons.
+- The list page `/` shows all pending actions, newest first, and then the 50 most recently changed other actions, `withdrawn` actions among them. Each row shows the account, the operation, the recipients (To, then `cc:` and `bcc (hidden):` lists), the subject, the state, and the age. For a draft send, the recipients and subject are those of the stored draft fields. A reply row starts its recipients with `reply` or, with `--all`, `reply all`, then the request's `cc:` and `bcc (hidden):` lists; the action page shows who the reply goes to.
+- The action page `/a/ID` shows the account, the operation, the state, the times, and every stored request field as plain text, with `to`, `cc`, and `bcc` first. `bcc` is labeled `bcc (hidden recipients)`: these people get the message, and the other recipients do not see them. An `--html` body is labeled `body (HTML source, not rendered)` and shows as source text. Links in the text are never links on the page.
+- For a reply, the action page also shows the recipients that the reply goes to under **Reply recipients**: the To and Cc worked out from the original message with the reply rule of [Mail send](#mail-send), plus the request's `cc`, and the request's `bcc` as `bcc (hidden recipients)`. The daemon reads the original when the page loads; if it cannot, the page shows `Reply recipients could not be read.` On Microsoft 365, Microsoft picks its own list when it makes the reply; it should match.
+- For a draft send, the action page also shows under **Draft** the draft fields that Jev checked, stored when the send began to wait: `to`, `cc`, `bcc (hidden recipients)`, `subject`, and `body` (an HTML body as `body (HTML source, not rendered)`), as plain text. The send sends the draft as it is at the provider when it runs, so a later change that the user makes in the mail app is not on the page. A change or delete of the draft by the agent withdraws the action instead (see [Waiting sends and draft changes](#waiting-sends-and-draft-changes)). If the draft is gone or is no longer a draft when the run starts, the run fails with a safe code and nothing is sent.
+- For an action on an existing message, the action page also shows the sender, subject, received date, and verdict of the message. For an action on an event, it shows the subject, start, end, and organizer. The daemon reads these through the screened read path and never shows a body. If the read fails, the page shows `not available`, and you can still decide.
+- The action page also shows the result of the [Jev action check](#jev-action-check), if a check ran.
+- A pending action has **Approve** and **Deny** buttons.
 
-**Approve** runs the stored action once, with no second policy check. A `done` item shows its result. If the run fails, the item shows `failed` and a safe error code. A failed item never runs again.
-**Deny** stops the item for good. Nothing runs.
-A `withdrawn` item has no buttons and never runs.
-An item that is already handled, also a `withdrawn` one, shows `already handled`, and nothing runs.
+**Approve** runs the stored action once, with no second policy check. A `done` action shows its result. If the run fails, the action shows `failed` and a safe error code. A failed action never runs again.
+**Deny** stops the action for good. Nothing runs.
+A `withdrawn` action has no buttons and never runs.
+An action that is already handled, also a `withdrawn` one, shows `already handled`, and nothing runs.
 
 To use the console from a phone, put it behind an HTTPS tunnel, for example `tailscale serve`, and add the tunnel host name to `[console].hosts`.
 Keep `listen` on loopback. If `listen` is not `localhost` or a loopback address, the daemon shows a warning at start.
 
 Protections:
 
-- Every page needs the password (HTTP Basic authentication). The console has no TLS of its own.
+- Every page needs the username and the password (HTTP Basic authentication). The console has no TLS of its own.
 - The console refuses a request whose `Host` is not `listen` or an entry of `hosts`, also before a password exists. This blocks DNS rebinding.
 - Approve and Deny need an `Origin` of the console itself. This blocks form posts from other sites.
-- After 5 wrong passwords in one minute, the console refuses every request with HTTP 429 until the oldest failure is more than one minute old.
-- Each wrong password adds a `console_signin` record to the audit log.
+- After 5 failed sign-ins (a wrong username or password) in one minute, the console refuses every request with HTTP 429 until the oldest failure is more than one minute old.
+- Each failed sign-in adds a `console_signin` record to the audit log.
 - Pages have no scripts and no remote resources, and browsers must not cache or frame them.
 
 ### Storage and audit
 
-Pending items are in the `pending` table of `cache.db`. They do not expire.
-A pending item stores the account key, the operation, and the request arguments: recipients, subject, body, comment, event fields, and the message or event ID.
+Pending actions are in the `pending` table of `cache.db`. They do not expire.
+A pending action stores the account key, the operation, and the request arguments: recipients, subject, body, comment, event fields, and the message or event ID.
 A waiting draft send stores only the draft ID as its arguments, and beside them, in the `draft` column, the draft fields that Jev checked: To, Cc, Bcc, subject, body, and the HTML flag. A `cache.db` made before this column or the `withdrawn` state existed gets them when the daemon first opens it.
 It also stores the result of the Jev check, if a check ran: the flag and the score, or the safe error code, and whether the fake screening engine made the check.
-`amgd cache clear` does not delete pending items. `amgd account remove` denies the pending items of the removed account.
+`amgd cache clear` does not delete pending actions. `amgd account remove` denies the pending actions of the removed account.
 
 The audit log gets content-free records for the policy. Their `account` is the account key, and their `operation` is the API operation name, for example `mail.trash`.
 
 - `"event": "policy"` records each decision, also `allow`. It has `time`, `account`, `operation`, `key`, `decision`, and `reasons`: `policy`; `sealed` if the referenced message is `sealed` or `error` and that made the decision stricter; `red` if the replied-to or forwarded message is `red` and that made the decision stricter; `jev_flag` if Jev flagged the action; `jev_error` if the Jev check failed. It can also have `id`, `rule`, and `approval_id`. It never has the Jev score.
-- `"event": "approval"` records each step of a pending item. It has `time`, `account`, `operation`, `state` (`created`, `approved`, `denied`, `withdrawn`, `done`, or `failed`), and `approval_id`. A `withdrawn` record is written for each waiting draft send that a draft change or delete withdrew.
-- `"event": "console_signin"` records each wrong console password. It has only `time` and `result` (`failed`). It never has the username, the password, the host name, or the address of the browser.
+- `"event": "approval"` records each step of a pending action. It has `time`, `account`, `operation`, `state` (`created`, `approved`, `denied`, `withdrawn`, `done`, or `failed`), and `approval_id`. A `withdrawn` record is written for each waiting draft send that a draft change or delete withdrew.
+- `"event": "console_signin"` records each failed console sign-in: a wrong username or password. It has only `time` and `result` (`failed`). It never has the username, the password, the host name, or the address of the browser.
 
 The audit log also gets content-free records for changes on the daemon host:
 
@@ -730,7 +732,7 @@ A hand edit of `config.toml` writes no `config_changed` record.
 ### Known limits
 
 The policy is effective only when the agent can use only `amg` commands.
-An agent with a shell as the same OS user can run `amgd`, edit `config.toml`, change pending items in `cache.db`, or restart the daemon.
+An agent with a shell as the same OS user can run `amgd`, edit `config.toml`, change pending actions in `cache.db`, or restart the daemon.
 Anyone who can reach the listener gets the same decisions as the agent.
 On Gmail, only the daemon code stops a send. The OAuth grant (`gmail.modify`) permits it.
 
@@ -782,11 +784,11 @@ The audit record of a send has no content. A `mail send` record has no message I
 A draft has at most one waiting `draft send`. The daemon withdraws and replaces waiting sends under the account's write lock, which a draft write holds from before its decision to its records:
 
 - A `draft update` or `draft delete`, directly or as an approved run, first withdraws every waiting `draft send` of that draft in the account. It withdraws as soon as it holds the write lock, before the policy, the "not a draft" check, and the [Jev action check](#jev-action-check), so the console can no longer approve the old send once the change holds the lock. The withdrawn sends stay withdrawn also when the update or delete itself waits for approval, when the policy refuses it, when the message is not a draft, or when the write fails; then no new send is made.
-- After a `draft update` that withdrew a send and ran, the daemon makes a new `mail_send` decision for the draft, under its new ID on Gmail, with a new read of the draft and a new [Jev action check](#jev-action-check). Under `allow` and `approve`, the new send waits for approval, also when Jev does not flag it: a draft change never sends mail by itself. Under `deny`, there is no new send. The new send never takes over the approval of an approved update. The update result has `send_approval_id`, the approval ID of the new send; follow it with `approvals status`. The policy record of the new send has the decision `approve` and the reason `policy`, because it always waits. If the daemon cannot make the new send after the update ran (the new read of the draft, the pending item, or an audit record fails), `draft update` fails although the draft changed, on Gmail also its ID, and no send of the draft waits. Read the draft again, for example with `mail list --folder` on the drafts folder or `mail get`, before you retry.
+- After a `draft update` that withdrew a send and ran, the daemon makes a new `mail_send` decision for the draft, under its new ID on Gmail, with a new read of the draft and a new [Jev action check](#jev-action-check). Under `allow` and `approve`, the new send waits for approval, also when Jev does not flag it: a draft change never sends mail by itself. Under `deny`, there is no new send. The new send never takes over the approval of an approved update. The update result has `send_approval_id`, the approval ID of the new send; follow it with `approvals status`. The policy record of the new send has the decision `approve` and the reason `policy`, because it always waits. If the daemon cannot make the new send after the update ran (the new read of the draft, the pending action, or an audit record fails), `draft update` fails although the draft changed, on Gmail also its ID, and no send of the draft waits. Read the draft again, for example with `mail list --folder` on the drafts folder or `mail get`, before you retry.
 - `draft delete` makes no new send.
 - A second `draft send` of a draft with a waiting send withdraws the old one first, also when the new send is refused (by a `deny` policy, or because the message is no longer a draft), then decides as usual.
 
-A withdrawn send has the state `withdrawn`: it never runs, and the console cannot approve or deny it. Each withdrawal writes an approval audit record with the state `withdrawn`. Withdrawing never runs or approves anything; only a person in the [approval console](#approval-console) approves. `amgd account remove` still denies the pending items of the account.
+A withdrawn send has the state `withdrawn`: it never runs, and the console cannot approve or deny it. Each withdrawal writes an approval audit record with the state `withdrawn`. Withdrawing never runs or approves anything; only a person in the [approval console](#approval-console) approves. `amgd account remove` still denies the pending actions of the account.
 
 Known window: a send that a person approved before the agent's change reached the daemon's write lock runs with the draft as it is then, also with the change, because a waiting send has no tie to a draft version. A change that the user makes in the app is never noticed.
 
@@ -914,7 +916,7 @@ A category target must already exist in the mailbox.
 Missing rules produce an empty organizer report without provider or Jev access.
 Invalid rules stop `amgd serve`, and a reload with invalid rules is refused with `rules_invalid`.
 `stats` needs neither account configuration nor provider authentication.
-`amgd cache clear` runs only on the daemon host. It removes the verdicts, saved organization answers, and completion markers of all accounts, but not pending items. The API has no cache operation.
+`amgd cache clear` runs only on the daemon host. It removes the verdicts, saved organization answers, and completion markers of all accounts, but not pending actions. The API has no cache operation.
 
 `mail organize --since` and `--until` follow the date rule in [Commands and output](#commands-and-output): days on the CLI machine, `--until` day included.
 The calendar range has no maximum: Microsoft Graph `calendarView` needs a start and an end but sets no maximum range.
@@ -961,7 +963,7 @@ Date bounds on the HTTP interface are exact RFC 3339 times, never days: `mail.se
 `draft.new` and `mail.send` take the optional address lists `to`, `cc`, and `bcc`, the optional strings `subject` and `body` (empty when absent), and the optional boolean `html`. `draft.reply` and `mail.reply` take the message `id`, the optional string `body` (empty when absent), the optional booleans `html` and `all`, and the optional address lists `cc` and `bcc`. `draft.forward` and `mail.forward` take the message `id`, the optional address lists `to`, `cc`, and `bcc`, the optional string `body` (empty when absent), and the optional boolean `html`. `mail.send` and `mail.forward` without an address in `to`, `cc`, or `bcc` are refused as `invalid request` before any policy decision. `draft.update` takes the message `id` and at least one of the address lists `to`, `cc`, and `bcc`, the string `subject`, and the string `body`, with the optional boolean `html` only together with `body`; an absent param stays unchanged and an empty list clears. A `draft.update` without a field is refused as `invalid request`. `draft.delete` and `draft.send` take only the message `id`.
 The `account` field is optional, and `params` must be an object.
 Unknown operations or fields, duplicate keys, malformed JSON, trailing JSON, null fields, invalid types, and oversized requests are refused.
-There is no HTTP login, token, key, raw-message, classification, rules-mutation, or approval endpoint. Only the [approval console](#approval-console), on its own address, approves or denies pending items.
+There is no HTTP login, token, key, raw-message, classification, rules-mutation, or approval endpoint. Only the [approval console](#approval-console), on its own address, approves or denies pending actions.
 A pending action returns HTTP 200 with `{"status":"pending","approval_id":"...","url":"..."}`.
 `approvals.status` takes `{"id":"APPROVAL_ID"}` (32 lowercase hex characters) and ignores `account`. An unknown ID returns HTTP 404 with `{"error":"approval not found"}`.
 A policy refusal returns HTTP 500 with `{"error":"refused by policy: KEY"}`.
@@ -985,7 +987,7 @@ There is no scheduler and no automatic mailbox work.
 Tests run offline: real loopback HTTP, temporary homes, the fake provider, fake Graph, Gmail, and Jev endpoints, and a fake Keychain `Platform`.
 No test needs real mailbox data, a browser, OpenRouter, or Keychain access. CI (`.github/workflows/ci.yml`) runs `make` on Linux only. The macOS-only code (the Keychain backend and the `*_darwin_test.go` tests) runs only in a local `make` on a Mac.
 
-The end-to-end tests in `internal/e2e` build the real `amg` and `amgd` binaries and run `amgd serve` as its own process, on a temporary home with a fake account, the fake screening engine, and the file credential backend. The other `amgd` commands and `amg` run as separate processes, and the tests approve and deny items through the approval console over HTTP.
+The end-to-end tests in `internal/e2e` build the real `amg` and `amgd` binaries and run `amgd serve` as its own process, on a temporary home with a fake account, the fake screening engine, and the file credential backend. The other `amgd` commands and `amg` run as separate processes, and the tests approve and deny pending actions through the approval console over HTTP.
 After each test, the daemon log, `audit.jsonl`, and every column of `cache.db` except the `args` and `draft` columns of `pending` must contain no seeded name, subject, body, or address.
 
 Not verified against real providers or services:
@@ -1012,7 +1014,7 @@ Offline verification does not establish production readiness.
 
 ## License
 
-Copyright 2026 Ivan Pereira.
+Copyright 2026 The agentmailguard authors.
 Licensed under the [Apache License, Version 2.0](LICENSE) (`Apache-2.0`).
 Dependencies retain their own licenses and attribution requirements.
 Binary distributions must include the applicable third-party license notices.

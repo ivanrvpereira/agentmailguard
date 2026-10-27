@@ -58,13 +58,19 @@ func (a Account) GoString() string { return a.String() }
 // Format also redacts unsupported verbs, which otherwise expose struct fields.
 func (a Account) Format(state fmt.State, _ rune) { _, _ = io.WriteString(state, a.String()) }
 
-// DefaultConsoleListen is the approval console address when [console] sets none.
-const DefaultConsoleListen = "localhost:8788"
+// DefaultConsoleListen and DefaultConsoleUsername are the approval console address and sign-in username when
+// [console] sets none.
+const (
+	DefaultConsoleListen   = "localhost:8788"
+	DefaultConsoleUsername = "admin"
+)
 
-// Console is the [console] table: the approval console listen address and extra Host names it accepts.
+// Console is the [console] table: the approval console listen address, extra Host names it accepts, and the
+// username that a console sign-in needs with the console password.
 type Console struct {
-	Listen string
-	Hosts  []string
+	Listen   string
+	Hosts    []string
+	Username string
 }
 
 // Screening is the [screening] table. Provider is jev or fake. Endpoint is the HTTPS URL of the jev engine and
@@ -175,7 +181,7 @@ func ValidEmail(email string) bool {
 }
 
 func validate(document map[string]any, exists bool) (Config, error) {
-	c := Config{Screening: Screening{Provider: "jev"}, Console: Console{Listen: DefaultConsoleListen}, Backend: "file", Accounts: []Account{}}
+	c := Config{Screening: Screening{Provider: "jev"}, Console: Console{Listen: DefaultConsoleListen, Username: DefaultConsoleUsername}, Backend: "file", Accounts: []Account{}}
 	for _, key := range slices.Sorted(maps.Keys(document)) {
 		switch key {
 		case "version", "default_account", "accounts", "policy", "screening", "console", "credentials":

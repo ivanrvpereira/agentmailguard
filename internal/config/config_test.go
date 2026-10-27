@@ -63,7 +63,7 @@ func TestHomeDefaultEnvironmentAndExplicitOverride(t *testing.T) {
 
 func TestMissingFileIsAnEmptyConfiguration(t *testing.T) {
 	got, err := config.Load(context.Background(), filepath.Join(t.TempDir(), "config.toml"))
-	want := config.Config{Accounts: []config.Account{}, Screening: config.Screening{Provider: "jev"}, Console: config.Console{Listen: "localhost:8788"}, Backend: "file"}
+	want := config.Config{Accounts: []config.Account{}, Screening: config.Screening{Provider: "jev"}, Console: config.Console{Listen: "localhost:8788", Username: "admin"}, Backend: "file"}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("config=%+v error=%v", got, err)
 	}
@@ -115,11 +115,11 @@ func TestInvalidAccountsNameTheKeyWithoutFileValues(t *testing.T) {
 }
 
 func TestEmailsAreLowercaseAndUnique(t *testing.T) {
-	got, err := parse(t, "version = 1\ndefault_account = 'work'\n[accounts.work]\nprovider = 'fake'\nemail = ' Ivan@Example.TEST '\n")
-	if err != nil || got.Accounts[0].Email != "ivan@example.test" || got.Accounts[0].Key() != "ivan@example.test" {
+	got, err := parse(t, "version = 1\ndefault_account = 'work'\n[accounts.work]\nprovider = 'fake'\nemail = ' Admin@Example.TEST '\n")
+	if err != nil || got.Accounts[0].Email != "admin@example.test" || got.Accounts[0].Key() != "admin@example.test" {
 		t.Fatalf("config=%+v error=%v", got, err)
 	}
-	_, err = parse(t, "version = 1\ndefault_account = 'work'\n[accounts.work]\nprovider = 'fake'\nemail = 'ivan@example.test'\n[accounts.other]\nprovider = 'fake'\nemail = 'IVAN@example.test'\n")
+	_, err = parse(t, "version = 1\ndefault_account = 'work'\n[accounts.work]\nprovider = 'fake'\nemail = 'admin@example.test'\n[accounts.other]\nprovider = 'fake'\nemail = 'ADMIN@example.test'\n")
 	refusal(t, err, "accounts.work.email")
 	if !strings.Contains(err.Error(), "same email as account other") {
 		t.Fatalf("error=%v", err)

@@ -18,6 +18,9 @@ import (
 const consolePassword = "private-console-pass"
 const consoleHost = "localhost:8788"
 
+// consoleUser is the default console username, which the fixture browser signs in with.
+const consoleUser = "admin"
+
 // consoleFixture is a daemon with the M365 account work against the native fake Graph API and Jev, and its
 // console. Its clock moves only when the test moves it.
 type consoleFixture struct {
@@ -75,7 +78,7 @@ func (f *consoleFixture) decide(t *testing.T, id, decision string, change func(*
 func (f *consoleFixture) send(t *testing.T, r *http.Request, change func(*http.Request)) *httptest.ResponseRecorder {
 	t.Helper()
 	r.Host = consoleHost
-	r.SetBasicAuth("anyone", consolePassword)
+	r.SetBasicAuth(consoleUser, consolePassword)
 	if change != nil {
 		change(r)
 	}
@@ -84,7 +87,39 @@ func (f *consoleFixture) send(t *testing.T, r *http.Request, change func(*http.R
 	return w
 }
 
-func wrongPassword(r *http.Request) { r.SetBasicAuth("anyone", "private-wrong-pass") }
+func wrongPassword(r *http.Request) { r.SetBasicAuth(consoleUser, "private-wrong-pass") }
+
+// signInAs signs in with user and the right password.
+func signInAs(user string) func(*http.Request) {
+	return func(r *http.Request) { r.SetBasicAuth(user, consolePassword) }
+}
+
+// The console needs the configured username, admin by default, with the password. A wrong username is a failed
+// sign-in like a wrong password: the same answer and an audit record. A new username takes effect at the reload.
+func TestConsoleNeedsTheConfiguredUsername(t *testing.T) {
+	f := consoleDaemon(t, "", true)
+	for user, want := range map[string]int{"admin": 200, "anyone": 401, "Admin": 401, "": 401, "admin ": 401} {
+		if w := f.get(t, "/", signInAs(user)); w.Code != want {
+			t.Errorf("default username, %q: %d; want %d", user, w.Code, want)
+		}
+		f.advance(time.Minute) // Stay below the failure limit.
+	}
+	if _, records := auditOf(t, f.d.home); len(records) != 4 {
+		t.Fatalf("records=%d; want one for each wrong username", len(records))
+	}
+	f.d.writeConfig(t, "default_account = 'work'\n"+workTable+"[console]\nusername = 'admin@example.test'\n")
+	if w := f.get(t, "/", signInAs("admin@example.test")); w.Code != 401 {
+		t.Fatalf("before the reload: %d", w.Code)
+	}
+	f.advance(time.Minute)
+	f.d.reload(t)
+	for user, want := range map[string]int{"admin@example.test": 200, "admin": 401} {
+		if w := f.get(t, "/", signInAs(user)); w.Code != want {
+			t.Errorf("after the reload, %q: %d; want %d", user, w.Code, want)
+		}
+		f.advance(time.Minute)
+	}
+}
 
 const draftApprove = "[policy]\nmail_draft='approve'\nmail_trash='approve'\ncalendar_respond='approve'\n[policy.sealed]\nmail_trash='approve'\n"
 

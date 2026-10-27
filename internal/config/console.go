@@ -10,7 +10,7 @@ import (
 
 // console reads the optional [console] table. An absent table or key gives the default.
 func console(d map[string]any) (Console, error) {
-	result := Console{Listen: DefaultConsoleListen}
+	result := Console{Listen: DefaultConsoleListen, Username: DefaultConsoleUsername}
 	value, present := d["console"]
 	if !present {
 		return result, nil
@@ -41,11 +41,23 @@ func console(d map[string]any) (Console, error) {
 				}
 				result.Hosts = append(result.Hosts, host)
 			}
+		case "username":
+			user, ok := table[key].(string)
+			if !ok || !validUsername(user) {
+				return Console{}, fail("must be 1 to 64 letters, digits, and . _ - @", "console", key)
+			}
+			result.Username = user
 		default:
 			return Console{}, fail("unknown key", "console", key)
 		}
 	}
 	return result, nil
+}
+
+// validUsername accepts 1 to 64 ASCII letters, digits, and . _ - @. HTTP Basic authentication cannot carry a colon
+// in a username, and browsers encode other characters differently.
+func validUsername(user string) bool {
+	return len(user) >= 1 && len(user) <= 64 && strings.Trim(user, hostChars+"_@") == ""
 }
 
 const hostChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-"

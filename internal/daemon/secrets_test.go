@@ -96,7 +96,7 @@ func TestSetConsolePasswordStoresAHashOfThePipedPassword(t *testing.T) {
 	t.Parallel()
 	k := &keychain{}
 	home, code, out, errout := setSecret(t, k, "console.password", "private-first-pass\n")
-	if code != 0 || out != "" || !strings.HasPrefix(errout, "Console password saved.\n") || strings.Contains(errout, "private-") {
+	if code != 0 || out != "" || !strings.HasPrefix(errout, "Console password saved. Sign in to the console as admin (console.username).\n") || strings.Contains(errout, "private-") {
 		t.Fatalf("exit %d stdout %q stderr %q", code, out, errout)
 	}
 	if bcrypt.CompareHashAndPassword([]byte(consoleHash(t, credentials.New(k, home))), []byte("private-first-pass")) != nil {
