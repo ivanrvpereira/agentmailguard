@@ -733,17 +733,21 @@ func TestDraftUpdateWithdrawsTheWaitingSendAndHoldsANewOne(t *testing.T) {
 	}
 }
 
-// A draft update that the user approved in the console also withdraws the waiting send and makes a new one, which
-// still waits for approval: approving a change is never approving a send. The update's stored result names it.
+// A draft update that waits for approval withdraws the waiting send at once and makes no new one. A send that the
+// agent makes while the update waits is withdrawn when the user approves the update in the console, and the update
+// makes a new one, which still waits for approval: approving a change is never approving a send. The update's stored
+// result names it.
 func TestApprovedDraftUpdateReplacesTheWaitingSendAndTheNewOneWaits(t *testing.T) {
 	t.Parallel()
 	s := start(t, "[policy]\nmail_send='allow'\nmail_draft='approve'\n")
 	id := s.seedFlaggedDraft()
-	old := s.held("draft", "send", id)
+	first := s.held("draft", "send", id)
 	update := s.held("draft", "update", id, "--body", "canary-body-clean: see you at noon")
-	if state := s.state(old.ApprovalID); state != "pending" {
-		t.Fatalf("a waiting update withdrew the send: %s", state)
+	s.assertWithdrawn(first.ApprovalID)
+	if _, list := s.consoleGet(consolePassword, "/"); strings.Count(list, `class="state pending"`) != 1 {
+		t.Fatalf("a waiting update made a new send:\n%s", list)
 	}
+	old := s.held("draft", "send", id)
 	s.approve(update.ApprovalID)
 	s.assertWithdrawn(old.ApprovalID)
 	status := decode[struct {

@@ -428,9 +428,10 @@ func TestDraftUpdateMakesAtMostOneNewSend(t *testing.T) {
 	}
 }
 
-// A draft update or delete that does not run now leaves the waiting send as it is: one that waits for approval
-// itself, one that the policy denies, and one of a message that is not a draft.
-func TestDraftChangeThatDoesNotRunKeepsTheWaitingSend(t *testing.T) {
+// A draft update or delete that does not run now still withdraws the waiting send of its draft and makes no new one:
+// one that waits for approval itself, one that the policy denies, and one of a message that is not a draft. Nothing is
+// written, and the withdrawal has its approval record.
+func TestDraftChangeThatDoesNotRunStillWithdrawsTheWaitingSend(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		draft config.Decision
@@ -455,13 +456,26 @@ func TestDraftChangeThatDoesNotRunKeepsTheWaitingSend(t *testing.T) {
 				w.mailbox = &mailbox{}
 				policy := allowAll
 				policy.Base.MailDraft = tc.draft
-				g, c, _ := policyGuard(t, &w, nil, scoring(0.08), policy)
+				g, c, path := policyGuard(t, &w, nil, scoring(0.08), policy)
 				old := waitingSend(t, c, "d1")
-				if err := op.call(g); err == nil {
+				err := op.call(g)
+				if err == nil {
 					t.Fatal("change ran")
 				}
-				if stateOf(t, c, old) != cache.StatePending || len(w.calls) != 0 {
-					t.Fatalf("old send=%s writes=%v", stateOf(t, c, old), w.calls)
+				// Only a held change waits: its own item.
+				want := []string{}
+				pending, held := errors.AsType[guard.PendingError](err)
+				if held != (tc.draft == config.Approve) {
+					t.Fatalf("err=%v; held=%v, want held only under approve", err, held)
+				}
+				if held {
+					want = []string{pending.ApprovalID}
+				}
+				if stateOf(t, c, old) != cache.StateWithdrawn || !reflect.DeepEqual(waitingIDs(t, c), want) || len(w.calls) != 0 {
+					t.Fatalf("old send=%s waiting=%v writes=%v", stateOf(t, c, old), waitingIDs(t, c), w.calls)
+				}
+				if events := decisionEvents(t, path); len(events) == 0 || events[0] != "approval draft.send withdrawn "+old {
+					t.Fatalf("records=%v", events)
 				}
 			})
 		}

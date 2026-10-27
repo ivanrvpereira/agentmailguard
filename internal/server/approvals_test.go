@@ -285,6 +285,69 @@ func TestConcurrentApprovalsRunTheActionOnce(t *testing.T) {
 	assertState(t, d.s, id, `{"state":"done","result":[{"id":"m1","ok":true,"error":null}]}`)
 }
 
+// A person who approves a waiting draft send after a draft update of that draft took the write lock (here while it
+// reads the draft, before Jev and the write) finds the send withdrawn: the update withdraws it first. The update then
+// makes the new waiting send. An approval that claimed the send before the update took the lock is the known window in
+// README "Waiting sends and draft changes".
+func TestApprovalDuringADraftUpdateFindsTheSendWithdrawn(t *testing.T) {
+	var blockRead atomic.Bool
+	reading, release := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	writes := []string{}
+	d := graphDaemon(t, "[policy]\nmail_draft='allow'\nmail_send='approve'\n", writeGrant, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == "GET" {
+			if blockRead.CompareAndSwap(true, false) {
+				close(reading)
+				<-release
+			}
+			io.WriteString(w, draftJSON)
+			return
+		}
+		mu.Lock()
+		writes = append(writes, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		io.WriteString(w, `{"id":"d1"}`)
+	}), newNativeAPI())
+	send := pend(t, d.s, "draft.send", `{"id":"d1"}`)[0]
+	blockRead.Store(true)
+	updated := make(chan string, 1)
+	go func() {
+		_, body := accountRPC(t, d.s, "draft.update", "work", `{"id":"d1","subject":"CANARY changed"}`)
+		updated <- body
+	}()
+	select {
+	case <-reading:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the update did not read the draft")
+	}
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	approved := make(chan error, 1)
+	go func() { approved <- d.s.Approve(context.Background(), send) }()
+	// The approval must answer while the update still holds the lock. A claimed send would wait for the lock instead.
+	select {
+	case err := <-approved:
+		if err != server.ErrAlreadyHandled {
+			t.Fatalf("approve=%v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the approval did not answer while the update held the lock")
+	}
+	unblock()
+	body := <-updated
+	mu.Lock()
+	defer mu.Unlock()
+	if !reflect.DeepEqual(writes, []string{"PATCH /me/messages/d1"}) {
+		t.Fatalf("provider writes=%v", writes)
+	}
+	assertState(t, d.s, send, `{"state":"withdrawn"}`)
+	if m := regexp.MustCompile(`"send_approval_id":"([0-9a-f]{32})"`).FindStringSubmatch(body); m == nil || m[1] == send {
+		t.Fatalf("update=%s", body)
+	}
+}
+
 // A run that fails returns a safe code, is stored and audited as failed, and never runs again.
 func TestFailedApprovalStoresASafeCodeAndDoesNotRetry(t *testing.T) {
 	cancelled := strings.Replace(organizerEvent, `"isOrganizer":true`, `"isOrganizer":true,"isCancelled":true`, 1)

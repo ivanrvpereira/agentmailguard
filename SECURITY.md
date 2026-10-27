@@ -59,7 +59,7 @@ The guard does not protect a human from fraud.
 Missing or invalid screening fails closed.
 The fake screening engine (`[screening] provider = "fake"`) judges by keywords only and is for tests and local work. If an account is not a fake account, `amgd serve` warns but does not refuse.
 Mail is sent only by `mail send`, `mail reply`, `mail forward`, and `draft send`, and only when the write policy allows it. The default policy denies sends. A send is never retried.
-Only a person in the approval console approves a waiting action. A draft change or delete through the API withdraws a waiting send of that draft and never runs or approves anything; a draft update then makes a new send that waits for approval.
+Only a person in the approval console approves a waiting action. A draft change or delete through the API withdraws a waiting send of that draft before its own checks and never runs or approves anything; a draft update that runs then makes a new send that waits for approval.
 Meeting invitations, updates, cancellations, and responses send notifications to attendees. The default policy denies them.
 The command set never permanently deletes mail, except a draft through `draft delete`: Gmail deletes drafts for good, and Microsoft 365 keeps the deleted item restorable. `draft delete` and `draft send` refuse a message that is not a draft.
 Read state, flag, categorize, archive, and move have no policy key. The daemon runs them for anyone who can reach the listener.

@@ -280,12 +280,12 @@ func (g *Guard) Categorize(ctx context.Context, ids, add, remove []string) ([]mo
 // draft operation that makes or changes a draft; for other actions it gives none, so the operation record has only
 // the source ID, or no ID for a new message.
 //
-// Under the mutation gate, a draft send first withdraws the waiting sends of its draft, before its decision and any
-// refusal, so one draft has at most one waiting send. A draft update or delete that runs withdraws them
-// after its decision and before the write, so no approval can claim an old send once the draft changes; a failed
-// write leaves them withdrawn. An update that withdrew a send then replaces it (replaceSend) and gives the new
-// approval ID as the second result; it is "" otherwise. A failed replacement gives its error after the update ran, as
-// a failed audit record after a write does, and leaves no waiting send.
+// Under the mutation gate, a draft update, delete, or send first withdraws the waiting sends of its draft, before its
+// decision and any refusal, so one draft has at most one waiting send and no approval can claim an old send once a
+// change of the draft holds the gate. A refused, held, or failed operation leaves them withdrawn. An update that
+// withdrew a send and ran then replaces it (replaceSend) and gives the new approval ID as the second result; it is ""
+// otherwise. A failed replacement gives its error after the update ran, as a failed audit record after a write does,
+// and leaves no waiting send.
 func (g *Guard) compose(ctx context.Context, op audit.Operation, source string, args any, call func() (string, error)) (string, string, error) {
 	if err := g.acquire(ctx); err != nil {
 		return "", "", err
@@ -302,9 +302,11 @@ func (g *Guard) compose(ctx context.Context, op audit.Operation, source string, 
 	}
 	onDraft := op == audit.DraftUpdate || op == audit.DraftDelete || op == audit.DraftSend
 	makesDraft := !send && op != audit.DraftDelete
-	// Withdrawing only removes, so a draft send withdraws the waiting sends of its draft before any refusal.
-	if op == audit.DraftSend {
-		if _, err := g.withdrawSends(ctx, source); err != nil {
+	// Withdrawing only removes, so an operation on a draft withdraws the waiting sends of its draft before any refusal.
+	withdrawn := 0
+	if onDraft {
+		var err error
+		if withdrawn, err = g.withdrawSends(ctx, source); err != nil {
 			return "", "", err
 		}
 	}
@@ -331,12 +333,6 @@ func (g *Guard) compose(ctx context.Context, op audit.Operation, source string, 
 	}
 	if err := g.single(ctx, op, key, d, ref, args); err != nil {
 		return "", "", err
-	}
-	withdrawn := 0
-	if op == audit.DraftUpdate || op == audit.DraftDelete {
-		if withdrawn, err = g.withdrawSends(ctx, source); err != nil {
-			return "", "", err
-		}
 	}
 	if err := ctx.Err(); err != nil {
 		return "", "", err
