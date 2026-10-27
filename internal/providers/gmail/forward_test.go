@@ -349,3 +349,33 @@ func TestForwardRefusesOversizedAttachmentsAndHeaderBreaks(t *testing.T) {
 		})
 	}
 }
+
+// An attachments.get answer without data, with null data, or with empty data for an attachment that is not empty
+// fails before anything is written. An empty attachment needs no data.
+func TestForwardRefusesAnAttachmentAnswerWithoutData(t *testing.T) {
+	forward := func(size int, answer map[string]any, writes func(http.ResponseWriter, *http.Request)) (*[]string, error) {
+		payload := map[string]any{"mimeType": "multipart/mixed", "headers": headers("From", "ana@example.test", "Subject", "Plan"), "parts": []any{part("text/plain", "One"), attachmentPart("application/pdf", "a.pdf", "att1", size)}}
+		requests, h := forwardOriginal(t, payload, nil, writes)
+		c := sendClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/messages/o1/attachments/att1" {
+				respond(w, answer)
+				return
+			}
+			h(w, r)
+		})
+		_, err := c.Mailbox().DraftForward(context.Background(), "o1", model.Forward{To: []string{"a@example.test"}})
+		return requests, err
+	}
+	for _, answer := range []map[string]any{{"attachmentId": "att1", "size": 4}, {"attachmentId": "att1", "size": 4, "data": nil}, {"attachmentId": "att1", "size": 4, "data": ""}} {
+		requests, err := forward(4, answer, func(http.ResponseWriter, *http.Request) { t.Error("write") })
+		if err == nil || err.Error() != "Gmail error ValueError" || !reflect.DeepEqual(*requests, []string{"GET /messages/o1"}) {
+			t.Fatalf("answer %v: err=%v requests=%v", answer, err, *requests)
+		}
+	}
+	requests, err := forward(0, map[string]any{"attachmentId": "att1", "size": 0}, func(w http.ResponseWriter, _ *http.Request) {
+		respond(w, map[string]any{"id": "f1", "message": map[string]any{"id": "created", "threadId": "thread"}})
+	})
+	if err != nil || !reflect.DeepEqual(*requests, []string{"GET /messages/o1", "POST /upload/drafts"}) {
+		t.Fatalf("empty attachment: err=%v requests=%v", err, *requests)
+	}
+}

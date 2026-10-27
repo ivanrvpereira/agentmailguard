@@ -168,13 +168,14 @@ func forwardParts(payload *mimePart, html bool) (regular, inline []*mimePart, er
 // attachmentData gives the data of each part of message id: the inline data, or else the data that
 // messages.attachments.get gives for its attachment ID
 // (https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages.attachments/get). A part with
-// neither fails, unless it is empty; an attached message (message/*) is never taken as empty. An encodedSize of more
-// than maxForwardBytes in total fails, and stops the reads.
+// neither, or whose attachments.get answer has no data, fails, unless it is empty; an attached message (message/*)
+// is never taken as empty. An encodedSize of more than maxForwardBytes in total fails, and stops the reads.
 func (m *mailbox) attachmentData(ctx context.Context, id string, parts []*mimePart) ([][]byte, error) {
 	out := make([][]byte, 0, len(parts))
 	total := 0
 	for _, p := range parts {
 		encoded := p.Body.Data
+		empty := p.Body.Size != nil && *p.Body.Size == 0 && !strings.HasPrefix(strings.ToLower(p.MimeType), "message/")
 		switch {
 		case encoded != "":
 		case p.Body.AttachmentID != "":
@@ -184,11 +185,11 @@ func (m *mailbox) attachmentData(ctx context.Context, id string, parts []*mimePa
 			}
 			var body struct{ Data string }
 			raw, _ := json.Marshal(v)
-			if json.Unmarshal(raw, &body) != nil {
+			if json.Unmarshal(raw, &body) != nil || body.Data == "" && !empty {
 				return nil, failure("Gmail", "ValueError")
 			}
 			encoded = body.Data
-		case p.Body.Size != nil && *p.Body.Size == 0 && !strings.HasPrefix(strings.ToLower(p.MimeType), "message/"):
+		case empty:
 		default:
 			return nil, failure("Gmail", "ValueError")
 		}

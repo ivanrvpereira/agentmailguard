@@ -293,6 +293,20 @@ func TestConsoleListShowsOptionalAttendeesAsRecipients(t *testing.T) {
 	}
 }
 
+// A reply goes to the original's recipients too, which only the item page reads, so the list marks a reply row as a
+// reply or a reply all before the cc and bcc of the request.
+func TestConsoleListMarksReplyRows(t *testing.T) {
+	f := consoleDaemon(t, draftApprove, true)
+	pend(t, f.d.s, "draft.reply", `{"id":"g","body":"b","all":true,"cc":["c@example.test"],"bcc":["d@example.test"]}`)
+	pend(t, f.d.s, "draft.reply", `{"id":"g","body":"b"}`)
+	page := f.get(t, "/", nil).Body.String()
+	for _, want := range []string{"<td>reply all; cc: c@example.test; bcc (hidden): d@example.test</td>", "<td>reply</td>"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("list misses %q: %s", want, page)
+		}
+	}
+}
+
 // The item page shows the stored arguments as text and the referenced message through the guarded read,
 // without its body.
 func TestConsoleItemShowsStoredArgumentsAsTextAndTheMessageSummary(t *testing.T) {

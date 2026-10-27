@@ -118,16 +118,24 @@ func TestNewMessagesCarryCcBccAndTheHTMLBodyType(t *testing.T) {
 	}
 }
 
-// A Graph message carries its bccRecipients, which Graph gives for drafts and sent mail.
-func TestGetReadsTheBccRecipients(t *testing.T) {
-	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.URL.Query().Get("$select"), ",bccRecipients,") {
-			t.Errorf("select=%s", r.URL.Query().Get("$select"))
+// A draft, or a message from the account's address, which is one that the account sent, carries its bccRecipients.
+// A received message gives no BCC.
+func TestGetReadsTheBccRecipientsOfDraftsAndSentMail(t *testing.T) {
+	bcc := []model.Address{{Name: "Ed", Address: "ed@example.test"}}
+	for _, tc := range []struct {
+		draft bool
+		from  string
+		want  []model.Address
+	}{{true, "ana@example.test", bcc}, {false, "WORK@example.test", bcc}, {false, "ana@example.test", []model.Address{}}} {
+		c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if !strings.Contains(r.URL.Query().Get("$select"), ",bccRecipients,") {
+				t.Errorf("select=%s", r.URL.Query().Get("$select"))
+			}
+			jsonResponse(w, map[string]any{"id": "m", "isDraft": tc.draft, "from": graphRecipients(tc.from)[0], "bccRecipients": []any{map[string]any{"emailAddress": map[string]any{"name": "Ed", "address": "ed@example.test"}}}})
+		})
+		got, err := c.Mailbox().Get(t.Context(), []string{"m"}, false)
+		if err != nil || len(got) != 1 || !reflect.DeepEqual(got[0].BCC, tc.want) {
+			t.Fatalf("draft=%v from=%s: got=%+v %v", tc.draft, tc.from, got, err)
 		}
-		jsonResponse(w, map[string]any{"id": "m", "isDraft": true, "bccRecipients": []any{map[string]any{"emailAddress": map[string]any{"name": "Ed", "address": "ed@example.test"}}}})
-	})
-	got, err := c.Mailbox().Get(t.Context(), []string{"m"}, false)
-	if err != nil || len(got) != 1 || !reflect.DeepEqual(got[0].BCC, []model.Address{{Name: "Ed", Address: "ed@example.test"}}) {
-		t.Fatalf("got=%+v %v", got, err)
 	}
 }

@@ -387,19 +387,23 @@ func (g *Guard) read(ctx context.Context, id string) (model.Message, cache.Row, 
 		return model.Message{}, cache.Row{}, nil, err
 	}
 	m := fetched[id]
-	if ok && hidden(row.Verdict) && !m.IsDraft {
+	// A draft, or a message with BCC, is screened on every read: a draft changes, and a cached verdict may predate
+	// BCC in the screened fields.
+	fresh := m.IsDraft || len(m.BCC) > 0
+	if ok && hidden(row.Verdict) && !fresh {
 		return m, row, nil, nil
 	}
-	if m.IsDraft && m.Body == nil {
+	if fresh && m.Body == nil {
+		draft := m.IsDraft
 		fetched, err = g.fetch(ctx, []string{id}, true)
 		if err != nil {
 			return model.Message{}, cache.Row{}, nil, err
 		}
 		m = fetched[id]
-		m.IsDraft = true
+		m.IsDraft = m.IsDraft || draft
 	}
 	var green *cache.Row
-	if ok && row.Verdict == model.Green && !m.IsDraft {
+	if ok && row.Verdict == model.Green && !fresh {
 		green = &row
 	}
 	row, r, err := g.screen(ctx, m, green)

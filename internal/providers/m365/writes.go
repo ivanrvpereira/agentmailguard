@@ -238,8 +238,8 @@ func quotedBody(kind, quote, note string, html bool) (map[string]string, error) 
 	return nil, invalidMetadata
 }
 
-// ReplyRecipients reads the original's sender, Reply-To, To, and CC and applies model.ReplyRecipients with the
-// account's address as the own address. A message from that address is one that the account sent.
+// ReplyRecipients reads the original's sender, Reply-To, To, and CC strictly and applies model.ReplyRecipients with
+// the account's address as the own address. A message from that address is one that the account sent.
 func (b *mailbox) ReplyRecipients(ctx context.Context, id string, all bool) (model.Recipients, error) {
 	d, err := b.c.get(ctx, b.c.endpoint("/me/messages/"+escapeID(id), url.Values{"$select": {"from,replyTo,toRecipients,ccRecipients"}}), false)
 	if err != nil {
@@ -249,7 +249,18 @@ func (b *mailbox) ReplyRecipients(ctx context.Context, id string, all bool) (mod
 		return model.Recipients{}, invalidMetadata
 	}
 	from, own := address(obj(d, "from")).Address, b.c.account.Email
-	src := model.ReplySource{From: []string{from}, ReplyTo: emails(d, "replyTo"), To: emails(d, "toRecipients"), CC: emails(d, "ccRecipients"), Sent: strings.EqualFold(from, own)}
+	if from == "" {
+		return model.Recipients{}, invalidMetadata
+	}
+	src := model.ReplySource{From: []string{from}, Sent: strings.EqualFold(from, own)}
+	for _, list := range []struct {
+		key string
+		out *[]string
+	}{{"replyTo", &src.ReplyTo}, {"toRecipients", &src.To}, {"ccRecipients", &src.CC}} {
+		if *list.out, err = strictRecipients(d, list.key); err != nil {
+			return model.Recipients{}, err
+		}
+	}
 	return model.ReplyRecipients(src, all, []string{own}), nil
 }
 
@@ -269,47 +280,48 @@ func (b *mailbox) SendReply(ctx context.Context, id string, reply model.Reply) e
 // notDraft refuses a draft write of a message that is not a draft.
 const notDraft = model.MailboxError("Graph error DraftError")
 
-// draftFlag reads isDraft, which must be a JSON boolean, of a message with an ID. Graph tells a draft from a sent
-// message by isDraft (https://learn.microsoft.com/en-us/graph/api/resources/message?view=graph-rest-1.0).
-func draftFlag(d object) (bool, error) {
+// draftFlag reads isDraft, which must be a JSON boolean, of message id; an answer for another message fails. Graph
+// tells a draft from a sent message by isDraft (https://learn.microsoft.com/en-us/graph/api/resources/message?view=graph-rest-1.0).
+func draftFlag(d object, id string) (bool, error) {
 	var v *bool
-	if json.Unmarshal(d["isDraft"], &v) != nil || v == nil || text(d, "id") == "" {
+	if json.Unmarshal(d["isDraft"], &v) != nil || v == nil || text(d, "id") != id {
 		return false, invalidMetadata
 	}
 	return *v, nil
 }
 
 // ReadDraft reads isDraft, the recipients, the subject, and the body of message id. A message that is not a draft
-// gives only IsDraft false. A draft body type other than text or html fails.
+// gives only IsDraft false. A draft body type other than text or html, or a body content that is not a string, fails.
 func (b *mailbox) ReadDraft(ctx context.Context, id string) (model.DraftContent, error) {
 	d, err := b.c.get(ctx, b.c.endpoint("/me/messages/"+escapeID(id), url.Values{"$select": {"isDraft,toRecipients,ccRecipients,bccRecipients,subject,body"}}), false)
 	if err != nil {
 		return model.DraftContent{}, err
 	}
-	draft, err := draftFlag(d)
+	draft, err := draftFlag(d, id)
 	if err != nil || !draft {
 		return model.DraftContent{}, err
 	}
 	body := obj(d, "body")
 	kind := strings.ToLower(text(body, "contentType"))
-	if kind != "text" && kind != "html" {
+	var content *string
+	if kind != "text" && kind != "html" || json.Unmarshal(body["content"], &content) != nil || content == nil {
 		return model.DraftContent{}, invalidMetadata
 	}
-	out := model.DraftContent{IsDraft: true, Subject: text(d, "subject"), Body: text(body, "content"), HTML: kind == "html"}
+	out := model.DraftContent{IsDraft: true, Subject: text(d, "subject"), Body: *content, HTML: kind == "html"}
 	for _, list := range []struct {
 		key string
 		out *[]string
 	}{{"toRecipients", &out.To}, {"ccRecipients", &out.CC}, {"bccRecipients", &out.BCC}} {
-		if *list.out, err = draftRecipients(d, list.key); err != nil {
+		if *list.out, err = strictRecipients(d, list.key); err != nil {
 			return model.DraftContent{}, err
 		}
 	}
 	return out, nil
 }
 
-// draftRecipients reads the recipient list k of a draft strictly: a JSON array of recipients that each have an
-// address. Any other value fails, so that no recipient of a draft is silently dropped or blank.
-func draftRecipients(d object, k string) ([]string, error) {
+// strictRecipients reads the recipient list k of a message strictly: a JSON array of recipients that each have an
+// address. Any other value fails, so that no recipient is silently dropped or blank.
+func strictRecipients(d object, k string) ([]string, error) {
 	var list []struct {
 		EmailAddress struct{ Address string } `json:"emailAddress"`
 	}
@@ -370,7 +382,7 @@ func (b *mailbox) onlyDraft(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	draft, err := draftFlag(d)
+	draft, err := draftFlag(d, id)
 	if err != nil {
 		return err
 	}

@@ -191,19 +191,28 @@ func TestNewMessagesCarryCcBccAndTheHTMLPart(t *testing.T) {
 	}
 }
 
-// A message read from Gmail carries its Bcc header, which Gmail keeps on drafts and sent mail.
-func TestGetReadsTheBccHeader(t *testing.T) {
-	c := sendClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/labels" {
-			respond(w, map[string]any{})
-			return
+// A draft or sent message read from Gmail carries its Bcc header, which Gmail keeps on drafts and sent mail. A
+// received message gives no BCC: its Bcc header is sender text.
+func TestGetReadsTheBccHeaderOfDraftsAndSentMail(t *testing.T) {
+	bcc := []model.Address{{Name: "Ed", Address: "ed@example.test"}, {Address: "flo@example.test"}}
+	for _, tc := range []struct {
+		labels []string
+		want   []model.Address
+	}{{[]string{"DRAFT"}, bcc}, {[]string{"SENT", "INBOX"}, bcc}, {[]string{"INBOX", "UNREAD"}, []model.Address{}}} {
+		c := sendClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/labels" {
+				respond(w, map[string]any{})
+				return
+			}
+			p := part("text/plain", "Body")
+			p["headers"] = []map[string]string{{"name": "To", "value": "a@example.test"}, {"name": "Bcc", "value": "Ed <ed@example.test>, flo@example.test"}}
+			m := message("m", p)
+			m["labelIds"] = tc.labels
+			respond(w, m)
+		})
+		got, err := c.Mailbox().Get(context.Background(), []string{"m"}, false)
+		if err != nil || len(got) != 1 || !reflect.DeepEqual(got[0].BCC, tc.want) {
+			t.Fatalf("%v: got=%+v %v", tc.labels, got, err)
 		}
-		p := part("text/plain", "Body")
-		p["headers"] = []map[string]string{{"name": "To", "value": "a@example.test"}, {"name": "Bcc", "value": "Ed <ed@example.test>, flo@example.test"}}
-		respond(w, message("m", p))
-	})
-	got, err := c.Mailbox().Get(context.Background(), []string{"m"}, false)
-	if err != nil || len(got) != 1 || !reflect.DeepEqual(got[0].BCC, []model.Address{{Name: "Ed", Address: "ed@example.test"}, {Address: "flo@example.test"}}) {
-		t.Fatalf("got=%+v %v", got, err)
 	}
 }

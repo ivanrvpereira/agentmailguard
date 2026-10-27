@@ -236,6 +236,13 @@ func (c *console) list(ctx context.Context, w http.ResponseWriter) {
 		if args["to"] == nil {
 			recipients = texts(args["add"])
 		}
+		// A reply goes to the original's recipients too, which only the item page reads.
+		if item.Op == "draft.reply" || item.Op == "mail.reply" {
+			recipients = []string{"reply"}
+			if all, _ := args["all"].(bool); all {
+				recipients = []string{"reply all"}
+			}
+		}
 		groups := []string{}
 		if len(recipients) > 0 {
 			groups = append(groups, strings.Join(recipients, ", "))

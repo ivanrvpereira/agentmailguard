@@ -317,9 +317,13 @@ func parseMessage(data map[string]json.RawMessage, labels map[string]string, bod
 	if err != nil {
 		return model.Message{}, err
 	}
-	m := model.Message{ID: v.ID, ThreadID: v.ThreadID, Subject: decoded(headerValue(v.Payload.Headers, "subject")), ReceivedAt: received, To: addresses(v.Payload.Headers, "to"), CC: addresses(v.Payload.Headers, "cc"), BCC: addresses(v.Payload.Headers, "bcc"), Folders: []string{}, Attachments: []string{}, Categories: []string{}, IsDraft: contains(v.LabelIDs, "DRAFT"), IsRead: !contains(v.LabelIDs, "UNREAD"), Flag: model.NoFlag}
+	m := model.Message{ID: v.ID, ThreadID: v.ThreadID, Subject: decoded(headerValue(v.Payload.Headers, "subject")), ReceivedAt: received, To: addresses(v.Payload.Headers, "to"), CC: addresses(v.Payload.Headers, "cc"), BCC: []model.Address{}, Folders: []string{}, Attachments: []string{}, Categories: []string{}, IsDraft: contains(v.LabelIDs, "DRAFT"), IsRead: !contains(v.LabelIDs, "UNREAD"), Flag: model.NoFlag}
 	if a := addresses(v.Payload.Headers, "from"); len(a) > 0 {
 		m.Sender = a[0]
+	}
+	// Only drafts and sent mail have a Bcc header that the account wrote; on received mail it is sender text.
+	if m.IsDraft || contains(v.LabelIDs, "SENT") {
+		m.BCC = addresses(v.Payload.Headers, "bcc")
 	}
 	if contains(v.LabelIDs, "STARRED") {
 		m.Flag = model.Flagged

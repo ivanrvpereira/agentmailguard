@@ -381,10 +381,12 @@ func newDraft(d model.DraftResult) newDraftDTO {
 }
 
 // updatedDraftDTO is the result of draft.update: the draft's IDs, the message ID possibly new, and only the recipient
-// lists and subject that the request gave. Fields that the update did not change are not read back. SendApprovalID is
-// the new waiting send that replaced a withdrawn one, left out when the update made none.
+// lists and subject that the request gave. Fields that the update did not change are not read back. OK is always
+// true, as in the result before the IDs. SendApprovalID is the new waiting send that replaced a withdrawn one, left
+// out when the update made none.
 type updatedDraftDTO struct {
 	draftIDsDTO
+	OK             bool      `json:"ok"`
 	To             *[]string `json:"to,omitempty"`
 	CC             *[]string `json:"cc,omitempty"`
 	BCC            *[]string `json:"bcc,omitempty"`
@@ -411,7 +413,7 @@ func updatedDraft(d guard.UpdatedDraft, c model.DraftChange) updatedDraftDTO {
 	if c.Subject != nil {
 		subject = new(content.CleanSubject(*c.Subject))
 	}
-	return updatedDraftDTO{draftIDsDTO{d.ID, d.ThreadID}, list(c.To), list(c.CC), list(c.BCC), subject, d.SendApprovalID}
+	return updatedDraftDTO{draftIDsDTO{d.ID, d.ThreadID}, true, list(c.To), list(c.CC), list(c.BCC), subject, d.SendApprovalID}
 }
 
 // sourceContentShown is the verdict limit of a reply or forward draft result. Its recipients and subject come from

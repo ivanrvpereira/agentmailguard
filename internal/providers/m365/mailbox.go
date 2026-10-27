@@ -65,10 +65,16 @@ func content(d object) (*string, *model.ContentType) {
 	}
 	return value, typ
 }
-func message(d object, body bool) (model.Message, error) {
-	m := model.Message{ID: text(d, "id"), ThreadID: text(d, "conversationId"), Subject: text(d, "subject"), IsDraft: boolean(d, "isDraft"), IsRead: boolean(d, "isRead"), Flag: model.NoFlag, Categories: stringsAt(d, "categories"), Attachments: names(d), To: addresses(d, "toRecipients"), CC: addresses(d, "ccRecipients"), BCC: addresses(d, "bccRecipients"), ReceivedAt: model.UnknownReceived, Folders: []string{}}
+
+// message reads BCC only of a draft or of a message from the account's address, which is one that the account sent,
+// as ReplyRecipients tells them apart.
+func (b *mailbox) message(d object, body bool) (model.Message, error) {
+	m := model.Message{ID: text(d, "id"), ThreadID: text(d, "conversationId"), Subject: text(d, "subject"), IsDraft: boolean(d, "isDraft"), IsRead: boolean(d, "isRead"), Flag: model.NoFlag, Categories: stringsAt(d, "categories"), Attachments: names(d), To: addresses(d, "toRecipients"), CC: addresses(d, "ccRecipients"), BCC: []model.Address{}, ReceivedAt: model.UnknownReceived, Folders: []string{}}
 	if m.ID == "" {
 		return m, invalidMetadata
+	}
+	if m.IsDraft || strings.EqualFold(address(obj(d, "from")).Address, b.c.account.Email) {
+		m.BCC = addresses(d, "bccRecipients")
 	}
 	sender := obj(d, "from")
 	if len(sender) == 0 {
@@ -106,7 +112,7 @@ func (b *mailbox) Get(ctx context.Context, ids []string, body bool) ([]model.Mes
 		wg.Go(func() {
 			d, err := b.c.get(ctx, b.c.endpoint("/me/messages/"+escapeID(id), messageQuery(body)), false)
 			if err == nil {
-				out[i], err = message(d, body)
+				out[i], err = b.message(d, body)
 			}
 			errs[i] = err
 		})
@@ -148,7 +154,7 @@ func (b *mailbox) Thread(ctx context.Context, thread string) ([]model.Message, e
 	}
 	out := []model.Message{}
 	for _, d := range items {
-		m, err := message(d, false)
+		m, err := b.message(d, false)
 		if err != nil {
 			return nil, err
 		}
@@ -246,7 +252,7 @@ func (b *mailbox) page(ctx context.Context, path string, q url.Values, page mode
 	}
 	out := []model.Message{}
 	for _, d := range items {
-		m, err := message(d, body)
+		m, err := b.message(d, body)
 		if err != nil {
 			return model.MessagePage{}, err
 		}

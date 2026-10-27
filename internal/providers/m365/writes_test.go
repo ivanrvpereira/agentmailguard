@@ -95,9 +95,10 @@ func TestDraftUpdatePatchesOnlyTheGivenFields(t *testing.T) {
 	}
 }
 
-// A message that is not a draft, or whose isDraft is missing or not a boolean, is refused before any PATCH.
+// A message that is not a draft, whose isDraft is missing or not a boolean, or that is another message, is refused
+// before any PATCH.
 func TestDraftUpdateRefusesAMessageThatIsNotADraftBeforeAnyPatch(t *testing.T) {
-	for _, read := range []map[string]any{{"id": "m", "isDraft": false}, {"id": "m"}, {"id": "m", "isDraft": "true"}, {"id": "m", "isDraft": nil}, {"isDraft": true}} {
+	for _, read := range []map[string]any{{"id": "m", "isDraft": false}, {"id": "m"}, {"id": "m", "isDraft": "true"}, {"id": "m", "isDraft": nil}, {"isDraft": true}, {"id": "other", "isDraft": true}} {
 		paths, _, c := draftGraph(t, read, 0)
 		if _, _, err := c.Mailbox().DraftUpdate(context.Background(), "m", model.DraftChange{Subject: new("New")}); err == nil || len(*paths) != 1 {
 			t.Fatalf("read %v: err=%v requests=%q", read, err, *paths)
@@ -145,7 +146,7 @@ func TestDraftDeleteAndSendWriteOnceAfterTheDraftCheck(t *testing.T) {
 					t.Fatalf("HTTP %d: err=%v requests=%q", status, err, *requests)
 				}
 			}
-			for _, read := range []map[string]any{{"id": "m/1", "isDraft": false}, {"id": "m/1"}, {"isDraft": true}} {
+			for _, read := range []map[string]any{{"id": "m/1", "isDraft": false}, {"id": "m/1"}, {"isDraft": true}, {"id": "other", "isDraft": true}} {
 				requests, _, c = draftGraph(t, read, tc.status)
 				if err := tc.call(c.Mailbox()); err == nil || !reflect.DeepEqual(*requests, []string{check}) {
 					t.Fatalf("read %v: err=%v requests=%q", read, err, *requests)
@@ -156,7 +157,8 @@ func TestDraftDeleteAndSendWriteOnceAfterTheDraftCheck(t *testing.T) {
 }
 
 // ReadDraft reads isDraft, the recipients, the subject, and the body with its type. A message that is not a draft
-// gives only IsDraft false; a draft body of another type fails.
+// gives only IsDraft false; another message, a draft body of another type, or a body content that is not a string
+// fails.
 func TestReadDraftMapsTheDraftFields(t *testing.T) {
 	recipients := func(a ...string) []any {
 		out := []any{}
@@ -185,6 +187,24 @@ func TestReadDraftMapsTheDraftFields(t *testing.T) {
 	_, _, c = draftGraph(t, draft, 0)
 	if _, err := c.Mailbox().ReadDraft(context.Background(), "m"); err == nil {
 		t.Fatal("unknown body type accepted")
+	}
+	draft["body"] = map[string]any{"contentType": "text", "content": ""}
+	other := maps.Clone(draft)
+	other["id"] = "other"
+	_, _, c = draftGraph(t, other, 0)
+	if got, err := c.Mailbox().ReadDraft(context.Background(), "m"); err == nil {
+		t.Fatalf("another message accepted: %+v", got)
+	}
+	_, _, c = draftGraph(t, draft, 0)
+	if got, err := c.Mailbox().ReadDraft(context.Background(), "m"); err != nil || got.Body != "" {
+		t.Fatalf("empty body=%+v %v", got, err)
+	}
+	for _, body := range []map[string]any{{"contentType": "text"}, {"contentType": "text", "content": nil}, {"contentType": "text", "content": 42}} {
+		draft["body"] = body
+		_, _, c = draftGraph(t, draft, 0)
+		if got, err := c.Mailbox().ReadDraft(context.Background(), "m"); err == nil {
+			t.Errorf("body %v accepted: %+v", body, got)
+		}
 	}
 	draft["body"] = map[string]any{"contentType": "text", "content": "x"}
 	// A recipient list that is not an array, or a recipient without an address, fails.

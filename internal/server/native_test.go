@@ -53,7 +53,7 @@ func messageJSON(id string, body bool, cats []string) map[string]any {
 	if cats == nil {
 		cats = []string{}
 	}
-	m := map[string]any{"id": id, "subject": "private-subject-" + id, "from": map[string]any{"emailAddress": map[string]string{"address": "sender@example.test", "name": "private-name"}}, "receivedDateTime": "2026-03-30T10:00:00Z", "isDraft": false, "isRead": false, "categories": cats, "parentFolderId": "inbox", "attachments": []any{}}
+	m := map[string]any{"id": id, "subject": "private-subject-" + id, "from": map[string]any{"emailAddress": map[string]string{"address": "sender@example.test", "name": "private-name"}}, "receivedDateTime": "2026-03-30T10:00:00Z", "isDraft": false, "isRead": false, "categories": cats, "parentFolderId": "inbox", "attachments": []any{}, "replyTo": []any{}, "toRecipients": []any{}, "ccRecipients": []any{}}
 	if body {
 		m["body"] = map[string]string{"contentType": "text", "content": "private-body-" + id + " https://example.test/report"}
 		m["internetMessageHeaders"] = []any{map[string]string{"name": "Authentication-Results", "value": "mx; spf=pass dkim=pass dmarc=pass compauth=pass"}}

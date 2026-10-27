@@ -411,7 +411,7 @@ func TestApprovalPageShowsTheForwardRecipients(t *testing.T) {
 }
 
 // draft update changes only the fields that it is given: a list replaces the old one, and an empty value clears it.
-// The result gives the draft's IDs and the changed fields, and the returned ID reads the updated draft.
+// The result gives the draft's IDs, "ok": true, and the changed fields, and the returned ID reads the updated draft.
 func TestDraftUpdateChangesOnlyTheGivenFields(t *testing.T) {
 	t.Parallel()
 	s := start(t, "")
@@ -436,7 +436,7 @@ func TestDraftUpdateChangesOnlyTheGivenFields(t *testing.T) {
 			`drafts 1 ["bob@example.test","di@example.test"] [] ["flo@example.test"] canary-subject-new text canary-body-plain`},
 	} {
 		got := decode[map[string]any](t, s.ok(append([]string{"draft", "update", id}, tc.args...)...))
-		tc.result["id"], tc.result["thread_id"] = id, id
+		tc.result["id"], tc.result["thread_id"], tc.result["ok"] = id, id, true
 		if !reflect.DeepEqual(got, tc.result) {
 			t.Fatalf("update %v: result %v, want %v", tc.args, got, tc.result)
 		}
@@ -463,11 +463,11 @@ func TestDraftUpdateChangesReplyAndForwardDrafts(t *testing.T) {
 	s.seedTeam()
 	s.seedReport()
 	reply := decode[newDraft](t, s.ok("draft", "reply", "team", "--body", "canary-body-reply")).ID
-	if got := decode[map[string]any](t, s.ok("draft", "update", reply, "--body", "canary-body-reply-new")); !reflect.DeepEqual(got, map[string]any{"id": reply, "thread_id": "team"}) {
+	if got := decode[map[string]any](t, s.ok("draft", "update", reply, "--body", "canary-body-reply-new")); !reflect.DeepEqual(got, map[string]any{"id": reply, "thread_id": "team", "ok": true}) {
 		t.Fatalf("reply update: %v", got)
 	}
 	forward := decode[newDraft](t, s.ok("draft", "forward", "report", "--body", "canary-body-note")).ID
-	if got := decode[map[string]any](t, s.ok("draft", "update", forward, "--to", "ana@example.test")); !reflect.DeepEqual(got, map[string]any{"id": forward, "thread_id": "report", "to": []any{"ana@example.test"}}) {
+	if got := decode[map[string]any](t, s.ok("draft", "update", forward, "--to", "ana@example.test")); !reflect.DeepEqual(got, map[string]any{"id": forward, "thread_id": "report", "ok": true, "to": []any{"ana@example.test"}}) {
 		t.Fatalf("forward update: %v", got)
 	}
 	got := s.column(`SELECT thread_id || ' ' || to_addresses || ' ' || subject || ' ' || attachments || ' ' || body FROM messages WHERE id IN (?, ?) ORDER BY thread_id DESC`, reply, forward)

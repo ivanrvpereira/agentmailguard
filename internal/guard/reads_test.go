@@ -126,6 +126,31 @@ func TestDraftIdentityOverridesPreviouslyCachedVerdict(t *testing.T) {
 		})
 	}
 }
+
+// A message with BCC is screened again on each read even with a cached green or yellow verdict, which may predate
+// BCC in the screened fields, so that no unscreened BCC is shown.
+func TestGetScreensAMessageWithBCCDespiteACachedVerdict(t *testing.T) {
+	for _, cached := range []model.Screening{{Verdict: model.Green, Score: new(0.0)}, {Verdict: model.Yellow, Score: new(.35)}} {
+		t.Run(string(cached.Verdict), func(t *testing.T) {
+			b := &mailbox{messages: []model.Message{message("m1")}}
+			s := &screeningResult{result: cached}
+			g, _, _ := setup(t, b, s)
+			ctx := context.Background()
+			if v, err := g.Get(ctx, "m1"); err != nil || v.Verdict != cached.Verdict {
+				t.Fatalf("first read: %v %v", v.Verdict, err)
+			}
+			b.messages[0].BCC = []model.Address{{Address: "CANARY-bcc@example.test"}}
+			s.result = model.Screening{Verdict: model.Red, Score: new(.9)}
+			v, err := g.Get(ctx, "m1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if v.Verdict != model.Red || v.BCC != nil || s.calls != 2 {
+				t.Fatalf("BCC shown from a cached verdict: verdict=%s bcc=%v calls=%d", v.Verdict, v.BCC, s.calls)
+			}
+		})
+	}
+}
 func TestSearchByRecipientAloneIsASearchTerm(t *testing.T) {
 	g, _, _ := setup(t, &mailbox{messages: []model.Message{message("m1")}}, &screener{verdict: model.Green})
 	got, err := summaries(g.Search(t.Context(), model.SearchQuery{To: ptr("ana@example.test")}, model.PageRequest{}))

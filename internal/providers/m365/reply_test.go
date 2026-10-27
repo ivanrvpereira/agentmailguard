@@ -173,6 +173,32 @@ func TestReplyRecipientsReadTheOriginalWithoutWriting(t *testing.T) {
 	}
 }
 
+// ReplyRecipients reads the original strictly: a missing or malformed sender, Reply-To, To, or CC list, or a
+// recipient without an address, fails, so that no recipient is silently dropped. Empty lists are valid.
+func TestReplyRecipientsRefuseAMalformedOriginal(t *testing.T) {
+	valid := map[string]any{"id": "m1", "from": graphRecipients("ana@example.test")[0], "replyTo": graphRecipients(), "toRecipients": graphRecipients("work@example.test"), "ccRecipients": graphRecipients()}
+	read := func(fields map[string]any) (model.Recipients, error) {
+		return graphClient(t, func(w http.ResponseWriter, r *http.Request) { jsonResponse(w, fields) }).Mailbox().ReplyRecipients(t.Context(), "m1", true)
+	}
+	if got, err := read(valid); err != nil || !reflect.DeepEqual(got, model.Recipients{To: []string{"ana@example.test"}, CC: []string{}, BCC: []string{}}) {
+		t.Fatalf("empty lists=%+v %v", got, err)
+	}
+	for _, key := range []string{"from", "replyTo", "toRecipients", "ccRecipients"} {
+		for _, bad := range []any{nil, "ana@example.test", map[string]any{"emailAddress": map[string]any{"name": "No address"}}, []any{map[string]any{"emailAddress": map[string]any{"name": "No address"}}}} {
+			broken := maps.Clone(valid)
+			broken[key] = bad
+			if got, err := read(broken); err != model.MailboxError("Graph error InvalidMetadata") {
+				t.Errorf("%s=%v: %+v %v", key, bad, got, err)
+			}
+		}
+		missing := maps.Clone(valid)
+		delete(missing, key)
+		if got, err := read(missing); err != model.MailboxError("Graph error InvalidMetadata") {
+			t.Errorf("missing %s: %+v %v", key, got, err)
+		}
+	}
+}
+
 // A create answer without a draft ID, or a PATCH answer for another draft, fails the reply: nothing is patched after
 // the bad create, and nothing is sent.
 func TestSendReplyStopsOnAnAnswerForTheWrongDraft(t *testing.T) {
