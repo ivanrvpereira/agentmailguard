@@ -962,7 +962,7 @@ Offline verification does not establish production readiness.
 
 ## License
 
-Copyright 2026 Ivan Pereira.
+Copyright 2026 The agentmailguard authors.
 Licensed under the [Apache License, Version 2.0](LICENSE) (`Apache-2.0`).
 Dependencies retain their own licenses and attribution requirements.
 Binary distributions must include the applicable third-party license notices.

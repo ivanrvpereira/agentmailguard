@@ -40,15 +40,15 @@ func TestAdminRecordsCarryOnlyKeysCodesAndFixedChoices(t *testing.T) {
 	log := audit.New(path)
 	allow := "allow"
 	for _, err := range []error{
-		log.Account(ctx, "account_added", "ivan@example.test"),
-		log.Account(ctx, "account_login", "ivan@example.test"),
-		log.Account(ctx, "account_removed", "ivan@example.test"),
+		log.Account(ctx, "account_added", "admin@example.test"),
+		log.Account(ctx, "account_login", "admin@example.test"),
+		log.Account(ctx, "account_removed", "admin@example.test"),
 		log.Credential(ctx, "screening_api_key_set"),
 		log.Credential(ctx, "console_password_set"),
 		log.Credential(ctx, "store_migrated"),
 		log.Credential(ctx, "store_password_changed"),
 		log.Config(ctx, "config_changed", "policy.mail_send", "", &allow),
-		log.Config(ctx, "config_changed", "accounts.work.policy.calendar_update", "ivan@example.test", &allow),
+		log.Config(ctx, "config_changed", "accounts.work.policy.calendar_update", "admin@example.test", &allow),
 		log.Config(ctx, "config_changed", "screening.endpoint", "", nil),
 		log.Config(ctx, "config_removed", "console.hosts", "", nil),
 		log.Reload(ctx, "ok"),
@@ -59,15 +59,15 @@ func TestAdminRecordsCarryOnlyKeysCodesAndFixedChoices(t *testing.T) {
 		}
 	}
 	want := []map[string]any{
-		{"event": "account_added", "account": "ivan@example.test"},
-		{"event": "account_login", "account": "ivan@example.test"},
-		{"event": "account_removed", "account": "ivan@example.test"},
+		{"event": "account_added", "account": "admin@example.test"},
+		{"event": "account_login", "account": "admin@example.test"},
+		{"event": "account_removed", "account": "admin@example.test"},
 		{"event": "screening_api_key_set"},
 		{"event": "console_password_set"},
 		{"event": "store_migrated"},
 		{"event": "store_password_changed"},
 		{"event": "config_changed", "key": "policy.mail_send", "value": "allow"},
-		{"event": "config_changed", "key": "accounts.work.policy.calendar_update", "account": "ivan@example.test", "value": "allow"},
+		{"event": "config_changed", "key": "accounts.work.policy.calendar_update", "account": "admin@example.test", "value": "allow"},
 		{"event": "config_changed", "key": "screening.endpoint"},
 		{"event": "config_removed", "key": "console.hosts"},
 		{"event": "reload", "result": "ok"},
@@ -84,7 +84,7 @@ func TestAdminRecordsRefuseFreeTextWithoutAppending(t *testing.T) {
 	log := audit.New(path)
 	endpoint, secret := "https://jev.example.test/CANARY", "CANARY-secret"
 	for name, err := range map[string]error{
-		"account event":     log.Account(ctx, "account_renamed", "ivan@example.test"),
+		"account event":     log.Account(ctx, "account_renamed", "admin@example.test"),
 		"account not a key": log.Account(ctx, "account_added", "CANARY work"),
 		"credential event":  log.Credential(ctx, "screening_api_key_CANARY"),
 		"config value":      log.Config(ctx, "config_changed", "screening.endpoint", "", &endpoint),

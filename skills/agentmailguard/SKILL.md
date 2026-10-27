@@ -3,7 +3,6 @@ name: agentmailguard
 description: Reads, searches, and organizes screened Microsoft 365 and Gmail mail and calendar events, creates reply, forward, and new-message drafts, sends mail, replies, and forwards, and sends meeting invitations, updates, cancellations, and responses, through the amg client of agentmailguard. Use when the user asks about their email, inbox, messages, calendar, or meetings, wants a draft written, wants a specific message sent, replied to, or forwarded, wants a meeting sent, changed, cancelled, or answered, or wants mail archived, flagged, categorized, moved, trashed, or organized by rules.
 compatibility: Requires the amg client on PATH, a shell tool, and a running agentmailguard daemon reachable over HTTP. Linux or macOS.
 metadata:
-  author: ivanrvpereira
   version: "0.1.0"
 ---
 
