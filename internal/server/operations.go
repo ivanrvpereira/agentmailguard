@@ -415,8 +415,10 @@ func updatedDraft(d guard.UpdatedDraft, c model.DraftChange) updatedDraftDTO {
 }
 
 // sourceContentShown is the verdict limit of a reply or forward draft result. Its recipients and subject come from
-// the source message, so they show only at the source verdicts that show its headers: green and yellow. Red, any
-// other verdict, and an unknown one give only the draft IDs.
+// the source message, so they show only at the source verdicts that show its headers: green and yellow. The policy
+// refuses a reply or forward of any other source. Two cases still reach the fallback, which fails closed to the
+// draft IDs: a source verdict that cannot be read after the write, such as that of a draft, which is never cached;
+// and an approved run, which skips the policy, such as an item that waited before red sources were refused.
 func sourceContentShown(source model.Verdict) bool {
 	return source == model.Green || source == model.Yellow
 }

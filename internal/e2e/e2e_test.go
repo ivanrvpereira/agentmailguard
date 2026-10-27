@@ -273,16 +273,23 @@ func TestReplyAllDraftAddsTheAgentCcAndBccAndQuotesBelowHTML(t *testing.T) {
 	}
 }
 
-// The draft result of a reply to a red message names only the draft: its recipients and subject come from a message
-// whose headers are hidden.
-func TestReplyDraftOfARedMessageGivesOnlyItsIDs(t *testing.T) {
+// The daemon screens a draft on every read and never caches its verdict, so after a reply draft or a forward draft
+// of a draft it cannot read the verdict of the source. The result then names only the draft: its recipients and
+// subject come from a message whose verdict is unknown.
+func TestDraftOfASourceWithoutACachedVerdictGivesOnlyItsIDs(t *testing.T) {
 	t.Parallel()
 	s := start(t, "")
-	out := s.ok("draft", "reply", "phish", "--all", "--body", "canary-body-reply-red")
-	got := decode[map[string]any](t, out)
-	id, _ := got["id"].(string)
-	if want := map[string]any{"id": id, "thread_id": "phish"}; id == "" || !reflect.DeepEqual(got, want) {
-		t.Fatalf("draft=%s", out)
+	source := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--subject", "canary-subject-source", "--body", "canary-body-source")).ID
+	for _, args := range [][]string{
+		{"draft", "reply", source, "--body", "canary-body-reply-unknown"},
+		{"draft", "forward", source, "--to", "ana@example.test"},
+	} {
+		out := s.ok(args...)
+		got := decode[map[string]any](t, out)
+		id, _ := got["id"].(string)
+		if want := map[string]any{"id": id, "thread_id": source}; id == "" || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%v: %s", args, out)
+		}
 	}
 }
 
@@ -381,8 +388,7 @@ func TestMailForwardSendsToEveryListWithTheOriginalBelowTheHTMLNote(t *testing.T
 }
 
 // The approval page of a waiting forward shows its To and CC and marks its BCC as hidden; the approved run sends
-// to them. A forward draft of a red message waits, because Jev cannot read the forwarded text, and its approved run
-// stores only the draft IDs.
+// to them.
 func TestApprovalPageShowsTheForwardRecipients(t *testing.T) {
 	t.Parallel()
 	s := start(t, "[policy]\nmail_send='approve'\n")
@@ -401,15 +407,6 @@ func TestApprovalPageShowsTheForwardRecipients(t *testing.T) {
 	if got := s.column(`SELECT to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || attachments || ' ' || body FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{
 		`["ana@example.test"] ["cy@example.test"] ["ed@example.test"] ["canary-file-plan.pdf","canary-file-notes.txt"] canary-body-forward-held`}) {
 		t.Fatalf("sent: %v", got)
-	}
-	red := s.held("draft", "forward", "phish", "--to", "ana@example.test", "--body", "canary-body-forward-red")
-	s.approve(red.ApprovalID)
-	status := decode[struct {
-		State  string
-		Result map[string]any
-	}](t, s.ok("approvals", "status", red.ApprovalID))
-	if id, _ := status.Result["id"].(string); status.State != "done" || id == "" || !reflect.DeepEqual(status.Result, map[string]any{"id": id, "thread_id": "phish"}) {
-		t.Fatalf("approved red forward draft: %+v", status)
 	}
 }
 
@@ -844,13 +841,15 @@ func TestRefusedDraftSendStillWithdrawsTheWaitingSend(t *testing.T) {
 	}
 }
 
-// A reply or forward of a sealed or error message is refused even when the policy allows drafts and sends.
-func TestRepliesAndForwardsOfASealedMessageAreAlwaysRefused(t *testing.T) {
+// A reply or forward of a red, sealed, or error message is refused even when the policy allows drafts and sends. The
+// policy record names the red source with the reason red, and the sealed and error sources with the reason sealed.
+func TestRepliesAndForwardsOfARedOrSealedMessageAreAlwaysRefused(t *testing.T) {
 	t.Parallel()
 	s := start(t, "[policy]\nmail_send='allow'\nmail_draft='allow'\n")
 	before := s.dump()
 	want := []map[string]any{}
-	for _, id := range []string{"code", "broken"} {
+	for _, source := range [][2]string{{"phish", "red"}, {"code", "sealed"}, {"broken", "sealed"}} {
+		id, reason := source[0], source[1]
 		for _, tc := range []struct {
 			op, key string
 			args    []string
@@ -861,7 +860,7 @@ func TestRepliesAndForwardsOfASealedMessageAreAlwaysRefused(t *testing.T) {
 			{"draft.forward", "mail_draft", []string{"draft", "forward", id, "--to", "ana@example.test"}},
 		} {
 			s.refused("refused by policy: "+tc.key, tc.args...)
-			want = append(want, map[string]any{"event": "policy", "account": "demo@fake.invalid", "operation": tc.op, "key": tc.key, "decision": "deny", "reasons": []any{"policy", "sealed"}, "id": id})
+			want = append(want, map[string]any{"event": "policy", "account": "demo@fake.invalid", "operation": tc.op, "key": tc.key, "decision": "deny", "reasons": []any{"policy", reason}, "id": id})
 		}
 	}
 	// A refused write changes no row at the provider: no sent mail and no draft.

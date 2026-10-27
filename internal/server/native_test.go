@@ -415,8 +415,8 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 		t.Fatal("partial result missing")
 	}
 	ok("draft", "new", "--to", "first@example.test", "--to", "second@example.test", "--subject", "private-draft-subject", "--body", "private-draft-body")
-	ok("draft", "reply", "r", "--body", "private-reply-body")
-	// The Jev action check reads the forwarded text, so the source must be green; a red source would wait for approval.
+	ok("draft", "reply", "y", "--body", "private-reply-body")
+	// The Jev action check reads the forwarded text, so the source must be green; a yellow source would wait for approval.
 	ok("draft", "forward", "g", "--to", "first@example.test", "--to", "second@example.test")
 	assertPatches([]string{"draft", "update", "draft-1", "--body", "private-replacement-body"}, map[string]map[string]any{
 		"/me/messages/draft-1": {"body": map[string]any{"contentType": "text", "content": "private-replacement-body"}},
@@ -438,7 +438,7 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 		}
 		// The reply draft is createReply without a body, then a PATCH of the agent's text into Graph's quote.
 		if strings.HasSuffix(w.path, "/createReply") {
-			replied = w.path == "/me/messages/r/createReply" && len(w.body) == 0
+			replied = w.path == "/me/messages/y/createReply" && len(w.body) == 0
 		}
 		if body, _ := w.body["body"].(map[string]any); replied && w.method == "PATCH" && w.path == "/me/messages/draft-1" && body["content"] == "<html><body>private-reply-body<div>quoted</div></body></html>" {
 			foundReply = true

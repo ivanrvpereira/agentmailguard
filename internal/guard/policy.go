@@ -88,8 +88,9 @@ func (g *Guard) baseDecision(key string) config.Decision {
 	return config.Deny
 }
 
-// sealedDecision is the decision of key for a sealed message. Only mail_trash has a sealed setting; every other
-// key, such as a reply or forward under mail_draft or mail_send, is denied.
+// sealedDecision is the decision of key for a sealed message, and for a red message under any key but mail_trash.
+// Only mail_trash has a sealed setting; every other key, such as a reply or forward under mail_draft or mail_send,
+// is denied.
 func (g *Guard) sealedDecision(key string) config.Decision {
 	if key == keyTrash {
 		return normal(g.policy.Sealed.MailTrash)
@@ -97,12 +98,13 @@ func (g *Guard) sealedDecision(key string) config.Decision {
 	return config.Deny
 }
 
-// decision is the final policy decision for one action. sealed is true when the sealed decision made it stricter.
-// jev is the Jev action check, nil when no check ran. draft is, for a draft send, the draft fields that the check
-// saw, which a pending item stores beside its args; nil for other actions.
+// decision is the final policy decision for one action. reason is the policy record reason, sealed or red, of the
+// referenced message's verdict when it made the decision stricter, and empty otherwise. jev is the Jev action check, nil when no check ran.
+// draft is, for a draft send, the draft fields that the check saw, which a pending item stores beside its args; nil
+// for other actions.
 type decision struct {
 	value  config.Decision
-	sealed bool
+	reason string
 	jev    *model.ActionCheck
 	draft  *newDraftArgs
 }
@@ -218,8 +220,9 @@ func (g *Guard) forwardedText(ctx context.Context, id string) (map[string]any, e
 
 // decide returns the decision of key for each message ID. It looks up or screens a message only when the
 // sealed decision is stricter than the base decision; for a reply or forward that is whenever the base is not
-// deny. A sealed or error verdict, or a failed lookup, counts as sealed. The caller holds the mutation gate and
-// not the security gate: screening can take the security gate.
+// deny. A sealed or error verdict, or a failed lookup, counts as sealed. A red verdict counts as red, which gives
+// the sealed decision to a reply or forward and leaves the base decision of a trash. The caller holds the mutation
+// gate and not the security gate: screening can take the security gate.
 func (g *Guard) decide(ctx context.Context, key string, ids []string) (map[string]decision, error) {
 	base, sealed := g.base(ctx, key), g.sealedDecision(key)
 	out := make(map[string]decision, len(ids))
@@ -247,9 +250,13 @@ func (g *Guard) decide(ctx context.Context, key string, ids []string) (map[strin
 	}
 	for i, id := range ids {
 		switch verdicts[i] {
-		case model.Green, model.Yellow, model.Red:
+		case model.Green, model.Yellow:
+		case model.Red:
+			if key != keyTrash {
+				out[id] = decision{value: sealed, reason: "red"}
+			}
 		default:
-			out[id] = decision{value: sealed, sealed: true}
+			out[id] = decision{value: sealed, reason: "sealed"}
 		}
 	}
 	return out, nil
@@ -274,8 +281,8 @@ func (g *Guard) recordDecision(ctx context.Context, op audit.Operation, key stri
 		return nil
 	}
 	reasons := []string{"policy"}
-	if d.sealed {
-		reasons = append(reasons, "sealed")
+	if d.reason != "" {
+		reasons = append(reasons, d.reason)
 	}
 	if d.jev != nil && d.jev.Failed() {
 		reasons = append(reasons, "jev_error")

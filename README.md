@@ -502,8 +502,8 @@ On Gmail, `mail search` sends the times in Unix seconds (`after:` and `before:`)
 `calendar search TEXT` uses the provider's own search: Google Calendar `events.list` with `q` on Gmail, and the Microsoft Search API (`POST /search/query` for events) on Microsoft 365. It returns one page in the provider's default size and order, with `next_page` as above, and has no date range. Each event is screened as `calendar get` screens it, and the result has the fields of a `calendar list` result. The provider matches the text on its side, so a hidden subject or body can decide whether an event is in the result. The fake provider matches the subject, body, location, organizer, and attendees, ignoring case.
 `draft new` takes every option as optional, as the mail apps do, and `--to`, `--cc`, and `--bcc` can each be repeated. `--bcc` adds hidden recipients: the other recipients do not see them. The body is plain text with its line breaks unless `--html` is given; with `--html`, the body is HTML that the daemon sends unchanged, without cleaning or checking it.
 `draft new` returns `{"id", "thread_id", "to", "cc", "bcc", "subject"}`: the draft ID, its conversation ID (left out when the provider gives none), and its recipients and subject. On Microsoft 365, they come from the message that Graph returns; on Gmail, the IDs come from Gmail's answer and the recipients and subject from the message that the daemon built.
-`draft reply` takes the same options as `mail reply` (see [Mail send](#mail-send)) and returns the same fields as `draft new` when the replied-to message is `green` or `yellow`. For a `red` message, it returns only `{"id", "thread_id"}`: the recipients and subject come from a message whose headers are hidden.
-`draft forward` takes the same options as `mail forward` (see [Mail send](#mail-send)), but needs no recipient, as the mail apps allow; add the recipients later in the app. It returns the same fields as `draft reply`, by the same verdict rule.
+`draft reply` takes the same options as `mail reply` (see [Mail send](#mail-send)) and returns the same fields as `draft new`, or only `{"id", "thread_id"}` when the daemon cannot read the verdict of the replied-to message after the write. The daemon always refuses a reply to a `red`, `sealed`, or `error` message; see [Sealed messages](#sealed-messages).
+`draft forward` takes the same options as `mail forward` (see [Mail send](#mail-send)), but needs no recipient, as the mail apps allow; add the recipients later in the app. It returns the same fields as `draft reply`, and the daemon refuses it for the same messages.
 `mail get` also shows `bcc` on drafts and sent mail, where the provider gives it, at the verdicts that show `to` and `cc`.
 `draft update` changes any draft: a new draft, a reply or forward draft, or a draft that the user wrote in the app. Only the fields that it is given change, and it needs at least one of `--to`, `--cc`, `--bcc`, `--subject`, and `--body`. A list replaces the draft's list, and one empty value (`--to ''`) clears it. `--body` replaces the whole body, the quoted original of a reply or forward included, as both providers do; it is plain text unless `--html`, which goes only with `--body`. On Gmail, the update keeps the draft's conversation and its other headers byte for byte, `In-Reply-To` and `References` included, except `Date` and `Message-ID`. `--body` replaces the body text that `mail get` shows (the first text and HTML parts that are not attachments, with the `multipart/alternative` that holds only them) with one base64 text part, and keeps every other part, such as attachments, inline images, and attached messages, byte for byte at its place. A draft with only attachments gets the body as its first part; a draft that cannot take one, or whose MIME does not parse, fails with `Gmail error ValueError`. Without `--body`, the body stays as it is. An update of a message that is not a draft fails with `draft update refused: not a draft` before anything is written.
 `draft update` returns `{"id", "thread_id"}` and only the fields that it was given (`to`, `cc`, `bcc`, `subject`), cleaned; it does not read back the other fields. Gmail gives the updated draft a new message ID, so use the returned `id` for later commands; on Microsoft 365 and the fake provider, the ID stays. When the update withdrew a waiting send of the draft, the result also has `send_approval_id`, the approval ID of the new waiting send (see [Waiting sends and draft changes](#waiting-sends-and-draft-changes)).
@@ -574,7 +574,7 @@ A policy is invalid if it has an unknown key or table, a value other than `allow
 
 ### Sealed messages
 
-The daemon always refuses `draft reply`, `draft forward`, `mail reply`, and `mail forward` on a `sealed` or `error` message, with the refusal of their key: `refused by policy: mail_draft` or `refused by policy: mail_send`. No setting allows them.
+The daemon always refuses `draft reply`, `draft forward`, `mail reply`, and `mail forward` on a `red`, `sealed`, or `error` message, with the refusal of their key: `refused by policy: mail_draft` or `refused by policy: mail_send`. No setting allows them.
 Unless the base decision is `deny`, the daemon looks up the verdict of the message for each reply and forward.
 
 The sealed tables apply only to `mail trash` and accept only `mail_trash`.
@@ -584,7 +584,7 @@ The order is `allow`, then `approve`, then `deny`.
 The daemon looks up the verdict only when the sealed decision is stricter than the base decision.
 
 If the message has no cached verdict, the daemon screens it first. A message that the daemon cannot screen counts as `sealed`.
-For `green`, `yellow`, and `red` messages, only the base decision applies.
+For replies and forwards of `green` and `yellow` messages, and for `mail trash` of `green`, `yellow`, and `red` messages, only the base decision applies.
 `draft new`, `draft update`, `draft delete`, `draft send`, and `mail send` do not reference a received message, so only the base decision applies. Unless the base decision is `deny`, `draft update`, `draft delete`, and `draft send` first read their message and refuse one that is not a draft, before the Jev action check and any pending item. An approved run reads the message again.
 
 ### Jev action check
@@ -714,7 +714,7 @@ It also stores the result of the Jev check, if a check ran: the flag and the sco
 
 The audit log gets content-free records for the policy. Their `account` is the account key, and their `operation` is the API operation name, for example `mail.trash`.
 
-- `"event": "policy"` records each decision, also `allow`. It has `time`, `account`, `operation`, `key`, `decision`, and `reasons`: `policy`; `sealed` if the referenced message is `sealed` or `error` and that made the decision stricter; `jev_flag` if Jev flagged the action; `jev_error` if the Jev check failed. It can also have `id`, `rule`, and `approval_id`. It never has the Jev score.
+- `"event": "policy"` records each decision, also `allow`. It has `time`, `account`, `operation`, `key`, `decision`, and `reasons`: `policy`; `sealed` if the referenced message is `sealed` or `error` and that made the decision stricter; `red` if the replied-to or forwarded message is `red` and that made the decision stricter; `jev_flag` if Jev flagged the action; `jev_error` if the Jev check failed. It can also have `id`, `rule`, and `approval_id`. It never has the Jev score.
 - `"event": "approval"` records each step of a pending item. It has `time`, `account`, `operation`, `state` (`created`, `approved`, `denied`, `withdrawn`, `done`, or `failed`), and `approval_id`. A `withdrawn` record is written for each waiting draft send that a draft change or delete withdrew.
 - `"event": "console_signin"` records each wrong console password. It has only `time` and `result` (`failed`). It never has the username, the password, the host name, or the address of the browser.
 
@@ -743,7 +743,7 @@ An agent must run these commands only after the user authorizes that specific se
 The [write policy](#write-policy) key `mail_send` decides all four commands. The default is `deny`.
 To use them, set `mail_send` to `allow` or `approve` in `config.toml`.
 With `approve`, each send waits in the [approval console](#approval-console) and runs only after a person approves it.
-`mail reply` and `mail forward` act on an existing message. The daemon always refuses a reply to or a forward of a `sealed` or `error` message, or of one that it cannot screen. See [Sealed messages](#sealed-messages).
+`mail reply` and `mail forward` act on an existing message. The daemon always refuses a reply to or a forward of a `red`, `sealed`, or `error` message, or of one that it cannot screen. See [Sealed messages](#sealed-messages).
 
 The commands take the same options as the matching draft commands:
 

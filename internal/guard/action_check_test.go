@@ -253,7 +253,7 @@ func TestForwardWithoutSourceTextIsPending(t *testing.T) {
 		verdict model.Verdict
 		cached  []cache.Row
 	}{
-		"hidden source": {&mailbox{messages: messages("m1")}, model.Red, nil},
+		"hidden source": {&mailbox{messages: messages("m1")}, model.Yellow, nil},
 		// A cached green verdict passes the sealed check; the source then cannot be read.
 		"missing source": {&mailbox{}, model.Green, []cache.Row{{MessageID: "m1", ReceivedAt: now, ScreenedAt: now, Verdict: model.Green, Score: new(0.0)}}},
 	} {

@@ -216,14 +216,18 @@ var approveAll = config.Policy{
 	Sealed: config.SealedDecisions{MailTrash: config.Approve},
 }
 
-func TestReplyAndForwardOfASealedSourceAreAlwaysRefused(t *testing.T) {
+// A red source refuses with the reason red; sealed, error, and unreadable sources with the reason sealed. The
+// source is screened in the decision, because it has no cached verdict.
+func TestReplyAndForwardOfARedOrSealedSourceAreAlwaysRefused(t *testing.T) {
 	sources := map[string]struct {
 		messages []model.Message
 		verdict  model.Verdict
+		reason   string
 	}{
-		"sealed":           {messages("m1"), model.Sealed},
-		"screening failed": {messages("m1"), model.Error},
-		"unreadable":       {nil, ""},
+		"red":              {messages("m1"), model.Red, "red"},
+		"sealed":           {messages("m1"), model.Sealed, "sealed"},
+		"screening failed": {messages("m1"), model.Error, "sealed"},
+		"unreadable":       {nil, "", "sealed"},
 	}
 	for name, policy := range map[string]config.Policy{"allow": allowAll, "approve": approveAll} {
 		for source, src := range sources {
@@ -243,7 +247,7 @@ func TestReplyAndForwardOfASealedSourceAreAlwaysRefused(t *testing.T) {
 					for _, r := range records {
 						delete(r, "time")
 					}
-					want := []map[string]any{{"account": "work", "event": "policy", "operation": tc.op, "key": tc.key, "decision": "deny", "reasons": []any{"policy", "sealed"}, "id": "m1"}}
+					want := []map[string]any{{"account": "work", "event": "policy", "operation": tc.op, "key": tc.key, "decision": "deny", "reasons": []any{"policy", src.reason}, "id": "m1"}}
 					if !reflect.DeepEqual(records, want) || len(auditRecords(t, path)) != 0 {
 						t.Fatalf("records=%v\nwant   %v", allAuditRecords(t, path), want)
 					}
@@ -256,10 +260,10 @@ func TestReplyAndForwardOfASealedSourceAreAlwaysRefused(t *testing.T) {
 	}
 }
 
-// The forwarded text of a yellow or red message is not shown, so the Jev check of its forward fails and holds
-// an allowed forward; the policy record then has the reasons policy and jev_error, and never sealed.
-func TestReplyAndForwardOfAGreenYellowOrRedSourceKeepTheBaseDecision(t *testing.T) {
-	for _, verdict := range []model.Verdict{model.Green, model.Yellow, model.Red} {
+// The forwarded text of a yellow message is not shown, so the Jev check of its forward fails and holds an allowed
+// forward; the policy record then has the reasons policy and jev_error, and never sealed or red.
+func TestReplyAndForwardOfAGreenOrYellowSourceKeepTheBaseDecision(t *testing.T) {
+	for _, verdict := range []model.Verdict{model.Green, model.Yellow} {
 		for _, tc := range sourceCalls {
 			for name, policy := range map[string]config.Policy{"allow": allowAll, "approve": approveAll} {
 				t.Run(string(verdict)+"/"+tc.op+"/"+name, func(t *testing.T) {
@@ -312,6 +316,35 @@ func TestMissingVerdictIsScreenedBeforeTheDecision(t *testing.T) {
 	g, _, _ := policyGuard(t, w, nil, s, defaultPolicy)
 	if _, _, err := g.DraftReply(context.Background(), "m1", model.Reply{Body: "reply"}); err == nil || err.Error() != "refused by policy: mail_draft" || s.count() != 1 || len(w.calls) != 0 {
 		t.Fatalf("reply to unscreened sealed source: %v screenings=%d writes=%v", err, s.count(), w.calls)
+	}
+}
+
+// The sealed trash decision is stricter here, so the message is screened, but a red message is not sealed: its
+// trash keeps the base decision, and a held trash has only the reason policy.
+func TestTrashOfARedMessageKeepsTheBaseDecision(t *testing.T) {
+	for _, base := range []config.Decision{config.Allow, config.Approve} {
+		t.Run(string(base), func(t *testing.T) {
+			w := &writer{mailbox: &mailbox{messages: messages("m1")}}
+			s := &subjectScreener{verdicts: map[string]model.Verdict{"m1": model.Red}}
+			policy := defaultPolicy
+			policy.Base.MailTrash = base
+			g, _, path := policyGuard(t, w, nil, s, policy)
+			got, err := g.Trash(context.Background(), []string{"m1"})
+			if err != nil || len(got) != 1 || s.count() != 1 {
+				t.Fatalf("trash=%+v %v screenings=%d", got, err, s.count())
+			}
+			want := []string{"trash"}
+			if base == config.Approve {
+				want = nil
+			}
+			if !reflect.DeepEqual(w.calls, want) {
+				t.Fatalf("trash=%+v writes=%v; want %v", got[0], w.calls, want)
+			}
+			records := policyRecords(t, path)
+			if len(records) == 0 || records[0]["event"] != "policy" || records[0]["decision"] != string(base) || !reflect.DeepEqual(records[0]["reasons"], []any{"policy"}) {
+				t.Fatalf("records=%v; want decision %s reasons [policy]", records, base)
+			}
+		})
 	}
 }
 

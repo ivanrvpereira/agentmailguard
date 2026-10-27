@@ -22,8 +22,9 @@ var policyOperations = map[string]bool{
 	"calendar.invite": true, "calendar.update": true, "calendar.cancel": true, "calendar.respond": true,
 }
 
-// Policy record reasons: the policy decision, a stricter sealed decision, a Jev flag, and a failed Jev check.
-var policyReasons = map[string]bool{"policy": true, "sealed": true, "jev_flag": true, "jev_error": true}
+// Policy record reasons: the policy decision, a stricter decision from a sealed or a red source, a Jev flag, and a
+// failed Jev check.
+var policyReasons = map[string]bool{"policy": true, "sealed": true, "red": true, "jev_flag": true, "jev_error": true}
 
 // Pending is the fixed per-ID result code of an action stored for approval.
 const Pending = "pending"
@@ -44,7 +45,7 @@ type Decision struct {
 	Operation  string   // API operation name, for example mail.trash
 	Key        string   // policy key, for example mail_trash
 	Decision   string   // allow, approve, or deny
-	Reasons    []string // policy; sealed when the sealed decision made it stricter; jev_flag or jev_error from the Jev action check
+	Reasons    []string // policy; sealed or red when a sealed or red source made it stricter; jev_flag or jev_error from the Jev action check
 	ID         *string  // the message or event the action references, if any
 	ApprovalID *string  // the stored action, on approve
 	Rule       *string  // the organizer rule that made the write, if any
