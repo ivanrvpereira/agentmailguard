@@ -45,10 +45,12 @@ Applies when the diff adds a decision, a default, a lookup, or a result type.
 
 ## Writes (hard)
 
-Applies when the diff adds or changes a mailbox, calendar, or draft write, or an outbound HTTP request.
+Applies when the diff adds or changes a mailbox, calendar, or draft write, an approval, an API operation, or an outbound HTTP request.
 
 - **One write path.** Mail changes go through `Guard.mutationCall` with the mutation gate held (as `Guard.manual` does), drafts and sends through `Guard.compose`, and calendar writes through `Guard.calendarWrite`. These paths validate, normalize results, and audit under the mutation gate. Put a new mail write refusal in `mutationCall` so organizer rule actions (`internal/guard/apply.go`) get it too.
 - **Audit survives cancellation.** After a provider returns a write result, record the audit with `context.WithoutCancel(ctx)`. The mailbox has already changed by then; a client that disconnects must not leave that change without a record. An audit failure returns `AuditError`.
+- **One approval path.** Only `Server.Approve` runs an action without a policy check, through `guard.WithApproval`. Only the approval console calls `Server.Approve` and `Server.Deny`.
+- **Closed API.** A new API operation is a change to the reviewed list in `TestAPIOperationsAreReviewed`. Review that it manages nothing: no accounts, credentials, console password, settings, or cache.
 - **At most once.** A write goes out once. Only reads retry, as the Gmail client retries rate-limited `GET` requests. A test checks the mechanical parts (no redirects, no rewindable body, no `Idempotency-Key`).
 
 ## Concurrency and cancellation (hard)

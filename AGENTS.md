@@ -1,29 +1,23 @@
 # agentmailguard
 
-Long-lived daemon that screens Microsoft 365 and Gmail mail for AI agents. Two binaries: `amg`, the agent's thin HTTP client (API commands only, pure Go), and `amgd`, which runs the daemon (`amgd serve`) and manages it on the daemon host (`reload`, `account`, `config`, `store`, `cache clear`).
+Long-lived daemon that screens Microsoft 365 and Gmail mail and calendars for AI agents. `amg` is the agent's client; `amgd` runs the daemon and holds every management command.
 
 ## Stack
 
-Go with cgo for `amgd` (SQLite through `mattn/go-sqlite3`, macOS Keychain through `keybase/go-keychain`); `amg` builds with `CGO_ENABLED=0`. See `go.mod` for the rest. macOS and Linux only.
+Go, macOS and Linux only. `amgd` needs cgo (SQLite, macOS Keychain); `amg` must build with `CGO_ENABLED=0`.
 
 ## Commands
 
-- `make` — gofmt check, `go vet`, `go test -race ./...`, builds `bin/amg` and `bin/amgd`. Run before reporting completion. The e2e tests build the binaries themselves, so Go may report them `(cached)` after a code change; run `go test -race -count=1 ./internal/e2e/` after changes to `cmd/`, `internal/daemon`, or `internal/cli`.
-
-| Task | Command |
-|------|---------|
-| Format check | `gofmt -l internal/<pkg>/` |
-| Vet | `go vet ./internal/<pkg>/` |
-| Package tests | `go test -race ./internal/<pkg>/` |
-| One test | `go test -race ./internal/<pkg>/ -run TestName` |
-
+- `make` — gofmt check, `go vet`, `go test -race ./...`, builds `bin/amg` and `bin/amgd`. Run before reporting completion. Run package tests with `-race` too.
+- The e2e tests build the binaries themselves, so Go may report them `(cached)` after a code change; run `go test -race -count=1 ./internal/e2e/` after changes to `cmd/`, `internal/daemon`, or `internal/cli`.
 - Read [CODING_STANDARDS.md](CODING_STANDARDS.md) before you write or review a diff.
+- Name domain concepts with the terms in [GLOSSARY.md](GLOSSARY.md). Before you change a boundary that an ADR in [docs/adr/](docs/adr/) records, read that ADR.
 
 ## Testing
 
 - Show red/green evidence for each behavior change.
 - Tests use only temp homes (`--home` or `AMG_HOME`), fake providers, and a fake `credentials.Platform`, never the real Keychain. Live checks use Ivan's home and need his approval.
-- All homes share one Keychain item, so a temp home does not keep `amgd` away from the real Keychain. If you must run `amgd` by hand, use a temp home with `[credentials] backend = "file"` and `AMG_CREDENTIALS_PASSWORD`, set before the first `amgd` command that reads the store (`serve`, `config list`/`get`, secrets, `account login`).
+- To run `amgd` by hand, use a temp home and set `AMG_CREDENTIALS_PASSWORD` before the first `amgd` command that reads the store (`serve`, `config list`/`get`, secrets, `account login`). Keep the default file backend: all homes share one Keychain item, so `backend = "keychain"` in a temp home reaches the real Keychain.
 
 ## Behavior
 
@@ -39,16 +33,16 @@ Go with cgo for `amgd` (SQLite through `mattn/go-sqlite3`, macOS Keychain throug
 - Availability reads expose only requested addresses and fixed status slots. Missing or invalid participant data is unknown, never free.
 - Mail is sent only by `mail.send`, `mail.reply`, and `mail.forward` under the `mail_send` policy (default deny), and a send is never retried. Mail is never permanently deleted. Calendar invitations, updates, cancellations, and responses (M365 and Gmail) send meeting notifications; Gmail writes always use `sendUpdates=all`, and a Gmail cancel moves the event to the calendar bin, never a permanent delete. Trash is a provider move.
 - Non-draft messages change only via read state, flag, categories, archive, trash, or validated move. M365 moves into Deleted Items or its subfolders are refused. Trash goes only through `mail.trash`.
-- The write policy (`[policy]` in `config.toml`) decides trash, draft, send, and meeting writes, including rule moves to trash. A zero or unknown decision denies. Only `Server.Approve` runs an action without a policy check (`guard.WithApproval`). Only the approval console calls `Server.Approve` and `Server.Deny`; the API and `amg` never approve or deny pending actions. `amgd account remove` denies the pending actions of the removed account.
+- The write policy (`[policy]` in `config.toml`) decides trash, draft, send, and meeting writes, including rule moves to trash. A zero or unknown decision denies. Only an approval in the approval console runs an action without a policy check; the API and `amg` never approve or deny pending actions. `amgd account remove` denies the pending actions of the removed account.
 - Accounts are keyed by their lowercase email, which `config.toml` stores. Every sign-in must return that email; a login is saved only after that check. The alias is only a command-line name.
-- The API never manages the daemon. Every management command is in `amgd` on the daemon host; `amg` has only API commands. Adding an API operation changes the reviewed list in `TestAPIOperationsAreReviewed`.
-- The daemon reads `config.toml`, `rules.toml`, and the credential store only at start and at a reload (SIGUSR1). A refused reload keeps the old state. A token refresh saves only if the stored login did not change since the daemon read it. `amgd` never writes `rules.toml`.
+- The API never manages the daemon. Every management command is in `amgd` on the daemon host; `amg` has only API commands.
+- The daemon reads `config.toml`, `rules.toml`, and the credential store only at start and at a reload. A refused reload keeps the old state. A token refresh saves only if the stored login did not change since the daemon read it. `amgd` never writes `rules.toml`.
 - The Jev action check only makes a write stricter: a flag or a failed check turns `allow` into `approve`. Denied actions and approved runs are never sent to Jev. The agent never sees the check result.
 - Logs and storage exclude subject, sender, body, attendee addresses, meeting comments, rule instructions, raw API responses, tokens, and keys. Exceptions: the `pending` table in `cache.db` stores the request arguments of actions that wait for approval, and the account's own email (the account key) is stored in `config.toml`, `cache.db`, `audit.jsonl`, and `rules.toml`.
 - Policy, approval, console sign-in, account, credential, config, and reload audit records contain IDs, account keys, key paths, and fixed codes only. A `config_changed` record carries a value only for fixed-choice keys; secrets never.
 - Secrets live in the macOS Keychain or the password-encrypted file backend, on the daemon host only. `amgd config set` reads secrets from stdin, never from arguments, and stores them there; they never go to `config.toml`. The console password is stored only as a bcrypt hash.
 - The daemon binds to loopback by default and warns on remote listeners. The API listener has no client authentication or built-in TLS. Anyone who can reach it can run every action that the policy allows, including mail sends and meeting notifications.
-- The approval console is a separate listener (`[console].listen`, default `localhost:8788`). It always listens; without a console password it refuses every request with 503. Every console request needs the password; the console also checks Host and Origin and has no built-in TLS.
+- The approval console is its own listener, never the API port. Every console request needs the console password; without one, the console refuses every request.
 
 ## Gotchas
 
