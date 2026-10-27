@@ -2,6 +2,7 @@ package m365_test
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"reflect"
 	"testing"
@@ -42,16 +43,12 @@ func (g *replyGraph) handler(t *testing.T, kind, content, fail string) http.Hand
 		}
 		draft := map[string]any{"id": "d1", "conversationId": "conv", "subject": "RE: Plan", "isDraft": true, "body": map[string]any{"contentType": kind, "content": content},
 			"toRecipients": graphRecipients("ana@example.test"), "ccRecipients": graphRecipients("bo@example.test"), "bccRecipients": graphRecipients()}
-		for k, v := range g.fields {
-			draft[k] = v
-		}
+		maps.Copy(draft, g.fields)
 		switch r.Method + " " + r.URL.EscapedPath() {
 		case "POST /v1.0/me/messages/d1/send":
 			w.WriteHeader(http.StatusAccepted)
 		case "PATCH /v1.0/me/messages/d1":
-			for k, v := range body {
-				draft[k] = v
-			}
+			maps.Copy(draft, body)
 			if id, ok := g.ids["patch"]; ok {
 				draft["id"] = id
 			}

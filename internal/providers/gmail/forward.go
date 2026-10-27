@@ -145,7 +145,7 @@ func forwardParts(payload *mimePart, html bool) (regular, inline []*mimePart, er
 		image := strings.HasPrefix(kind, "image/") && headerValue(p.Headers, "content-id") != "" && disposition != "attachment"
 		switch {
 		case image && !html:
-			return skipParts
+			return errSkipParts
 		case !image && !attached:
 			return nil
 		}
@@ -160,7 +160,7 @@ func forwardParts(payload *mimePart, html bool) (regular, inline []*mimePart, er
 		if len(regular)+len(inline) > maxForwardAttachments {
 			return failure("Gmail", "SizeError")
 		}
-		return skipParts
+		return errSkipParts
 	})
 	return regular, inline, err
 }

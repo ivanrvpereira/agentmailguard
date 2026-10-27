@@ -112,8 +112,8 @@ func addresses(headers []header, name string) []model.Address {
 	return out
 }
 
-// skipParts, returned by the visit of walk, skips the parts below the visited part.
-var skipParts = errors.New("skip parts")
+// errSkipParts, returned by the visit of walk, skips the parts below the visited part.
+var errSkipParts = errors.New("skip parts")
 
 // maxMIMEDepth and maxMIMEParts bound the levels and the parts that walk visits and that parseRaw reads.
 const (
@@ -138,7 +138,7 @@ func walk(p *mimePart, visit func(*mimePart, bool) error) error {
 		}
 		p := last.p
 		attached := last.attached || p.Filename != "" || strings.HasPrefix(strings.ToLower(strings.TrimSpace(headerValue(p.Headers, "content-disposition"))), "attachment") || strings.EqualFold(p.MimeType, "message/rfc822")
-		if err := visit(p, attached); errors.Is(err, skipParts) {
+		if err := visit(p, attached); errors.Is(err, errSkipParts) {
 			continue
 		} else if err != nil {
 			return err
