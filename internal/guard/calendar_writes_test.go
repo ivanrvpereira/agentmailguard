@@ -416,7 +416,7 @@ func TestCalendarInvitePreservesPayloadAndAuditsWithoutReading(t *testing.T) {
 	assertCalendarAudit(t, path, "calendar_invite", "created")
 }
 
-// storedArgs decodes the request arguments of a pending item.
+// storedArgs decodes the request arguments of a pending action.
 func storedArgs(t *testing.T, item cache.Pending) map[string]any {
 	t.Helper()
 	var args map[string]any

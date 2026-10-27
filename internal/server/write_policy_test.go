@@ -129,7 +129,7 @@ func TestTrashPolicyResultsKeepOneEntryPerID(t *testing.T) {
 		}
 	}
 	if writes.Load() != 1 || reads.Load() != 0 {
-		t.Fatalf("provider accessed for pending items: reads=%d writes=%d", reads.Load(), writes.Load())
+		t.Fatalf("provider accessed for pending actions: reads=%d writes=%d", reads.Load(), writes.Load())
 	}
 }
 

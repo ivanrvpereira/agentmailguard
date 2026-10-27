@@ -332,7 +332,7 @@ func TestTrashRepeatedIDGivesOnePendingItem(t *testing.T) {
 		}
 	}
 	if created != 1 {
-		t.Fatalf("created %d pending items; want 1", created)
+		t.Fatalf("created %d pending actions; want 1", created)
 	}
 }
 
@@ -451,7 +451,7 @@ func TestRuleTrashFollowsThePolicy(t *testing.T) {
 				return
 			}
 			if len(approvals) != 2 || approvals[0] == approvals[1] {
-				t.Fatalf("want one new pending item per run: %v", approvals)
+				t.Fatalf("want one new pending action per run: %v", approvals)
 			}
 			for _, id := range approvals {
 				item, err := c.GetPending(ctx, id)

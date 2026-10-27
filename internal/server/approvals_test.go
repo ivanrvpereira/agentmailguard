@@ -167,7 +167,7 @@ func TestApprovedActionMakesTheSameWriteAsTheAllowedCall(t *testing.T) {
 }
 
 // An approved run adds the approved and done records and its normal operation record, and no policy
-// record or new pending item. Records hold IDs, codes, and the account key only.
+// record or new pending action. Records hold IDs, codes, and the account key only.
 func TestApprovedRunAuditsTheApprovalAndNoNewDecision(t *testing.T) {
 	for _, tc := range []struct{ policy, op, params, operation string }{
 		{approveAll, "draft.new", `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body"}`, "draft_new"},

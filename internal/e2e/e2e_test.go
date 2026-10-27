@@ -283,7 +283,7 @@ func TestPendingItemsAndVerdictsSurviveARestart(t *testing.T) {
 		t.Fatalf("phish after restart: %s", out)
 	}
 	if state := s.state(p.ApprovalID); state != "pending" {
-		t.Fatalf("pending item after restart: %s", state)
+		t.Fatalf("pending action after restart: %s", state)
 	}
 	s.approve(p.ApprovalID)
 	if got := s.column(`SELECT subject FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{"canary-subject-restart"}) {
