@@ -506,7 +506,7 @@ On Gmail, `mail search` sends the times in Unix seconds (`after:` and `before:`)
 `draft forward` takes the same options as `mail forward` (see [Mail send](#mail-send)), but needs no recipient, as the mail apps allow; add the recipients later in the app. It returns the same fields as `draft reply`, by the same verdict rule.
 `mail get` also shows `bcc` on drafts and sent mail, where the provider gives it, at the verdicts that show `to` and `cc`.
 `draft update` changes any draft: a new draft, a reply or forward draft, or a draft that the user wrote in the app. Only the fields that it is given change, and it needs at least one of `--to`, `--cc`, `--bcc`, `--subject`, and `--body`. A list replaces the draft's list, and one empty value (`--to ''`) clears it. `--body` replaces the whole body, the quoted original of a reply or forward included, as both providers do; it is plain text unless `--html`, which goes only with `--body`. On Gmail, the update keeps the draft's conversation and its other headers byte for byte, `In-Reply-To` and `References` included, except `Date` and `Message-ID`. `--body` replaces the body text that `mail get` shows (the first text and HTML parts that are not attachments, with the `multipart/alternative` that holds only them) with one base64 text part, and keeps every other part, such as attachments, inline images, and attached messages, byte for byte at its place. A draft with only attachments gets the body as its first part; a draft that cannot take one, or whose MIME does not parse, fails with `Gmail error ValueError`. Without `--body`, the body stays as it is. An update of a message that is not a draft fails with `draft update refused: not a draft` before anything is written.
-`draft update` returns `{"id", "thread_id"}` and only the fields that it was given (`to`, `cc`, `bcc`, `subject`), cleaned; it does not read back the other fields. Gmail gives the updated draft a new message ID, so use the returned `id` for later commands; on Microsoft 365 and the fake provider, the ID stays.
+`draft update` returns `{"id", "thread_id"}` and only the fields that it was given (`to`, `cc`, `bcc`, `subject`), cleaned; it does not read back the other fields. Gmail gives the updated draft a new message ID, so use the returned `id` for later commands; on Microsoft 365 and the fake provider, the ID stays. When the update withdrew a waiting send of the draft, the result also has `send_approval_id`, the approval ID of the new waiting send (see [Waiting sends and draft changes](#waiting-sends-and-draft-changes)).
 `draft delete ID` deletes any draft: on Gmail with `drafts.delete` on the draft that holds the message, which deletes it for good and does not trash it; on Microsoft 365 with Graph `DELETE` of the message, which keeps the item restorable (Graph has a separate permanent delete that the daemon never uses). `draft send ID` sends any draft as it is (see [Mail send](#mail-send)). Both refuse a message that is not a draft, with `draft delete refused: not a draft` or `draft send refused: not a draft`, before anything is written.
 `mail send`, `mail reply`, `mail forward`, `draft send`, and `draft delete` return `{"ok": true}`. The providers give no ID for a sent message.
 `calendar invite` returns the new event ID. The other meeting commands return the event ID and `"ok": true`.
@@ -529,7 +529,7 @@ Each policy key has one of three decisions:
 
 **Caution:** Do not set `approve` unless the [console password](#console-password) is set.
 Only a person in the [approval console](#approval-console) can approve or deny a pending item. Without the password, the console refuses every request and a pending item stays pending.
-`amg` and the API cannot approve or deny. `approvals status ID` shows the state of a pending item. See [Results](#results).
+`amg` and the API cannot approve or deny. A draft change or delete through the API withdraws a waiting send of that draft and never runs or approves anything (see [Waiting sends and draft changes](#waiting-sends-and-draft-changes)). `approvals status ID` shows the state of a pending item. See [Results](#results).
 
 Example:
 
@@ -624,8 +624,8 @@ The daemon trashes the allowed IDs.
 A denied ID gets `"ok": false` and `"error": "refused by policy: mail_trash"`.
 An ID that needs approval gets `"ok": false`, `"error": "pending"`, and an `approval_id`, but no `url`. Each such ID is its own pending item.
 
-`approvals status ID` returns `{"state":"..."}` for a pending item. The state is `pending`, `running`, `done`, `denied`, or `failed`.
-A `done` item also has `result`: the normal result of the command, except that a `draft new` or `draft reply` result keeps only `id` and `thread_id`, because the stored result holds no mail content.
+`approvals status ID` returns `{"state":"..."}` for a pending item. The state is `pending`, `running`, `done`, `denied`, `withdrawn`, or `failed`. A `withdrawn` item is a waiting `draft send` that a draft change or delete withdrew; it never runs.
+A `done` item also has `result`: the normal result of the command, except that a `draft new`, `draft reply`, `draft forward`, or `draft update` result keeps only `id` and `thread_id`, and for `draft update` also `send_approval_id`, because the stored result holds no mail content.
 The output never shows the stored request arguments.
 An unknown ID fails with `approval not found` and exit code `1`.
 
@@ -679,17 +679,18 @@ Until you set the [console password](#console-password), the console answers eve
 
 The browser asks for a username and the password. The console ignores the username.
 
-- The list page `/` shows all pending items, newest first, and then the 50 most recently changed other items. Each row shows the account, the operation, the recipients (To, then `cc:` and `bcc (hidden):` lists), the subject, the state, and the age. For a draft send, the recipients and subject are those of the stored draft fields.
+- The list page `/` shows all pending items, newest first, and then the 50 most recently changed other items, `withdrawn` items among them. Each row shows the account, the operation, the recipients (To, then `cc:` and `bcc (hidden):` lists), the subject, the state, and the age. For a draft send, the recipients and subject are those of the stored draft fields.
 - The item page `/a/ID` shows the account, the operation, the state, the times, and every stored request field as plain text, with `to`, `cc`, and `bcc` first. `bcc` is labeled `bcc (hidden recipients)`: these people get the message, and the other recipients do not see them. An `--html` body is labeled `body (HTML source, not rendered)` and shows as source text. Links in the text are never links on the page.
 - For a reply, the item page also shows the recipients that the reply goes to under **Reply recipients**: the To and Cc worked out from the original message with the reply rule of [Mail send](#mail-send), plus the request's `cc`, and the request's `bcc` as `bcc (hidden recipients)`. The daemon reads the original when the page loads; if it cannot, the page shows `Reply recipients could not be read.` On Microsoft 365, Microsoft picks its own list when it makes the reply; it should match.
-- For a draft send, the item page also shows under **Draft** the draft fields that Jev checked, stored when the send began to wait: `to`, `cc`, `bcc (hidden recipients)`, `subject`, and `body` (an HTML body as `body (HTML source, not rendered)`), as plain text. The send sends the draft as it is at the provider when it runs, so a later change to the draft, also in the mail app, is not on the page. If the draft is gone or is no longer a draft when the run starts, the run fails with a safe code and nothing is sent.
+- For a draft send, the item page also shows under **Draft** the draft fields that Jev checked, stored when the send began to wait: `to`, `cc`, `bcc (hidden recipients)`, `subject`, and `body` (an HTML body as `body (HTML source, not rendered)`), as plain text. The send sends the draft as it is at the provider when it runs, so a later change that the user makes in the mail app is not on the page. A change or delete of the draft by the agent withdraws the item instead (see [Waiting sends and draft changes](#waiting-sends-and-draft-changes)). If the draft is gone or is no longer a draft when the run starts, the run fails with a safe code and nothing is sent.
 - For an action on an existing message, the item page also shows the sender, subject, received date, and verdict of the message. For an action on an event, it shows the subject, start, end, and organizer. The daemon reads these through the screened read path and never shows a body. If the read fails, the page shows `not available`, and you can still decide.
 - The item page also shows the result of the [Jev action check](#jev-action-check), if a check ran.
 - A pending item has **Approve** and **Deny** buttons.
 
 **Approve** runs the stored action once, with no second policy check. A `done` item shows its result. If the run fails, the item shows `failed` and a safe error code. A failed item never runs again.
 **Deny** stops the item for good. Nothing runs.
-An item that is already handled shows `already handled`, and nothing runs again.
+A `withdrawn` item has no buttons and never runs.
+An item that is already handled, also a `withdrawn` one, shows `already handled`, and nothing runs.
 
 To use the console from a phone, put it behind an HTTPS tunnel, for example `tailscale serve`, and add the tunnel host name to `[console].hosts`.
 Keep `listen` on loopback. If `listen` is not `localhost` or a loopback address, the daemon shows a warning at start.
@@ -707,14 +708,14 @@ Protections:
 
 Pending items are in the `pending` table of `cache.db`. They do not expire.
 A pending item stores the account key, the operation, and the request arguments: recipients, subject, body, comment, event fields, and the message or event ID.
-A waiting draft send stores only the draft ID as its arguments, and beside them, in the `draft` column, the draft fields that Jev checked: To, Cc, Bcc, subject, body, and the HTML flag. A `cache.db` made before this column existed gets it when the daemon first opens it.
+A waiting draft send stores only the draft ID as its arguments, and beside them, in the `draft` column, the draft fields that Jev checked: To, Cc, Bcc, subject, body, and the HTML flag. A `cache.db` made before this column or the `withdrawn` state existed gets them when the daemon first opens it.
 It also stores the result of the Jev check, if a check ran: the flag and the score, or the safe error code, and whether the fake screening engine made the check.
 `amgd cache clear` does not delete pending items. `amgd account remove` denies the pending items of the removed account.
 
 The audit log gets content-free records for the policy. Their `account` is the account key, and their `operation` is the API operation name, for example `mail.trash`.
 
 - `"event": "policy"` records each decision, also `allow`. It has `time`, `account`, `operation`, `key`, `decision`, and `reasons`: `policy`; `sealed` if the referenced message is `sealed` or `error` and that made the decision stricter; `jev_flag` if Jev flagged the action; `jev_error` if the Jev check failed. It can also have `id`, `rule`, and `approval_id`. It never has the Jev score.
-- `"event": "approval"` records each step of a pending item. It has `time`, `account`, `operation`, `state` (`created`, `approved`, `denied`, `done`, or `failed`), and `approval_id`.
+- `"event": "approval"` records each step of a pending item. It has `time`, `account`, `operation`, `state` (`created`, `approved`, `denied`, `withdrawn`, `done`, or `failed`), and `approval_id`. A `withdrawn` record is written for each waiting draft send that a draft change or delete withdrew.
 - `"event": "console_signin"` records each wrong console password. It has only `time` and `result` (`failed`). It never has the username, the password, the host name, or the address of the browser.
 
 The audit log also gets content-free records for changes on the daemon host:
@@ -750,7 +751,7 @@ The commands take the same options as the matching draft commands:
 - `mail reply ID [--all] [--cc ADDRESS]... [--bcc ADDRESS]... [--body TEXT] [--html]` sends a reply in the conversation of the message. `--body` is optional and defaults to empty; it goes above the quoted original, as plain text with its line breaks unless `--html` is given. An `--html` reply keeps the quoted original below the agent's HTML, which goes unchanged. Without `--all`, the reply goes to the sender; with `--all`, also to everyone on the original. `--cc` and `--bcc` are added to the recipients that the reply picks and never replace them; an address that is already a recipient, ignoring case, is not added again.
 - `mail forward ID [--to ADDRESS]... [--cc ADDRESS]... [--bcc ADDRESS]... [--body TEXT] [--html]` forwards the message in its conversation, with the original's attachments. It needs at least one recipient in `--to`, `--cc`, or `--bcc`. `--body` is an optional note above the forwarded message, plain text with its line breaks unless `--html` is given; an `--html` forward keeps the original below the agent's HTML, which goes unchanged. Forwards with attachments follow the same `mail_send` decision as other sends.
 
-`draft send ID` sends a draft as it is at the provider when the send runs: a new, reply, or forward draft, or one that the user wrote in the app. It has no options and no sealed check, because it acts on a draft; a draft that the user wrote is the user's responsibility. The [Jev action check](#jev-action-check) reads the draft's fields. A waiting send is not tied to a version of the draft: a later change to the draft is sent as changed. On Microsoft 365, the daemon checks that the message is a draft (`isDraft`) and posts Graph `send` once, without a body; Graph saves the message in Sent Items. On Gmail, it finds the draft that holds the message and calls `drafts.send` once with only the draft ID; Gmail deletes the draft and makes a new sent message. A message that is not a draft is refused with `draft send refused: not a draft`. Approval of a draft write is not approval to send it.
+`draft send ID` sends a draft as it is at the provider when the send runs: a new, reply, or forward draft, or one that the user wrote in the app. It has no options and no sealed check, because it acts on a draft; a draft that the user wrote is the user's responsibility. The [Jev action check](#jev-action-check) reads the draft's fields. A waiting send is not tied to a version of the draft: a change that the user makes in the app is sent as changed. A change or delete through `amg` withdraws the waiting send instead; see [Waiting sends and draft changes](#waiting-sends-and-draft-changes). On Microsoft 365, the daemon checks that the message is a draft (`isDraft`) and posts Graph `send` once, without a body; Graph saves the message in Sent Items. On Gmail, it finds the draft that holds the message and calls `drafts.send` once with only the draft ID; Gmail deletes the draft and makes a new sent message. A message that is not a draft is refused with `draft send refused: not a draft`. Approval of a draft write is not approval to send it.
 
 Reply recipients follow each provider's app:
 
@@ -775,6 +776,19 @@ A timeout, transport error, or `operation failed` does not prove that the send f
 Before you retry such a command, ask the user to check the sent mail folder.
 
 The audit record of a send has no content. A `mail send` record has no message ID, because the providers give none. A `mail reply` or `mail forward` record has the ID of the source message.
+
+### Waiting sends and draft changes
+
+A draft has at most one waiting `draft send`. The daemon withdraws and replaces waiting sends under the account's write lock, which a draft write holds from its decision to its records:
+
+- A `draft update` or `draft delete` that runs, directly or as an approved run, first withdraws every waiting `draft send` of that draft in the account. It withdraws after the policy and the "not a draft" check and before the provider write, so the console can no longer approve the old send once the draft changes. If the write then fails, the command fails; the withdrawn sends stay withdrawn, and no new send is made. An update or delete that itself waits for approval, or that the policy refuses, withdraws nothing.
+- After a `draft update` that withdrew a send, the daemon makes a new `mail_send` decision for the draft, under its new ID on Gmail, with a new read of the draft and a new [Jev action check](#jev-action-check). Under `allow` and `approve`, the new send waits for approval, also when Jev does not flag it: a draft change never sends mail by itself. Under `deny`, there is no new send. The new send never takes over the approval of an approved update. The update result has `send_approval_id`, the approval ID of the new send; follow it with `approvals status`. The policy record of the new send has the decision `approve` and the reason `policy`, because it always waits. If the daemon cannot make the new send after the update ran (the new read of the draft, the pending item, or an audit record fails), `draft update` fails although the draft changed, on Gmail also its ID, and no send of the draft waits. Read the draft again, for example with `mail list --folder` on the drafts folder or `mail get`, before you retry.
+- `draft delete` makes no new send.
+- A second `draft send` of a draft with a waiting send withdraws the old one first, also when the new send is refused (by a `deny` policy, or because the message is no longer a draft), then decides as usual.
+
+A withdrawn send has the state `withdrawn`: it never runs, and the console cannot approve or deny it. Each withdrawal writes an approval audit record with the state `withdrawn`. Withdrawing never runs or approves anything; only a person in the [approval console](#approval-console) approves. `amgd account remove` still denies the pending items of the account.
+
+Known window: a send that a person approved before the agent's change reached the daemon's write lock runs with the draft as it is then, also with the change, because a waiting send has no tie to a draft version. A change that the user makes in the app is never noticed.
 
 ## Meetings
 
@@ -982,6 +996,7 @@ Not verified against real providers or services:
 - a forward on Microsoft 365 that fails after `createForward` leaves its forward draft in Drafts;
 - draft updates: the Microsoft 365 `PATCH` of the given fields, and the Gmail `drafts.update` rebuild from the raw message with a base64 body part that keeps the thread, the inline images, and the attachments, were checked live on 2026-10-26; the other cases are verified only against fake Graph and Gmail endpoints: kept headers byte for byte (folded `References`, `From`), dropped `Date` and `Message-ID`, attached messages and other kept parts, the body added to an attachment-only draft, and the refusals of a message that is not a draft;
 - draft delete and draft send: the refusals of a message that is not a draft and the single write without retry are verified only against fake Graph and Gmail endpoints and the fake provider (checked live on 2026-10-26: Graph `DELETE` moves a draft out of Drafts into a folder that is neither Deleted Items nor in `mail folders`, likely Recoverable Items, where it stays readable by ID and so restorable; Graph `send` of a forward draft sends it and moves it to Sent Items; Gmail `drafts.delete` removes the draft, and later reads fail; Gmail `drafts.send` of an HTML forward draft with inline images sends it and removes the draft);
+- waiting sends and draft changes: the withdraw and the new waiting send are verified end to end with the fake provider, which keeps the draft ID on update; the new send under the new message ID that Gmail gives an updated draft is verified only with a fake mailbox in the guard tests;
 - reply recipients: Microsoft's `createReply` and `createReplyAll` lists, the patch of the agent's body into Graph's quoted reply and of Cc and Bcc into Microsoft's lists (verified only against a fake Graph endpoint), and the Gmail reply-all rule, which follows Google's unsupported `gws` CLI and the Gmail web behavior that it approximates (no Gmail API page states it);
 - a reply on Microsoft 365 that fails after `createReply` leaves its reply draft in Drafts;
 - the Bcc that `mail get` reads from drafts and sent mail (Graph `bccRecipients`, the Gmail `Bcc` header);

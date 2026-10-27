@@ -223,6 +223,98 @@ func TestDenyOnlyFromPending(t *testing.T) {
 	}
 }
 
+// Withdrawing the waiting sends of a draft moves only the pending draft.send items of that account whose args name
+// that draft to withdrawn, and returns them. A send in any other state, a send of another draft or account, and any
+// other operation on the draft stay as they are. A withdrawn item can never be claimed, denied, or withdrawn again.
+func TestWithdrawDraftSendsChangesOnlyWaitingSendsOfTheDraft(t *testing.T) {
+	c, _ := open(t)
+	add := func(account, op, args string) string {
+		t.Helper()
+		id, err := c.AddPending(ctx, account, op, json.RawMessage(args), nil, nil, queued)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	waiting := add("work", "draft.send", `{"id":"d1"}`)
+	second := add("work", "draft.send", `{"id":"d1"}`)
+	running := add("work", "draft.send", `{"id":"d1"}`)
+	denied := add("work", "draft.send", `{"id":"d1"}`)
+	otherDraft := add("work", "draft.send", `{"id":"d2"}`)
+	otherAccount := add("home", "draft.send", `{"id":"d1"}`)
+	update := add("work", "draft.update", `{"id":"d1","subject":"x"}`)
+	trash := add("work", "mail.trash", `{"ids":["d1"]}`)
+	if _, err := c.ClaimPending(ctx, running, queued); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.DenyPending(ctx, denied, queued); err != nil {
+		t.Fatal(err)
+	}
+	later := queued.Add(time.Hour)
+	got, err := c.WithdrawDraftSends(ctx, "work", "d1", later)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("withdrawn=%+v error=%v", got, err)
+	}
+	ids := map[string]bool{}
+	for _, p := range got {
+		ids[p.ID] = true
+		if p.State != cache.StateWithdrawn || p.Op != "draft.send" || p.Account != "work" || p.Result != nil || !p.Updated.Equal(later) {
+			t.Errorf("withdrawn item=%+v", p)
+		}
+	}
+	if !ids[waiting] || !ids[second] {
+		t.Fatalf("withdrawn %v, want %s and %s", ids, waiting, second)
+	}
+	for id, want := range map[string]cache.PendingState{waiting: cache.StateWithdrawn, second: cache.StateWithdrawn, running: cache.StateRunning, denied: cache.StateDenied,
+		otherDraft: cache.StatePending, otherAccount: cache.StatePending, update: cache.StatePending, trash: cache.StatePending} {
+		if p, err := c.GetPending(ctx, id); err != nil || p.State != want {
+			t.Errorf("%s: state=%s error=%v, want %s", id, p.State, err, want)
+		}
+	}
+	if _, err := c.ClaimPending(ctx, waiting, later); !errors.Is(err, cache.ErrPendingHandled) {
+		t.Errorf("claim of withdrawn item: %v", err)
+	}
+	if _, err := c.DenyPending(ctx, waiting, later); !errors.Is(err, cache.ErrPendingHandled) {
+		t.Errorf("deny of withdrawn item: %v", err)
+	}
+	if again, err := c.WithdrawDraftSends(ctx, "work", "d1", later); err != nil || len(again) != 0 {
+		t.Errorf("second withdraw=%+v error=%v", again, err)
+	}
+	if p, err := c.GetPending(ctx, waiting); err != nil || !p.Updated.Equal(later) {
+		t.Errorf("second withdraw changed the item: %+v %v", p, err)
+	}
+}
+
+// A console claim and a withdraw of the same waiting send race on two connections: exactly one of them changes it.
+func TestConcurrentClaimAndWithdrawHaveExactlyOneWinner(t *testing.T) {
+	first, path := open(t)
+	second, err := cache.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	for range 20 {
+		id, err := first.AddPending(ctx, "work", "draft.send", json.RawMessage(`{"id":"d1"}`), nil, nil, queued)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var claimErr, withdrawErr error
+		var withdrawn []cache.Pending
+		var workers sync.WaitGroup
+		workers.Go(func() { _, claimErr = first.ClaimPending(ctx, id, queued) })
+		workers.Go(func() { withdrawn, withdrawErr = second.WithdrawDraftSends(ctx, "work", "d1", queued) })
+		workers.Wait()
+		if withdrawErr != nil || claimErr != nil && !errors.Is(claimErr, cache.ErrPendingHandled) {
+			t.Fatalf("claim=%v withdraw=%v", claimErr, withdrawErr)
+		}
+		claimed := claimErr == nil
+		p, err := first.GetPending(ctx, id)
+		if err != nil || claimed == (len(withdrawn) == 1) || claimed && p.State != cache.StateRunning || !claimed && p.State != cache.StateWithdrawn {
+			t.Fatalf("claimed=%v withdrawn=%d state=%s %v", claimed, len(withdrawn), p.State, err)
+		}
+	}
+}
+
 func TestFinishOnlyFromRunningToDoneOrFailed(t *testing.T) {
 	c, _ := open(t)
 	add := func(claim bool) string {
@@ -359,6 +451,7 @@ func TestCancelledPendingIOReturnsCancellation(t *testing.T) {
 		func() error { _, err := c.GetPending(cancelled, id); return err },
 		func() error { _, err := c.ClaimPending(cancelled, id, queued); return err },
 		func() error { _, err := c.DenyPending(cancelled, id, queued); return err },
+		func() error { _, err := c.WithdrawDraftSends(cancelled, "work", "d1", queued); return err },
 		func() error { return c.FinishPending(cancelled, id, cache.StateDone, "x", queued) },
 		func() error { _, err := c.ListPending(cancelled, 50); return err },
 	} {

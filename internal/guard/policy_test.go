@@ -144,8 +144,8 @@ func TestDefaultPolicyTrashesAndDraftsGreenMail(t *testing.T) {
 			return d.ID, err
 		},
 		func() (string, error) {
-			id, _, err := g.DraftUpdate(ctx, "d1", model.DraftChange{Body: new("body")})
-			return id, err
+			d, err := g.DraftUpdate(ctx, "d1", model.DraftChange{Body: new("body")})
+			return d.ID, err
 		},
 		func() (string, error) { return "", g.DraftDelete(ctx, "d1") },
 	} {
@@ -685,7 +685,7 @@ func TestDraftUpdateRefusesAMessageThatIsNotADraftBeforeAnyWrite(t *testing.T) {
 			policy.Base.MailDraft = tc.decision
 			g, c, path := policyGuard(t, tc.w, nil, s, policy)
 			ctx := context.Background()
-			if _, _, err := g.DraftUpdate(ctx, "m1", tc.change); err == nil || err.Error() != tc.want {
+			if _, err := g.DraftUpdate(ctx, "m1", tc.change); err == nil || err.Error() != tc.want {
 				t.Fatalf("err=%v want %q", err, tc.want)
 			}
 			if tc.w.draftReads != tc.reads || len(tc.w.calls) != 0 || len(s.checked()) != 0 {
@@ -702,7 +702,7 @@ func TestDraftUpdateRefusesAMessageThatIsNotADraftBeforeAnyWrite(t *testing.T) {
 	// A denied update reads nothing.
 	w := &writer{mailbox: &mailbox{}, notDraft: true}
 	g, _, _ := policyGuard(t, w, nil, scoring(0.08), config.Policy{})
-	if _, _, err := g.DraftUpdate(context.Background(), "m1", body); err == nil || err.Error() != "refused by policy: mail_draft" || w.draftReads != 0 {
+	if _, err := g.DraftUpdate(context.Background(), "m1", body); err == nil || err.Error() != "refused by policy: mail_draft" || w.draftReads != 0 {
 		t.Fatalf("denied update: %v reads=%d", err, w.draftReads)
 	}
 }

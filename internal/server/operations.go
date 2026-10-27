@@ -381,17 +381,26 @@ func newDraft(d model.DraftResult) newDraftDTO {
 }
 
 // updatedDraftDTO is the result of draft.update: the draft's IDs, the message ID possibly new, and only the recipient
-// lists and subject that the request gave. Fields that the update did not change are not read back.
+// lists and subject that the request gave. Fields that the update did not change are not read back. SendApprovalID is
+// the new waiting send that replaced a withdrawn one, left out when the update made none.
 type updatedDraftDTO struct {
 	draftIDsDTO
-	To      *[]string `json:"to,omitempty"`
-	CC      *[]string `json:"cc,omitempty"`
-	BCC     *[]string `json:"bcc,omitempty"`
-	Subject *string   `json:"subject,omitempty"`
+	To             *[]string `json:"to,omitempty"`
+	CC             *[]string `json:"cc,omitempty"`
+	BCC            *[]string `json:"bcc,omitempty"`
+	Subject        *string   `json:"subject,omitempty"`
+	SendApprovalID string    `json:"send_approval_id,omitempty"`
+}
+
+// updatedDraftIDsDTO is the stored result of an approved draft update: its draft IDs and the new waiting send, which
+// are IDs, not mail content.
+type updatedDraftIDsDTO struct {
+	draftIDsDTO
+	SendApprovalID string `json:"send_approval_id,omitempty"`
 }
 
 // updatedDraft is the result DTO of a draft update, with every text field of the change cleaned and the IDs as given.
-func updatedDraft(id, thread string, c model.DraftChange) updatedDraftDTO {
+func updatedDraft(d guard.UpdatedDraft, c model.DraftChange) updatedDraftDTO {
 	list := func(v *[]string) *[]string {
 		if v == nil {
 			return nil
@@ -402,7 +411,7 @@ func updatedDraft(id, thread string, c model.DraftChange) updatedDraftDTO {
 	if c.Subject != nil {
 		subject = new(content.CleanSubject(*c.Subject))
 	}
-	return updatedDraftDTO{draftIDsDTO{id, thread}, list(c.To), list(c.CC), list(c.BCC), subject}
+	return updatedDraftDTO{draftIDsDTO{d.ID, d.ThreadID}, list(c.To), list(c.CC), list(c.BCC), subject, d.SendApprovalID}
 }
 
 // sourceContentShown is the verdict limit of a reply or forward draft result. Its recipients and subject come from
@@ -615,11 +624,11 @@ func draftUpdate(ctx context.Context, _ *Server, raw json.RawMessage) (call, gua
 		return nil, "", errInvalid
 	}
 	return func(a *account) (any, error) {
-		id, thread, e := a.guard.DraftUpdate(ctx, p.ID, change)
+		d, e := a.guard.DraftUpdate(ctx, p.ID, change)
 		if e != nil {
 			return nil, e
 		}
-		return updatedDraft(id, thread, change), nil
+		return updatedDraft(d, change), nil
 	}, "", nil
 }
 

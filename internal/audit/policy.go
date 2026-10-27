@@ -117,13 +117,13 @@ func (l *Log) Policy(ctx context.Context, account string, d Decision) error {
 	return l.append(ctx, policyRecord{now(), account, "policy", d.Operation, d.Key, d.Decision, d.Reasons, d.Rule, d.ID, d.ApprovalID})
 }
 
-// Approval appends one approval event: created, approved, denied, done, or failed.
+// Approval appends one approval event: created, approved, denied, withdrawn, done, or failed.
 func (l *Log) Approval(ctx context.Context, account, operation, state, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	switch state {
-	case "created", "approved", "denied", "done", "failed":
+	case "created", "approved", "denied", "withdrawn", "done", "failed":
 	default:
 		return errors.New("invalid approval audit record")
 	}

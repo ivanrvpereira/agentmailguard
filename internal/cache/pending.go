@@ -13,15 +13,17 @@ import (
 )
 
 // PendingState is the life cycle of a stored action:
-// pending -> running -> done|failed, or pending -> denied.
+// pending -> running -> done|failed, or pending -> denied, or pending -> withdrawn. denied, withdrawn, done, and
+// failed are final. Only a draft change or delete withdraws, and only waiting draft sends; a withdrawn action never runs.
 type PendingState string
 
 const (
-	StatePending PendingState = "pending"
-	StateRunning PendingState = "running"
-	StateDone    PendingState = "done"
-	StateDenied  PendingState = "denied"
-	StateFailed  PendingState = "failed"
+	StatePending   PendingState = "pending"
+	StateRunning   PendingState = "running"
+	StateDone      PendingState = "done"
+	StateDenied    PendingState = "denied"
+	StateFailed    PendingState = "failed"
+	StateWithdrawn PendingState = "withdrawn"
 )
 
 // Pending is a stored write action. Args and Draft can contain message content.
@@ -202,6 +204,18 @@ func (c *Cache) FinishPending(ctx context.Context, id string, state PendingState
 	return err
 }
 
+// WithdrawDraftSends atomically moves pending -> withdrawn for every waiting draft.send of the account whose args
+// name draft, in one conditional UPDATE, and returns the withdrawn actions; none gives an empty list. An action in any
+// other state, such as one that a claim already moved to running, is not changed.
+func (c *Cache) WithdrawDraftSends(ctx context.Context, account, draft string, now time.Time) ([]Pending, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	rows, err := c.db.QueryContext(ctx, `UPDATE pending SET state = ?, updated = ? WHERE account = ? AND op = 'draft.send' AND state = ? AND json_extract(args, '$.id') = ? RETURNING `+pendingColumns,
+		StateWithdrawn, iso(now), account, StatePending, draft)
+	return changed(ctx, rows, err)
+}
+
 // AccountRemoved is the result code of the pending actions that DenyAccount denies.
 const AccountRemoved = "account_removed"
 
@@ -213,7 +227,16 @@ func (c *Cache) DenyAccount(ctx context.Context, account string, now time.Time) 
 	}
 	rows, err := c.db.QueryContext(ctx, `UPDATE pending SET state = ?, result = ?, updated = ? WHERE account = ? AND state = ? RETURNING `+pendingColumns,
 		StateDenied, AccountRemoved, iso(now), account, StatePending)
+	return changed(ctx, rows, err)
+}
+
+// changed reads the actions that an UPDATE ... RETURNING changed. A cancellation gives ctx.Err(); other failures
+// give fixed text.
+func changed(ctx context.Context, rows *sql.Rows, err error) ([]Pending, error) {
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, errors.New("pending action write failed")
 	}
 	defer rows.Close()

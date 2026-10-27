@@ -31,6 +31,12 @@ func WithApproval(ctx context.Context) context.Context {
 
 func approved(ctx context.Context) bool { return ctx.Value(approvalKey{}) != nil }
 
+// withoutApproval removes the approval mark of ctx, for a new decision inside an approved run that the approval
+// does not cover.
+func withoutApproval(ctx context.Context) context.Context {
+	return context.WithValue(ctx, approvalKey{}, nil)
+}
+
 // SafeCode gives the safe failure code of err, for storage with a failed approval.
 func SafeCode(err error) string { return safeCode(err) }
 

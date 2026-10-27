@@ -597,7 +597,8 @@ func TestDraftSendSendsTheDraftAndOnlyADraft(t *testing.T) {
 
 // A draft send that waits for approval stores the draft fields that Jev checked: the approval list and page show its
 // recipients, bcc marked as hidden, its subject, and its HTML body as source text. The approved run sends the draft
-// as it is then, here after an update of its subject. An approved send whose draft is gone fails with a safe code and
+// as it is then: a change that the user made in the app after the check is sent as is, because a waiting send has no
+// tie to a draft version. An approved send of a draft that the user deleted in the app fails with a safe code and
 // sends nothing.
 func TestApprovedDraftSendShowsTheCheckedDraftAndSendsItOnce(t *testing.T) {
 	t.Parallel()
@@ -619,7 +620,8 @@ func TestApprovedDraftSendShowsTheCheckedDraftAndSendsItOnce(t *testing.T) {
 			t.Errorf("item page misses %q:\n%s", want, item)
 		}
 	}
-	s.ok("draft", "update", id, "--subject", "canary-subject-changed")
+	// The user changes the draft in the app, which the daemon does not watch.
+	s.exec(`UPDATE messages SET subject = 'canary-subject-changed' WHERE id = ?`, id)
 	s.approve(p.ApprovalID)
 	if got := s.column(`SELECT folder || ' ' || is_draft || ' ' || subject FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got, []string{"sent 0 canary-subject-changed"}) {
 		t.Fatalf("approved send: %v", got)
@@ -634,7 +636,7 @@ func TestApprovedDraftSendShowsTheCheckedDraftAndSendsItOnce(t *testing.T) {
 
 	gone := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--subject", "canary-subject-gone")).ID
 	p = s.held("draft", "send", gone)
-	s.ok("draft", "delete", gone)
+	s.exec(`DELETE FROM messages WHERE id = ?`, gone)
 	sent := s.column(`SELECT id FROM messages WHERE folder = 'sent'`)
 	s.approve(p.ApprovalID)
 	if state := s.state(p.ApprovalID); state != "failed" {
@@ -645,6 +647,200 @@ func TestApprovedDraftSendShowsTheCheckedDraftAndSendsItOnce(t *testing.T) {
 	}
 	if _, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID); !strings.Contains(item, "<dt>Error</dt><dd><pre>MailboxError</pre></dd>") {
 		t.Fatalf("failed item page:\n%s", item)
+	}
+}
+
+// updatedDraft is the result of draft update.
+type updatedDraft struct {
+	ID             string `json:"id"`
+	SendApprovalID string `json:"send_approval_id"`
+}
+
+// seedFlaggedDraft adds a draft that the user wrote in the app, whose body the fake Jev check flags, and gives its ID.
+func (s *server) seedFlaggedDraft() string {
+	s.t.Helper()
+	s.exec(`INSERT INTO messages (account, id, folder, to_addresses, subject, body, is_draft, thread_id) VALUES
+		('demo@fake.invalid', 'users-draft', 'drafts', '["ana@example.test"]', 'canary-subject-draft', 'canary-body-flagged: my password is hunter2', 1, 'conversation')`)
+	return "users-draft"
+}
+
+// assertWithdrawn checks that the waiting send approval is withdrawn: approvals status reports it, the console lists
+// it among the handled items and shows its state, and it can be neither approved nor denied. Its approval records
+// are created and then withdrawn, with IDs and fixed codes only.
+func (s *server) assertWithdrawn(approval string) {
+	s.t.Helper()
+	if state := s.state(approval); state != "withdrawn" {
+		s.t.Fatalf("approvals status %s: %s", approval, state)
+	}
+	_, list := s.consoleGet(consolePassword, "/")
+	at := strings.Index(list, `<a href="/a/`+approval+`">draft.send</a>`)
+	if at < 0 || !strings.Contains(list[at:at+strings.Index(list[at:], "</tr>")], `<td class="state withdrawn">withdrawn</td>`) {
+		s.t.Fatalf("console list misses the withdrawn send:\n%s", list)
+	}
+	_, item := s.consoleGet(consolePassword, "/a/"+approval)
+	if !strings.Contains(item, `<dt>State</dt><dd class="state withdrawn">withdrawn</dd>`) || strings.Contains(item, "<form") {
+		s.t.Fatalf("item page of the withdrawn send:\n%s", item)
+	}
+	for _, decision := range []string{"approve", "deny"} {
+		if code := s.decide(approval, decision); code != http.StatusConflict {
+			s.t.Fatalf("%s of a withdrawn send: HTTP %d", decision, code)
+		}
+	}
+	records := []map[string]any{}
+	for _, r := range s.auditEvents("approval") {
+		if r["approval_id"] == approval {
+			records = append(records, r)
+		}
+	}
+	record := func(state string) map[string]any {
+		return map[string]any{"event": "approval", "account": demo, "operation": "draft.send", "state": state, "approval_id": approval}
+	}
+	if want := []map[string]any{record("created"), record("withdrawn")}; !reflect.DeepEqual(records, want) {
+		s.t.Fatalf("approval records=%v\nwant %v", records, want)
+	}
+	if state := s.state(approval); state != "withdrawn" {
+		s.t.Fatalf("withdrawn send after console decisions: %s", state)
+	}
+}
+
+// An agent's draft update withdraws the waiting send of the draft and makes a new one with a new Jev check, which
+// waits for approval even under mail_send = allow and when the check no longer flags it. The update result names the
+// new send; approved, it sends the changed draft once.
+func TestDraftUpdateWithdrawsTheWaitingSendAndHoldsANewOne(t *testing.T) {
+	t.Parallel()
+	s := start(t, sendAllowed)
+	id := s.seedFlaggedDraft()
+	old := s.held("draft", "send", id)
+	updated := decode[updatedDraft](t, s.ok("draft", "update", id, "--body", "canary-body-clean: see you at noon"))
+	if updated.ID != id || updated.SendApprovalID == "" || updated.SendApprovalID == old.ApprovalID {
+		t.Fatalf("draft update: %+v", updated)
+	}
+	s.assertWithdrawn(old.ApprovalID)
+	if state := s.state(updated.SendApprovalID); state != "pending" {
+		t.Fatalf("new send: %s", state)
+	}
+	if got := s.column(`SELECT folder FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got, []string{"drafts"}) {
+		t.Fatalf("a draft update sent mail: %v", got)
+	}
+	if _, item := s.consoleGet(consolePassword, "/a/"+updated.SendApprovalID); !strings.Contains(item, "<dt>body</dt><dd><pre>canary-body-clean: see you at noon</pre></dd>") || !strings.Contains(item, "Fake check (keywords only): not flagged") {
+		t.Fatalf("new send page:\n%s", item)
+	}
+	policy := s.auditEvents("policy")
+	if got, want := policy[len(policy)-1], map[string]any{"event": "policy", "account": demo, "operation": "draft.send", "key": "mail_send", "decision": "approve", "reasons": []any{"policy"},
+		"id": id, "approval_id": updated.SendApprovalID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("new send policy record=%v\nwant %v", got, want)
+	}
+	s.approve(updated.SendApprovalID)
+	if got := s.column(`SELECT folder || ' ' || body FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got, []string{"sent canary-body-clean: see you at noon"}) {
+		t.Fatalf("approved new send: %v", got)
+	}
+}
+
+// A draft update that the user approved in the console also withdraws the waiting send and makes a new one, which
+// still waits for approval: approving a change is never approving a send. The update's stored result names it.
+func TestApprovedDraftUpdateReplacesTheWaitingSendAndTheNewOneWaits(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='allow'\nmail_draft='approve'\n")
+	id := s.seedFlaggedDraft()
+	old := s.held("draft", "send", id)
+	update := s.held("draft", "update", id, "--body", "canary-body-clean: see you at noon")
+	if state := s.state(old.ApprovalID); state != "pending" {
+		t.Fatalf("a waiting update withdrew the send: %s", state)
+	}
+	s.approve(update.ApprovalID)
+	s.assertWithdrawn(old.ApprovalID)
+	status := decode[struct {
+		State  string
+		Result updatedDraft
+	}](t, s.ok("approvals", "status", update.ApprovalID))
+	if status.State != "done" || status.Result.ID != id || status.Result.SendApprovalID == "" || status.Result.SendApprovalID == old.ApprovalID {
+		t.Fatalf("approved update: %+v", status)
+	}
+	if state := s.state(status.Result.SendApprovalID); state != "pending" {
+		t.Fatalf("new send after an approved update: %s", state)
+	}
+	// The new send has its own decision and Jev check: the approval of the update does not cover it.
+	if _, item := s.consoleGet(consolePassword, "/a/"+status.Result.SendApprovalID); !strings.Contains(item, "Fake check (keywords only): not flagged") {
+		t.Fatalf("new send page has no new check:\n%s", item)
+	}
+	policy := s.auditEvents("policy")
+	if got := policy[len(policy)-1]; got["operation"] != "draft.send" || got["decision"] != "approve" || got["approval_id"] != status.Result.SendApprovalID {
+		t.Fatalf("new send policy record=%v", got)
+	}
+	if got := s.column(`SELECT folder || ' ' || body FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got, []string{"drafts canary-body-clean: see you at noon"}) {
+		t.Fatalf("approved update: %v", got)
+	}
+}
+
+// Under mail_send = deny, a draft update still withdraws the waiting send but makes no new one, and its result has no
+// send_approval_id.
+func TestDraftUpdateUnderASendDenyWithdrawsWithoutANewSend(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='approve'\n")
+	id := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--subject", "canary-subject-deny")).ID
+	old := s.held("draft", "send", id)
+	before := s.reloads()
+	s.amgdOK(nil, "config", "set", "policy.mail_send", "deny")
+	if got := s.awaitReload(before); got != "reload ok" {
+		t.Fatalf("reload: %s", got)
+	}
+	if out := s.ok("draft", "update", id, "--subject", "canary-subject-denied"); strings.Contains(out, "send_approval_id") || decode[updatedDraft](t, out).ID != id {
+		t.Fatalf("draft update: %s", out)
+	}
+	s.assertWithdrawn(old.ApprovalID)
+	if _, list := s.consoleGet(consolePassword, "/"); strings.Contains(list, `class="state pending"`) {
+		t.Fatalf("a send waits after an update under deny:\n%s", list)
+	}
+}
+
+// A second draft send of a draft replaces its waiting send, so one draft has at most one waiting send, and a draft
+// delete withdraws the waiting send and makes none. Nothing is sent.
+func TestSecondDraftSendAndDraftDeleteWithdrawTheWaitingSend(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='approve'\n")
+	id := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--subject", "canary-subject-twice")).ID
+	first := s.held("draft", "send", id)
+	second := s.held("draft", "send", id)
+	s.assertWithdrawn(first.ApprovalID)
+	if state := s.state(second.ApprovalID); state != "pending" {
+		t.Fatalf("second send: %s", state)
+	}
+	s.ok("draft", "delete", id)
+	s.assertWithdrawn(second.ApprovalID)
+	if got := s.column(`SELECT id FROM messages WHERE folder = 'sent'`); len(got) != 0 {
+		t.Fatalf("sent: %v", got)
+	}
+	if _, list := s.consoleGet(consolePassword, "/"); strings.Contains(list, `class="state pending"`) {
+		t.Fatalf("a send waits after the draft delete:\n%s", list)
+	}
+}
+
+// A second draft send withdraws the waiting send of the draft also when it is refused itself: for a message that is no
+// longer a draft, and under mail_send = deny. Nothing new waits and nothing is sent.
+func TestRefusedDraftSendStillWithdrawsTheWaitingSend(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='approve'\n")
+	sentByApp := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--subject", "canary-subject-app")).ID
+	old := s.held("draft", "send", sentByApp)
+	// The user sends the draft in the app, so the message is no longer a draft.
+	s.exec(`UPDATE messages SET folder = 'sent', is_draft = 0 WHERE id = ?`, sentByApp)
+	s.refused("draft send refused: not a draft", "draft", "send", sentByApp)
+	s.assertWithdrawn(old.ApprovalID)
+
+	id := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--subject", "canary-subject-denied")).ID
+	old = s.held("draft", "send", id)
+	before := s.reloads()
+	s.amgdOK(nil, "config", "set", "policy.mail_send", "deny")
+	if got := s.awaitReload(before); got != "reload ok" {
+		t.Fatalf("reload: %s", got)
+	}
+	s.refused("refused by policy: mail_send", "draft", "send", id)
+	s.assertWithdrawn(old.ApprovalID)
+	if _, list := s.consoleGet(consolePassword, "/"); strings.Contains(list, `class="state pending"`) {
+		t.Fatalf("a send waits after refused sends:\n%s", list)
+	}
+	if got := s.column(`SELECT id FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{sentByApp}) {
+		t.Fatalf("sent: %v", got)
 	}
 }
 

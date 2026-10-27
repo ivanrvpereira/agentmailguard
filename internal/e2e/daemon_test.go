@@ -49,7 +49,8 @@ func (s *server) auditEvents(events ...string) []map[string]any {
 		if err := json.Unmarshal([]byte(line), &v); err != nil {
 			s.t.Fatal(err)
 		}
-		if slices.Contains(events, v["event"].(string)) {
+		// An operation record has no event.
+		if event, _ := v["event"].(string); slices.Contains(events, event) {
 			delete(v, "time")
 			out = append(out, v)
 		}

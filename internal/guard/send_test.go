@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/cache"
@@ -260,4 +262,324 @@ func sameJSON(stored json.RawMessage, want string) bool {
 	}
 	var a, b any
 	return json.Unmarshal(stored, &a) == nil && json.Unmarshal([]byte(want), &b) == nil && reflect.DeepEqual(a, b)
+}
+
+// waitingSend stores a waiting send of draft id in c, as an earlier draft send under approve did, and gives its ID.
+func waitingSend(t *testing.T, c *cache.Cache, id string) string {
+	t.Helper()
+	approval, err := c.AddPending(context.Background(), "work", "draft.send", json.RawMessage(`{"id":"`+id+`"}`), json.RawMessage(draftFields), nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return approval
+}
+
+// stateOf is the state of the stored action id.
+func stateOf(t *testing.T, c *cache.Cache, id string) cache.PendingState {
+	t.Helper()
+	p, err := c.GetPending(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p.State
+}
+
+// waitingIDs gives the IDs of the actions in c that wait for approval.
+func waitingIDs(t *testing.T, c *cache.Cache) []string {
+	t.Helper()
+	items, err := c.ListPending(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := []string{}
+	for _, p := range items {
+		out = append(out, p.ID)
+	}
+	return out
+}
+
+// decisionEvents gives the policy and approval records as "policy OPERATION DECISION ID APPROVAL" and "approval
+// OPERATION STATE APPROVAL", in order. A field that a record does not have is <nil>.
+func decisionEvents(t *testing.T, path string) []string {
+	t.Helper()
+	out := []string{}
+	for _, r := range policyRecords(t, path) {
+		if r["event"] == "policy" {
+			out = append(out, fmt.Sprint("policy ", r["operation"], " ", r["decision"], " ", r["id"], " ", r["approval_id"]))
+		} else {
+			out = append(out, fmt.Sprint("approval ", r["operation"], " ", r["state"], " ", r["approval_id"]))
+		}
+	}
+	return out
+}
+
+// A draft update that runs, directly or as an approved run, first withdraws the waiting send of its draft: at the
+// time of the provider write, the old item is already withdrawn, so the console can no longer approve it. After the
+// write the guard makes a new mail_send decision for the draft's new ID (Gmail gives a new ID), with a fresh read of
+// the draft and a fresh Jev check, and without the approval mark of an approved update: allow and approve both give a
+// new waiting send that never runs by itself. The result names it. Every record has IDs and fixed codes only.
+func TestDraftUpdateWithdrawsTheWaitingSendBeforeTheWriteAndHoldsANewOne(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		send     config.Decision
+		approved bool
+	}{
+		{"send allowed", config.Allow, false},
+		{"send approved", config.Approve, false},
+		{"approved update, send allowed", config.Allow, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := &writer{mailbox: &mailbox{}}
+			s := scoring(0.08)
+			policy := allowAll
+			policy.Base.MailSend = tc.send
+			g, c, path := policyGuard(t, w, nil, s, policy)
+			old := waitingSend(t, c, "d1")
+			var atWrite cache.PendingState
+			w.beforeWrite = func() { atWrite = stateOf(t, c, old) }
+			ctx := context.Background()
+			if tc.approved {
+				ctx = guard.WithApproval(ctx)
+			}
+			got, err := g.DraftUpdate(ctx, "d1", model.DraftChange{Subject: new("CANARY changed")})
+			if err != nil || got.ID != "d4" || got.ThreadID != "t4" || got.SendApprovalID == "" || got.SendApprovalID == old {
+				t.Fatalf("update=%+v %v", got, err)
+			}
+			if atWrite != cache.StateWithdrawn || stateOf(t, c, old) != cache.StateWithdrawn {
+				t.Fatalf("old send at the write=%s after=%s", atWrite, stateOf(t, c, old))
+			}
+			item, err := c.GetPending(context.Background(), got.SendApprovalID)
+			if err != nil || item.Op != "draft.send" || item.State != cache.StatePending || string(item.Args) != `{"id":"d4"}` || !sameJSON(item.Draft, draftFields) || item.Jev == nil || item.Jev.Flag {
+				t.Fatalf("new send=%+v args=%s draft=%s %v", item, item.Args, item.Draft, err)
+			}
+			if !reflect.DeepEqual(waitingIDs(t, c), []string{got.SendApprovalID}) || !reflect.DeepEqual(w.calls, []string{"draft_update"}) || !reflect.DeepEqual(w.draftIDs, []string{"d1", "d4"}) {
+				t.Fatalf("waiting=%v writes=%v draft reads=%v", waitingIDs(t, c), w.calls, w.draftIDs)
+			}
+			checks := s.checked()
+			if len(checks) == 0 || checks[len(checks)-1].operation != "draft.send" || !reflect.DeepEqual(checks[len(checks)-1].state, map[string]any{"to": []any{"CANARY-to@example.test"}, "cc": []any{},
+				"bcc": []any{"CANARY-bcc@example.test"}, "subject": "CANARY subject", "body": "<p>CANARY body</p>", "html": true}) {
+				t.Fatalf("checks=%+v", checks)
+			}
+			// The allow record of the update follows its write, as for every allowed write.
+			want := []string{"approval draft.send withdrawn " + old, "policy draft.update allow d1 <nil>"}
+			if tc.approved {
+				want = want[:1]
+			}
+			want = append(want, "policy draft.send approve d4 "+got.SendApprovalID, "approval draft.send created "+got.SendApprovalID)
+			if events := decisionEvents(t, path); !reflect.DeepEqual(events, want) {
+				t.Fatalf("records=%v\nwant     %v", events, want)
+			}
+			if records := auditRecords(t, path); len(records) != 1 || records[0]["operation"] != "draft_update" {
+				t.Fatalf("operation records=%v", records)
+			}
+		})
+	}
+}
+
+// Under a mail_send deny, an update still withdraws the waiting send but makes no new one, also as an approved run:
+// the new decision never inherits the approval of the update. The deny has its policy record.
+func TestDraftUpdateUnderASendDenyWithdrawsAndMakesNoNewSend(t *testing.T) {
+	for _, approved := range []bool{false, true} {
+		w := &writer{mailbox: &mailbox{}}
+		s := scoring(0.08)
+		policy := allowAll
+		policy.Base.MailSend = config.Deny
+		g, c, path := policyGuard(t, w, nil, s, policy)
+		old := waitingSend(t, c, "d1")
+		ctx := context.Background()
+		if approved {
+			ctx = guard.WithApproval(ctx)
+		}
+		got, err := g.DraftUpdate(ctx, "d1", model.DraftChange{Subject: new("CANARY changed")})
+		if err != nil || got != (guard.UpdatedDraft{ID: "d4", ThreadID: "t4"}) {
+			t.Fatalf("approved=%v update=%+v %v", approved, got, err)
+		}
+		if stateOf(t, c, old) != cache.StateWithdrawn || len(waitingIDs(t, c)) != 0 || !reflect.DeepEqual(w.draftIDs, []string{"d1"}) {
+			t.Fatalf("approved=%v old=%s waiting=%v draft reads=%v", approved, stateOf(t, c, old), waitingIDs(t, c), w.draftIDs)
+		}
+		for _, check := range s.checked() {
+			if check.operation == "draft.send" {
+				t.Fatalf("approved=%v: denied send was checked", approved)
+			}
+		}
+		if events := decisionEvents(t, path); events[len(events)-1] != "policy draft.send deny d4 <nil>" || !slices.Contains(events, "approval draft.send withdrawn "+old) {
+			t.Fatalf("approved=%v records=%v", approved, events)
+		}
+	}
+}
+
+// Several waiting sends of the draft are all withdrawn, and the update makes exactly one new one. An update of a
+// draft without a waiting send makes none.
+func TestDraftUpdateMakesAtMostOneNewSend(t *testing.T) {
+	w := &writer{mailbox: &mailbox{}}
+	g, c, _ := policyGuard(t, w, nil, scoring(0.08), allowAll)
+	first, second := waitingSend(t, c, "d1"), waitingSend(t, c, "d1")
+	got, err := g.DraftUpdate(context.Background(), "d1", model.DraftChange{Subject: new("CANARY changed")})
+	if err != nil || stateOf(t, c, first) != cache.StateWithdrawn || stateOf(t, c, second) != cache.StateWithdrawn || !reflect.DeepEqual(waitingIDs(t, c), []string{got.SendApprovalID}) {
+		t.Fatalf("update=%+v %v waiting=%v", got, err, waitingIDs(t, c))
+	}
+	other := &writer{mailbox: &mailbox{}}
+	g, c, path := policyGuard(t, other, nil, scoring(0.08), allowAll)
+	if got, err := g.DraftUpdate(context.Background(), "d1", model.DraftChange{Subject: new("CANARY changed")}); err != nil || got.SendApprovalID != "" {
+		t.Fatalf("update without a waiting send=%+v %v", got, err)
+	}
+	if len(waitingIDs(t, c)) != 0 || !reflect.DeepEqual(other.draftIDs, []string{"d1"}) || !reflect.DeepEqual(decisionEvents(t, path), []string{"policy draft.update allow d1 <nil>"}) {
+		t.Fatalf("waiting=%v draft reads=%v records=%v", waitingIDs(t, c), other.draftIDs, decisionEvents(t, path))
+	}
+}
+
+// A draft update or delete that does not run now leaves the waiting send as it is: one that waits for approval
+// itself, one that the policy denies, and one of a message that is not a draft.
+func TestDraftChangeThatDoesNotRunKeepsTheWaitingSend(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		draft config.Decision
+		w     *writer
+	}{
+		{"held", config.Approve, &writer{}},
+		{"denied", config.Deny, &writer{}},
+		{"not a draft", config.Allow, &writer{notDraft: true}},
+	} {
+		for _, op := range []struct {
+			name string
+			call func(*guard.Guard) error
+		}{
+			{"update", func(g *guard.Guard) error {
+				_, err := g.DraftUpdate(context.Background(), "d1", model.DraftChange{Subject: new("CANARY changed")})
+				return err
+			}},
+			{"delete", func(g *guard.Guard) error { return g.DraftDelete(context.Background(), "d1") }},
+		} {
+			t.Run(tc.name+" "+op.name, func(t *testing.T) {
+				w := *tc.w
+				w.mailbox = &mailbox{}
+				policy := allowAll
+				policy.Base.MailDraft = tc.draft
+				g, c, _ := policyGuard(t, &w, nil, scoring(0.08), policy)
+				old := waitingSend(t, c, "d1")
+				if err := op.call(g); err == nil {
+					t.Fatal("change ran")
+				}
+				if stateOf(t, c, old) != cache.StatePending || len(w.calls) != 0 {
+					t.Fatalf("old send=%s writes=%v", stateOf(t, c, old), w.calls)
+				}
+			})
+		}
+	}
+}
+
+// A failed provider write returns its safe code. The send that the change withdrew before the write stays withdrawn,
+// and no new send is made.
+func TestFailedDraftChangeKeepsTheSendWithdrawnAndMakesNoNewOne(t *testing.T) {
+	for _, op := range []struct {
+		name string
+		call func(*guard.Guard) error
+	}{
+		{"update", func(g *guard.Guard) error {
+			_, err := g.DraftUpdate(context.Background(), "d1", model.DraftChange{Subject: new("CANARY changed")})
+			return err
+		}},
+		{"delete", func(g *guard.Guard) error { return g.DraftDelete(context.Background(), "d1") }},
+	} {
+		t.Run(op.name, func(t *testing.T) {
+			w := &writer{mailbox: &mailbox{}, err: model.MailboxError("CANARY provider text")}
+			s := scoring(0.08)
+			g, c, path := policyGuard(t, w, nil, s, allowAll)
+			old := waitingSend(t, c, "d1")
+			if err := op.call(g); err == nil || err.Error() != "MailboxError" {
+				t.Fatalf("change=%v", err)
+			}
+			if stateOf(t, c, old) != cache.StateWithdrawn || len(waitingIDs(t, c)) != 0 || !reflect.DeepEqual(w.draftIDs, []string{"d1"}) || len(auditRecords(t, path)) != 0 {
+				t.Fatalf("old=%s waiting=%v draft reads=%v records=%v", stateOf(t, c, old), waitingIDs(t, c), w.draftIDs, allAuditRecords(t, path))
+			}
+			for _, check := range s.checked() {
+				if check.operation == "draft.send" {
+					t.Fatal("failed change checked a new send")
+				}
+			}
+		})
+	}
+}
+
+// A draft delete withdraws the waiting send of its draft before the provider write and makes no new send.
+func TestDraftDeleteWithdrawsTheWaitingSend(t *testing.T) {
+	w := &writer{mailbox: &mailbox{}}
+	g, c, path := policyGuard(t, w, nil, scoring(0.08), allowAll)
+	old := waitingSend(t, c, "d1")
+	var atWrite cache.PendingState
+	w.beforeWrite = func() { atWrite = stateOf(t, c, old) }
+	if err := g.DraftDelete(context.Background(), "d1"); err != nil {
+		t.Fatal(err)
+	}
+	if atWrite != cache.StateWithdrawn || len(waitingIDs(t, c)) != 0 || !reflect.DeepEqual(w.calls, []string{"draft_delete"}) || !reflect.DeepEqual(w.draftIDs, []string{"d1"}) {
+		t.Fatalf("old at the write=%s waiting=%v writes=%v draft reads=%v", atWrite, waitingIDs(t, c), w.calls, w.draftIDs)
+	}
+	if events := decisionEvents(t, path); !reflect.DeepEqual(events, []string{"approval draft.send withdrawn " + old, "policy draft.delete allow d1 <nil>"}) {
+		t.Fatalf("records=%v", events)
+	}
+}
+
+// A second draft send of a draft with a waiting send withdraws the old one first, so one draft has at most one
+// waiting send: under approve the new send waits in its place, under allow the old one is withdrawn before the send.
+func TestSecondDraftSendReplacesTheWaitingSend(t *testing.T) {
+	for _, send := range []config.Decision{config.Approve, config.Allow} {
+		t.Run(string(send), func(t *testing.T) {
+			w := &writer{mailbox: &mailbox{}}
+			policy := allowAll
+			policy.Base.MailSend = send
+			g, c, path := policyGuard(t, w, nil, scoring(0.08), policy)
+			old := waitingSend(t, c, "d1")
+			var atWrite cache.PendingState
+			w.beforeWrite = func() { atWrite = stateOf(t, c, old) }
+			err := g.DraftSend(context.Background(), "d1")
+			pending, held := errors.AsType[guard.PendingError](err)
+			if stateOf(t, c, old) != cache.StateWithdrawn {
+				t.Fatalf("old send=%s", stateOf(t, c, old))
+			}
+			switch send {
+			case config.Approve:
+				if !held || !reflect.DeepEqual(waitingIDs(t, c), []string{pending.ApprovalID}) || len(w.calls) != 0 {
+					t.Fatalf("send=%v waiting=%v writes=%v", err, waitingIDs(t, c), w.calls)
+				}
+				if events := decisionEvents(t, path); !reflect.DeepEqual(events, []string{"approval draft.send withdrawn " + old, "policy draft.send approve d1 " + pending.ApprovalID, "approval draft.send created " + pending.ApprovalID}) {
+					t.Fatalf("records=%v", events)
+				}
+			default:
+				if err != nil || atWrite != cache.StateWithdrawn || len(waitingIDs(t, c)) != 0 || !reflect.DeepEqual(w.calls, []string{"draft_send"}) {
+					t.Fatalf("send=%v old at the write=%s waiting=%v writes=%v", err, atWrite, waitingIDs(t, c), w.calls)
+				}
+			}
+		})
+	}
+}
+
+// A second draft send withdraws the waiting send of its draft also when it is refused itself: under a mail_send deny,
+// before any draft read, and for a message that is no longer a draft. Withdrawing only removes: nothing new waits,
+// nothing is written, and the withdrawal has its approval record.
+func TestRefusedDraftSendStillWithdrawsTheWaitingSend(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		send       config.Decision
+		w          *writer
+	}{
+		{"denied", "refused by policy: mail_send", config.Deny, &writer{}},
+		{"no longer a draft", "draft send refused: not a draft", config.Approve, &writer{notDraft: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.w.mailbox = &mailbox{}
+			policy := allowAll
+			policy.Base.MailSend = tc.send
+			g, c, path := policyGuard(t, tc.w, nil, scoring(0.08), policy)
+			old := waitingSend(t, c, "d1")
+			if err := g.DraftSend(context.Background(), "d1"); err == nil || err.Error() != tc.want {
+				t.Fatalf("send=%v", err)
+			}
+			if stateOf(t, c, old) != cache.StateWithdrawn || len(waitingIDs(t, c)) != 0 || len(tc.w.calls) != 0 {
+				t.Fatalf("old=%s waiting=%v writes=%v", stateOf(t, c, old), waitingIDs(t, c), tc.w.calls)
+			}
+			if events := decisionEvents(t, path); len(events) == 0 || events[0] != "approval draft.send withdrawn "+old {
+				t.Fatalf("records=%v", events)
+			}
+		})
+	}
 }

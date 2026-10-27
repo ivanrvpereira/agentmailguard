@@ -22,6 +22,8 @@ type writer struct {
 	flags            []model.FlagState
 	updates          []draftUpdate
 	draftReads       int
+	draftIDs         []string           // the IDs that ReadDraft got, in order
+	beforeWrite      func()             // runs at the start of DraftUpdate, DraftDelete, and DraftSend
 	notDraft         bool               // ReadDraft gives a message that is not a draft
 	draftErr         error              // the ReadDraft error
 	draft            *model.DraftResult // the DraftNew result; nil gives ID d1
@@ -116,8 +118,9 @@ type draftUpdate struct {
 // draftContent is what ReadDraft gives for a draft.
 var draftContent = model.DraftContent{IsDraft: true, To: []string{"CANARY-to@example.test"}, CC: []string{}, BCC: []string{"CANARY-bcc@example.test"}, Subject: "CANARY subject", Body: "<p>CANARY body</p>", HTML: true}
 
-func (w *writer) ReadDraft(context.Context, string) (model.DraftContent, error) {
+func (w *writer) ReadDraft(_ context.Context, id string) (model.DraftContent, error) {
 	w.draftReads++
+	w.draftIDs = append(w.draftIDs, id)
 	if w.draftErr != nil {
 		return model.DraftContent{}, w.draftErr
 	}
@@ -127,14 +130,23 @@ func (w *writer) ReadDraft(context.Context, string) (model.DraftContent, error) 
 	return draftContent, nil
 }
 func (w *writer) DraftDelete(context.Context, string) error {
+	if w.beforeWrite != nil {
+		w.beforeWrite()
+	}
 	_, err := w.write("draft_delete", nil)
 	return err
 }
 func (w *writer) DraftSend(context.Context, string) error {
+	if w.beforeWrite != nil {
+		w.beforeWrite()
+	}
 	_, err := w.write("draft_send", nil)
 	return err
 }
 func (w *writer) DraftUpdate(_ context.Context, id string, change model.DraftChange) (string, string, error) {
+	if w.beforeWrite != nil {
+		w.beforeWrite()
+	}
 	w.updates = append(w.updates, draftUpdate{id, change})
 	_, err := w.write("draft_update", nil)
 	return "d4", "t4", err
@@ -247,7 +259,7 @@ func TestEveryManualRouteAndDraftHasContentFreeAudit(t *testing.T) {
 			_, _, e := g.DraftForward(ctx, "m1", model.Forward{Body: "CANARY", To: []string{"CANARY@example.com"}})
 			return e
 		}, func() error {
-			_, _, e := g.DraftUpdate(ctx, "d1", model.DraftChange{Subject: new("CANARY"), Body: new("CANARY")})
+			_, e := g.DraftUpdate(ctx, "d1", model.DraftChange{Subject: new("CANARY"), Body: new("CANARY")})
 			return e
 		}, func() error { return g.DraftDelete(ctx, "d1") }, func() error { return g.DraftSend(ctx, "d1") },
 	}
@@ -312,8 +324,8 @@ func TestManualFlagAndDraftUpdatePreserveRequestedPayloads(t *testing.T) {
 		t.Errorf("provider flag states=%v; want flagged, complete, none", w.flags)
 	}
 	change := model.DraftChange{CC: new([]string{}), Body: new("CANARY draft update é <b>requested body</b>"), HTML: true}
-	if id, thread, err := g.DraftUpdate(ctx, "draft-source", change); err != nil || id != "d4" || thread != "t4" {
-		t.Fatalf("draft update result: %q %q %v", id, thread, err)
+	if got, err := g.DraftUpdate(ctx, "draft-source", change); err != nil || got != (guard.UpdatedDraft{ID: "d4", ThreadID: "t4"}) {
+		t.Fatalf("draft update result: %+v %v", got, err)
 	}
 	if !reflect.DeepEqual(w.updates, []draftUpdate{{"draft-source", change}}) {
 		t.Errorf("provider got %+v, not the exact draft and change", w.updates)
