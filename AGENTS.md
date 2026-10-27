@@ -16,14 +16,13 @@ Go, macOS and Linux only. `amgd` needs cgo (SQLite, macOS Keychain); `amg` must 
 ## Testing
 
 - Show red/green evidence for each behavior change.
-- Tests use only temp homes (`--home` or `AMG_HOME`), fake providers, and a fake `credentials.Platform`, never the real Keychain. Live checks use Ivan's home and need his approval.
-- To run `amgd` by hand, use a temp home and set `AMG_CREDENTIALS_PASSWORD` before the first `amgd` command that reads the store (`serve`, `config list`/`get`, secrets, `account login`). Keep the default file backend: all homes share one Keychain item, so `backend = "keychain"` in a temp home reaches the real Keychain.
+- Tests use only temp homes (`--home` or `AMG_HOME`), fake providers, and a fake `credentials.Platform`, never the real Keychain.
+- To run `amgd` by hand on a temp home, set `AMG_CREDENTIALS_PASSWORD` before the first `amgd` command that reads the store (`serve`, `config list`/`get`, secrets, `account login`). Keep the default file backend: all homes share one Keychain item, so `backend = "keychain"` in a temp home reaches the real Keychain.
 
 ## Behavior
 
 - Follow the provider APIs (Gmail API, Microsoft Graph): their options, defaults, and limits. Avoid adding your own.
 - An action should do what a user of that account's app expects. Gmail and Microsoft 365 can differ.
-- If the docs don't say how the app behaves, ask before you check it on a real account.
 
 ## Safety
 
@@ -46,18 +45,9 @@ Go, macOS and Linux only. `amgd` needs cgo (SQLite, macOS Keychain); `amg` must 
 
 ## Gotchas
 
-- Keychain reads from a new binary trigger a macOS GUI prompt; non-interactive runs hang. Hand Keychain steps to the user.
 - Only `*.go` files under `internal/credentials/` are tracked; `.gitignore` ignores anything else there, such as testdata.
 
-## Boundaries
-
-### Ask first
+## Ask first
 
 - New dependencies.
 - Changes to OAuth scopes, Jev questions, screening thresholds, policy keys or defaults, or supported operations.
-- Live provider calls, mailbox writes, cache clearing, consent changes.
-- Starting, stopping, or reloading the user's daemon; touching `~/.agentmailguard` or Keychain items.
-
-### Never
-
-- Commit secrets, credentials, `config.toml`, `rules.toml`, `*.db`, or `audit.jsonl`.
