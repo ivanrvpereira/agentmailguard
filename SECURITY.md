@@ -46,7 +46,7 @@ A public listener or untrusted shared host is outside the supported security bou
 
 The approval console is a second listener (default `localhost:8788`). It always listens while the daemon runs.
 Until a console password is set, it refuses every request with HTTP 503.
-It requires the password on every request and has no built-in TLS.
+It requires the console username and password on every request and has no built-in TLS.
 Never forward its port through a tunnel that the agent can use.
 
 ## Mail and agent boundary

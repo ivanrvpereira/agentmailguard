@@ -540,7 +540,7 @@ func (s *server) decide(approvalID, decision string) int {
 	}
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.Header.Set("Origin", "http://"+s.console)
-	r.SetBasicAuth("me", consolePassword)
+	r.SetBasicAuth("admin", consolePassword)
 	client := http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(r)
 	if err != nil {

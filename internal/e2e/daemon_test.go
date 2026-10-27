@@ -24,7 +24,7 @@ func (s *server) consoleGet(password string) (int, string) {
 		s.t.Fatal(err)
 	}
 	if password != "" {
-		r.SetBasicAuth("me", password)
+		r.SetBasicAuth("admin", password)
 	}
 	resp, err := http.DefaultClient.Do(r)
 	if err != nil {
@@ -353,7 +353,7 @@ func TestConfigListShowsValuesDefaultsAndOnlyTheStateOfSecrets(t *testing.T) {
 	t.Parallel()
 	s := start(t, "[policy]\nmail_send='approve'\n")
 	out, _ := s.amgdOK(nil, "config", "list")
-	for _, want := range []string{"policy.mail_send = approve\n", "policy.mail_trash = allow (default)\n", "screening.endpoint = https://openrouter.ai/api/v1/systemone (default)\n", "screening.model = typesafe/jev-1.13 (default)\n", "console.password = set\n", "screening.api_key = not set\n", "accounts.demo.email = demo@fake.invalid\n", "accounts.demo.policy.mail_send = approve (default)\n"} {
+	for _, want := range []string{"policy.mail_send = approve\n", "policy.mail_trash = allow (default)\n", "screening.endpoint = https://openrouter.ai/api/v1/systemone (default)\n", "screening.model = typesafe/jev-1.13 (default)\n", "console.username = admin (default)\nconsole.password = set\n", "screening.api_key = not set\n", "accounts.demo.email = demo@fake.invalid\n", "accounts.demo.policy.mail_send = approve (default)\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("list lacks %q:\n%s", want, out)
 		}

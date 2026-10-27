@@ -63,7 +63,7 @@ func TestHomeDefaultEnvironmentAndExplicitOverride(t *testing.T) {
 
 func TestMissingFileIsAnEmptyConfiguration(t *testing.T) {
 	got, err := config.Load(context.Background(), filepath.Join(t.TempDir(), "config.toml"))
-	want := config.Config{Accounts: []config.Account{}, Screening: config.Screening{Provider: "jev"}, Console: config.Console{Listen: "localhost:8788"}, Backend: "file"}
+	want := config.Config{Accounts: []config.Account{}, Screening: config.Screening{Provider: "jev"}, Console: config.Console{Listen: "localhost:8788", Username: "admin"}, Backend: "file"}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("config=%+v error=%v", got, err)
 	}

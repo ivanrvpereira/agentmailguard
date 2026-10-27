@@ -150,7 +150,7 @@ A key is a dotted path:
 - `policy.KEY`, `policy.sealed.KEY`, `accounts.ALIAS.policy.KEY`, and `accounts.ALIAS.policy.sealed.KEY`, for example `policy.mail_send`. See [Write policy](#write-policy).
 - `accounts.ALIAS.client_id`, `accounts.ALIAS.tenant_id` (Microsoft 365), and `accounts.ALIAS.client_secret` (Gmail).
 - `screening.provider`, `screening.endpoint`, and `screening.model`. See [Screening](#screening).
-- `console.listen` and `console.hosts`. `console.hosts` takes a comma-separated list. See [Console configuration](#console-configuration).
+- `console.listen`, `console.hosts`, and `console.username`. `console.hosts` takes a comma-separated list. See [Console configuration](#console-configuration).
 - `credentials.backend`. See [Credential storage](#credential-storage).
 
 `config set` refuses an unknown key or an invalid value, and the file stays unchanged.
@@ -630,19 +630,21 @@ On Microsoft 365, `mail folders`, `mail move`, `mail organize`, and `rules list`
 
 ### Console configuration
 
-The optional `[console]` table in `config.toml` sets the address of the [approval console](#approval-console).
+The optional `[console]` table in `config.toml` sets the address of the [approval console](#approval-console) and the username of its sign-in.
 
 ```toml
 [console]
 listen = "localhost:8788"
 hosts = ["my-mac.example.ts.net"]
+username = "admin"
 ```
 
 - `listen`: `HOST:PORT`. The default is `localhost:8788`. The console listens on this address, and the pending `url` uses it.
 - `hosts`: extra host names that the console accepts, for example a Tailscale name. Each entry is a host name or IP address with an optional `:PORT`. An entry without a port matches a request without a port. Put an IPv6 address in brackets. The default is none.
+- `username`: the username that the console sign-in needs, with the [console password](#console-password). The default is `admin`. It has 1 to 64 characters: ASCII letters, digits, `.`, `_`, `-`, and `@`. It is not a secret.
 
-`amgd config set console.listen HOST:PORT` and `amgd config set console.hosts NAME1,NAME2` change the table.
-A new `hosts` list takes effect at the reload. A new `listen` address takes effect only when you start the daemon again: the command prints `restart needed: console.listen changed`.
+`amgd config set console.listen HOST:PORT`, `amgd config set console.hosts NAME1,NAME2`, and `amgd config set console.username NAME` change the table.
+A new `hosts` list and a new `username` take effect at the reload. A new `listen` address takes effect only when you start the daemon again: the command prints `restart needed: console.listen changed`.
 An invalid table stops `amgd serve` with `config.toml: KEY_PATH: PROBLEM`, for example `config.toml: console.listen: must be HOST:PORT`. The error never shows the value.
 
 ### Console password
@@ -655,7 +657,7 @@ On a terminal, echo is off and it asks for the new password twice.
 Non-terminal stdin supplies the lines in the same order without a confirmation: the file backend password (if `AMG_CREDENTIALS_PASSWORD` is absent), and then the new password.
 The password must be 8 to 72 bytes of valid UTF-8 without control characters.
 The command stores only a bcrypt hash of the password in the credential store (Keychain or the encrypted file). It never prints the password or the hash, and it does not accept them as arguments.
-It writes a `console_password_set` audit record and reloads the daemon. The new password takes effect at the reload, and the old password stops working at once. Make sure that the daemon log shows `reload ok`: after `reload refused`, the old password stays valid until a reload succeeds.
+It prints `Console password saved. Sign in to the console as USERNAME (console.username).`, writes a `console_password_set` audit record, and reloads the daemon. The new password takes effect at the reload, and the old password stops working at once. Make sure that the daemon log shows `reload ok`: after `reload refused`, the old password stays valid until a reload succeeds.
 
 The daemon reads the hash at start and at each reload. It shows `credential check: console password: ok` or `not set; the console refuses every request until amgd config set console.password`. A missing password does not stop the start.
 
@@ -666,7 +668,7 @@ It always listens, from the start of the daemon. At start, the daemon shows `app
 If the console address is taken, the daemon does not start and shows `console listener unavailable`.
 Until you set the [console password](#console-password), the console answers every request with HTTP 503 and `console password not set; run amgd config set console.password`. You do not have to restart the daemon after you set the password.
 
-The browser asks for a username and the password. The console ignores the username.
+The browser asks for a username and a password. Give the [console username](#console-configuration) (`admin` by default; `amgd config get console.username` shows it) and the [console password](#console-password).
 
 - The list page `/` shows all pending actions, newest first, and then the 50 most recently changed other actions. Each row shows the account, the operation, the recipients, the subject, the state, and the age.
 - The action page `/a/ID` shows the account, the operation, the state, the times, and every stored request field as plain text. Links in the text are never links on the page.
@@ -683,11 +685,11 @@ Keep `listen` on loopback. If `listen` is not `localhost` or a loopback address,
 
 Protections:
 
-- Every page needs the password (HTTP Basic authentication). The console has no TLS of its own.
+- Every page needs the username and the password (HTTP Basic authentication). The console has no TLS of its own.
 - The console refuses a request whose `Host` is not `listen` or an entry of `hosts`, also before a password exists. This blocks DNS rebinding.
 - Approve and Deny need an `Origin` of the console itself. This blocks form posts from other sites.
-- After 5 wrong passwords in one minute, the console refuses every request with HTTP 429 until the oldest failure is more than one minute old.
-- Each wrong password adds a `console_signin` record to the audit log.
+- After 5 failed sign-ins (a wrong username or password) in one minute, the console refuses every request with HTTP 429 until the oldest failure is more than one minute old.
+- Each failed sign-in adds a `console_signin` record to the audit log.
 - Pages have no scripts and no remote resources, and browsers must not cache or frame them.
 
 ### Storage and audit
@@ -701,7 +703,7 @@ The audit log gets content-free records for the policy. Their `account` is the a
 
 - `"event": "policy"` records each decision, also `allow`. It has `time`, `account`, `operation`, `key`, `decision`, and `reasons`: `policy`; `sealed` if the sealed decision made it stricter; `jev_flag` if Jev flagged the action; `jev_error` if the Jev check failed. It can also have `id`, `rule`, and `approval_id`. It never has the Jev score.
 - `"event": "approval"` records each step of a pending action. It has `time`, `account`, `operation`, `state` (`created`, `approved`, `denied`, `done`, or `failed`), and `approval_id`.
-- `"event": "console_signin"` records each wrong console password. It has only `time` and `result` (`failed`). It never has the username, the password, the host name, or the address of the browser.
+- `"event": "console_signin"` records each failed console sign-in: a wrong username or password. It has only `time` and `result` (`failed`). It never has the username, the password, the host name, or the address of the browser.
 
 The audit log also gets content-free records for changes on the daemon host:
 

@@ -133,6 +133,8 @@ amgd config set screening.api_key
 amgd config set console.password
 ```
 
+You sign in to the console with the username `admin` and this password. To use another username, run `amgd config set console.username NAME`.
+
 3. Start the daemon on its default loopback listener:
 
 ```sh

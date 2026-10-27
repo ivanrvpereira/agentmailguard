@@ -113,7 +113,7 @@ func (r *runner) configList(ctx context.Context, key string) int {
 		if s.Key == "screening.model" {
 			line(config.ScreeningAPIKey, secrets[config.ScreeningAPIKey], false)
 		}
-		if s.Key == "console.hosts" {
+		if s.Key == "console.username" {
 			line(config.ConsolePassword, secrets[config.ConsolePassword], false)
 		}
 	}
@@ -139,7 +139,7 @@ func (r *runner) configSet(ctx context.Context, args []string) int {
 		if len(args) != 1 {
 			return r.fail(key + " is a secret; give the value on stdin, never as an argument")
 		}
-		return r.setSecret(ctx, home, c.Backend, key)
+		return r.setSecret(ctx, home, c.Backend, c.Console.Username, key)
 	}
 	k, err := config.ParseKey(c, key)
 	if err != nil {
@@ -207,8 +207,9 @@ func (r *runner) applied(home, key string, audited error) int {
 }
 
 // setSecret reads a secret from stdin, stores it, and reloads the daemon. The console password replaces the
-// current one without asking for it, so that a forgotten password can be reset on the daemon host.
-func (r *runner) setSecret(ctx context.Context, home, backend, key string) int {
+// current one without asking for it, so that a forgotten password can be reset on the daemon host. user is the console
+// username, which the message names so that the operator knows the whole sign-in.
+func (r *runner) setSecret(ctx context.Context, home, backend, user, key string) int {
 	store, err := r.store(ctx, home, backend)
 	if err != nil {
 		return r.fail(err.Error())
@@ -235,7 +236,7 @@ func (r *runner) setSecret(ctx context.Context, home, backend, key string) int {
 	if store.SaveConsoleHash(ctx, string(hash)) != nil {
 		return r.fail("credential save failed")
 	}
-	return r.stored(home, "Console password saved.", log.Credential(ctx, "console_password_set"))
+	return r.stored(home, "Console password saved. Sign in to the console as "+term.Safe(user)+" (console.username).", log.Credential(ctx, "console_password_set"))
 }
 
 // stored finishes a change that the credential store already holds: it reports the change or the failed audit

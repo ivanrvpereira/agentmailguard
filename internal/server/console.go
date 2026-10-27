@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,7 +45,7 @@ type signinLimit struct {
 const consoleUnset = "console password not set; run amgd config set console.password"
 
 // Console returns the approval console handler. It is always on: without a console password in the current state,
-// it refuses every request. The password hash and the hosts come from the state of each request.
+// it refuses every request. The username, the password hash, and the hosts come from the state of each request.
 func (s *Server) Console() http.Handler { return &console{s: s} }
 
 // ConsoleAddress is the [console].listen address that the first Load read.
@@ -86,7 +87,7 @@ func (c *console) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer done()
-	if status := c.signIn(ctx, r, st.consoleHash); status != 0 {
+	if status := c.signIn(ctx, r, st.config.Console.Username, st.consoleHash); status != 0 {
 		if status == 401 {
 			h.Set("WWW-Authenticate", `Basic realm="agentmailguard approvals", charset="UTF-8"`)
 			plain(w, 401, "sign-in required")
@@ -98,9 +99,10 @@ func (c *console) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c.route(ctx, w, r)
 }
 
-// signIn returns 0 for the right password, 429 while the sign-in limit holds, and 401 otherwise. Only a
-// wrong password counts as a failure; each one gets an audit record without request details.
-func (c *console) signIn(ctx context.Context, r *http.Request, hash string) int {
+// signIn returns 0 for the configured username with the right password, 429 while the sign-in limit holds, and 401
+// otherwise. A wrong username or password counts as a failure; each one gets an audit record without request details.
+// The password is checked also for a wrong username, so the answer time does not tell which one was wrong.
+func (c *console) signIn(ctx context.Context, r *http.Request, username, hash string) int {
 	l := c.s.signins
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -115,11 +117,12 @@ func (c *console) signIn(ctx context.Context, r *http.Request, hash string) int 
 	if len(l.failures) >= maxFailures {
 		return 429
 	}
-	_, password, ok := r.BasicAuth()
+	user, password, ok := r.BasicAuth()
 	if !ok {
 		return 401
 	}
-	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil {
+	right := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
+	if subtle.ConstantTimeCompare([]byte(user), []byte(username)) == 1 && right {
 		return 0
 	}
 	l.failures = append(l.failures, now)

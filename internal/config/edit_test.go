@@ -49,6 +49,7 @@ func TestEditRefusesAnInvalidResultAndKeepsTheFile(t *testing.T) {
 	for _, tc := range []struct{ key, value, problem string }{
 		{"policy.mail_send", "always", "config.toml: policy.mail_send: must be allow, approve, or deny"},
 		{"console.listen", "nowhere", "config.toml: console.listen: must be HOST:PORT"},
+		{"console.username", "a:b", "config.toml: console.username: must be 1 to 64 letters, digits, and . _ - @"},
 		{"default_account", "home", "config.toml: default_account: names no account"},
 		{"screening.endpoint", "http://jev.example.test", "config.toml: screening.endpoint: must be an https URL"},
 	} {
@@ -105,6 +106,22 @@ func TestConsoleHostsTakeACommaSeparatedList(t *testing.T) {
 	}
 }
 
+func TestConsoleUsernameIsSetAndUnset(t *testing.T) {
+	path := file(t, head+work)
+	got, err := edit(t, path, "console.username", "admin@example.test")
+	if err != nil || got.Console.Username != "admin@example.test" {
+		t.Fatalf("console=%+v error=%v", got.Console, err)
+	}
+	c, _ := config.Load(context.Background(), path)
+	k, err := config.ParseKey(c, "console.username")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err = config.Edit(context.Background(), path, k.Unset()); err != nil || got.Console.Username != "admin" {
+		t.Fatalf("console=%+v error=%v", got.Console, err)
+	}
+}
+
 func TestParseKeyRefusesIdentityVersionSecretsAndUnknownKeys(t *testing.T) {
 	c, err := parse(t, head+work)
 	if err != nil {
@@ -130,7 +147,7 @@ func TestParseKeyRefusesIdentityVersionSecretsAndUnknownKeys(t *testing.T) {
 	for key, choice := range map[string]bool{
 		"policy.mail_send": true, "policy.sealed.mail_trash": true, "accounts.work.policy.calendar_update": true, "accounts.work.policy.sealed.mail_draft": true,
 		"screening.provider": true, "credentials.backend": true,
-		"screening.endpoint": false, "screening.model": false, "console.listen": false, "console.hosts": false, "default_account": false,
+		"screening.endpoint": false, "screening.model": false, "console.listen": false, "console.hosts": false, "console.username": false, "default_account": false,
 		"accounts.work.client_id": false, "accounts.work.tenant_id": false,
 	} {
 		k, err := config.ParseKey(c, key)
@@ -166,6 +183,7 @@ func TestListShowsEffectiveValuesAndMarksDefaults(t *testing.T) {
 		"accounts.home.client_secret":           {Key: "accounts.home.client_secret", Value: "set", Secret: true},
 		"accounts.work.email":                   {Key: "accounts.work.email", Value: "work@example.test"},
 		"console.listen":                        {Key: "console.listen", Value: "localhost:8788", Default: true},
+		"console.username":                      {Key: "console.username", Value: "admin", Default: true},
 		"credentials.backend":                   {Key: "credentials.backend", Value: "file", Default: true},
 		"screening.provider":                    {Key: "screening.provider", Value: "jev", Default: true},
 		"screening.endpoint":                    {Key: "screening.endpoint", Default: true},
