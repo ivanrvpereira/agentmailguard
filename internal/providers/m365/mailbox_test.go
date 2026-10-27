@@ -37,6 +37,33 @@ func jsonResponse(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
 }
+
+// nextLink is the @odata.nextLink that live Graph gives for r with query. Live Graph names the folder of a
+// mailFolders/ID path in OData key form, mailFolders('ID'), and escapes the query with lowercase hex and literal
+// parentheses: a request for mailFolders/inbox/messages gets
+// mailFolders('inbox')/messages?%24expand=attachments(%24select%3dname)&... Fake Graph pages use this form, so
+// that an adapter that only follows its own request form fails in tests, not first on a live mailbox.
+func nextLink(r *http.Request, query url.Values) string {
+	segments := strings.Split(r.URL.EscapedPath(), "/")
+	for i := 1; i < len(segments); i++ {
+		if segments[i-1] == "mailFolders" {
+			key, _ := url.PathUnescape(segments[i])
+			segments = slices.Replace(segments, i-1, i+1, "mailFolders('"+url.PathEscape(strings.ReplaceAll(key, "'", "''"))+"')")
+			break
+		}
+	}
+	encoded := strings.NewReplacer("%28", "(", "%29", ")").Replace(query.Encode())
+	var raw strings.Builder
+	for i := 0; i < len(encoded); i++ {
+		if encoded[i] == '%' && i+2 < len(encoded) {
+			raw.WriteString("%" + strings.ToLower(encoded[i+1:i+3]))
+			i += 2
+			continue
+		}
+		raw.WriteByte(encoded[i])
+	}
+	return "http://" + r.Host + strings.Join(segments, "/") + "?" + raw.String()
+}
 func TestReadCollectionsSearchAndCurrentNestedFolders(t *testing.T) {
 	round := 0
 	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -258,7 +285,7 @@ func TestSearchWidensReceivedDaysAndKeepsExactTimes(t *testing.T) {
 			map[string]any{"id": "at-after", "receivedDateTime": "2026-03-07T07:00:00Z"},
 			map[string]any{"id": "day-before", "receivedDateTime": "2026-03-07T06:59:59Z"},
 			map[string]any{"id": "no-time"},
-		}, "@odata.nextLink": "http://" + r.Host + r.URL.Path + "?" + next.Encode()})
+		}, "@odata.nextLink": nextLink(r, next)})
 	})
 	zone := time.FixedZone("UTC-7", -7*60*60)
 	after, before := time.Date(2026, 3, 7, 0, 0, 0, 0, zone), time.Date(2026, 3, 9, 0, 0, 0, 0, zone)
@@ -340,8 +367,9 @@ func TestThreadReadsEveryPageOfTheConversationFilterNewestFirst(t *testing.T) {
 	}
 }
 
-// messagesPath is the List path of the inbox; inboxQuery is the query that List sends for it without a size.
-const messagesPath = "/v1.0/me/mailFolders/inbox/messages"
+// messagesPath is the List path of the inbox, and keyedMessagesPath is the path of its nextLinks (see nextLink);
+// inboxQuery is the query that List sends for it without a size.
+const messagesPath, keyedMessagesPath = "/v1.0/me/mailFolders/inbox/messages", "/v1.0/me/mailFolders('inbox')/messages"
 
 func inboxQuery() url.Values {
 	return url.Values{
@@ -369,7 +397,7 @@ func TestListAndSearchReadOneGraphPageAndReturnTheNextLink(t *testing.T) {
 			next.Set("$top", "10")
 			next.Set("$skip", "10")
 		}
-		jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "first"}}, "@odata.nextLink": "http://" + r.Host + r.URL.Path + "?" + next.Encode()})
+		jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "first"}}, "@odata.nextLink": nextLink(r, next)})
 	})
 	b := c.Mailbox()
 	first, err := b.List(t.Context(), "inbox", model.PageRequest{}, false)
@@ -390,7 +418,7 @@ func TestListAndSearchReadOneGraphPageAndReturnTheNextLink(t *testing.T) {
 	}
 	listed := inboxQuery()
 	searched := url.Values{"$select": listed["$select"], "$expand": listed["$expand"], "$search": {`"hello"`}, "$top": {"5"}}
-	want := []string{messagesPath + "?" + listed.Encode(), messagesPath + "?" + strings.SplitN(first.Next, "?", 2)[1],
+	want := []string{messagesPath + "?" + listed.Encode(), keyedMessagesPath + "?" + strings.SplitN(first.Next, "?", 2)[1],
 		"/v1.0/me/messages?" + searched.Encode(), "/v1.0/me/messages?" + strings.SplitN(found.Next, "?", 2)[1]}
 	if !reflect.DeepEqual(requests, want) {
 		t.Fatalf("requests=%q\nwant %q", requests, want)
@@ -515,7 +543,8 @@ func TestListAndSearchRefuseAGraphPageLargerThanAsked(t *testing.T) {
 }
 
 // Live Graph writes the folder of a nextLink in OData key form, mailFolders('inbox'), though the request used
-// mailFolders/inbox. Both name the same folder, so the page is followed; the key form of another folder is not.
+// mailFolders/inbox (see nextLink). Both name the same folder, so the page is followed; the key form of another
+// folder is not.
 func TestListFollowsANextLinkInODataKeyForm(t *testing.T) {
 	var requests []string
 	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -526,7 +555,7 @@ func TestListFollowsANextLinkInODataKeyForm(t *testing.T) {
 			return
 		}
 		next.Set("$skip", "1")
-		jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "first"}}, "@odata.nextLink": "http://" + r.Host + "/v1.0/me/mailFolders('inbox')/messages?" + next.Encode()})
+		jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "first"}}, "@odata.nextLink": nextLink(r, next)})
 	})
 	b := c.Mailbox()
 	first, err := b.List(t.Context(), "inbox", model.PageRequest{Size: 1}, false)
@@ -537,11 +566,11 @@ func TestListFollowsANextLinkInODataKeyForm(t *testing.T) {
 	if err != nil || len(last.Messages) != 1 || last.Messages[0].ID != "second" {
 		t.Fatalf("last page %+v %v", last, err)
 	}
-	if want := []string{messagesPath, "/v1.0/me/mailFolders('inbox')/messages"}; !reflect.DeepEqual(requests, want) {
+	if want := []string{messagesPath, keyedMessagesPath}; !reflect.DeepEqual(requests, want) {
 		t.Fatalf("requests=%q want %q", requests, want)
 	}
 	for _, other := range []string{"/v1.0/me/mailFolders('sentitems')/messages", "/v1.0/me/mailFolders('inbox')/messages/x", "/v1.0/me/mailFolders('inbox'/messages"} {
-		page := strings.Replace(first.Next, "/v1.0/me/mailFolders('inbox')/messages", other, 1)
+		page := strings.Replace(first.Next, keyedMessagesPath, other, 1)
 		if _, err := b.List(t.Context(), "inbox", model.PageRequest{Size: 1, Page: page}, false); err == nil {
 			t.Fatalf("followed %s", other)
 		}

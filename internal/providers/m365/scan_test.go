@@ -3,6 +3,7 @@ package m365_test
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,7 +18,7 @@ func TestScanExactWindowMetadataOnlyAndPartialFailure(t *testing.T) {
 	}
 	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		if r.Method != "GET" || r.URL.Path != "/v1.0/me/mailFolders/inbox/messages" {
+		if r.Method != "GET" || r.URL.Path != messagesPath && r.URL.Path != keyedMessagesPath {
 			t.Error("scan wrote or wrong folder")
 		}
 		switch q.Get("page") {
@@ -25,9 +26,9 @@ func TestScanExactWindowMetadataOnlyAndPartialFailure(t *testing.T) {
 			if q.Get("$select") != "id,receivedDateTime,isDraft" || q.Get("$filter") != "receivedDateTime ge 2026-09-21T00:00:00.123456Z and receivedDateTime lt 2026-09-21T01:00:00.123456Z" {
 				t.Errorf("wrong scan query %v", q)
 			}
-			jsonResponse(w, map[string]any{"value": []any{item("edge", since.Format(time.RFC3339Nano), false), item("old", "2026-09-21T00:00:00.123455Z", false), item("draft", since.Format(time.RFC3339Nano), true), item("upper", until.Format(time.RFC3339Nano), false), item("bad-date", "SECRET", false), item("bad-draft", since.Format(time.RFC3339Nano), "false"), 17, nil}, "@odata.nextLink": "http://" + r.Host + "/v1.0/me/mailFolders/inbox/messages?page=2"})
+			jsonResponse(w, map[string]any{"value": []any{item("edge", since.Format(time.RFC3339Nano), false), item("old", "2026-09-21T00:00:00.123455Z", false), item("draft", since.Format(time.RFC3339Nano), true), item("upper", until.Format(time.RFC3339Nano), false), item("bad-date", "SECRET", false), item("bad-draft", since.Format(time.RFC3339Nano), "false"), 17, nil}, "@odata.nextLink": nextLink(r, url.Values{"page": {"2"}})})
 		case "2":
-			jsonResponse(w, map[string]any{"value": []any{item("second", "2026-09-21T00:30:00Z", false)}, "@odata.nextLink": "http://" + r.Host + "/v1.0/me/mailFolders/inbox/messages?page=3"})
+			jsonResponse(w, map[string]any{"value": []any{item("second", "2026-09-21T00:30:00Z", false)}, "@odata.nextLink": nextLink(r, url.Values{"page": {"3"}})})
 		default:
 			w.WriteHeader(500)
 			_, _ = w.Write([]byte(`{"error":{"code":"SECRET","message":"SECRET"}}`))
