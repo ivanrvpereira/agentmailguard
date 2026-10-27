@@ -13,8 +13,8 @@ import (
 )
 
 // policyDaemon is a graphDaemon with the write grant whose provider counts every request; GET requests return the
-// green message m1 for any message, event e2 as an attendee event, and any other ID as the organizer event e1.
-// Other requests succeed.
+// draft d1, the green message m1 for any other message, event e2 as an attendee event, and any other ID as the
+// organizer event e1. Other requests succeed.
 func policyDaemon(t *testing.T, policy string) (*daemon, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
 	var reads, writes atomic.Int32
@@ -23,7 +23,9 @@ func policyDaemon(t *testing.T, policy string) (*daemon, *atomic.Int32, *atomic.
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == "GET" {
 			reads.Add(1)
-			if strings.HasPrefix(r.URL.Path, "/me/messages/") {
+			if r.URL.Path == "/me/messages/d1" {
+				io.WriteString(w, draftJSON)
+			} else if strings.HasPrefix(r.URL.Path, "/me/messages/") {
 				io.WriteString(w, message)
 			} else if strings.HasSuffix(r.URL.Path, "/events/e2") {
 				io.WriteString(w, strings.Replace(attendeeEvent, `"id":"e1"`, `"id":"e2"`, 1))
@@ -80,8 +82,8 @@ func TestPendingResultLinksToTheApprovalConsole(t *testing.T) {
 	}
 }
 
-// A held action waits as pending and reaches the provider only for reads: the event checks, the verdict lookup of
-// the reply source, and the reply recipients and the forwarded message of the Jev check. TestApprovedActionMakesTheSameWriteAsTheAllowedCall runs the stored requests.
+// A held action waits as pending and reaches the provider only for reads: the event checks, the draft check of the
+// update, the verdict lookup of the reply source, and the reply recipients and the forwarded message of the Jev check. TestApprovedActionMakesTheSameWriteAsTheAllowedCall runs the stored requests.
 func TestPolicyApproveHoldsTheActionWithoutAProviderWrite(t *testing.T) {
 	d, reads, writes := policyDaemon(t, "[policy]\nmail_draft='approve'\ncalendar_invite='approve'\ncalendar_update='approve'\ncalendar_cancel='approve'\ncalendar_respond='approve'\n")
 	for _, tc := range []struct{ op, params string }{
@@ -107,8 +109,8 @@ func TestPolicyApproveHoldsTheActionWithoutAProviderWrite(t *testing.T) {
 	if writes.Load() != 0 {
 		t.Fatalf("approve wrote to the provider %d times", writes.Load())
 	}
-	if reads.Load() != 7 {
-		t.Fatalf("reads=%d; want one event check per update, cancel, and respond, one screening of the reply source, and one read of the reply recipients and one of the forwarded message for the Jev check", reads.Load())
+	if reads.Load() != 8 {
+		t.Fatalf("reads=%d; want one event check per update, cancel, and respond, one draft check, one screening of the reply source, and one read of the reply recipients and one of the forwarded message for the Jev check", reads.Load())
 	}
 }
 

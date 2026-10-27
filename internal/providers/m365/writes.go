@@ -2,7 +2,6 @@ package m365
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -39,14 +38,19 @@ func (b *mailbox) post(ctx context.Context, path string, body map[string]any) (o
 	return b.c.request(ctx, http.MethodPost, b.c.endpoint(path, nil), body, false)
 }
 
-// newMessage is the Graph message of a new message: its recipients, and a body of contentType text or html
+// itemBody is a Graph body of contentType text, or html with isHTML
 // (https://learn.microsoft.com/en-us/graph/api/resources/itembody?view=graph-rest-1.0).
-func newMessage(draft model.NewDraft) map[string]any {
+func itemBody(content string, isHTML bool) map[string]string {
 	kind := "text"
-	if draft.HTML {
+	if isHTML {
 		kind = "html"
 	}
-	return map[string]any{"subject": draft.Subject, "body": map[string]string{"contentType": kind, "content": draft.Body}, "toRecipients": recipients(draft.To), "ccRecipients": recipients(draft.CC), "bccRecipients": recipients(draft.BCC)}
+	return map[string]string{"contentType": kind, "content": content}
+}
+
+// newMessage is the Graph message of a new message: its recipients, subject, and body.
+func newMessage(draft model.NewDraft) map[string]any {
+	return map[string]any{"subject": draft.Subject, "body": itemBody(draft.Body, draft.HTML), "toRecipients": recipients(draft.To), "ccRecipients": recipients(draft.CC), "bccRecipients": recipients(draft.BCC)}
 }
 
 // DraftNew reads the result from the message that Graph creates and returns
@@ -261,31 +265,112 @@ func (b *mailbox) SendReply(ctx context.Context, id string, reply model.Reply) e
 	_, err := b.reply(ctx, id, reply, true)
 	return err
 }
-func (b *mailbox) DraftUpdate(ctx context.Context, id, body string) (string, error) {
-	if !b.c.lockMutation(ctx) {
-		return "", requestFailed
+
+// notDraft refuses an update of a message that is not a draft.
+const notDraft = model.MailboxError("Graph error DraftError")
+
+// draftFlag reads isDraft, which must be a JSON boolean, of a message with an ID. Graph tells a draft from a sent
+// message by isDraft (https://learn.microsoft.com/en-us/graph/api/resources/message?view=graph-rest-1.0).
+func draftFlag(d object) (bool, error) {
+	var v *bool
+	if json.Unmarshal(d["isDraft"], &v) != nil || v == nil || text(d, "id") == "" {
+		return false, invalidMetadata
 	}
-	defer func() { <-b.c.mutationGate }()
-	q := url.Values{"$select": {"isDraft,conversationIndex"}, "$expand": {"singleValueExtendedProperties($filter=id eq 'String 0x1042')"}}
-	d, err := b.c.get(ctx, b.c.endpoint("/me/messages/"+escapeID(id), q), false)
+	return *v, nil
+}
+
+// ReadDraft reads isDraft, the recipients, the subject, and the body of message id. A message that is not a draft
+// gives only IsDraft false. A draft body type other than text or html fails.
+func (b *mailbox) ReadDraft(ctx context.Context, id string) (model.DraftContent, error) {
+	d, err := b.c.get(ctx, b.c.endpoint("/me/messages/"+escapeID(id), url.Values{"$select": {"isDraft,toRecipients,ccRecipients,bccRecipients,subject,body"}}), false)
 	if err != nil {
-		return "", err
+		return model.DraftContent{}, err
 	}
-	encoded := text(d, "conversationIndex")
-	index, err := base64.StdEncoding.Strict().DecodeString(encoded)
-	if err != nil || strings.ContainsAny(encoded, "\r\n") || len(index) != 22 || !boolean(d, "isDraft") {
-		return "", invalidMetadata
+	draft, err := draftFlag(d)
+	if err != nil || !draft {
+		return model.DraftContent{}, err
 	}
-	if raw, ok := d["singleValueExtendedProperties"]; ok && string(raw) != "null" {
-		var props []object
-		if json.Unmarshal(raw, &props) != nil || len(props) > 0 {
-			return "", invalidMetadata
+	body := obj(d, "body")
+	kind := strings.ToLower(text(body, "contentType"))
+	if kind != "text" && kind != "html" {
+		return model.DraftContent{}, invalidMetadata
+	}
+	out := model.DraftContent{IsDraft: true, Subject: text(d, "subject"), Body: text(body, "content"), HTML: kind == "html"}
+	for _, list := range []struct {
+		key string
+		out *[]string
+	}{{"toRecipients", &out.To}, {"ccRecipients", &out.CC}, {"bccRecipients", &out.BCC}} {
+		if *list.out, err = draftRecipients(d, list.key); err != nil {
+			return model.DraftContent{}, err
 		}
 	}
-	if err := b.patch(ctx, id, map[string]any{"body": map[string]string{"contentType": "text", "content": body}}); err != nil {
-		return "", err
+	return out, nil
+}
+
+// draftRecipients reads the recipient list k of a draft strictly: a JSON array of recipients that each have an
+// address. Any other value fails, so that no recipient of a draft is silently dropped or blank.
+func draftRecipients(d object, k string) ([]string, error) {
+	var list []struct {
+		EmailAddress struct{ Address string } `json:"emailAddress"`
 	}
-	return id, nil
+	if json.Unmarshal(d[k], &list) != nil || list == nil {
+		return nil, invalidMetadata
+	}
+	out := make([]string, 0, len(list))
+	for _, r := range list {
+		if r.EmailAddress.Address == "" {
+			return nil, invalidMetadata
+		}
+		out = append(out, r.EmailAddress.Address)
+	}
+	return out, nil
+}
+
+// DraftUpdate reads isDraft of message id and refuses a message that is not a draft; then it sends one PATCH of only
+// the fields that change gives. Graph updates the recipients, subject, and body only of a draft and keeps the message
+// ID (https://learn.microsoft.com/en-us/graph/api/message-update?view=graph-rest-1.0). The conversation comes from
+// Graph's answer to the PATCH.
+func (b *mailbox) DraftUpdate(ctx context.Context, id string, change model.DraftChange) (string, string, error) {
+	if !b.c.lockMutation(ctx) {
+		return "", "", requestFailed
+	}
+	defer func() { <-b.c.mutationGate }()
+	d, err := b.c.get(ctx, b.c.endpoint("/me/messages/"+escapeID(id), url.Values{"$select": {"isDraft"}}), false)
+	if err != nil {
+		return "", "", err
+	}
+	draft, err := draftFlag(d)
+	if err != nil {
+		return "", "", err
+	}
+	if !draft {
+		return "", "", notDraft
+	}
+	patch := map[string]any{}
+	for _, list := range []struct {
+		key   string
+		value *[]string
+	}{{"toRecipients", change.To}, {"ccRecipients", change.CC}, {"bccRecipients", change.BCC}} {
+		if list.value != nil {
+			patch[list.key] = recipients(*list.value)
+		}
+	}
+	if change.Subject != nil {
+		patch["subject"] = *change.Subject
+	}
+	if change.Body != nil {
+		patch["body"] = itemBody(*change.Body, change.HTML)
+	}
+	if ctx.Err() != nil {
+		return "", "", requestFailed
+	}
+	if d, err = b.c.request(ctx, http.MethodPatch, b.c.endpoint("/me/messages/"+escapeID(id), nil), patch, false); err != nil {
+		return "", "", err
+	}
+	if text(d, "id") == "" {
+		return "", "", invalidMetadata
+	}
+	return id, text(d, "conversationId"), nil
 }
 func (b *mailbox) each(ctx context.Context, ids []string, call func(string) error) ([]model.MutationResult, error) {
 	// Serialize mutation operations for this account, including category read-modify-write.

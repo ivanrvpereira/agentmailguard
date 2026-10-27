@@ -187,6 +187,32 @@ type Forward struct {
 // Addressed reports a recipient in To, CC, or BCC, by the rule of NewDraft.Addressed.
 func (f Forward) Addressed() bool { return NewDraft{To: f.To, CC: f.CC, BCC: f.BCC}.Addressed() }
 
+// DraftChange is an update of a draft. A nil field is unchanged; a list replaces the old list, and an empty list
+// clears it. Body replaces the whole body, a quoted original included: plain text unless HTML, which marks Body as
+// HTML source sent unchanged.
+type DraftChange struct {
+	To, CC, BCC   *[]string
+	Subject, Body *string
+	HTML          bool // valid only with Body (HTMLWithoutBody)
+}
+
+// Empty reports a change with no field set.
+func (c DraftChange) Empty() bool {
+	return c.To == nil && c.CC == nil && c.BCC == nil && c.Subject == nil && c.Body == nil
+}
+
+// HTMLWithoutBody reports an HTML flag without a body: the body type goes only with a body.
+func (c DraftChange) HTMLWithoutBody() bool { return c.HTML && c.Body == nil }
+
+// DraftContent is a message as a draft write reads it: whether it is a draft, its recipients, its subject, and its
+// body, which is HTML source when HTML is true and plain text otherwise. Like all provider data, it is untrusted.
+type DraftContent struct {
+	IsDraft       bool
+	To, CC, BCC   []string
+	Subject, Body string
+	HTML          bool
+}
+
 // ReplySource is what the reply-recipient rule reads from the original message: its bare addresses, and Sent when
 // the account sent it.
 type ReplySource struct {
@@ -337,8 +363,12 @@ type Mailbox interface {
 	// above the original and the original's attachments. The forward must be provider-built; unsupported
 	// providers must fail, not substitute a new draft.
 	DraftForward(ctx context.Context, id MessageID, forward Forward) (DraftResult, error)
-	// DraftUpdate is restricted to new drafts, and returns the possibly changed message ID.
-	DraftUpdate(ctx context.Context, id MessageID, body string) (MessageID, error)
+	// ReadDraft reads message id for a draft write. It writes nothing. A message that is not a draft gives only
+	// IsDraft false, not an error and none of its content; an unknown ID is the adapter's not-found error.
+	ReadDraft(ctx context.Context, id MessageID) (DraftContent, error)
+	// DraftUpdate applies change to draft id, any draft, and gives the draft's message ID, which may be new, and its
+	// conversation (empty: the provider gave none). It refuses a message that is not a draft before any write.
+	DraftUpdate(ctx context.Context, id MessageID, change DraftChange) (MessageID, ThreadID, error)
 	// SendNew, SendReply, and SendForward send mail at once, with the same content as the matching draft
 	// operation. A send request that may have reached the provider is never sent again.
 	SendNew(ctx context.Context, draft NewDraft) error

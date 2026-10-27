@@ -40,9 +40,12 @@ func (s *Server) Approve(ctx context.Context, id string) error {
 }
 
 // storedResult is the part of a run result that the pending store keeps: provider IDs, never mail content. A
-// draft result keeps only its draft and thread IDs.
+// draft result, also of an update, keeps only its draft and thread IDs.
 func storedResult(result any) any {
-	if d, ok := result.(newDraftDTO); ok {
+	switch d := result.(type) {
+	case newDraftDTO:
+		return d.draftIDsDTO
+	case updatedDraftDTO:
 		return d.draftIDsDTO
 	}
 	return result

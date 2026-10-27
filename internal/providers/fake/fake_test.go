@@ -295,8 +295,8 @@ func TestDraftsLandInDraftsFromTheAccountAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated, err := m.DraftUpdate(ctx, created, "second"); err != nil || updated != created {
-		t.Fatalf("update=%q err=%v", updated, err)
+	if updated, thread, err := m.DraftUpdate(ctx, created, model.DraftChange{Body: new("second")}); err != nil || updated != created || thread != created {
+		t.Fatalf("update=%q thread=%q err=%v", updated, thread, err)
 	}
 	got, err := m.Get(ctx, []string{created, reply, forward}, true)
 	if err != nil {
@@ -321,8 +321,9 @@ func TestDraftsLandInDraftsFromTheAccountAddress(t *testing.T) {
 			t.Errorf("draft %d=%+v", i, d)
 		}
 	}
-	for _, id := range []string{reply, forward, "old", "gone"} {
-		if _, err := m.DraftUpdate(ctx, id, "changed"); err == nil {
+	// Only a draft changes; a received message is not a draft.
+	for _, id := range []string{"old", "gone"} {
+		if _, _, err := m.DraftUpdate(ctx, id, model.DraftChange{Body: new("changed")}); err == nil {
 			t.Errorf("update of %s accepted", id)
 		}
 	}

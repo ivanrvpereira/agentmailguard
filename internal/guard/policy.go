@@ -390,10 +390,28 @@ func newReplyArgs(id string, r model.Reply) replyArgs {
 	return replyArgs{id, r.Body, r.HTML, r.All, list(r.CC), list(r.BCC)}
 }
 
-type bodyArgs struct {
-	ID   string `json:"id"`
-	Body string `json:"body"`
+type draftChangeArgs struct {
+	ID      string    `json:"id"`
+	To      *[]string `json:"to,omitempty"`
+	CC      *[]string `json:"cc,omitempty"`
+	BCC     *[]string `json:"bcc,omitempty"`
+	Subject *string   `json:"subject,omitempty"`
+	Body    *string   `json:"body,omitempty"`
+	HTML    bool      `json:"html,omitempty"`
 }
+
+// newDraftChangeArgs stores only the fields of the change: a field that was not given stays out. A given list that
+// is nil becomes an empty list, which clears, because the API refuses null.
+func newDraftChangeArgs(id string, c model.DraftChange) draftChangeArgs {
+	list := func(v *[]string) *[]string {
+		if v == nil {
+			return nil
+		}
+		return new(append([]string{}, *v...))
+	}
+	return draftChangeArgs{id, list(c.To), list(c.CC), list(c.BCC), c.Subject, c.Body, c.HTML}
+}
+
 type forwardArgs struct {
 	ID   string   `json:"id"`
 	To   []string `json:"to"`

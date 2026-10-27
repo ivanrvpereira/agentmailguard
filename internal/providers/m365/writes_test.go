@@ -2,8 +2,8 @@ package m365_test
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"reflect"
 	"strings"
@@ -12,55 +12,135 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 )
 
-func TestDraftsCreateWithoutSendingAndUpdateOnlyNewDraft(t *testing.T) {
+func TestDraftNewCreatesWithoutSending(t *testing.T) {
 	var paths []string
 	var bodies []map[string]any
 	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "GET" {
-			q := r.URL.Query()
-			if q.Get("$select") != "isDraft,conversationIndex" || q.Get("$expand") != "singleValueExtendedProperties($filter=id eq 'String 0x1042')" {
-				t.Error("missing draft safety signals")
-			}
-			jsonResponse(w, map[string]any{"isDraft": true, "conversationIndex": base64.StdEncoding.EncodeToString(make([]byte, 22))})
-			return
-		}
 		paths = append(paths, r.Method+" "+r.URL.EscapedPath())
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		bodies = append(bodies, body)
 		jsonResponse(w, map[string]string{"id": "new-immutable"})
 	})
-	b := c.Mailbox()
-	ctx := context.Background()
-	draft, err := b.DraftNew(ctx, model.NewDraft{To: []string{"a@example.test"}, Subject: "Hi", Body: "text"})
+	draft, err := c.Mailbox().DraftNew(context.Background(), model.NewDraft{To: []string{"a@example.test"}, Subject: "Hi", Body: "text"})
 	if draft.ID != "new-immutable" || err != nil {
 		t.Fatal(draft, err)
 	}
-	id, err := b.DraftUpdate(ctx, "draft", "replacement")
-	if id != "draft" || err != nil {
-		t.Fatal(id, err)
-	}
-	if !reflect.DeepEqual(paths, []string{"POST /v1.0/me/messages", "PATCH /v1.0/me/messages/draft"}) {
+	if !reflect.DeepEqual(paths, []string{"POST /v1.0/me/messages"}) {
 		t.Fatalf("unsafe endpoints %v", paths)
 	}
-	expected := []map[string]any{{"subject": "Hi", "body": map[string]any{"contentType": "text", "content": "text"}, "toRecipients": []any{map[string]any{"emailAddress": map[string]any{"address": "a@example.test"}}}, "ccRecipients": []any{}, "bccRecipients": []any{}}, {"body": map[string]any{"contentType": "text", "content": "replacement"}}}
+	expected := []map[string]any{{"subject": "Hi", "body": map[string]any{"contentType": "text", "content": "text"}, "toRecipients": []any{map[string]any{"emailAddress": map[string]any{"address": "a@example.test"}}}, "ccRecipients": []any{}, "bccRecipients": []any{}}}
 	if !reflect.DeepEqual(bodies, expected) {
 		t.Fatalf("draft bodies %v", bodies)
 	}
 }
-func TestDraftUpdateRefusesMissingOrReplySignals(t *testing.T) {
-	index := base64.StdEncoding.EncodeToString(make([]byte, 22))
-	for _, data := range []map[string]any{{}, {"isDraft": false, "conversationIndex": index}, {"isDraft": "true", "conversationIndex": index}, {"isDraft": true}, {"isDraft": true, "conversationIndex": "bad"}, {"isDraft": true, "conversationIndex": index + "\n"}, {"isDraft": true, "conversationIndex": base64.StdEncoding.EncodeToString(make([]byte, 27))}, {"isDraft": true, "conversationIndex": index, "singleValueExtendedProperties": []any{map[string]string{"id": "String 0x1042", "value": "reply"}}}, {"isDraft": true, "conversationIndex": index, "singleValueExtendedProperties": "invalid"}} {
-		c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != "GET" {
-				t.Error("unsafe draft was patched")
+
+// draftUpdateGraph serves message m with the JSON fields of read to every GET, and answers a PATCH with the updated
+// draft in conversation conv. It records each request and each PATCH body.
+func draftUpdateGraph(t *testing.T, read map[string]any) (*[]string, *[]map[string]any, *m365.Client) {
+	t.Helper()
+	var paths []string
+	var patches []map[string]any
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.EscapedPath()+" "+r.URL.Query().Get("$select"))
+		if r.Method == "GET" {
+			jsonResponse(w, read)
+			return
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		patches = append(patches, body)
+		jsonResponse(w, map[string]string{"id": "m", "conversationId": "conv"})
+	})
+	return &paths, &patches, c
+}
+
+// A draft update checks isDraft and then sends one PATCH of only the fields that it is given: a list replaces the
+// recipients, an empty list clears them, and the body has contentType text or html. The draft keeps its ID, and the
+// conversation comes from Graph's answer.
+func TestDraftUpdatePatchesOnlyTheGivenFields(t *testing.T) {
+	recipient := func(a string) map[string]any { return map[string]any{"emailAddress": map[string]any{"address": a}} }
+	for _, tc := range []struct {
+		name   string
+		change model.DraftChange
+		patch  map[string]any
+	}{
+		{"subject", model.DraftChange{Subject: new("New")}, map[string]any{"subject": "New"}},
+		{"lists", model.DraftChange{To: new([]string{"a@example.test", "b@example.test"}), CC: new([]string{}), BCC: new([]string{"c@example.test"})},
+			map[string]any{"toRecipients": []any{recipient("a@example.test"), recipient("b@example.test")}, "ccRecipients": []any{}, "bccRecipients": []any{recipient("c@example.test")}}},
+		{"plain body", model.DraftChange{Body: new("line one\nline two")}, map[string]any{"body": map[string]any{"contentType": "text", "content": "line one\nline two"}}},
+		{"html body", model.DraftChange{Body: new("<p>Hi</p>"), HTML: true}, map[string]any{"body": map[string]any{"contentType": "html", "content": "<p>Hi</p>"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			paths, patches, c := draftUpdateGraph(t, map[string]any{"id": "m", "isDraft": true})
+			id, thread, err := c.Mailbox().DraftUpdate(context.Background(), "m", tc.change)
+			if err != nil || id != "m" || thread != "conv" {
+				t.Fatalf("update=%q %q %v", id, thread, err)
 			}
-			jsonResponse(w, data)
+			if want := []string{"GET /v1.0/me/messages/m isDraft", "PATCH /v1.0/me/messages/m "}; !reflect.DeepEqual(*paths, want) {
+				t.Fatalf("requests=%q", *paths)
+			}
+			if !reflect.DeepEqual(*patches, []map[string]any{tc.patch}) {
+				t.Fatalf("patch=%v\nwant %v", *patches, tc.patch)
+			}
 		})
-		if _, err := c.Mailbox().DraftUpdate(context.Background(), "m", "body"); err == nil {
-			t.Fatalf("unsafe draft accepted %v", data)
+	}
+}
+
+// A message that is not a draft, or whose isDraft is missing or not a boolean, is refused before any PATCH.
+func TestDraftUpdateRefusesAMessageThatIsNotADraftBeforeAnyPatch(t *testing.T) {
+	for _, read := range []map[string]any{{"id": "m", "isDraft": false}, {"id": "m"}, {"id": "m", "isDraft": "true"}, {"id": "m", "isDraft": nil}, {"isDraft": true}} {
+		paths, _, c := draftUpdateGraph(t, read)
+		if _, _, err := c.Mailbox().DraftUpdate(context.Background(), "m", model.DraftChange{Subject: new("New")}); err == nil || len(*paths) != 1 {
+			t.Fatalf("read %v: err=%v requests=%q", read, err, *paths)
+		}
+	}
+}
+
+// ReadDraft reads isDraft, the recipients, the subject, and the body with its type. A message that is not a draft
+// gives only IsDraft false; a draft body of another type fails.
+func TestReadDraftMapsTheDraftFields(t *testing.T) {
+	recipients := func(a ...string) []any {
+		out := []any{}
+		for _, v := range a {
+			out = append(out, map[string]any{"emailAddress": map[string]any{"name": "Name", "address": v}})
+		}
+		return out
+	}
+	draft := map[string]any{"id": "m", "isDraft": true, "subject": "Plan", "toRecipients": recipients("a@example.test", "b@example.test"), "ccRecipients": recipients(), "bccRecipients": recipients("c@example.test"), "body": map[string]any{"contentType": "HTML", "content": "<p>Hi</p>"}}
+	paths, _, c := draftUpdateGraph(t, draft)
+	got, err := c.Mailbox().ReadDraft(context.Background(), "m")
+	want := model.DraftContent{IsDraft: true, To: []string{"a@example.test", "b@example.test"}, CC: []string{}, BCC: []string{"c@example.test"}, Subject: "Plan", Body: "<p>Hi</p>", HTML: true}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("draft=%+v %v", got, err)
+	}
+	if want := []string{"GET /v1.0/me/messages/m isDraft,toRecipients,ccRecipients,bccRecipients,subject,body"}; !reflect.DeepEqual(*paths, want) {
+		t.Fatalf("requests=%q", *paths)
+	}
+	received := maps.Clone(draft)
+	received["isDraft"] = false
+	_, _, c = draftUpdateGraph(t, received)
+	if got, err := c.Mailbox().ReadDraft(context.Background(), "m"); err != nil || !reflect.DeepEqual(got, model.DraftContent{}) {
+		t.Fatalf("received message=%+v %v", got, err)
+	}
+	draft["body"] = map[string]any{"contentType": "rtf", "content": "x"}
+	_, _, c = draftUpdateGraph(t, draft)
+	if _, err := c.Mailbox().ReadDraft(context.Background(), "m"); err == nil {
+		t.Fatal("unknown body type accepted")
+	}
+	draft["body"] = map[string]any{"contentType": "text", "content": "x"}
+	// A recipient list that is not an array, or a recipient without an address, fails.
+	for _, bad := range []any{"a@example.test", nil, map[string]any{}, []any{map[string]any{"emailAddress": map[string]any{"name": "No address"}}}, []any{map[string]any{}}, []any{"a@example.test"}} {
+		for _, key := range []string{"toRecipients", "ccRecipients", "bccRecipients"} {
+			broken := maps.Clone(draft)
+			broken[key] = bad
+			_, _, c = draftUpdateGraph(t, broken)
+			if got, err := c.Mailbox().ReadDraft(context.Background(), "m"); err == nil {
+				t.Errorf("%s=%v accepted: %+v", key, bad, got)
+			}
 		}
 	}
 }

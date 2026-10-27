@@ -88,7 +88,9 @@ func TestValidatedAccountOperationsReachTheProviderOnlyWhenValid(t *testing.T) {
 	}
 	for _, body := range []struct{ op, params string }{
 		{"mail.get", `{}`}, {"mail.get", `{"id":""}`},
-		{"draft.update", `{"id":"x"}`}, {"mail.archive", `{"ids":[]}`},
+		{"draft.update", `{"id":"x"}`}, {"draft.update", `{"id":"x","html":true}`}, {"draft.update", `{"id":"x","subject":"s","html":true}`},
+		{"draft.update", `{"id":"x","to":null}`}, {"draft.update", `{"id":"x","subject":null}`}, {"draft.update", `{"id":"x","cc":[""]}`}, {"draft.update", `{"id":"x","from":["a@example.test"]}`},
+		{"mail.archive", `{"ids":[]}`},
 		{"mail.list", `{"count":-1}`}, {"mail.list", `{"page":"a b"}`}, {"mail.search", `{"text":"x","page":"a\u0000"}`}, {"calendar.search", `{"text":"x","page":"\u00e9"}`}, {"mail.flag", `{"ids":["x"],"state":"urgent"}`},
 		{"mail.organize", `{"since":"0d"}`}, {"mail.organize", `{"since":"2026-10-08"}`},
 		{"calendar.list", `{"start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:00:00Z"}`},

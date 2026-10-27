@@ -45,7 +45,7 @@ func publicError(e error) (string, bool) {
 	if e, ok := e.(guard.GuardError); ok {
 		switch e {
 		case guard.CalendarWriteUnsupported, guard.CalendarAvailabilityUnsupported, guard.CalendarCancelCommentUnsupported, guard.CalendarNoNotifyUnsupported, "missing_scopes", "invalid request",
-			guard.CalendarRecurring, guard.CalendarCancelled, guard.CalendarOrganizerOnly, guard.CalendarOrganizerCannotRespond:
+			guard.CalendarRecurring, guard.CalendarCancelled, guard.CalendarOrganizerOnly, guard.CalendarOrganizerCannotRespond, guard.DraftUpdateNotDraft:
 			return string(e), true
 		case "refused by policy: mail_draft", "refused by policy: mail_send", "refused by policy: calendar_invite", "refused by policy: calendar_update", "refused by policy: calendar_cancel", "refused by policy: calendar_respond":
 			return string(e), true
@@ -167,7 +167,7 @@ var operations = map[string]operation{
 	"mail.forward":  {decode: forwardMessage(true), grants: mailSendGrants},
 	"draft.new":     {decode: newMessage(false)},
 	"draft.reply":   {decode: replyMessage(false)},
-	"draft.update":  {decode: bodyMessage},
+	"draft.update":  {decode: draftUpdate},
 	"draft.forward": {decode: forwardMessage(false)},
 	"calendar.get": {decode: typed(idParam{}, func(p *idParam) bool { return idValid(p.ID) }, func(ctx context.Context, _ *Server, p idParam, a *account) (any, error) {
 		return a.guard.CalendarGet(ctx, p.ID)
@@ -303,9 +303,14 @@ type replyParam struct {
 	CC   []string `json:"cc"`
 	BCC  []string `json:"bcc"`
 }
-type bodyParam struct {
-	ID   string  `json:"id"`
-	Body *string `json:"body"`
+type draftChangeParam struct {
+	ID      string    `json:"id"`
+	To      *[]string `json:"to"`
+	CC      *[]string `json:"cc"`
+	BCC     *[]string `json:"bcc"`
+	Subject *string   `json:"subject"`
+	Body    *string   `json:"body"`
+	HTML    bool      `json:"html"`
 }
 type forwardParam struct {
 	ID   string   `json:"id"`
@@ -366,6 +371,31 @@ type newDraftDTO struct {
 // newDraft is the result DTO of a draft, with every text field cleaned and the IDs as given.
 func newDraft(d model.DraftResult) newDraftDTO {
 	return newDraftDTO{draftIDsDTO{d.ID, d.ThreadID}, cleaned(d.To), cleaned(d.CC), cleaned(d.BCC), content.CleanSubject(d.Subject)}
+}
+
+// updatedDraftDTO is the result of draft.update: the draft's IDs, the message ID possibly new, and only the recipient
+// lists and subject that the request gave. Fields that the update did not change are not read back.
+type updatedDraftDTO struct {
+	draftIDsDTO
+	To      *[]string `json:"to,omitempty"`
+	CC      *[]string `json:"cc,omitempty"`
+	BCC     *[]string `json:"bcc,omitempty"`
+	Subject *string   `json:"subject,omitempty"`
+}
+
+// updatedDraft is the result DTO of a draft update, with every text field of the change cleaned and the IDs as given.
+func updatedDraft(id, thread string, c model.DraftChange) updatedDraftDTO {
+	list := func(v *[]string) *[]string {
+		if v == nil {
+			return nil
+		}
+		return new(cleaned(*v))
+	}
+	var subject *string
+	if c.Subject != nil {
+		subject = new(content.CleanSubject(*c.Subject))
+	}
+	return updatedDraftDTO{draftIDsDTO{id, thread}, list(c.To), list(c.CC), list(c.BCC), subject}
 }
 
 // sourceContentShown is the verdict limit of a reply or forward draft result. Its recipients and subject come from
@@ -561,15 +591,28 @@ func replyMessage(send bool) decoder {
 	}
 }
 
-// bodyMessage is the decoder of draft.update: one message ID and a body.
-func bodyMessage(ctx context.Context, _ *Server, raw json.RawMessage) (call, guard.GuardError, error) {
-	var p bodyParam
-	if params(raw, &p) != nil || !idValid(p.ID) || p.Body == nil || !validString(*p.Body, MaxRequestBytes, true) {
+// draftUpdate is the decoder of draft.update: one message ID and at least one of to, cc, bcc, subject, and body. An
+// absent param is unchanged; an empty list clears; html goes only with body.
+func draftUpdate(ctx context.Context, _ *Server, raw json.RawMessage) (call, guard.GuardError, error) {
+	var p draftChangeParam
+	if params(raw, &p) != nil || !idValid(p.ID) || p.Subject != nil && !validString(*p.Subject, 65536, true) || p.Body != nil && !validString(*p.Body, MaxRequestBytes, true) {
+		return nil, "", errInvalid
+	}
+	for _, list := range []*[]string{p.To, p.CC, p.BCC} {
+		if list != nil && !listValid(*list, 0, noMax) {
+			return nil, "", errInvalid
+		}
+	}
+	change := model.DraftChange{To: p.To, CC: p.CC, BCC: p.BCC, Subject: p.Subject, Body: p.Body, HTML: p.HTML}
+	if change.Empty() || change.HTMLWithoutBody() {
 		return nil, "", errInvalid
 	}
 	return func(a *account) (any, error) {
-		id, e := a.guard.DraftUpdate(ctx, p.ID, *p.Body)
-		return updateDTO{id, true}, e
+		id, thread, e := a.guard.DraftUpdate(ctx, p.ID, change)
+		if e != nil {
+			return nil, e
+		}
+		return updatedDraft(id, thread, change), nil
 	}, "", nil
 }
 

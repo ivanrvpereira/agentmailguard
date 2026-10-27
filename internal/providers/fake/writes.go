@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
@@ -311,23 +312,66 @@ func (b *mailbox) DraftForward(ctx context.Context, id string, f model.Forward) 
 	return b.draftResult(ctx, o)
 }
 
-// DraftUpdate changes only drafts that DraftNew made.
-func (b *mailbox) DraftUpdate(ctx context.Context, id, body string) (string, error) {
+// ReadDraft gives only IsDraft false for a message that is not a draft.
+func (b *mailbox) ReadDraft(ctx context.Context, id string) (model.DraftContent, error) {
+	found, err := b.Get(ctx, []string{id}, true)
+	if err != nil || !found[0].IsDraft {
+		return model.DraftContent{}, err
+	}
+	m := found[0]
+	bare := func(list []model.Address) []string {
+		out := []string{}
+		for _, a := range list {
+			out = append(out, a.Address)
+		}
+		return out
+	}
+	return model.DraftContent{IsDraft: true, To: bare(m.To), CC: bare(m.CC), BCC: bare(m.BCC), Subject: m.Subject, Body: *m.Body, HTML: *m.ContentType == model.HTML}, nil
+}
+
+// notDraft refuses an update of a message that is not a draft.
+const notDraft = model.MailboxError("DraftError")
+
+// DraftUpdate changes the given fields of any draft in one UPDATE; the draft keeps its ID.
+func (b *mailbox) DraftUpdate(ctx context.Context, id string, change model.DraftChange) (string, string, error) {
 	db, err := b.p.conn(ctx)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	r, err := db.ExecContext(ctx, `UPDATE messages SET body = ?, content_type = 'text' WHERE account = ? AND id = ? AND is_draft = 1 AND origin = 'new'`, body, b.p.account, id)
-	if err != nil {
-		return "", storageError
-	}
-	if n, err := r.RowsAffected(); err != nil || n == 0 {
-		if _, err := b.Get(ctx, []string{id}, false); err != nil {
-			return "", err
+	set, args := []string{}, []any{}
+	for _, list := range []struct {
+		column string
+		value  *[]string
+	}{{"to_addresses", change.To}, {"cc_addresses", change.CC}, {"bcc_addresses", change.BCC}} {
+		if list.value != nil {
+			set, args = append(set, list.column+" = ?"), append(args, jsonList(*list.value))
 		}
-		return "", invalid
 	}
-	return id, nil
+	if change.Subject != nil {
+		set, args = append(set, "subject = ?"), append(args, *change.Subject)
+	}
+	if change.Body != nil {
+		kind := model.Text
+		if change.HTML {
+			kind = model.HTML
+		}
+		set, args = append(set, "body = ?", "content_type = ?"), append(args, *change.Body, string(kind))
+	}
+	if len(set) == 0 || change.HTMLWithoutBody() {
+		return "", "", invalid
+	}
+	var thread string
+	err = db.QueryRowContext(ctx, `UPDATE messages SET `+strings.Join(set, ", ")+` WHERE account = ? AND id = ? AND is_draft = 1 RETURNING COALESCE(thread_id, id)`, append(args, b.p.account, id)...).Scan(&thread)
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, err := b.Get(ctx, []string{id}, false); err != nil {
+			return "", "", err
+		}
+		return "", "", notDraft
+	}
+	if err != nil {
+		return "", "", storageError
+	}
+	return id, thread, nil
 }
 
 // Sends only store the message in sent. Nothing leaves the machine.

@@ -413,6 +413,134 @@ func TestApprovalPageShowsTheForwardRecipients(t *testing.T) {
 	}
 }
 
+// draft update changes only the fields that it is given: a list replaces the old one, and an empty value clears it.
+// The result gives the draft's IDs and the changed fields, and the returned ID reads the updated draft.
+func TestDraftUpdateChangesOnlyTheGivenFields(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	id := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--cc", "cy@example.test", "--bcc", "ed@example.test", "--subject", "canary-subject-old", "--body", "canary-body-old")).ID
+	stored := func() string {
+		return strings.Join(s.column(`SELECT folder || ' ' || is_draft || ' ' || to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || subject || ' ' || content_type || ' ' || body FROM messages WHERE id = ?`, id), "\n")
+	}
+	for _, tc := range []struct {
+		args   []string
+		result map[string]any
+		row    string
+	}{
+		{[]string{"--subject", "canary-subject-new"}, map[string]any{"subject": "canary-subject-new"},
+			`drafts 1 ["ana@example.test"] ["cy@example.test"] ["ed@example.test"] canary-subject-new text canary-body-old`},
+		{[]string{"--to", "bob@example.test", "--to", "di@example.test"}, map[string]any{"to": []any{"bob@example.test", "di@example.test"}},
+			`drafts 1 ["bob@example.test","di@example.test"] ["cy@example.test"] ["ed@example.test"] canary-subject-new text canary-body-old`},
+		{[]string{"--cc", ""}, map[string]any{"cc": []any{}},
+			`drafts 1 ["bob@example.test","di@example.test"] [] ["ed@example.test"] canary-subject-new text canary-body-old`},
+		{[]string{"--body", "<p>canary-body-html</p>", "--html"}, map[string]any{},
+			`drafts 1 ["bob@example.test","di@example.test"] [] ["ed@example.test"] canary-subject-new html <p>canary-body-html</p>`},
+		{[]string{"--bcc", "flo@example.test", "--body", "canary-body-plain"}, map[string]any{"bcc": []any{"flo@example.test"}},
+			`drafts 1 ["bob@example.test","di@example.test"] [] ["flo@example.test"] canary-subject-new text canary-body-plain`},
+	} {
+		got := decode[map[string]any](t, s.ok(append([]string{"draft", "update", id}, tc.args...)...))
+		tc.result["id"], tc.result["thread_id"] = id, id
+		if !reflect.DeepEqual(got, tc.result) {
+			t.Fatalf("update %v: result %v, want %v", tc.args, got, tc.result)
+		}
+		if row := stored(); row != tc.row {
+			t.Fatalf("update %v: stored %q, want %q", tc.args, row, tc.row)
+		}
+		id = got["id"].(string)
+	}
+	view := decode[struct {
+		Verdict string
+		Subject string
+		Body    string
+	}](t, s.ok("mail", "get", id))
+	if view.Verdict != "green" || view.Subject != "canary-subject-new" || !strings.Contains(view.Body, "canary-body-plain") {
+		t.Fatalf("mail get of the updated draft: %+v", view)
+	}
+}
+
+// draft update works on reply and forward drafts too: --body replaces the whole body, quoted original included,
+// and the draft keeps its conversation, its recipients, and the forwarded attachments.
+func TestDraftUpdateChangesReplyAndForwardDrafts(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	s.seedTeam()
+	s.seedReport()
+	reply := decode[newDraft](t, s.ok("draft", "reply", "team", "--body", "canary-body-reply")).ID
+	if got := decode[map[string]any](t, s.ok("draft", "update", reply, "--body", "canary-body-reply-new")); !reflect.DeepEqual(got, map[string]any{"id": reply, "thread_id": "team"}) {
+		t.Fatalf("reply update: %v", got)
+	}
+	forward := decode[newDraft](t, s.ok("draft", "forward", "report", "--body", "canary-body-note")).ID
+	if got := decode[map[string]any](t, s.ok("draft", "update", forward, "--to", "ana@example.test")); !reflect.DeepEqual(got, map[string]any{"id": forward, "thread_id": "report", "to": []any{"ana@example.test"}}) {
+		t.Fatalf("forward update: %v", got)
+	}
+	got := s.column(`SELECT thread_id || ' ' || to_addresses || ' ' || subject || ' ' || attachments || ' ' || body FROM messages WHERE id IN (?, ?) ORDER BY thread_id DESC`, reply, forward)
+	if want := []string{`team ["ana@example.test"] Re: canary-subject-team [] canary-body-reply-new`,
+		`report ["ana@example.test"] Fw: canary-subject-report ["canary-file-plan.pdf","canary-file-notes.txt"] canary-body-note`}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("stored drafts: %q", got)
+	}
+}
+
+// draft update without a field, or with --html but no --body, is invalid usage and reaches no policy decision. An
+// update of a message that is not a draft is refused with a fixed text before any write.
+func TestDraftUpdateRefusesNoFieldAndAMessageThatIsNotADraft(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	id := decode[newDraft](t, s.ok("draft", "new", "--subject", "canary-subject-draft")).ID
+	before := s.dump()
+	audit := func() string {
+		data, err := os.ReadFile(filepath.Join(s.home, "audit.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	records := audit()
+	for _, args := range [][]string{{"draft", "update", id}, {"draft", "update", id, "--html"}, {"draft", "update", id, "--subject", "canary-subject-x", "--html"}} {
+		if out, errout, code := s.amg(args...); code != 2 || out != "" || errout == "" {
+			t.Fatalf("amg %v: exit %d stdout %q stderr %q", args, code, out, errout)
+		}
+	}
+	s.refused("draft update refused: not a draft", "draft", "update", "lunch", "--subject", "canary-subject-x", "--body", "canary-body-x")
+	s.assertTables(before)
+	if audit() != records {
+		t.Fatal("refused updates wrote audit records")
+	}
+}
+
+// A draft that the user wrote in the app can be updated too. An update that waits for approval stores only the fields
+// that it was given; the approval page shows them, and the approved run applies them and stores only the draft IDs.
+func TestApprovedDraftUpdateAppliesOnlyTheGivenFields(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_draft='approve'\n")
+	id := "users-draft"
+	s.exec(`INSERT INTO messages (account, id, folder, to_addresses, cc_addresses, subject, body, is_draft, thread_id) VALUES
+		('demo@fake.invalid', ?, 'drafts', '["ana@example.test"]', '["cy@example.test"]', 'canary-subject-old', 'canary-body-old', 1, 'conversation')`, id)
+	p := s.held("draft", "update", id, "--cc", "", "--subject", "canary-subject-new")
+	if got := s.column(`SELECT cc_addresses || ' ' || subject FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got, []string{`["cy@example.test"] canary-subject-old`}) {
+		t.Fatalf("pending update ran: %v", got)
+	}
+	_, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID)
+	for _, want := range []string{"<dt>cc</dt><dd></dd>", "<dt>subject</dt><dd><pre>canary-subject-new</pre></dd>"} {
+		if !strings.Contains(item, want) {
+			t.Errorf("item page misses %q:\n%s", want, item)
+		}
+	}
+	if strings.Contains(item, "<dt>to</dt>") || strings.Contains(item, "<dt>body</dt>") {
+		t.Errorf("item page shows a field that was not given:\n%s", item)
+	}
+	s.approve(p.ApprovalID)
+	if got := s.column(`SELECT to_addresses || ' ' || cc_addresses || ' ' || subject || ' ' || body FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got, []string{`["ana@example.test"] [] canary-subject-new canary-body-old`}) {
+		t.Fatalf("approved update: %v", got)
+	}
+	status := decode[struct {
+		State  string
+		Result map[string]any
+	}](t, s.ok("approvals", "status", p.ApprovalID))
+	if status.State != "done" || !reflect.DeepEqual(status.Result, map[string]any{"id": id, "thread_id": "conversation"}) {
+		t.Fatalf("approved draft update: %+v", status)
+	}
+}
+
 // A reply or forward of a sealed or error message is refused even when the policy allows drafts and sends.
 func TestRepliesAndForwardsOfASealedMessageAreAlwaysRefused(t *testing.T) {
 	t.Parallel()

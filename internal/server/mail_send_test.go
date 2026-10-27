@@ -236,3 +236,21 @@ func TestApprovedDraftStoresOnlyItsIDs(t *testing.T) {
 	}
 	assertState(t, d.s, id, `{"state":"done","result":{"id":"d1","thread_id":"conv"}}`)
 }
+
+// draft.update gives the draft's IDs from the provider's answer and only the fields that the request gave, each
+// text field cleaned; an empty list stays empty, and fields that were not given are not read back.
+func TestDraftUpdateResultHasOnlyTheGivenFieldsCleaned(t *testing.T) {
+	var paths []string
+	d := graphDaemon(t, "[policy]\nmail_draft='allow'\n", writeGrant, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"d1","conversationId":"conv","isDraft":true,"subject":"CANARY old","toRecipients":[{"emailAddress":{"address":"old@example.test"}}],"ccRecipients":[],"bccRecipients":[],"body":{"contentType":"text","content":"CANARY"}}`)
+	}), newNativeAPI())
+	status, body := accountRPC(t, d.s, "draft.update", "work", `{"id":"d1","to":["a@example.test\u0007"],"cc":[],"subject":"CANARY\u200b see https://evil.example.test/x"}`)
+	if want := `{"id":"d1","thread_id":"conv","to":["a@example.test"],"cc":[],"subject":"CANARY see [link removed]"}`; status != 200 || body != want {
+		t.Fatalf("draft.update: %d %s\nwant %s", status, body, want)
+	}
+	if want := []string{"GET /me/messages/d1", "GET /me/messages/d1", "PATCH /me/messages/d1"}; !reflect.DeepEqual(paths, want) {
+		t.Fatalf("provider requests=%v", paths)
+	}
+}

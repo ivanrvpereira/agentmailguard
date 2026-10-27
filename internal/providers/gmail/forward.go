@@ -3,7 +3,6 @@ package gmail
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"html"
 	"mime"
@@ -33,7 +32,7 @@ func (m *mailbox) DraftForward(ctx context.Context, id string, f model.Forward) 
 	if err != nil {
 		return model.DraftResult{}, err
 	}
-	data, err := m.upload(ctx, m.c.options.UploadURL, map[string]any{"message": map[string]string{"threadId": b.thread}}, b.raw)
+	data, err := m.upload(ctx, "POST", m.c.options.UploadURL, map[string]any{"message": map[string]string{"threadId": b.thread}}, b.raw)
 	if err != nil {
 		return model.DraftResult{}, err
 	}
@@ -51,7 +50,7 @@ func (m *mailbox) SendForward(ctx context.Context, id string, f model.Forward) e
 	if err != nil {
 		return err
 	}
-	_, err = m.upload(ctx, m.c.options.SendUploadURL, map[string]string{"threadId": b.thread}, b.raw)
+	_, err = m.upload(ctx, "POST", m.c.options.SendUploadURL, map[string]string{"threadId": b.thread}, b.raw)
 	return err
 }
 
@@ -132,8 +131,10 @@ func (m *mailbox) forward(ctx context.Context, id string, f model.Forward) (buil
 // forwardParts gives the parts of a message that its forward carries. An inline image is an image/* part with a
 // Content-ID whose Content-Disposition is not attachment: the original's HTML shows it in place through a cid: link.
 // With html, inline images are carried as inline; without, they are dropped, as Google's CLI does. Every other part
-// that starts an attachment (walk), without the parts inside it, is a regular attachment: a part with a file name,
-// an inline part with a Content-ID that is not an image included. Regular attachments and carried inline images count
+// that starts an attachment (walk: a file name, Content-Disposition attachment, or message/rfc822), without the parts
+// inside it, is a regular attachment; partHeader sends an attached message as application/octet-stream. A part that
+// is none of these is not carried, such as an unnamed text/calendar part or a non-image part with only a Content-ID.
+// Regular attachments and carried inline images count
 // toward maxForwardAttachments together, and a file name, type, or Content-ID with a line break fails before it
 // reaches a header.
 func forwardParts(payload *mimePart, html bool) (regular, inline []*mimePart, err error) {
@@ -262,12 +263,7 @@ func multipartOf(sub string, params map[string]string, header textproto.MIMEHead
 		if err != nil {
 			return nil, nil, failure("Gmail", "ValueError")
 		}
-		encoded := base64.StdEncoding.EncodeToString(data[i])
-		for len(encoded) > 76 {
-			_, _ = part.Write([]byte(encoded[:76] + "\r\n"))
-			encoded = encoded[76:]
-		}
-		_, _ = part.Write([]byte(encoded + "\r\n"))
+		_, _ = part.Write(append(base64Lines(data[i]), "\r\n"...))
 	}
 	if w.Close() != nil {
 		return nil, nil, failure("Gmail", "ValueError")
@@ -314,8 +310,8 @@ func partHeader(p *mimePart, inline bool) (textproto.MIMEHeader, error) {
 	return h, nil
 }
 
-// upload posts media with its JSON metadata as one multipart/related upload.
-func (m *mailbox) upload(ctx context.Context, endpoint string, metadata any, media []byte) (map[string]json.RawMessage, error) {
+// upload sends media with its JSON metadata as one multipart/related upload, with method POST or PUT.
+func (m *mailbox) upload(ctx context.Context, method, endpoint string, metadata any, media []byte) (map[string]json.RawMessage, error) {
 	var upload bytes.Buffer
 	related := multipart.NewWriter(&upload)
 	p, err := related.CreatePart(textproto.MIMEHeader{"Content-Type": {"application/json; charset=UTF-8"}})
@@ -329,5 +325,5 @@ func (m *mailbox) upload(ctx context.Context, endpoint string, metadata any, med
 	}
 	_, _ = p.Write(media)
 	_ = related.Close()
-	return m.c.request(ctx, "Gmail", "POST", endpoint, url.Values{"uploadType": {"multipart"}}, upload.Bytes(), "multipart/related; boundary="+related.Boundary())
+	return m.c.request(ctx, "Gmail", method, endpoint, url.Values{"uploadType": {"multipart"}}, upload.Bytes(), "multipart/related; boundary="+related.Boundary())
 }

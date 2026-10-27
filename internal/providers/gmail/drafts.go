@@ -26,6 +26,21 @@ func threadIDs(messageID, references string) []string {
 	return append(messageIDRE.FindAllString(references, -1), last)
 }
 func mimeHeaders(headers []header, ids []string) ([]byte, error) {
+	lines, err := headerLines(headers)
+	if err != nil {
+		return nil, err
+	}
+	b := bytes.NewBuffer(lines)
+	if len(ids) > 0 {
+		b.WriteString("In-Reply-To: " + ids[len(ids)-1] + "\r\nReferences: " + strings.Join(ids, "\r\n ") + "\r\n")
+	}
+	b.WriteString("MIME-Version: 1.0\r\n")
+	return b.Bytes(), nil
+}
+
+// headerLines writes each header with a value as one line, its whitespace runs made single spaces and a Subject
+// Q-encoded. A value whose decoded text has a line break fails, so that no value can add a header.
+func headerLines(headers []header) ([]byte, error) {
 	var b bytes.Buffer
 	for _, h := range headers {
 		value := strings.Join(strings.Fields(h.Value), " ")
@@ -40,10 +55,6 @@ func mimeHeaders(headers []header, ids []string) ([]byte, error) {
 		}
 		b.WriteString(h.Name + ": " + value + "\r\n")
 	}
-	if len(ids) > 0 {
-		b.WriteString("In-Reply-To: " + ids[len(ids)-1] + "\r\nReferences: " + strings.Join(ids, "\r\n ") + "\r\n")
-	}
-	b.WriteString("MIME-Version: 1.0\r\n")
 	return b.Bytes(), nil
 }
 
@@ -62,8 +73,23 @@ func textMessage(headers []header, body string, html bool, ids []string) ([]byte
 }
 
 // textBody is the content type and the quoted-printable data of a text/plain body, or with html a text/html body.
-// Line ends become LF, and the body ends in one.
+// Line ends become LF (bodyLines), and the quoted-printable writer writes them as CRLF.
 func textBody(body string, html bool) (string, []byte, error) {
+	kind, text := bodyLines(body, html)
+	var b bytes.Buffer
+	w := quotedprintable.NewWriter(&b)
+	if _, err := w.Write([]byte(text)); err != nil {
+		return "", nil, failure("Gmail", "ValueError")
+	}
+	if err := w.Close(); err != nil {
+		return "", nil, failure("Gmail", "ValueError")
+	}
+	return kind, b.Bytes(), nil
+}
+
+// bodyLines is the content type of a text/plain body, or with html a text/html body, and its text with LF line ends
+// and a final one.
+func bodyLines(body string, html bool) (string, string) {
 	kind := "text/plain; charset=utf-8"
 	if html {
 		kind = "text/html; charset=utf-8"
@@ -72,19 +98,19 @@ func textBody(body string, html bool) (string, []byte, error) {
 	if !strings.HasSuffix(body, "\n") {
 		body += "\n"
 	}
-	var b bytes.Buffer
-	w := quotedprintable.NewWriter(&b)
-	if _, err := w.Write([]byte(body)); err != nil {
-		return "", nil, failure("Gmail", "ValueError")
-	}
-	if err := w.Close(); err != nil {
-		return "", nil, failure("Gmail", "ValueError")
-	}
-	return kind, b.Bytes(), nil
+	return kind, body
 }
-func draftID(v map[string]json.RawMessage) (string, error) {
-	id, _, err := draftMessage(v)
-	return id, err
+
+// base64Lines is data in base64 in lines of at most 76 characters, joined by CRLF (RFC 2045 section 6.8).
+func base64Lines(data []byte) []byte {
+	encoded := base64.StdEncoding.EncodeToString(data)
+	var b bytes.Buffer
+	for len(encoded) > 76 {
+		b.WriteString(encoded[:76] + "\r\n")
+		encoded = encoded[76:]
+	}
+	b.WriteString(encoded)
+	return b.Bytes()
 }
 
 // draftMessage gives the message ID and thread ID of a Draft resource, which drafts.create and drafts.update

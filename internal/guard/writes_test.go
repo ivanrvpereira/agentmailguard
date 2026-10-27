@@ -20,7 +20,10 @@ type writer struct {
 	calls            []string
 	trashed          []string
 	flags            []model.FlagState
-	updates          []struct{ id, body string }
+	updates          []draftUpdate
+	draftReads       int
+	notDraft         bool               // ReadDraft gives a message that is not a draft
+	draftErr         error              // the ReadDraft error
 	draft            *model.DraftResult // the DraftNew result; nil gives ID d1
 	recipientsErr    error              // the ReplyRecipients error; nil gives the recipients of replyRecipients
 	err              error
@@ -103,10 +106,24 @@ func (w *writer) DraftForward(context.Context, string, model.Forward) (model.Dra
 	_, err := w.write("draft_forward", nil)
 	return model.DraftResult{ID: "d3"}, err
 }
-func (w *writer) DraftUpdate(_ context.Context, id, body string) (string, error) {
-	w.updates = append(w.updates, struct{ id, body string }{id, body})
+
+// draftUpdate is one DraftUpdate call that writer got.
+type draftUpdate struct {
+	id     string
+	change model.DraftChange
+}
+
+func (w *writer) ReadDraft(context.Context, string) (model.DraftContent, error) {
+	w.draftReads++
+	if w.draftErr != nil {
+		return model.DraftContent{}, w.draftErr
+	}
+	return model.DraftContent{IsDraft: !w.notDraft}, nil
+}
+func (w *writer) DraftUpdate(_ context.Context, id string, change model.DraftChange) (string, string, error) {
+	w.updates = append(w.updates, draftUpdate{id, change})
 	_, err := w.write("draft_update", nil)
-	return "d4", err
+	return "d4", "t4", err
 }
 
 // auditRecords returns the per-operation records. Policy and approval records have an "event" field;
@@ -215,7 +232,10 @@ func TestEveryManualRouteAndDraftHasContentFreeAudit(t *testing.T) {
 		}, func() error { _, _, e := g.DraftReply(ctx, "m1", model.Reply{Body: "CANARY"}); return e }, func() error {
 			_, _, e := g.DraftForward(ctx, "m1", model.Forward{Body: "CANARY", To: []string{"CANARY@example.com"}})
 			return e
-		}, func() error { _, e := g.DraftUpdate(ctx, "d1", "CANARY"); return e },
+		}, func() error {
+			_, _, e := g.DraftUpdate(ctx, "d1", model.DraftChange{Subject: new("CANARY"), Body: new("CANARY")})
+			return e
+		},
 	}
 	for _, call := range calls {
 		if err := call(); err != nil {
@@ -271,12 +291,12 @@ func TestManualFlagAndDraftUpdatePreserveRequestedPayloads(t *testing.T) {
 	if !reflect.DeepEqual(w.flags, []model.FlagState{model.Flagged, model.Complete, model.NoFlag}) {
 		t.Errorf("provider flag states=%v; want flagged, complete, none", w.flags)
 	}
-	body := "CANARY draft update é <b>requested body</b>"
-	if id, err := g.DraftUpdate(ctx, "draft-source", body); err != nil || id != "d4" {
-		t.Fatalf("draft update result: %q %v", id, err)
+	change := model.DraftChange{CC: new([]string{}), Body: new("CANARY draft update é <b>requested body</b>"), HTML: true}
+	if id, thread, err := g.DraftUpdate(ctx, "draft-source", change); err != nil || id != "d4" || thread != "t4" {
+		t.Fatalf("draft update result: %q %q %v", id, thread, err)
 	}
-	if len(w.updates) != 1 || w.updates[0].id != "draft-source" || w.updates[0].body != body {
-		t.Error("provider did not receive exact draft source and nonempty body")
+	if !reflect.DeepEqual(w.updates, []draftUpdate{{"draft-source", change}}) {
+		t.Errorf("provider got %+v, not the exact draft and change", w.updates)
 	}
 	if len(auditRecords(t, path)) != 4 {
 		t.Fatal("payload mutations missing safe audit")

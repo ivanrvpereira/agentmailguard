@@ -136,6 +136,9 @@ func greenMessage(t *testing.T, id string) string {
 	return string(data)
 }
 
+// draftJSON is the Graph JSON of the draft d1, which a draft update reads before it writes.
+const draftJSON = `{"id":"d1","isDraft":true,"toRecipients":[],"ccRecipients":[],"bccRecipients":[],"subject":"CANARY draft","body":{"contentType":"text","content":"CANARY body"}}`
+
 // The same call under an allow policy gives the expected provider writes and result: one write, and for a reply or
 // forward draft the createReply or createForward and its PATCH. A stored draft result keeps only the draft IDs (stored).
 func TestApprovedActionMakesTheSameWriteAsTheAllowedCall(t *testing.T) {
@@ -148,6 +151,7 @@ func TestApprovedActionMakesTheSameWriteAsTheAllowedCall(t *testing.T) {
 		// the forwarded text, so the Graph API serves a green message.
 		{"draft.reply", "draft.reply", `{"id":"m1","body":"CANARY reply","all":true,"cc":["c@example.test"],"bcc":["d@example.test"],"html":true}`, greenMessage(t, "m1"), `{"id":"w1"}`, 2},
 		{"draft.forward", "draft.forward", `{"id":"m1","to":["a@example.test","b@example.test"],"cc":["c@example.test"],"body":"CANARY note","html":true}`, greenMessage(t, "m1"), `{"id":"w1"}`, 2},
+		{"draft.update", "draft.update", `{"id":"d1","to":[],"bcc":["d@example.test"],"subject":"CANARY subject","body":"<b>CANARY</b>","html":true}`, draftJSON, `{"id":"d1"}`, 1},
 		{"calendar.invite", "calendar.invite", `{"to":["a@example.test"],"subject":"CANARY","body":"CANARY body","start":"2026-10-09T09:00:00Z","end":"2026-10-09T10:00:00Z","location":"Room","online":false}`, organizerEvent, "", 1},
 		{"calendar.update duration and attendees", "calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","start":"2026-10-09T12:00:00+01:00","duration":"30m","add":["new@example.test"],"remove":["remove@example.test"],"online":true}`, organizerEvent, "", 1},
 		{"calendar.update start keeps duration", "calendar.update", `{"id":"e1","start":"2026-10-09T12:00:00+01:00"}`, organizerEvent, "", 1},

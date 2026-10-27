@@ -115,6 +115,12 @@ func addresses(headers []header, name string) []model.Address {
 // skipParts, returned by the visit of walk, skips the parts below the visited part.
 var skipParts = errors.New("skip parts")
 
+// maxMIMEDepth and maxMIMEParts bound the levels and the parts that walk visits and that parseRaw reads.
+const (
+	maxMIMEDepth = 100
+	maxMIMEParts = 100000
+)
+
 func walk(p *mimePart, visit func(*mimePart, bool) error) error {
 	type item struct {
 		p        *mimePart
@@ -127,7 +133,7 @@ func walk(p *mimePart, visit func(*mimePart, bool) error) error {
 		last := todo[len(todo)-1]
 		todo = todo[:len(todo)-1]
 		count++
-		if last.depth > 100 || count > 100000 {
+		if last.depth > maxMIMEDepth || count > maxMIMEParts {
 			return failure("Gmail", "ValueError")
 		}
 		p := last.p
@@ -150,6 +156,24 @@ func decode64(s string) ([]byte, error) {
 	}
 	return b, nil
 }
+
+// textLeaves gives the first text/plain and the first text/html part of payload, in document order, that are not
+// attachments (walk); nil when there is none. They are the body of a message: bodyText shows one of them, and a Gmail
+// draft update replaces them.
+func textLeaves(payload *mimePart) (plain, html *mimePart, err error) {
+	err = walk(payload, func(p *mimePart, attached bool) error {
+		switch kind := strings.ToLower(p.MimeType); {
+		case attached:
+		case kind == "text/plain" && plain == nil:
+			plain = p
+		case kind == "text/html" && html == nil:
+			html = p
+		}
+		return nil
+	})
+	return plain, html, err
+}
+
 func bodyText(payload *mimePart, plainFirst bool) (string, model.ContentType, error) {
 	// Missing/null payloads decode to a zero value, not a fetched-empty MIME body.
 	if payload == nil {
@@ -159,17 +183,11 @@ func bodyText(payload *mimePart, plainFirst bool) (string, model.ContentType, er
 	if err != nil || !strings.Contains(mediaType, "/") {
 		return "", "", failure("Gmail", "ValueError")
 	}
-	found := map[string]*mimePart{}
-	err = walk(payload, func(p *mimePart, attached bool) error {
-		kind := strings.ToLower(p.MimeType)
-		if !attached && (kind == "text/plain" || kind == "text/html") && found[kind] == nil {
-			found[kind] = p
-		}
-		return nil
-	})
+	plain, html, err := textLeaves(payload)
 	if err != nil {
 		return "", "", err
 	}
+	found := map[string]*mimePart{"text/plain": plain, "text/html": html}
 	order := []string{"text/html", "text/plain"}
 	if plainFirst {
 		order = []string{"text/plain", "text/html"}

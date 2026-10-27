@@ -34,9 +34,10 @@ func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "CLIOption
 const notes = `amg talks to the agentmailguard daemon (amgd serve) over HTTP: -H or AMG_HOST, default http://127.0.0.1:8787.
 It never starts the daemon and never changes accounts, credentials, or settings: amgd does that on the daemon host. No permanent delete.
 mail send, reply, and forward send email at once, and calendar invite, update, cancel, and respond (unless --no-notify) send meeting notifications at once, when the write policy allows them (default: deny).
---bcc recipients are hidden: the other recipients do not see them. draft new, mail send, reply, forward, calendar invite, and calendar update bodies are plain text unless --html; HTML goes unchanged, without cleaning.
+--bcc recipients are hidden: the other recipients do not see them. draft new, draft update, mail send, reply, forward, calendar invite, and calendar update bodies are plain text unless --html; HTML goes unchanged, without cleaning.
 A reply goes to the sender, and with --all also to everyone on the original; its --cc and --bcc are added to those recipients. It keeps the quoted original and the conversation.
 A forward puts its --body note above the original, carries the original's attachments, and keeps the conversation. draft forward needs no recipient; mail forward needs a --to, --cc, or --bcc.
+draft update changes only the given fields of any draft: a list replaces the old one and --to '' clears it; --body replaces the whole body, quoted original included. Gmail gives the draft a new ID: use the returned id.
 Days in date options run from 00:00 to the end of the day on this machine's clock and time zone; the last day is included.
 Client authentication and built-in TLS are absent. Anyone who reaches the daemon can run every action that the write policy allows. Protect remote access with a tunnel.`
 
@@ -557,7 +558,7 @@ func calendarCmd(r *runner) *cobra.Command {
 func draftCmd(r *runner) *cobra.Command {
 	c := group(r, "draft", "Create and update drafts without sending them")
 	c.AddCommand(newMessageCmd(r, "new", "draft.new", "Draft a new message"), replyCmd(r, "draft.reply", "Draft a reply to a message"),
-		forwardCmd(r, "draft.forward", "Draft a forward of a message"), bodyCmd(r, "update ID", "draft.update", "Replace the body of a draft"))
+		forwardCmd(r, "draft.forward", "Draft a forward of a message"), draftUpdateCmd(r))
 	return c
 }
 
@@ -583,16 +584,50 @@ func newMessageCmd(r *runner, use, op, short string) *cobra.Command {
 	return c
 }
 
-// bodyCmd runs an operation on one message ID that needs --body.
-func bodyCmd(r *runner, use, op, short string) *cobra.Command {
-	body := ""
-	c := r.leaf(use, short, 1, 1, func(c *cobra.Command, args []string) error {
-		if !c.Flags().Changed("body") {
+// draftUpdateCmd runs draft.update: one draft ID and at least one field; only the given fields change. A list option
+// replaces the list, and the option given once with an empty value clears it. --html goes only with --body.
+func draftUpdateCmd(r *runner) *cobra.Command {
+	var to, cc, bcc []string
+	subject, body, html := "", "", false
+	c := r.leaf("update ID", "Change the given fields of any draft: new, reply, forward, or written in the app", 1, 1, func(c *cobra.Command, args []string) error {
+		list := func(name string, values []string) *[]string {
+			switch {
+			case !c.Flags().Changed(name):
+				return nil
+			case len(values) == 1 && values[0] == "":
+				return new([]string{})
+			}
+			return new(append([]string{}, values...))
+		}
+		text := func(name, value string) *string {
+			if !c.Flags().Changed(name) {
+				return nil
+			}
+			return &value
+		}
+		change := model.DraftChange{To: list("to", to), CC: list("cc", cc), BCC: list("bcc", bcc), Subject: text("subject", subject), Body: text("body", body), HTML: html}
+		if change.Empty() || change.HTMLWithoutBody() {
 			return errUsage
 		}
-		return r.call(c, op, map[string]any{"id": args[0], "body": body}, false)
+		p := map[string]any{"id": args[0]}
+		for name, v := range map[string]*[]string{"to": change.To, "cc": change.CC, "bcc": change.BCC} {
+			if v != nil {
+				p[name] = *v
+			}
+		}
+		optional(c, p, "subject", &subject)
+		optional(c, p, "body", &body)
+		if html {
+			p["html"] = true
+		}
+		return r.call(c, "draft.update", p, false)
 	})
-	c.Flags().StringVar(&body, "body", "", "message body")
+	c.Flags().StringArrayVar(&to, "to", nil, "recipient address; repeatable; replaces the To list, and --to '' clears it")
+	c.Flags().StringArrayVar(&cc, "cc", nil, "copy recipient address; repeatable; replaces the CC list, and --cc '' clears it")
+	c.Flags().StringArrayVar(&bcc, "bcc", nil, "hidden (blind copy) recipient address; repeatable; replaces the BCC list, and --bcc '' clears it")
+	c.Flags().StringVar(&subject, "subject", "", "new subject")
+	c.Flags().StringVar(&body, "body", "", "new body, plain text unless --html; replaces the whole body, a quoted original included")
+	c.Flags().BoolVar(&html, "html", false, "--body is HTML, used unchanged; only with --body; default plain text")
 	return c
 }
 

@@ -143,7 +143,10 @@ func TestDefaultPolicyTrashesAndDraftsGreenMail(t *testing.T) {
 			d, _, err := g.DraftForward(ctx, "m2", model.Forward{To: []string{"a@example.test"}})
 			return d.ID, err
 		},
-		func() (string, error) { return g.DraftUpdate(ctx, "d1", "body") },
+		func() (string, error) {
+			id, _, err := g.DraftUpdate(ctx, "d1", model.DraftChange{Body: new("body")})
+			return id, err
+		},
 	} {
 		if _, err := call(); err != nil {
 			t.Fatal(err)
@@ -652,5 +655,53 @@ func TestPolicyAuditFailureFailsClosed(t *testing.T) {
 				t.Fatalf("provider writes=%v", w.calls)
 			}
 		})
+	}
+}
+
+// A draft update reads its message unless the policy denies it, and refuses one that is not a draft with the fixed
+// public text before the Jev check, any pending item, any record, and any write. A failed read fails closed with a
+// safe code. A change without a field, or with HTML but no body, is refused before the read.
+func TestDraftUpdateRefusesAMessageThatIsNotADraftBeforeAnyWrite(t *testing.T) {
+	body := model.DraftChange{Body: new("CANARY body")}
+	for _, tc := range []struct {
+		name     string
+		decision config.Decision
+		w        *writer
+		change   model.DraftChange
+		want     string
+		reads    int
+	}{
+		{"not a draft", config.Allow, &writer{notDraft: true}, body, "draft update refused: not a draft", 1},
+		{"not a draft under approve", config.Approve, &writer{notDraft: true}, body, "draft update refused: not a draft", 1},
+		{"failed read", config.Allow, &writer{draftErr: model.MailboxError("CANARY provider text")}, body, "MailboxError", 1},
+		{"no field", config.Allow, &writer{}, model.DraftChange{}, "invalid request", 0},
+		{"html without body", config.Allow, &writer{}, model.DraftChange{Subject: new("x"), HTML: true}, "invalid request", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.w.mailbox = &mailbox{}
+			s := scoring(0.08)
+			policy := allowAll
+			policy.Base.MailDraft = tc.decision
+			g, c, path := policyGuard(t, tc.w, nil, s, policy)
+			ctx := context.Background()
+			if _, _, err := g.DraftUpdate(ctx, "m1", tc.change); err == nil || err.Error() != tc.want {
+				t.Fatalf("err=%v want %q", err, tc.want)
+			}
+			if tc.w.draftReads != tc.reads || len(tc.w.calls) != 0 || len(s.checked()) != 0 {
+				t.Fatalf("reads=%d writes=%v checks=%v", tc.w.draftReads, tc.w.calls, s.checked())
+			}
+			if items, err := c.ListPending(ctx, 10); err != nil || len(items) != 0 {
+				t.Fatalf("pending=%v %v", items, err)
+			}
+			if got := allAuditRecords(t, path); len(got) != 0 {
+				t.Fatalf("records=%v", got)
+			}
+		})
+	}
+	// A denied update reads nothing.
+	w := &writer{mailbox: &mailbox{}, notDraft: true}
+	g, _, _ := policyGuard(t, w, nil, scoring(0.08), config.Policy{})
+	if _, _, err := g.DraftUpdate(context.Background(), "m1", body); err == nil || err.Error() != "refused by policy: mail_draft" || w.draftReads != 0 {
+		t.Fatalf("denied update: %v reads=%d", err, w.draftReads)
 	}
 }

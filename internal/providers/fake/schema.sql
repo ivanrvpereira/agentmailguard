@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS categories (
 -- categories: JSON array of category names. attachments: JSON array of file names.
 -- spf, dkim, dmarc, compauth: authentication results such as pass or fail; compauth_reason: digits.
 -- origin and source_id: how the server made the message (new, reply, or forward) and the source message ID.
--- They are NULL for seeded mail. Only drafts with origin new can be updated.
+-- They are NULL for seeded mail. Any draft can be updated, whatever its origin.
 -- thread_id: messages with the same thread_id are one conversation. NULL means the message is its own
 -- conversation: its thread ID is its message ID. Replies and forwards join the conversation of their source.
 CREATE TABLE IF NOT EXISTS messages (

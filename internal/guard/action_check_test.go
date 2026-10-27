@@ -64,10 +64,15 @@ func TestJevSeesOnlyTheAgentFieldsOfEachAction(t *testing.T) {
 			actionCall{"draft.reply", "creates a draft that the user may send later", map[string]any{"body": "<p>Thanks</p>", "html": true, "all": true, "cc": []any{"c@example.test"}, "bcc": []any{"d@example.test"},
 				"reply_recipients": map[string]any{"to": []string{"ana@example.test"}, "cc": []string{"bo@example.test"}}}}},
 		{"draft.update", func(ctx context.Context, g *guard.Guard) error {
-			_, err := g.DraftUpdate(ctx, "d1", "New body")
+			_, _, err := g.DraftUpdate(ctx, "d1", model.DraftChange{Body: new("New body")})
 			return err
 		},
 			actionCall{"draft.update", "creates a draft that the user may send later", map[string]any{"body": "New body"}}},
+		{"draft.update of lists and an HTML body", func(ctx context.Context, g *guard.Guard) error {
+			_, _, err := g.DraftUpdate(ctx, "d1", model.DraftChange{To: new([]string{"b@example.test"}), BCC: new([]string{}), Subject: new("Plan"), Body: new("<p>New</p>"), HTML: true})
+			return err
+		},
+			actionCall{"draft.update", "creates a draft that the user may send later", map[string]any{"to": []any{"b@example.test"}, "bcc": []any{}, "subject": "Plan", "body": "<p>New</p>", "html": true}}},
 		{"draft.forward", func(ctx context.Context, g *guard.Guard) error {
 			_, _, err := g.DraftForward(ctx, "m1", model.Forward{Body: "<p>FYI</p>", HTML: true, To: []string{"b@example.test"}, CC: []string{"c@example.test"}, BCC: []string{"d@example.test"}})
 			return err

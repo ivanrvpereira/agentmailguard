@@ -122,15 +122,16 @@ func (a *nativeAPI) graph(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(404)
 				return
 			}
-			if strings.Contains(r.URL.Query().Get("$select"), "conversationIndex") {
-				response(w, map[string]any{"isDraft": true, "conversationIndex": base64.StdEncoding.EncodeToString(make([]byte, 22))})
-				return
-			}
 			body := strings.Contains(r.URL.Query().Get("$select"), ",body")
 			if body {
 				a.bodyReads[id]++
 			}
-			response(w, messageJSON(id, body, a.categories[id]))
+			m := messageJSON(id, body, a.categories[id])
+			// The drafts that the workflow makes are draft-1; Graph gives a draft's recipient lists.
+			if strings.HasPrefix(id, "draft-") {
+				m["isDraft"], m["toRecipients"], m["ccRecipients"], m["bccRecipients"] = true, []any{}, []any{}, []any{}
+			}
+			response(w, m)
 			return
 		}
 		w.WriteHeader(404)

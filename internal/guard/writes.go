@@ -273,8 +273,9 @@ func (g *Guard) Categorize(ctx context.Context, ids, add, remove []string) ([]mo
 // compose applies the mail_draft decision to a draft operation, or the mail_send decision to a send, and the
 // Jev action check, then runs call. source is the message that the action references; a new message has
 // none. Reply and forward reference a received message, so the sealed decision applies to their source;
-// update acts on a draft and has no sealed check. Jev sees the agent fields, and for a forward also the text
-// of the forwarded message. call gives the draft ID; a send gives none, so its operation record has only the
+// update acts on a draft and has no sealed check, but unless the policy denies it, it is refused before the Jev
+// check and any write when its source is not a draft (onlyDraft). Jev sees the agent fields, and for a forward
+// also the text of the forwarded message. call gives the draft ID; a send gives none, so its operation record has only the
 // source ID, or no ID for a new message.
 func (g *Guard) compose(ctx context.Context, op audit.Operation, source string, args any, call func() (string, error)) (string, error) {
 	if err := g.acquire(ctx); err != nil {
@@ -297,6 +298,11 @@ func (g *Guard) compose(ctx context.Context, op audit.Operation, source string, 
 			return "", err
 		}
 		d = decisions[source]
+	}
+	if op == audit.DraftUpdate && d.value != config.Deny {
+		if err := g.onlyDraft(ctx, source); err != nil {
+			return "", err
+		}
 	}
 	d, err := g.checkAction(ctx, op, key, d, args)
 	if err != nil {
@@ -411,8 +417,39 @@ func (g *Guard) cachedVerdict(ctx context.Context, id string) model.Verdict {
 	}
 	return rows[id].Verdict
 }
-func (g *Guard) DraftUpdate(ctx context.Context, id, body string) (string, error) {
-	return g.compose(ctx, audit.DraftUpdate, id, bodyArgs{id, body}, func() (string, error) { return g.mailbox.DraftUpdate(ctx, id, body) })
+
+// DraftUpdateNotDraft is the public refusal of a draft update of a message that is not a draft.
+const DraftUpdateNotDraft = GuardError("draft update refused: not a draft")
+
+// DraftUpdate applies change to draft id and gives the draft's message ID, which may be new, and its conversation.
+// A change without a field, or with HTML but no body, is refused before any policy decision.
+func (g *Guard) DraftUpdate(ctx context.Context, id string, change model.DraftChange) (string, string, error) {
+	if id == "" || change.Empty() || change.HTMLWithoutBody() {
+		return "", "", GuardError("invalid request")
+	}
+	var thread string
+	draft, err := g.compose(ctx, audit.DraftUpdate, id, newDraftChangeArgs(id, change), func() (string, error) {
+		var draft string
+		var err error
+		draft, thread, err = g.mailbox.DraftUpdate(ctx, id, change)
+		return draft, err
+	})
+	return draft, thread, err
+}
+
+// onlyDraft reads message id and refuses it unless it is a draft. A failed read fails closed with its safe code.
+func (g *Guard) onlyDraft(ctx context.Context, id string) error {
+	draft, err := g.mailbox.ReadDraft(ctx, id)
+	if err != nil {
+		return safeErr(ctx, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !draft.IsDraft {
+		return DraftUpdateNotDraft
+	}
+	return nil
 }
 
 // SendNew, SendReply, and SendForward send mail at once under the mail_send decision. Their params and

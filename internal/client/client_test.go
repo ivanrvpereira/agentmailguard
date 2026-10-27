@@ -77,6 +77,7 @@ func TestClientDisplaysOnlyExactFixedRefusals(t *testing.T) {
 		"calendar response refused: organizer cannot respond",
 		"calendar cancel refused: comments are not supported for this account",
 		"calendar response refused: responses without notification are not supported for this account",
+		"draft update refused: not a draft",
 		"missing_scopes",
 		"refused by policy: mail_draft",
 		"refused by policy: mail_send",
