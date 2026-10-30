@@ -35,11 +35,20 @@ func TestMailboxMutationsAreLabelOnlyAndPerID(t *testing.T) {
 			return c.Mailbox().Flag(context.Background(), []string{"ok", "gone"}, model.NoFlag)
 		}, []string{}, []string{"STARRED"}, false},
 		{"move", func(c *gmail.Client) ([]model.MutationResult, error) {
-			return c.Mailbox().Move(context.Background(), []string{"ok", "gone"}, "Label_1")
+			return c.Mailbox().Move(context.Background(), []string{"ok", "gone"}, "inbox", "Label_1")
 		}, []string{"Label_1"}, []string{"INBOX"}, false},
 		{"inbox", func(c *gmail.Client) ([]model.MutationResult, error) {
-			return c.Mailbox().Move(context.Background(), []string{"ok", "gone"}, "INBOX")
+			return c.Mailbox().Move(context.Background(), []string{"ok", "gone"}, "inbox", "INBOX")
 		}, []string{"INBOX"}, []string{}, false},
+		{"move from a label", func(c *gmail.Client) ([]model.MutationResult, error) {
+			return c.Mailbox().Move(context.Background(), []string{"ok", "gone"}, "Label_2", "Label_1")
+		}, []string{"Label_1"}, []string{"Label_2"}, false},
+		{"inbox from a label", func(c *gmail.Client) ([]model.MutationResult, error) {
+			return c.Mailbox().Move(context.Background(), []string{"ok", "gone"}, "Label_2", "INBOX")
+		}, []string{"INBOX"}, []string{"Label_2"}, false},
+		{"move to its source", func(c *gmail.Client) ([]model.MutationResult, error) {
+			return c.Mailbox().Move(context.Background(), []string{"ok", "gone"}, "Label_1", "Label_1")
+		}, []string{"Label_1"}, []string{}, false},
 		{"categories", func(c *gmail.Client) ([]model.MutationResult, error) {
 			return c.Mailbox().Categorize(context.Background(), []string{"ok", "gone"}, []string{"Work"}, []string{"Work"})
 		}, []string{"Label_1"}, []string{}, false},
@@ -51,7 +60,7 @@ func TestMailboxMutationsAreLabelOnlyAndPerID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/labels" {
-					respond(w, map[string]any{"labels": []any{map[string]string{"id": "Label_1", "name": "Work", "type": "user"}}})
+					respond(w, map[string]any{"labels": []any{map[string]string{"id": "INBOX", "name": "INBOX", "type": "system"}, map[string]string{"id": "Label_1", "name": "Work", "type": "user"}, map[string]string{"id": "Label_2", "name": "Later", "type": "user"}}})
 					return
 				}
 				if r.Method != "POST" || strings.Contains(r.URL.Path, "send") {
@@ -95,7 +104,7 @@ func TestRefusedMutationsDoNotWrite(t *testing.T) {
 	}))
 	defer server.Close()
 	c := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), GmailURL: server.URL})
-	if _, err := c.Mailbox().Move(context.Background(), []string{"m"}, "TRASH"); err == nil {
+	if _, err := c.Mailbox().Move(context.Background(), []string{"m"}, "inbox", "TRASH"); err == nil {
 		t.Fatal("system move accepted")
 	}
 	if _, err := c.Mailbox().Flag(context.Background(), []string{"m"}, model.Complete); err == nil {
@@ -103,5 +112,22 @@ func TestRefusedMutationsDoNotWrite(t *testing.T) {
 	}
 	if _, err := c.Mailbox().Categorize(context.Background(), []string{"m"}, []string{"unknown"}, nil); err == nil {
 		t.Fatal("unknown category accepted")
+	}
+}
+
+func TestMoveWithAFailedLabelsReadFailsBeforeAnyModify(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.URL.Path != "/labels" {
+			t.Errorf("request after a failed labels read: %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(403)
+		respond(w, map[string]any{"error": map[string]any{"errors": []any{map[string]string{"reason": "forbidden"}}}})
+	}))
+	defer server.Close()
+	c := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), GmailURL: server.URL})
+	for _, dest := range []string{"INBOX", "Label_1"} {
+		if got, err := c.Mailbox().Move(context.Background(), []string{"m"}, "inbox", dest); err == nil || got != nil {
+			t.Fatalf("%s: results=%+v err=%v", dest, got, err)
+		}
 	}
 }

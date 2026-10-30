@@ -58,7 +58,7 @@ func (w *writer) Trash(_ context.Context, ids []string) ([]model.MutationResult,
 	w.trashed = append(w.trashed, ids...)
 	return w.write("trash", ids)
 }
-func (w *writer) Move(_ context.Context, ids []string, _ string) ([]model.MutationResult, error) {
+func (w *writer) Move(_ context.Context, ids []string, _, _ string) ([]model.MutationResult, error) {
 	return w.write("move", ids)
 }
 func (w *writer) MarkRead(_ context.Context, ids []string, read bool) ([]model.MutationResult, error) {

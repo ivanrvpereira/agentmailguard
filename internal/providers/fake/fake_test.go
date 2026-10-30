@@ -244,7 +244,7 @@ func TestMutationsChangeMessagesAndReportMissingIDsInOrder(t *testing.T) {
 	seed(t, home, `INSERT INTO folders (account, id, name) VALUES ('demo@fake.test', 'projects', 'Projects')`)
 	for _, call := range []func() ([]model.MutationResult, error){
 		func() ([]model.MutationResult, error) { return m.Archive(ctx, []string{"new"}) },
-		func() ([]model.MutationResult, error) { return m.Move(ctx, []string{"arc"}, "projects") },
+		func() ([]model.MutationResult, error) { return m.Move(ctx, []string{"arc"}, "archive", "projects") },
 		func() ([]model.MutationResult, error) { return m.MarkRead(ctx, []string{"new"}, true) },
 		func() ([]model.MutationResult, error) { return m.Flag(ctx, []string{"new"}, model.Complete) },
 		func() ([]model.MutationResult, error) {
@@ -264,7 +264,7 @@ func TestMutationsChangeMessagesAndReportMissingIDsInOrder(t *testing.T) {
 	if got := folderOf(t, m, "old"); !reflect.DeepEqual(got.Categories, []string{"Home"}) {
 		t.Fatalf("categories=%v", got.Categories)
 	}
-	if _, err := m.Move(ctx, []string{"new"}, "nowhere"); err == nil {
+	if _, err := m.Move(ctx, []string{"new"}, "archive", "nowhere"); err == nil {
 		t.Fatal("move to an unknown folder accepted")
 	}
 }
@@ -628,6 +628,29 @@ func TestThreadReturnsEveryMessageOfTheConversationNewestFirstFromEveryFolder(t 
 		if got, err := m.Thread(ctx, unknown); !errors.Is(err, model.MailboxError("NotFoundError")) || len(got) != 0 {
 			t.Errorf("%s: ids=%v err=%v", unknown, ids(got), err)
 		}
+	}
+}
+
+func TestThreadMessagesInKeepsTheConversationMessagesOfOneFolderNewestFirst(t *testing.T) {
+	m, home := mailbox(t)
+	ctx := t.Context()
+	seed(t, home, `INSERT INTO messages (account, id, folder, sender_address, subject, received_at, is_draft, thread_id) VALUES
+		('demo@fake.test', 'inbox-reply', 'inbox', 'ana@example.test', 'Re: Old report', '2026-03-05T09:00:00Z', 0, 'old'),
+		('demo@fake.test', 'sent-reply', 'sent', 'demo@fake.test', 'Re: Old report', '2026-03-02T09:00:00Z', 0, 'old'),
+		('demo@fake.test', 'reply-draft', 'drafts', 'demo@fake.test', 'Re: Old report', '2026-03-04T09:00:00Z', 1, 'old'),
+		('other', 'their-reply', 'inbox', 'ana@example.test', 'Re: Old report', '2026-03-06T09:00:00Z', 0, 'old')`)
+	for folder, want := range map[string][]string{"inbox": {"inbox-reply", "old"}, "sent": {"sent-reply"}, "archive": {}} {
+		if got, err := m.ThreadMessagesIn(ctx, "old", folder); err != nil || got == nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: ids=%#v err=%v", folder, got, err)
+		}
+	}
+	for _, unknown := range []string{"gone", "theirs"} {
+		if got, err := m.ThreadMessagesIn(ctx, unknown, "inbox"); !errors.Is(err, model.MailboxError("NotFoundError")) || len(got) != 0 {
+			t.Errorf("%s: ids=%v err=%v", unknown, got, err)
+		}
+	}
+	if got, err := m.ThreadMessagesIn(ctx, "old", "nowhere"); !errors.Is(err, model.MailboxError("NotFoundError")) || len(got) != 0 {
+		t.Errorf("unknown folder: ids=%v err=%v", got, err)
 	}
 }
 

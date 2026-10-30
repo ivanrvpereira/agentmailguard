@@ -367,6 +367,76 @@ func TestThreadReadsEveryPageOfTheConversationFilterNewestFirst(t *testing.T) {
 	}
 }
 
+func TestThreadMessagesInLooksUpTheFolderIDThenKeepsTheConversationMessagesInIt(t *testing.T) {
+	// requests holds the path and query of each request.
+	requests := []string{}
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.EscapedPath()+"?"+r.URL.RawQuery)
+		switch r.URL.EscapedPath() {
+		case "/v1.0/me/mailFolders/inbox":
+			jsonResponse(w, map[string]any{"id": "inbox-id"})
+		case "/v1.0/me/mailFolders/proj-id":
+			jsonResponse(w, map[string]any{"id": "proj-id"})
+		case "/v1.0/me/mailFolders/blank":
+			jsonResponse(w, map[string]any{"id": ""})
+		case "/v1.0/me/mailFolders/missing":
+			w.WriteHeader(404)
+			jsonResponse(w, map[string]any{"error": map[string]any{"code": "ErrorItemNotFound"}})
+		case "/v1.0/me/messages":
+			if strings.Contains(r.URL.Query().Get("$filter"), "gone") {
+				jsonResponse(w, map[string]any{"value": []any{}})
+				return
+			}
+			jsonResponse(w, map[string]any{"value": []any{
+				map[string]any{"id": "n6", "conversationId": "c-1", "receivedDateTime": "2026-03-06T09:00:00Z", "parentFolderId": "deleted-id"},
+				map[string]any{"id": "n5", "conversationId": "c-1", "receivedDateTime": "2026-03-05T09:00:00Z", "parentFolderId": "inbox-id"},
+				map[string]any{"id": "n4", "conversationId": "c-1", "receivedDateTime": "2026-03-04T09:00:00Z", "parentFolderId": "drafts-id", "isDraft": true},
+				map[string]any{"id": "n3", "conversationId": "c-1", "receivedDateTime": "2026-03-03T09:00:00Z", "parentFolderId": "proj-id"},
+				map[string]any{"id": "n2", "conversationId": "c-1", "receivedDateTime": "2026-03-02T09:00:00Z", "parentFolderId": "sent-id"},
+				map[string]any{"id": "n1", "conversationId": "c-1", "receivedDateTime": "2026-03-01T09:00:00Z", "parentFolderId": "inbox-id"},
+			}})
+		default:
+			t.Errorf("%s %s", r.Method, r.URL.EscapedPath())
+			w.WriteHeader(404)
+		}
+	})
+	b := c.Mailbox()
+	ctx := t.Context()
+	conversation := func(thread string) string {
+		return "GET /v1.0/me/messages?" + url.Values{
+			"$filter":  {"receivedDateTime ge 1900-01-01T00:00:00Z and conversationId eq '" + thread + "'"},
+			"$orderby": {"receivedDateTime desc"},
+			"$select":  {"id,from,sender,subject,receivedDateTime,toRecipients,ccRecipients,bccRecipients,parentFolderId,conversationId,isDraft,isRead,flag,categories"},
+			"$expand":  {"attachments($select=name)"},
+		}.Encode()
+	}
+	for folder, want := range map[string][]string{"inbox": {"n5", "n1"}, "proj-id": {"n3"}} {
+		requests = nil
+		if got, err := b.ThreadMessagesIn(ctx, "c-1", folder); err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: ids=%q err=%v", folder, got, err)
+		}
+		if want := []string{"GET /v1.0/me/mailFolders/" + folder + "?%24select=id", conversation("c-1")}; !reflect.DeepEqual(requests, want) {
+			t.Fatalf("%s: requests=%q\nwant %q", folder, requests, want)
+		}
+	}
+	requests = nil
+	if got, err := b.ThreadMessagesIn(ctx, "gone", "inbox"); err != model.MailboxError("Graph error 404") || len(got) != 0 {
+		t.Fatalf("unknown thread: ids=%q err=%v", got, err)
+	}
+	if want := []string{"GET /v1.0/me/mailFolders/inbox?%24select=id", conversation("gone")}; !reflect.DeepEqual(requests, want) {
+		t.Fatalf("unknown thread: requests=%q", requests)
+	}
+	for _, folder := range []string{"missing", "blank"} {
+		requests = nil
+		if got, err := b.ThreadMessagesIn(ctx, "c-1", folder); err == nil || got != nil {
+			t.Fatalf("%s: ids=%q err=%v", folder, got, err)
+		}
+		if want := []string{"GET /v1.0/me/mailFolders/" + folder + "?%24select=id"}; !reflect.DeepEqual(requests, want) {
+			t.Fatalf("%s: requests=%q", folder, requests)
+		}
+	}
+}
+
 // messagesPath is the List path of the inbox, and keyedMessagesPath is the path of its nextLinks (see nextLink);
 // inboxQuery is the query that List sends for it without a size.
 const messagesPath, keyedMessagesPath = "/v1.0/me/mailFolders/inbox/messages", "/v1.0/me/mailFolders('inbox')/messages"

@@ -58,12 +58,18 @@ func (m *mailbox) labelID(ctx context.Context, id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return labelIn(a, id), nil
+}
+
+// labelIn gives the label ID of folder id among labels a: a system label name such as inbox is that label's ID; any
+// other ID stays as given.
+func labelIn(a []label, id string) string {
 	for _, l := range a {
 		if l.Type == "system" && l.ID == strings.ToUpper(id) {
-			return l.ID, nil
+			return l.ID
 		}
 	}
-	return id, nil
+	return id
 }
 func (m *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
 	a, err := m.labels(ctx)
@@ -245,6 +251,37 @@ func (m *mailbox) Thread(ctx context.Context, thread string) ([]model.Message, e
 		return nil, err
 	}
 	slices.SortStableFunc(out, func(a, b model.Message) int { return b.ReceivedAt.Compare(a.ReceivedAt) })
+	return out, nil
+}
+
+// ThreadMessagesIn keeps the messages of Thread that carry the label of folder, which becomes a label ID as List
+// makes it. A folder that is no label of the account fails, so that a wrong folder is not an empty selection.
+// Trash and spam keep a message's other labels, such as SENT and user labels, so a folder other than TRASH or SPAM
+// skips their messages, as messages.list does by default (includeSpamTrash,
+// https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list).
+func (m *mailbox) ThreadMessagesIn(ctx context.Context, thread, folder string) ([]string, error) {
+	all, err := m.Thread(ctx, thread)
+	if err != nil {
+		return nil, err
+	}
+	a, err := m.labels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	id := labelIn(a, folder)
+	if !slices.ContainsFunc(a, func(l label) bool { return l.ID == id }) {
+		return nil, failure("Gmail", "FolderError")
+	}
+	out := []string{}
+	for _, msg := range all {
+		if !slices.Contains(msg.Folders, id) {
+			continue
+		}
+		if id != "TRASH" && id != "SPAM" && (slices.Contains(msg.Folders, "TRASH") || slices.Contains(msg.Folders, "SPAM")) {
+			continue
+		}
+		out = append(out, msg.ID)
+	}
 	return out, nil
 }
 

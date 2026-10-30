@@ -163,6 +163,31 @@ func (b *mailbox) Thread(ctx context.Context, thread string) ([]model.Message, e
 	return out, nil
 }
 
+// ThreadMessagesIn keeps the messages of Thread in folder. Messages carry the real folder ID in parentFolderId, so
+// folder, a well-known name such as inbox or a real ID, is looked up first
+// (https://learn.microsoft.com/en-us/graph/api/mailfolder-get?view=graph-rest-1.0). A failed lookup fails closed.
+func (b *mailbox) ThreadMessagesIn(ctx context.Context, thread, folder string) ([]string, error) {
+	d, err := b.c.get(ctx, b.c.endpoint("/me/mailFolders/"+escapeID(folder), url.Values{"$select": {"id"}}), false)
+	if err != nil {
+		return nil, err
+	}
+	id := text(d, "id")
+	if id == "" {
+		return nil, invalidMetadata
+	}
+	all, err := b.Thread(ctx, thread)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, m := range all {
+		if slices.Contains(m.Folders, id) {
+			out = append(out, m.ID)
+		}
+	}
+	return out, nil
+}
+
 // kql builds the $search value. KQL received takes a day and ignores any time, in the search time zone or UTC
 // without one (MS-KQL Date Tokens,
 // https://learn.microsoft.com/en-us/openspecs/sharepoint_protocols/ms-kql/21b23dbb-6c49-4d35-86e4-80fb1d66b301),

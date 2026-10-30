@@ -158,7 +158,10 @@ func (g *Guard) mutationCall(ctx context.Context, op audit.Operation, ids []stri
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			call = func(ids []string) ([]model.MutationResult, error) { return g.mailbox.Move(ctx, ids, *opts.Folder) }
+			// Moves by message ID, organizer rule moves included, take the messages from the Inbox.
+			call = func(ids []string) ([]model.MutationResult, error) {
+				return g.mailbox.Move(ctx, ids, "inbox", *opts.Folder)
+			}
 		case audit.Read, audit.Unread:
 			call = func(ids []string) ([]model.MutationResult, error) {
 				return g.mailbox.MarkRead(ctx, ids, op == audit.Read)

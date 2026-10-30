@@ -341,7 +341,7 @@ func TestMutationsAreMovesOrFixedPatchesAndFailuresIsolated(t *testing.T) {
 	})
 	b := c.Mailbox()
 	ctx := context.Background()
-	for _, call := range []func() ([]model.MutationResult, error){func() ([]model.MutationResult, error) { return b.Archive(ctx, []string{"m"}) }, func() ([]model.MutationResult, error) { return b.Trash(ctx, []string{"m"}) }, func() ([]model.MutationResult, error) { return b.Move(ctx, []string{"m"}, "folder") }, func() ([]model.MutationResult, error) { return b.Flag(ctx, []string{"m"}, model.Flagged) }, func() ([]model.MutationResult, error) {
+	for _, call := range []func() ([]model.MutationResult, error){func() ([]model.MutationResult, error) { return b.Archive(ctx, []string{"m"}) }, func() ([]model.MutationResult, error) { return b.Trash(ctx, []string{"m"}) }, func() ([]model.MutationResult, error) { return b.Move(ctx, []string{"m"}, "inbox", "folder") }, func() ([]model.MutationResult, error) { return b.Flag(ctx, []string{"m"}, model.Flagged) }, func() ([]model.MutationResult, error) {
 		return b.Categorize(ctx, []string{"m"}, []string{"Later", "Work"}, []string{"Old"})
 	}} {
 		r, err := call()
