@@ -23,13 +23,15 @@ CREATE TABLE IF NOT EXISTS categories (
 	PRIMARY KEY (account, name)
 );
 
--- messages holds all mail. Nothing is ever deleted: trash and archive are moves to those folders.
--- received_at is the time of the insert unless the row gives one.
--- to_addresses and cc_addresses: JSON arrays of addresses, for example ["ana@example.test"].
+-- messages holds all mail. Only draft delete deletes a row, a draft's; trash and archive are moves to those
+-- folders, and draft send moves the draft to sent.
+-- received_at is the time of the insert unless the row gives one; draft send sets it to the send time.
+-- to_addresses, cc_addresses, and bcc_addresses: JSON arrays of addresses, for example ["ana@example.test"].
+-- content_type: text keeps the body as plain text with its line breaks; html marks the body as HTML source.
 -- categories: JSON array of category names. attachments: JSON array of file names.
 -- spf, dkim, dmarc, compauth: authentication results such as pass or fail; compauth_reason: digits.
 -- origin and source_id: how the server made the message (new, reply, or forward) and the source message ID.
--- They are NULL for seeded mail. Only drafts with origin new can be updated.
+-- They are NULL for seeded mail. Any draft can be updated, whatever its origin.
 -- thread_id: messages with the same thread_id are one conversation. NULL means the message is its own
 -- conversation: its thread ID is its message ID. Replies and forwards join the conversation of their source.
 CREATE TABLE IF NOT EXISTS messages (
@@ -40,6 +42,7 @@ CREATE TABLE IF NOT EXISTS messages (
 	sender_address TEXT NOT NULL DEFAULT '',
 	to_addresses TEXT NOT NULL DEFAULT '[]',
 	cc_addresses TEXT NOT NULL DEFAULT '[]',
+	bcc_addresses TEXT NOT NULL DEFAULT '[]',
 	subject TEXT NOT NULL DEFAULT '',
 	body TEXT NOT NULL DEFAULT '',
 	content_type TEXT NOT NULL DEFAULT 'text' CHECK (content_type IN ('text', 'html')),

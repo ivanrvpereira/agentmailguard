@@ -71,7 +71,7 @@ func (g *Guard) calendarWrite(ctx context.Context, op audit.Operation, ref *stri
 }
 
 func (g *Guard) CalendarInvite(ctx context.Context, event model.NewEvent) (string, error) {
-	args := inviteArgs{To: event.Attendees, Optional: event.Optional, Subject: event.Subject, Body: event.Body, Start: event.Start.Format(time.RFC3339Nano), End: event.End.Format(time.RFC3339Nano), Location: event.Location, Online: event.Online}
+	args := inviteArgs{To: event.Attendees, Optional: event.Optional, Subject: event.Subject, Body: event.Body, HTML: event.HTML, Start: event.Start.Format(time.RFC3339Nano), End: event.End.Format(time.RFC3339Nano), Location: event.Location, Online: event.Online}
 	return g.calendarWrite(ctx, audit.CalendarInvite, nil, args, func() error {
 		if !calendarRangeValid(event.Start, event.End) || event.AttendeeConflict() {
 			return GuardError("invalid request")
@@ -84,7 +84,7 @@ func (g *Guard) CalendarInvite(ctx context.Context, event model.NewEvent) (strin
 // sets the end from the new or current start. A start-only move keeps the current duration.
 func (g *Guard) CalendarUpdate(ctx context.Context, id string, change model.EventChange, duration time.Duration) error {
 	_, err := g.calendarWrite(ctx, audit.CalendarUpdate, &id, updateArgs(id, change, duration), func() error {
-		if change.Empty() && duration == 0 || duration < 0 || duration > 0 && change.End != nil || change.AttendeeConflict() {
+		if change.Empty() && duration == 0 || duration < 0 || duration > 0 && change.End != nil || change.AttendeeConflict() || change.HTMLWithoutBody() {
 			return GuardError("invalid request")
 		}
 		event, err := g.calendarWritableEvent(ctx, id, asOrganizer)

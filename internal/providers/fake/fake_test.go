@@ -80,7 +80,7 @@ func TestListReturnsFolderMessagesNewestFirstWithoutBodies(t *testing.T) {
 	if got[0].Body != nil || got[0].ContentType != nil || got[0].Auth != nil {
 		t.Fatal("metadata list carried body or auth")
 	}
-	want := model.Message{ID: "new", ThreadID: "new", Sender: model.Address{Name: "Bob", Address: "bob@example.test"}, Subject: "Lunch plans", ReceivedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC), To: []model.Address{{Address: "demo@fake.test"}}, CC: []model.Address{}, Folders: []string{"inbox"}, Attachments: []string{}, Flag: model.NoFlag, Categories: []string{}}
+	want := model.Message{ID: "new", ThreadID: "new", Sender: model.Address{Name: "Bob", Address: "bob@example.test"}, Subject: "Lunch plans", ReceivedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC), To: []model.Address{{Address: "demo@fake.test"}}, CC: []model.Address{}, BCC: []model.Address{}, Folders: []string{"inbox"}, Attachments: []string{}, Flag: model.NoFlag, Categories: []string{}}
 	got[0].ReceivedAt = got[0].ReceivedAt.UTC()
 	if !reflect.DeepEqual(got[0], want) {
 		t.Fatalf("message=%+v", got[0])
@@ -280,20 +280,23 @@ func TestStatusGivesTheAccountAddressWithoutScopes(t *testing.T) {
 func TestDraftsLandInDraftsFromTheAccountAddress(t *testing.T) {
 	m, _ := mailbox(t)
 	ctx := context.Background()
-	created, err := m.DraftNew(ctx, model.NewDraft{To: []string{"ana@example.test"}, Subject: "Hello", Body: "first"})
+	draft, err := m.DraftNew(ctx, model.NewDraft{To: []string{"ana@example.test"}, Subject: "Hello", Body: "first"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	reply, err := m.DraftReply(ctx, "old", "Thanks")
+	created := draft.ID
+	replied, err := m.DraftReply(ctx, "old", model.Reply{Body: "Thanks"})
+	reply := replied.ID
 	if err != nil {
 		t.Fatal(err)
 	}
-	forward, err := m.DraftForward(ctx, "new", []string{"x@example.test"})
+	forwarded, err := m.DraftForward(ctx, "new", model.Forward{Body: "FYI", To: []string{"x@example.test"}})
+	forward := forwarded.ID
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated, err := m.DraftUpdate(ctx, created, "second"); err != nil || updated != created {
-		t.Fatalf("update=%q err=%v", updated, err)
+	if updated, thread, err := m.DraftUpdate(ctx, created, model.DraftChange{Body: new("second")}); err != nil || updated != created || thread != created {
+		t.Fatalf("update=%q thread=%q err=%v", updated, thread, err)
 	}
 	got, err := m.Get(ctx, []string{created, reply, forward}, true)
 	if err != nil {
@@ -307,7 +310,7 @@ func TestDraftsLandInDraftsFromTheAccountAddress(t *testing.T) {
 	want := []view{
 		{[]string{"ana@example.test"}, []string{"drafts"}, "Hello", "second", model.Text},
 		{[]string{"ana@example.test"}, []string{"drafts"}, "Re: Old report", "Thanks", model.Text},
-		{[]string{"x@example.test"}, []string{"drafts"}, "Fw: Lunch plans", "<p>Pizza?</p>", model.HTML},
+		{[]string{"x@example.test"}, []string{"drafts"}, "Fw: Lunch plans", "FYI", model.Text},
 	}
 	for i, d := range got {
 		to := []string{}
@@ -318,18 +321,46 @@ func TestDraftsLandInDraftsFromTheAccountAddress(t *testing.T) {
 			t.Errorf("draft %d=%+v", i, d)
 		}
 	}
-	for _, id := range []string{reply, forward, "old", "gone"} {
-		if _, err := m.DraftUpdate(ctx, id, "changed"); err == nil {
+	// Only a draft changes; a received message is not a draft.
+	for _, id := range []string{"old", "gone"} {
+		if _, _, err := m.DraftUpdate(ctx, id, model.DraftChange{Body: new("changed")}); err == nil {
 			t.Errorf("update of %s accepted", id)
 		}
 	}
 	for _, call := range []func() error{
-		func() error { _, err := m.DraftReply(ctx, "gone", "x"); return err },
-		func() error { _, err := m.DraftForward(ctx, "theirs", []string{"x@example.test"}); return err },
+		func() error { _, err := m.DraftReply(ctx, "gone", model.Reply{Body: "x"}); return err },
+		func() error {
+			_, err := m.DraftForward(ctx, "theirs", model.Forward{To: []string{"x@example.test"}})
+			return err
+		},
 	} {
 		if call() == nil {
 			t.Error("draft from a missing message accepted")
 		}
+	}
+}
+
+// Draft delete and draft send act only on a draft: a received message is refused and stays as it is, and a missing
+// message is refused.
+func TestDraftDeleteAndSendRefuseAMessageThatIsNotADraft(t *testing.T) {
+	m, _ := mailbox(t)
+	ctx := context.Background()
+	before, err := m.Get(ctx, []string{"old"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, call := range map[string]func(string) error{
+		"delete": func(id string) error { return m.DraftDelete(ctx, id) },
+		"send":   func(id string) error { return m.DraftSend(ctx, id) },
+	} {
+		for _, id := range []string{"old", "gone"} {
+			if err := call(id); err == nil {
+				t.Errorf("%s of %s accepted", name, id)
+			}
+		}
+	}
+	if after, err := m.Get(ctx, []string{"old"}, true); err != nil || !reflect.DeepEqual(after, before) {
+		t.Fatalf("received message changed: %+v %v", after, err)
 	}
 }
 
@@ -340,14 +371,14 @@ func TestSendsLandInSentAndRecordKindAndSource(t *testing.T) {
 		func() error {
 			return m.SendNew(ctx, model.NewDraft{To: []string{"ana@example.test"}, Subject: "Hello", Body: "hi"})
 		},
-		func() error { return m.SendReply(ctx, "old", "Thanks") },
-		func() error { return m.SendForward(ctx, "new", []string{"x@example.test"}) },
+		func() error { return m.SendReply(ctx, "old", model.Reply{Body: "Thanks"}) },
+		func() error { return m.SendForward(ctx, "new", model.Forward{To: []string{"x@example.test"}}) },
 	} {
 		if err := call(); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if m.SendReply(ctx, "gone", "x") == nil {
+	if m.SendReply(ctx, "gone", model.Reply{Body: "x"}) == nil {
 		t.Fatal("reply to a missing message accepted")
 	}
 	sent, err := messages(m.List(ctx, "sent", model.PageRequest{}, false))
@@ -480,15 +511,18 @@ func TestRepliesAndForwardsJoinTheSourceConversationAndNewMailStartsItsOwn(t *te
 	m, home := mailbox(t)
 	ctx := t.Context()
 	seed(t, home, `UPDATE messages SET thread_id = 'invoices' WHERE id = 'old'`)
-	created, err := m.DraftNew(ctx, model.NewDraft{To: []string{"ana@example.test"}, Subject: "Hello", Body: "first"})
+	draft, err := m.DraftNew(ctx, model.NewDraft{To: []string{"ana@example.test"}, Subject: "Hello", Body: "first"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	reply, err := m.DraftReply(ctx, "old", "Thanks")
+	created := draft.ID
+	replied, err := m.DraftReply(ctx, "old", model.Reply{Body: "Thanks"})
+	reply := replied.ID
 	if err != nil {
 		t.Fatal(err)
 	}
-	forward, err := m.DraftForward(ctx, "new", []string{"x@example.test"})
+	forwarded, err := m.DraftForward(ctx, "new", model.Forward{To: []string{"x@example.test"}})
+	forward := forwarded.ID
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,8 +537,8 @@ func TestRepliesAndForwardsJoinTheSourceConversationAndNewMailStartsItsOwn(t *te
 		func() error {
 			return m.SendNew(ctx, model.NewDraft{To: []string{"ana@example.test"}, Subject: "Hello", Body: "hi"})
 		},
-		func() error { return m.SendReply(ctx, "old", "Thanks") },
-		func() error { return m.SendForward(ctx, "new", []string{"x@example.test"}) },
+		func() error { return m.SendReply(ctx, "old", model.Reply{Body: "Thanks"}) },
+		func() error { return m.SendForward(ctx, "new", model.Forward{To: []string{"x@example.test"}}) },
 	} {
 		if err := send(); err != nil {
 			t.Fatal(err)
@@ -549,7 +583,8 @@ func TestDatabaseFromBeforeThreadsOpensAndKeepsItsMail(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(threads(list), map[string]string{"old": "old"}) {
 		t.Fatalf("list threads=%v err=%v", threads(list), err)
 	}
-	reply, err := m.DraftReply(ctx, "old", "Thanks")
+	replied, err := m.DraftReply(ctx, "old", model.Reply{Body: "Thanks"})
+	reply := replied.ID
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -630,5 +665,75 @@ func TestListAndSearchReturnOnePageAndTheNextMarker(t *testing.T) {
 				t.Errorf("%s %+v accepted: %v", name, p, ids(got.Messages))
 			}
 		}
+	}
+}
+
+// A fake-provider.db made before the bcc_addresses column gets it on the first open, and new mail keeps its
+// To, CC, and BCC lists and its body type. The draft result is the new message in its own conversation.
+func TestOlderDatabaseGetsTheBccColumnAndNewMailKeepsEveryRecipientList(t *testing.T) {
+	home := t.TempDir()
+	seed(t, home, `ALTER TABLE messages DROP COLUMN bcc_addresses`)
+	m := fake.New("demo@fake.test", home, func() time.Time { return now }).Mailbox()
+	ctx := t.Context()
+	d := model.NewDraft{To: []string{"ana@example.test"}, CC: []string{"cy@example.test"}, BCC: []string{"ed@example.test", "flo@example.test"}, Subject: "Hello", Body: "<p>Hi</p>", HTML: true}
+	draft, err := m.DraftNew(ctx, d)
+	if want := (model.DraftResult{ID: draft.ID, ThreadID: draft.ID, To: d.To, CC: d.CC, BCC: d.BCC, Subject: "Hello"}); err != nil || draft.ID == "" || !reflect.DeepEqual(draft, want) {
+		t.Fatalf("draft=%+v err=%v", draft, err)
+	}
+	if err := m.SendNew(ctx, model.NewDraft{BCC: []string{"ed@example.test"}, Body: "line one\nline two"}); err != nil {
+		t.Fatal(err)
+	}
+	sent, err := messages(m.List(ctx, "sent", model.PageRequest{}, true))
+	if err != nil || len(sent) != 1 {
+		t.Fatalf("sent=%v err=%v", sent, err)
+	}
+	got, err := m.Get(ctx, []string{draft.ID}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := func(as ...string) []model.Address {
+		out := []model.Address{}
+		for _, a := range as {
+			out = append(out, model.Address{Address: a})
+		}
+		return out
+	}
+	if g := got[0]; !reflect.DeepEqual([][]model.Address{g.To, g.CC, g.BCC}, [][]model.Address{address("ana@example.test"), address("cy@example.test"), address("ed@example.test", "flo@example.test")}) || *g.ContentType != model.HTML || *g.Body != "<p>Hi</p>" {
+		t.Fatalf("draft=%+v", g)
+	}
+	if s := sent[0]; !reflect.DeepEqual([][]model.Address{s.To, s.CC, s.BCC}, [][]model.Address{address(), address(), address("ed@example.test")}) || *s.ContentType != model.Text || *s.Body != "line one\nline two" {
+		t.Fatalf("sent=%+v", s)
+	}
+}
+
+// Reply all follows the Gmail rule: the sender, and the original To and CC as copies, without the account's address
+// and without duplicates ignoring case; for a sent message, the original To and CC. The agent's CC and BCC are added.
+// An HTML reply keeps the quoted original below the agent's HTML. ReplyRecipients gives the same recipients.
+func TestReplyAllFollowsTheGmailRuleAndHTMLRepliesQuoteTheOriginal(t *testing.T) {
+	m, home := mailbox(t)
+	ctx := t.Context()
+	seed(t, home, `UPDATE messages SET to_addresses = '["DEMO@fake.test", "bo@example.test"]', cc_addresses = '["Bo@Example.test", "cy@example.test"]' WHERE id = 'old'`,
+		`INSERT INTO messages (account, id, folder, sender_address, to_addresses, cc_addresses, subject, body, received_at) VALUES ('demo@fake.test', 'mine', 'sent', 'demo@fake.test', '["dan@example.test", "demo@fake.test"]', '["eve@example.test"]', 'Plan', 'see <you>', '2026-03-02T09:00:00Z')`)
+	if got, err := m.ReplyRecipients(ctx, "old", true); err != nil || !reflect.DeepEqual(got, model.Recipients{To: []string{"ana@example.test"}, CC: []string{"bo@example.test", "cy@example.test"}, BCC: []string{}}) {
+		t.Fatalf("recipients=%+v %v", got, err)
+	}
+	draft, err := m.DraftReply(ctx, "old", model.Reply{Body: "Thanks", All: true, CC: []string{"CY@example.test", "flo@example.test"}, BCC: []string{"gus@example.test"}})
+	want := model.DraftResult{ID: draft.ID, ThreadID: "old", To: []string{"ana@example.test"}, CC: []string{"bo@example.test", "cy@example.test", "flo@example.test"}, BCC: []string{"gus@example.test"}, Subject: "Re: Old report"}
+	if err != nil || draft.ID == "" || !reflect.DeepEqual(draft, want) {
+		t.Fatalf("draft=%+v %v", draft, err)
+	}
+	sent, err := m.DraftReply(ctx, "mine", model.Reply{Body: "<p>Hi</p>", HTML: true, All: true})
+	if err != nil || !reflect.DeepEqual([][]string{sent.To, sent.CC}, [][]string{{"dan@example.test"}, {"eve@example.test"}}) {
+		t.Fatalf("sent reply=%+v %v", sent, err)
+	}
+	got, err := m.Get(ctx, []string{draft.ID, sent.ID}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := got[0]; !reflect.DeepEqual(g.BCC, []model.Address{{Address: "gus@example.test"}}) || *g.Body != "Thanks" || *g.ContentType != model.Text {
+		t.Fatalf("draft=%+v", g)
+	}
+	if g := got[1]; *g.ContentType != model.HTML || *g.Body != "<p>Hi</p><blockquote>see &lt;you&gt;</blockquote>" {
+		t.Fatalf("html reply=%q", *g.Body)
 	}
 }

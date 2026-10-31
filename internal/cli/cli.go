@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/client"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"github.com/ivanrvpereira/agentmailguard/internal/term"
 	"github.com/ivanrvpereira/agentmailguard/internal/views"
 )
@@ -31,8 +32,14 @@ type Options struct {
 func (Options) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, "CLIOptions{redacted}") }
 
 const notes = `amg talks to the agentmailguard daemon (amgd serve) over HTTP: -H or AMG_HOST, default http://127.0.0.1:8787.
-It never starts the daemon and never changes accounts, credentials, or settings: amgd does that on the daemon host. No permanent delete.
-mail send, reply, and forward send email at once, and calendar invite, update, cancel, and respond (unless --no-notify) send meeting notifications at once, when the write policy allows them (default: deny).
+It never starts the daemon and never changes accounts, credentials, or settings: amgd does that on the daemon host. No permanent delete, except draft delete on Gmail, which deletes the draft for good.
+mail send, reply, forward, and draft send send email at once, and calendar invite, update, cancel, and respond (unless --no-notify) send meeting notifications at once, when the write policy allows them (default: deny). A send is never retried.
+--bcc recipients are hidden: the other recipients do not see them. draft new, draft update, mail send, reply, forward, calendar invite, and calendar update bodies are plain text unless --html; HTML goes unchanged, without cleaning.
+A reply goes to the sender, and with --all also to everyone on the original; its --cc and --bcc are added to those recipients. It keeps the quoted original and the conversation.
+A forward puts its --body note above the original, carries the original's attachments, and keeps the conversation. draft forward needs no recipient; mail forward needs a --to, --cc, or --bcc.
+draft update changes only the given fields of any draft: a list replaces the old one and --to '' clears it; --body replaces the whole body, quoted original included. Gmail gives the draft a new ID: use the returned id.
+draft delete and draft send act only on a draft; draft send sends the draft as it is at the provider when it runs.
+draft update, draft delete, and a second draft send withdraw a waiting draft send of that draft, also when they are refused or wait themselves; it never runs. A draft update that runs then makes a new send that waits for approval and returns its send_approval_id.
 Days in date options run from 00:00 to the end of the day on this machine's clock and time zone; the last day is included.
 Client authentication and built-in TLS are absent. Anyone who reaches the daemon can run every action that the write policy allows. Protect remote access with a tunnel.`
 
@@ -313,7 +320,7 @@ func rulesCmd(r *runner) *cobra.Command {
 
 func approvalsCmd(r *runner) *cobra.Command {
 	c := group(r, "approvals", "Write actions that wait for approval")
-	c.AddCommand(r.leaf("status ID", "Show the state of a pending write action", 1, 1, func(c *cobra.Command, args []string) error {
+	c.AddCommand(r.leaf("status ID", "Show the state of a pending write action: pending, running, done, denied, withdrawn, or failed", 1, 1, func(c *cobra.Command, args []string) error {
 		return r.call(c, "approvals.status", map[string]any{"id": args[0]}, false)
 	}))
 	return c
@@ -329,9 +336,9 @@ func mailCmd(r *runner) *cobra.Command {
 		r.leaf("read IDS...", "Mark messages as read", 1, -1, r.ids("mail.read")),
 		r.leaf("unread IDS...", "Mark messages as unread", 1, -1, r.ids("mail.unread")),
 		mailMoveCmd(r), mailFlagCmd(r), mailCategorizeCmd(r), mailOrganizeCmd(r),
-		newMessageCmd(r, "send", "mail.send", "Send a new message at once"),
-		bodyCmd(r, "reply ID", "mail.reply", "Send a reply to a message at once"),
-		forwardCmd(r, "mail.forward", "Send a forward of a message at once"))
+		newMessageCmd(r, "send", "mail.send", "Send a new message at once; needs a --to, --cc, or --bcc"),
+		replyCmd(r, "mail.reply", "Send a reply to a message at once"),
+		forwardCmd(r, "mail.forward", "Send a forward of a message at once; needs a --to, --cc, or --bcc"))
 	return c
 }
 
@@ -551,51 +558,122 @@ func calendarCmd(r *runner) *cobra.Command {
 }
 
 func draftCmd(r *runner) *cobra.Command {
-	c := group(r, "draft", "Create and update drafts without sending them")
-	c.AddCommand(newMessageCmd(r, "new", "draft.new", "Draft a new message"), bodyCmd(r, "reply ID", "draft.reply", "Draft a reply to a message"),
-		forwardCmd(r, "draft.forward", "Draft a forward of a message"), bodyCmd(r, "update ID", "draft.update", "Replace the body of a draft"))
+	c := group(r, "draft", "Create, update, and delete drafts, and send a draft")
+	del := r.leaf("delete ID", "Delete a draft: for good on Gmail, restorable on Microsoft 365 (write policy applies)", 1, 1, func(c *cobra.Command, args []string) error {
+		return r.call(c, "draft.delete", map[string]any{"id": args[0]}, false)
+	})
+	send := r.leaf("send ID", "Send a draft as it is at the provider when the send runs (write policy applies)", 1, 1, func(c *cobra.Command, args []string) error {
+		return r.call(c, "draft.send", map[string]any{"id": args[0]}, false)
+	})
+	c.AddCommand(newMessageCmd(r, "new", "draft.new", "Draft a new message"), replyCmd(r, "draft.reply", "Draft a reply to a message"),
+		forwardCmd(r, "draft.forward", "Draft a forward of a message"), draftUpdateCmd(r), del, send)
 	return c
 }
 
-// newMessageCmd runs draft.new or mail.send: both need --to, --subject, and --body.
+// newMessageCmd runs draft.new or mail.send. Every option is optional; a send needs at least one --to, --cc, or
+// --bcc.
 func newMessageCmd(r *runner, use, op, short string) *cobra.Command {
-	var to []string
-	subject, body := "", ""
+	var to, cc, bcc []string
+	subject, body, html := "", "", false
 	c := r.leaf(use, short, 0, 0, func(c *cobra.Command, _ []string) error {
-		if !c.Flags().Changed("body") || !c.Flags().Changed("subject") || len(to) == 0 {
+		if op == "mail.send" && !(model.NewDraft{To: to, CC: cc, BCC: bcc}).Addressed() {
 			return errUsage
 		}
-		return r.call(c, op, map[string]any{"to": to, "subject": subject, "body": body}, false)
+		// The API refuses null, so a list without values is sent empty.
+		list := func(v []string) []string { return append([]string{}, v...) }
+		return r.call(c, op, map[string]any{"to": list(to), "cc": list(cc), "bcc": list(bcc), "subject": subject, "body": body, "html": html}, false)
 	})
 	c.Flags().StringArrayVar(&to, "to", nil, "recipient address; repeatable")
-	c.Flags().StringVar(&subject, "subject", "", "message subject")
-	c.Flags().StringVar(&body, "body", "", "message body")
+	c.Flags().StringArrayVar(&cc, "cc", nil, "copy recipient address; repeatable")
+	c.Flags().StringArrayVar(&bcc, "bcc", nil, "hidden (blind copy) recipient address; repeatable")
+	c.Flags().StringVar(&subject, "subject", "", "message subject; default empty")
+	c.Flags().StringVar(&body, "body", "", "message body, plain text unless --html; default empty")
+	c.Flags().BoolVar(&html, "html", false, "--body is HTML, used unchanged; default plain text")
 	return c
 }
 
-// bodyCmd runs an operation on one message ID that needs --body.
-func bodyCmd(r *runner, use, op, short string) *cobra.Command {
-	body := ""
-	c := r.leaf(use, short, 1, 1, func(c *cobra.Command, args []string) error {
-		if !c.Flags().Changed("body") {
+// draftUpdateCmd runs draft.update: one draft ID and at least one field; only the given fields change. A list option
+// replaces the list, and the option given once with an empty value clears it. --html goes only with --body.
+func draftUpdateCmd(r *runner) *cobra.Command {
+	var to, cc, bcc []string
+	subject, body, html := "", "", false
+	c := r.leaf("update ID", "Change the given fields of any draft: new, reply, forward, or written in the app", 1, 1, func(c *cobra.Command, args []string) error {
+		list := func(name string, values []string) *[]string {
+			switch {
+			case !c.Flags().Changed(name):
+				return nil
+			case len(values) == 1 && values[0] == "":
+				return new([]string{})
+			}
+			return new(append([]string{}, values...))
+		}
+		text := func(name, value string) *string {
+			if !c.Flags().Changed(name) {
+				return nil
+			}
+			return &value
+		}
+		change := model.DraftChange{To: list("to", to), CC: list("cc", cc), BCC: list("bcc", bcc), Subject: text("subject", subject), Body: text("body", body), HTML: html}
+		if change.Empty() || change.HTMLWithoutBody() {
 			return errUsage
 		}
-		return r.call(c, op, map[string]any{"id": args[0], "body": body}, false)
+		p := map[string]any{"id": args[0]}
+		for name, v := range map[string]*[]string{"to": change.To, "cc": change.CC, "bcc": change.BCC} {
+			if v != nil {
+				p[name] = *v
+			}
+		}
+		optional(c, p, "subject", &subject)
+		optional(c, p, "body", &body)
+		if html {
+			p["html"] = true
+		}
+		return r.call(c, "draft.update", p, false)
 	})
-	c.Flags().StringVar(&body, "body", "", "message body")
+	c.Flags().StringArrayVar(&to, "to", nil, "recipient address; repeatable; replaces the To list, and --to '' clears it")
+	c.Flags().StringArrayVar(&cc, "cc", nil, "copy recipient address; repeatable; replaces the CC list, and --cc '' clears it")
+	c.Flags().StringArrayVar(&bcc, "bcc", nil, "hidden (blind copy) recipient address; repeatable; replaces the BCC list, and --bcc '' clears it")
+	c.Flags().StringVar(&subject, "subject", "", "new subject")
+	c.Flags().StringVar(&body, "body", "", "new body, plain text unless --html; replaces the whole body, a quoted original included")
+	c.Flags().BoolVar(&html, "html", false, "--body is HTML, used unchanged; only with --body; default plain text")
 	return c
 }
 
-// forwardCmd runs draft.forward or mail.forward: one message ID and at least one --to.
+// replyCmd runs draft.reply or mail.reply: one message ID; every option is optional.
+func replyCmd(r *runner, op, short string) *cobra.Command {
+	var cc, bcc []string
+	body, html, all := "", false, false
+	c := r.leaf("reply ID", short, 1, 1, func(c *cobra.Command, args []string) error {
+		// The API refuses null, so a list without values is sent empty.
+		list := func(v []string) []string { return append([]string{}, v...) }
+		return r.call(c, op, map[string]any{"id": args[0], "body": body, "html": html, "all": all, "cc": list(cc), "bcc": list(bcc)}, false)
+	})
+	c.Flags().BoolVar(&all, "all", false, "reply to everyone on the message, not only the sender")
+	c.Flags().StringArrayVar(&cc, "cc", nil, "copy recipient address, added to the ones the reply picks; repeatable")
+	c.Flags().StringArrayVar(&bcc, "bcc", nil, "hidden (blind copy) recipient address; repeatable")
+	c.Flags().StringVar(&body, "body", "", "reply text above the quoted original, plain text unless --html; default empty")
+	c.Flags().BoolVar(&html, "html", false, "--body is HTML, used unchanged; default plain text")
+	return c
+}
+
+// forwardCmd runs draft.forward or mail.forward: one message ID; every option is optional, but a send needs at
+// least one --to, --cc, or --bcc.
 func forwardCmd(r *runner, op, short string) *cobra.Command {
-	var to []string
+	var to, cc, bcc []string
+	body, html := "", false
 	c := r.leaf("forward ID", short, 1, 1, func(c *cobra.Command, args []string) error {
-		if len(to) == 0 {
+		if op == "mail.forward" && !(model.Forward{To: to, CC: cc, BCC: bcc}).Addressed() {
 			return errUsage
 		}
-		return r.call(c, op, map[string]any{"id": args[0], "to": to}, false)
+		// The API refuses null, so a list without values is sent empty.
+		list := func(v []string) []string { return append([]string{}, v...) }
+		return r.call(c, op, map[string]any{"id": args[0], "to": list(to), "cc": list(cc), "bcc": list(bcc), "body": body, "html": html}, false)
 	})
 	c.Flags().StringArrayVar(&to, "to", nil, "recipient address; repeatable")
+	c.Flags().StringArrayVar(&cc, "cc", nil, "copy recipient address; repeatable")
+	c.Flags().StringArrayVar(&bcc, "bcc", nil, "hidden (blind copy) recipient address; repeatable")
+	c.Flags().StringVar(&body, "body", "", "note above the forwarded message, plain text unless --html; default empty")
+	c.Flags().BoolVar(&html, "html", false, "--body is HTML, used unchanged; default plain text")
 	return c
 }
 

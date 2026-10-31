@@ -13,21 +13,24 @@ import (
 )
 
 // PendingState is the life cycle of a stored action:
-// pending -> running -> done|failed, or pending -> denied.
+// pending -> running -> done|failed, or pending -> denied, or pending -> withdrawn. denied, withdrawn, done, and
+// failed are final. Only a draft change or delete withdraws, and only waiting draft sends; a withdrawn action never runs.
 type PendingState string
 
 const (
-	StatePending PendingState = "pending"
-	StateRunning PendingState = "running"
-	StateDone    PendingState = "done"
-	StateDenied  PendingState = "denied"
-	StateFailed  PendingState = "failed"
+	StatePending   PendingState = "pending"
+	StateRunning   PendingState = "running"
+	StateDone      PendingState = "done"
+	StateDenied    PendingState = "denied"
+	StateFailed    PendingState = "failed"
+	StateWithdrawn PendingState = "withdrawn"
 )
 
-// Pending is a stored write action. Args can contain message content.
+// Pending is a stored write action. Args and Draft can contain message content.
 type Pending struct {
 	ID, Account, Op  string
 	Args             json.RawMessage
+	Draft            json.RawMessage // a draft send: the draft fields that the Jev action check saw; nil for other actions
 	State            PendingState
 	Result           *string            // provider IDs on done, safe error code on failed
 	Jev              *model.ActionCheck // nil when no Jev action check ran
@@ -40,16 +43,23 @@ var (
 	ErrPendingHandled = errors.New("pending action already handled")
 )
 
-const pendingColumns = `id, account, op, args, jev, state, result, created, updated`
+const pendingColumns = `id, account, op, args, draft, jev, state, result, created, updated`
 
-// AddPending stores an action in state pending and returns its new random ID. jev is the result of the
-// Jev action check, nil when no check ran.
-func (c *Cache) AddPending(ctx context.Context, account, op string, args json.RawMessage, jev *model.ActionCheck, now time.Time) (string, error) {
+// AddPending stores an action in state pending and returns its new random ID. draft is the draft fields of a draft
+// send, nil for other actions. jev is the result of the Jev action check, nil when no check ran.
+func (c *Cache) AddPending(ctx context.Context, account, op string, args, draft json.RawMessage, jev *model.ActionCheck, now time.Time) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	if !json.Valid(args) {
 		return "", errors.New("pending action arguments are not valid JSON")
+	}
+	var fields *string
+	if draft != nil {
+		if !json.Valid(draft) {
+			return "", errors.New("pending draft fields are not valid JSON")
+		}
+		fields = new(string(draft))
 	}
 	var check *string
 	if jev != nil {
@@ -66,8 +76,8 @@ func (c *Cache) AddPending(ctx context.Context, account, op string, args json.Ra
 	}
 	id := hex.EncodeToString(random)
 	at := iso(now)
-	if _, err := c.db.ExecContext(ctx, `INSERT INTO pending (id, account, op, args, jev, state, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, account, op, string(args), check, StatePending, at, at); err != nil {
+	if _, err := c.db.ExecContext(ctx, `INSERT INTO pending (id, account, op, args, draft, jev, state, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, account, op, string(args), fields, check, StatePending, at, at); err != nil {
 		return "", errors.New("pending action write failed")
 	}
 	return id, nil
@@ -125,8 +135,8 @@ func (c *Cache) ListPending(ctx context.Context, resolvedLimit int) ([]Pending, 
 func scanPending(row interface{ Scan(...any) error }) (Pending, error) {
 	var p Pending
 	var args, created, updated string
-	var jev *string
-	err := row.Scan(&p.ID, &p.Account, &p.Op, &args, &jev, &p.State, &p.Result, &created, &updated)
+	var draft, jev *string
+	err := row.Scan(&p.ID, &p.Account, &p.Op, &args, &draft, &jev, &p.State, &p.Result, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Pending{}, ErrPendingNotFound
 	}
@@ -134,6 +144,9 @@ func scanPending(row interface{ Scan(...any) error }) (Pending, error) {
 		return Pending{}, errors.New("pending action read failed")
 	}
 	p.Args = json.RawMessage(args)
+	if draft != nil {
+		p.Draft = json.RawMessage(*draft)
+	}
 	if jev != nil {
 		p.Jev = &model.ActionCheck{}
 		if json.Unmarshal([]byte(*jev), p.Jev) != nil {
@@ -191,6 +204,18 @@ func (c *Cache) FinishPending(ctx context.Context, id string, state PendingState
 	return err
 }
 
+// WithdrawDraftSends atomically moves pending -> withdrawn for every waiting draft.send of the account whose args
+// name draft, in one conditional UPDATE, and returns the withdrawn actions; none gives an empty list. An action in any
+// other state, such as one that a claim already moved to running, is not changed.
+func (c *Cache) WithdrawDraftSends(ctx context.Context, account, draft string, now time.Time) ([]Pending, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	rows, err := c.db.QueryContext(ctx, `UPDATE pending SET state = ?, updated = ? WHERE account = ? AND op = 'draft.send' AND state = ? AND json_extract(args, '$.id') = ? RETURNING `+pendingColumns,
+		StateWithdrawn, iso(now), account, StatePending, draft)
+	return changed(ctx, rows, err)
+}
+
 // AccountRemoved is the result code of the pending actions that DenyAccount denies.
 const AccountRemoved = "account_removed"
 
@@ -202,7 +227,16 @@ func (c *Cache) DenyAccount(ctx context.Context, account string, now time.Time) 
 	}
 	rows, err := c.db.QueryContext(ctx, `UPDATE pending SET state = ?, result = ?, updated = ? WHERE account = ? AND state = ? RETURNING `+pendingColumns,
 		StateDenied, AccountRemoved, iso(now), account, StatePending)
+	return changed(ctx, rows, err)
+}
+
+// changed reads the actions that an UPDATE ... RETURNING changed. A cancellation gives ctx.Err(); other failures
+// give fixed text.
+func changed(ctx context.Context, rows *sql.Rows, err error) ([]Pending, error) {
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, errors.New("pending action write failed")
 	}
 	defer rows.Close()

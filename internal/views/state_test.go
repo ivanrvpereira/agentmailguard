@@ -17,7 +17,7 @@ func TestScreeningStateMatchesPythonExplicitFields(t *testing.T) {
 		state map[string]any
 		want  string
 	}{
-		{"mail", views.ScreeningState(model.Message{ID: "not-screened", IsRead: true, Flag: model.Flagged, Categories: []string{"not-screened"}}, r), `{"sender":{"name":"","address":""},"subject":"","to":[],"cc":[],"attachments":[],"auth":{},"body":"Visible","links":{"L1":"example.test"}}`},
+		{"mail", views.ScreeningState(model.Message{ID: "not-screened", IsRead: true, Flag: model.Flagged, Categories: []string{"not-screened"}}, r), `{"sender":{"name":"","address":""},"subject":"","to":[],"cc":[],"bcc":[],"attachments":[],"auth":{},"body":"Visible","links":{"L1":"example.test"}}`},
 		{"event", views.EventScreeningState(model.Event{ID: "not-screened"}, &r), `{"subject":"","all_day":false,"recurrence":null,"location":"","organizer":{"name":"","address":""},"attendees":[],"join_url":null,"attachments":[],"categories":[],"show_as":"","cancelled":false,"body":"Visible","links":{"L1":"example.test"},"truncated":true}`},
 		{"private event", views.EventScreeningState(model.Event{ID: "not-screened", IsPrivate: true}, &r), `{"subject":"","all_day":false,"recurrence":null,"location":"","organizer":{"name":"","address":""},"attendees":[],"join_url":null,"attachments":[],"categories":[],"show_as":"","cancelled":false}`},
 	}

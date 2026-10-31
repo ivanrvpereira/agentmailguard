@@ -27,7 +27,7 @@ func TestPolicyDefaultsWithoutPolicyTables(t *testing.T) {
 			MailTrash: "allow", MailDraft: "allow", MailSend: "deny",
 			CalendarInvite: "deny", CalendarUpdate: "deny", CalendarCancel: "deny", CalendarRespond: "deny",
 		},
-		Sealed: config.SealedDecisions{MailTrash: "deny", MailDraft: "deny", MailSend: "deny"},
+		Sealed: config.SealedDecisions{MailTrash: "deny"},
 	}
 	if got != want {
 		t.Fatalf("policy=%+v", got)
@@ -85,7 +85,6 @@ default_account = "personal"
 mail_trash = "deny"
 [policy.sealed]
 mail_trash = "approve"
-mail_draft = "allow"
 [accounts.personal]
 provider = "m365"
 email = "personal@example.test"
@@ -99,13 +98,30 @@ email = "other@example.test"
 client_id = "c"
 tenant_id = "t"
 `)
-	personal := config.SealedDecisions{MailTrash: "allow", MailDraft: "allow", MailSend: "deny"}
-	other := config.SealedDecisions{MailTrash: "approve", MailDraft: "allow", MailSend: "deny"}
+	personal := config.SealedDecisions{MailTrash: "allow"}
+	other := config.SealedDecisions{MailTrash: "approve"}
 	if got["personal"].Sealed != personal || got["other"].Sealed != other {
 		t.Fatalf("personal=%+v other=%+v", got["personal"].Sealed, got["other"].Sealed)
 	}
 	if got["personal"].Base.MailTrash != "deny" {
 		t.Fatalf("sealed table changed the base decision: %+v", got["personal"].Base)
+	}
+}
+
+// Replies and forwards of a sealed message are always refused, so the sealed tables accept only mail_trash.
+func TestSealedTablesRefuseMailDraftAndMailSend(t *testing.T) {
+	for _, tc := range []struct{ text, path string }{
+		{"[policy.sealed]\nmail_draft = 'allow'\n" + work, "policy.sealed.mail_draft"},
+		{"[policy.sealed]\nmail_send = 'deny'\n" + work, "policy.sealed.mail_send"},
+		{work + "[accounts.work.policy.sealed]\nmail_draft = 'deny'\n", "accounts.work.policy.sealed.mail_draft"},
+		{work + "[accounts.work.policy.sealed]\nmail_send = 'approve'\n", "accounts.work.policy.sealed.mail_send"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			_, err := parse(t, head+tc.text)
+			if err == nil || err.Error() != "config.toml: "+tc.path+": unknown key" {
+				t.Fatalf("error=%v, want unknown key at %s", err, tc.path)
+			}
+		})
 	}
 }
 

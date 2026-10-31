@@ -65,6 +65,10 @@ func (p *Provider) conn(ctx context.Context) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, storageError
 	}
+	if err := addColumn(ctx, db, "messages", "bcc_addresses", "TEXT NOT NULL DEFAULT '[]'"); err != nil {
+		_ = db.Close()
+		return nil, storageError
+	}
 	_, err = db.ExecContext(ctx, `INSERT OR IGNORE INTO folders (account, id, name) VALUES (?1, 'inbox', 'Inbox'), (?1, 'drafts', 'Drafts'), (?1, 'sent', 'Sent'), (?1, 'archive', 'Archive'), (?1, 'trash', 'Trash')`, p.account)
 	if err != nil {
 		_ = db.Close()

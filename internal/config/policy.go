@@ -23,9 +23,10 @@ type Decisions struct {
 	CalendarInvite, CalendarUpdate, CalendarCancel, CalendarRespond Decision
 }
 
-// SealedDecisions applies to actions on an existing message with the verdict sealed.
+// SealedDecisions applies to actions on an existing message with the verdict sealed. It has only mail_trash:
+// the guard always refuses replies to and forwards of a sealed message.
 type SealedDecisions struct {
-	MailTrash, MailDraft, MailSend Decision
+	MailTrash Decision
 }
 
 // Policy is the fully resolved write policy of one account.
@@ -55,13 +56,8 @@ func (d *Decisions) field(key string) *Decision {
 }
 
 func (s *SealedDecisions) field(key string) *Decision {
-	switch key {
-	case "mail_trash":
+	if key == "mail_trash" {
 		return &s.MailTrash
-	case "mail_draft":
-		return &s.MailDraft
-	case "mail_send":
-		return &s.MailSend
 	}
 	return nil
 }
@@ -89,7 +85,7 @@ var DefaultPolicy = Policy{
 		MailTrash: Allow, MailDraft: Allow, MailSend: Deny,
 		CalendarInvite: Deny, CalendarUpdate: Deny, CalendarCancel: Deny, CalendarRespond: Deny,
 	},
-	Sealed: SealedDecisions{MailTrash: Deny, MailDraft: Deny, MailSend: Deny},
+	Sealed: SealedDecisions{MailTrash: Deny},
 }
 
 // globalPolicy is the default policy with the [policy] table applied. Each account table applies on top of it.

@@ -64,12 +64,12 @@ func TestEditRefusesAnInvalidResultAndKeepsTheFile(t *testing.T) {
 
 func TestEditKeepsEveryValueAndDropsComments(t *testing.T) {
 	path := file(t, "# my comment\n"+head+"[console]\nlisten = '127.0.0.1:9000' # inline\n"+work+"[accounts.work.policy]\ncalendar_update = 'allow'\n")
-	got, err := edit(t, path, "accounts.work.policy.sealed.mail_send", "approve")
+	got, err := edit(t, path, "accounts.work.policy.sealed.mail_trash", "approve")
 	if err != nil {
 		t.Fatal(err)
 	}
 	a := got.Accounts[0]
-	if got.Console.Listen != "127.0.0.1:9000" || a.Email != "work@example.test" || a.ClientID != "c" || a.Policy.Base.CalendarUpdate != config.Allow || a.Policy.Sealed.MailSend != config.Approve {
+	if got.Console.Listen != "127.0.0.1:9000" || a.Email != "work@example.test" || a.ClientID != "c" || a.Policy.Base.CalendarUpdate != config.Allow || a.Policy.Sealed.MailTrash != config.Approve {
 		t.Fatalf("config=%+v account=%+v", got, a.Policy)
 	}
 	data, _ := os.ReadFile(path)
@@ -128,24 +128,26 @@ func TestParseKeyRefusesIdentityVersionSecretsAndUnknownKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	for key, want := range map[string]string{
-		"accounts.work.email":            "accounts.work.email changes only with amgd account remove and amgd account add",
-		"accounts.work.provider":         "accounts.work.provider changes only with amgd account remove and amgd account add",
-		"accounts.work.client_secret":    "unknown key accounts.work.client_secret",
-		"accounts.home.policy.mail_send": "unknown account home; run amgd account add",
-		"version":                        "version is fixed; this program writes version = 1",
-		"screening.api_key":              "screening.api_key is a secret; run amgd config set screening.api_key and give the value on stdin",
-		"console.password":               "console.password is a secret; run amgd config set console.password and give the value on stdin",
-		"policy.mail_sned":               "unknown key policy.mail_sned",
-		"policy.sealed.calendar_invite":  "unknown key policy.sealed.calendar_invite",
-		"approvals.listen":               "unknown key approvals.listen",
-		"policy":                         "unknown key policy",
+		"accounts.work.email":                   "accounts.work.email changes only with amgd account remove and amgd account add",
+		"accounts.work.provider":                "accounts.work.provider changes only with amgd account remove and amgd account add",
+		"accounts.work.client_secret":           "unknown key accounts.work.client_secret",
+		"accounts.home.policy.mail_send":        "unknown account home; run amgd account add",
+		"version":                               "version is fixed; this program writes version = 1",
+		"screening.api_key":                     "screening.api_key is a secret; run amgd config set screening.api_key and give the value on stdin",
+		"console.password":                      "console.password is a secret; run amgd config set console.password and give the value on stdin",
+		"policy.mail_sned":                      "unknown key policy.mail_sned",
+		"policy.sealed.calendar_invite":         "unknown key policy.sealed.calendar_invite",
+		"policy.sealed.mail_draft":              "unknown key policy.sealed.mail_draft",
+		"accounts.work.policy.sealed.mail_send": "unknown key accounts.work.policy.sealed.mail_send",
+		"approvals.listen":                      "unknown key approvals.listen",
+		"policy":                                "unknown key policy",
 	} {
 		if _, err := config.ParseKey(c, key); err == nil || err.Error() != want {
 			t.Errorf("%s: error=%v, want %q", key, err, want)
 		}
 	}
 	for key, choice := range map[string]bool{
-		"policy.mail_send": true, "policy.sealed.mail_trash": true, "accounts.work.policy.calendar_update": true, "accounts.work.policy.sealed.mail_draft": true,
+		"policy.mail_send": true, "policy.sealed.mail_trash": true, "accounts.work.policy.calendar_update": true, "accounts.work.policy.sealed.mail_trash": true,
 		"screening.provider": true, "credentials.backend": true,
 		"screening.endpoint": false, "screening.model": false, "console.listen": false, "console.hosts": false, "console.username": false, "default_account": false,
 		"accounts.work.client_id": false, "accounts.work.tenant_id": false,
@@ -174,24 +176,29 @@ func TestListShowsEffectiveValuesAndMarksDefaults(t *testing.T) {
 		}
 	}
 	for key, want := range map[string]config.Setting{
-		"version":                               {Key: "version", Value: "1"},
-		"default_account":                       {Key: "default_account", Value: "work"},
-		"policy.mail_send":                      {Key: "policy.mail_send", Value: "approve"},
-		"policy.mail_trash":                     {Key: "policy.mail_trash", Value: "allow", Default: true},
-		"accounts.work.policy.mail_send":        {Key: "accounts.work.policy.mail_send", Value: "approve", Default: true},
-		"accounts.home.policy.mail_send":        {Key: "accounts.home.policy.mail_send", Value: "deny"},
-		"accounts.home.client_secret":           {Key: "accounts.home.client_secret", Value: "set", Secret: true},
-		"accounts.work.email":                   {Key: "accounts.work.email", Value: "work@example.test"},
-		"console.listen":                        {Key: "console.listen", Value: "localhost:8788", Default: true},
-		"console.username":                      {Key: "console.username", Value: "admin", Default: true},
-		"credentials.backend":                   {Key: "credentials.backend", Value: "file", Default: true},
-		"screening.provider":                    {Key: "screening.provider", Value: "jev", Default: true},
-		"screening.endpoint":                    {Key: "screening.endpoint", Default: true},
-		"screening.model":                       {Key: "screening.model", Default: true},
-		"accounts.home.policy.sealed.mail_send": {Key: "accounts.home.policy.sealed.mail_send", Value: "deny", Default: true},
+		"version":                                {Key: "version", Value: "1"},
+		"default_account":                        {Key: "default_account", Value: "work"},
+		"policy.mail_send":                       {Key: "policy.mail_send", Value: "approve"},
+		"policy.mail_trash":                      {Key: "policy.mail_trash", Value: "allow", Default: true},
+		"accounts.work.policy.mail_send":         {Key: "accounts.work.policy.mail_send", Value: "approve", Default: true},
+		"accounts.home.policy.mail_send":         {Key: "accounts.home.policy.mail_send", Value: "deny"},
+		"accounts.home.client_secret":            {Key: "accounts.home.client_secret", Value: "set", Secret: true},
+		"accounts.work.email":                    {Key: "accounts.work.email", Value: "work@example.test"},
+		"console.listen":                         {Key: "console.listen", Value: "localhost:8788", Default: true},
+		"console.username":                       {Key: "console.username", Value: "admin", Default: true},
+		"credentials.backend":                    {Key: "credentials.backend", Value: "file", Default: true},
+		"screening.provider":                     {Key: "screening.provider", Value: "jev", Default: true},
+		"screening.endpoint":                     {Key: "screening.endpoint", Default: true},
+		"screening.model":                        {Key: "screening.model", Default: true},
+		"accounts.home.policy.sealed.mail_trash": {Key: "accounts.home.policy.sealed.mail_trash", Value: "deny", Default: true},
 	} {
 		if got[key] != want {
 			t.Errorf("%s=%+v, want %+v", key, got[key], want)
+		}
+	}
+	for key := range got {
+		if strings.Contains(key, ".sealed.") && !strings.HasSuffix(key, ".sealed.mail_trash") {
+			t.Errorf("listed sealed key %s; the sealed tables accept only mail_trash", key)
 		}
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,22 +19,22 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/rules"
 )
 
-// defaultPolicy is the shipped default from the plan: mail allowed, calendar denied, sealed denied.
+// defaultPolicy is the shipped default from the plan: mail allowed, calendar denied, sealed trash denied.
 var defaultPolicy = config.Policy{
 	Base: config.Decisions{
 		MailTrash: config.Allow, MailDraft: config.Allow, MailSend: config.Deny,
 		CalendarInvite: config.Deny, CalendarUpdate: config.Deny, CalendarCancel: config.Deny, CalendarRespond: config.Deny,
 	},
-	Sealed: config.SealedDecisions{MailTrash: config.Deny, MailDraft: config.Deny, MailSend: config.Deny},
+	Sealed: config.SealedDecisions{MailTrash: config.Deny},
 }
 
-// allowAll keeps the behavior from before the policy: every write runs and nothing is looked up.
+// allowAll allows every write. A reply or forward still looks up its source, which must not be sealed.
 var allowAll = config.Policy{
 	Base: config.Decisions{
 		MailTrash: config.Allow, MailDraft: config.Allow, MailSend: config.Allow,
 		CalendarInvite: config.Allow, CalendarUpdate: config.Allow, CalendarCancel: config.Allow, CalendarRespond: config.Allow,
 	},
-	Sealed: config.SealedDecisions{MailTrash: config.Allow, MailDraft: config.Allow, MailSend: config.Allow},
+	Sealed: config.SealedDecisions{MailTrash: config.Allow},
 }
 
 // policyGuard builds a guard over mail b and calendar cal with the given policy.
@@ -73,7 +74,7 @@ func TestEmptyPolicyDeniesEveryPolicyWrite(t *testing.T) {
 	}
 }
 
-// subjectScreener gives each message the verdict for its subject, green otherwise. message(id) uses the ID as subject.
+// subjectScreener gives each message the verdict for its subject, with a score that fits it, green otherwise. message(id) uses the ID as subject.
 type subjectScreener struct {
 	model.Screener
 	mu       sync.Mutex
@@ -91,6 +92,10 @@ func (s *subjectScreener) Screen(_ context.Context, state map[string]any) (model
 		return model.Screening{Verdict: model.Error, Error: new("Error")}, nil
 	case "":
 		return model.Screening{Verdict: model.Green, Score: new(0.0)}, nil
+	case model.Yellow:
+		return model.Screening{Verdict: v, Score: new(0.35)}, nil
+	case model.Red:
+		return model.Screening{Verdict: v, Score: new(0.9)}, nil
 	default:
 		return model.Screening{Verdict: v, Score: new(0.0)}, nil
 	}
@@ -126,16 +131,29 @@ func TestDefaultPolicyTrashesAndDraftsGreenMail(t *testing.T) {
 		t.Fatalf("trash=%+v %v", got, err)
 	}
 	for _, call := range []func() (string, error){
-		func() (string, error) { return g.DraftNew(ctx, model.NewDraft{To: []string{"a@example.test"}}) },
-		func() (string, error) { return g.DraftReply(ctx, "m2", "reply") },
-		func() (string, error) { return g.DraftForward(ctx, "m2", []string{"a@example.test"}) },
-		func() (string, error) { return g.DraftUpdate(ctx, "d1", "body") },
+		func() (string, error) {
+			d, err := g.DraftNew(ctx, model.NewDraft{To: []string{"a@example.test"}})
+			return d.ID, err
+		},
+		func() (string, error) {
+			d, _, err := g.DraftReply(ctx, "m2", model.Reply{Body: "reply"})
+			return d.ID, err
+		},
+		func() (string, error) {
+			d, _, err := g.DraftForward(ctx, "m2", model.Forward{To: []string{"a@example.test"}})
+			return d.ID, err
+		},
+		func() (string, error) {
+			d, err := g.DraftUpdate(ctx, "d1", model.DraftChange{Body: new("body")})
+			return d.ID, err
+		},
+		func() (string, error) { return "", g.DraftDelete(ctx, "d1") },
 	} {
 		if _, err := call(); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if want := []string{"trash", "draft_new", "draft_reply", "draft_forward", "draft_update"}; !reflect.DeepEqual(w.calls, want) {
+	if want := []string{"trash", "draft_new", "draft_reply", "draft_forward", "draft_update", "draft_delete"}; !reflect.DeepEqual(w.calls, want) {
 		t.Fatalf("provider writes=%v want %v", w.calls, want)
 	}
 }
@@ -155,16 +173,120 @@ func TestDefaultSealedDecisionRefusesSealedAndErrorMessages(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(got, []model.MutationResult{refusal("m1", "mail_trash")}) {
 				t.Fatalf("trash=%+v %v", got, err)
 			}
-			if _, err := g.DraftReply(ctx, "m1", "reply"); err == nil || err.Error() != "refused by policy: mail_draft" {
+			if _, _, err := g.DraftReply(ctx, "m1", model.Reply{Body: "reply"}); err == nil || err.Error() != "refused by policy: mail_draft" {
 				t.Fatalf("reply=%v", err)
 			}
-			if _, err := g.DraftForward(ctx, "m1", []string{"a@example.test"}); err == nil || err.Error() != "refused by policy: mail_draft" {
+			if _, _, err := g.DraftForward(ctx, "m1", model.Forward{To: []string{"a@example.test"}}); err == nil || err.Error() != "refused by policy: mail_draft" {
 				t.Fatalf("forward=%v", err)
 			}
 			if len(w.calls) != 0 || s.count() != 1 {
 				t.Fatalf("provider writes=%v screenings=%d; want none and only the first read", w.calls, s.count())
 			}
 		})
+	}
+}
+
+// sourceCalls are the writes that reply to or forward the existing message m1, with their policy key.
+var sourceCalls = []struct {
+	op, key string
+	call    func(context.Context, *guard.Guard) error
+}{
+	{"draft.reply", "mail_draft", func(ctx context.Context, g *guard.Guard) error {
+		_, _, err := g.DraftReply(ctx, "m1", model.Reply{Body: "CANARY reply"})
+		return err
+	}},
+	{"draft.forward", "mail_draft", func(ctx context.Context, g *guard.Guard) error {
+		_, _, err := g.DraftForward(ctx, "m1", model.Forward{Body: "CANARY note", To: []string{"CANARY@example.test"}})
+		return err
+	}},
+	{"mail.reply", "mail_send", func(ctx context.Context, g *guard.Guard) error {
+		return g.SendReply(ctx, "m1", model.Reply{Body: "CANARY reply"})
+	}},
+	{"mail.forward", "mail_send", func(ctx context.Context, g *guard.Guard) error {
+		return g.SendForward(ctx, "m1", model.Forward{Body: "CANARY note", To: []string{"CANARY@example.test"}})
+	}},
+}
+
+// approveAll holds every write for approval.
+var approveAll = config.Policy{
+	Base: config.Decisions{
+		MailTrash: config.Approve, MailDraft: config.Approve, MailSend: config.Approve,
+		CalendarInvite: config.Approve, CalendarUpdate: config.Approve, CalendarCancel: config.Approve, CalendarRespond: config.Approve,
+	},
+	Sealed: config.SealedDecisions{MailTrash: config.Approve},
+}
+
+// A red source refuses with the reason red; sealed, error, and unreadable sources with the reason sealed. The
+// source is screened in the decision, because it has no cached verdict.
+func TestReplyAndForwardOfARedOrSealedSourceAreAlwaysRefused(t *testing.T) {
+	sources := map[string]struct {
+		messages []model.Message
+		verdict  model.Verdict
+		reason   string
+	}{
+		"red":              {messages("m1"), model.Red, "red"},
+		"sealed":           {messages("m1"), model.Sealed, "sealed"},
+		"screening failed": {messages("m1"), model.Error, "sealed"},
+		"unreadable":       {nil, "", "sealed"},
+	}
+	for name, policy := range map[string]config.Policy{"allow": allowAll, "approve": approveAll} {
+		for source, src := range sources {
+			for _, tc := range sourceCalls {
+				t.Run(name+"/"+source+"/"+tc.op, func(t *testing.T) {
+					w := &writer{mailbox: &mailbox{messages: src.messages}}
+					s := &actionScreener{subjectScreener: &subjectScreener{verdicts: map[string]model.Verdict{"m1": src.verdict}}, check: model.ActionScore(0)}
+					g, c, path := policyGuard(t, w, nil, s, policy)
+					ctx := context.Background()
+					if err := tc.call(ctx, g); err == nil || err.Error() != "refused by policy: "+tc.key {
+						t.Fatalf("error=%v", err)
+					}
+					if len(w.calls) != 0 || len(s.checked()) != 0 {
+						t.Fatalf("provider writes=%v checks=%v", w.calls, s.checked())
+					}
+					records := policyRecords(t, path)
+					for _, r := range records {
+						delete(r, "time")
+					}
+					want := []map[string]any{{"account": "work", "event": "policy", "operation": tc.op, "key": tc.key, "decision": "deny", "reasons": []any{"policy", src.reason}, "id": "m1"}}
+					if !reflect.DeepEqual(records, want) || len(auditRecords(t, path)) != 0 {
+						t.Fatalf("records=%v\nwant   %v", allAuditRecords(t, path), want)
+					}
+					if items, err := c.ListPending(ctx, 10); err != nil || len(items) != 0 {
+						t.Fatalf("pending items=%+v %v", items, err)
+					}
+				})
+			}
+		}
+	}
+}
+
+// The forwarded text of a yellow message is not shown, so the Jev check of its forward fails and holds an allowed
+// forward; the policy record then has the reasons policy and jev_error, and never sealed or red.
+func TestReplyAndForwardOfAGreenOrYellowSourceKeepTheBaseDecision(t *testing.T) {
+	for _, verdict := range []model.Verdict{model.Green, model.Yellow} {
+		for _, tc := range sourceCalls {
+			for name, policy := range map[string]config.Policy{"allow": allowAll, "approve": approveAll} {
+				t.Run(string(verdict)+"/"+tc.op+"/"+name, func(t *testing.T) {
+					hidden := verdict != model.Green && strings.HasSuffix(tc.op, ".forward")
+					decision, reasons := name, []any{"policy"}
+					if hidden {
+						decision, reasons = "approve", []any{"policy", "jev_error"}
+					}
+					w := &writer{mailbox: &mailbox{messages: messages("m1")}}
+					s := &actionScreener{subjectScreener: &subjectScreener{verdicts: map[string]model.Verdict{"m1": verdict}}, check: model.ActionScore(0)}
+					g, _, path := policyGuard(t, w, nil, s, policy)
+					err := tc.call(context.Background(), g)
+					var pending guard.PendingError
+					if decision == "allow" && (err != nil || len(w.calls) != 1) || decision == "approve" && (!errors.As(err, &pending) || len(w.calls) != 0) {
+						t.Fatalf("error=%v writes=%v; want %s", err, w.calls, decision)
+					}
+					records := policyRecords(t, path)
+					if len(records) == 0 || records[0]["decision"] != decision || !reflect.DeepEqual(records[0]["reasons"], reasons) {
+						t.Fatalf("records=%v; want decision %s reasons %v", records, decision, reasons)
+					}
+				})
+			}
+		}
 	}
 }
 
@@ -192,8 +314,37 @@ func TestMissingVerdictIsScreenedBeforeTheDecision(t *testing.T) {
 	w := &writer{mailbox: &mailbox{messages: messages("m1")}}
 	s := &subjectScreener{verdicts: map[string]model.Verdict{"m1": model.Sealed}}
 	g, _, _ := policyGuard(t, w, nil, s, defaultPolicy)
-	if _, err := g.DraftReply(context.Background(), "m1", "reply"); err == nil || err.Error() != "refused by policy: mail_draft" || s.count() != 1 || len(w.calls) != 0 {
+	if _, _, err := g.DraftReply(context.Background(), "m1", model.Reply{Body: "reply"}); err == nil || err.Error() != "refused by policy: mail_draft" || s.count() != 1 || len(w.calls) != 0 {
 		t.Fatalf("reply to unscreened sealed source: %v screenings=%d writes=%v", err, s.count(), w.calls)
+	}
+}
+
+// The sealed trash decision is stricter here, so the message is screened, but a red message is not sealed: its
+// trash keeps the base decision, and a held trash has only the reason policy.
+func TestTrashOfARedMessageKeepsTheBaseDecision(t *testing.T) {
+	for _, base := range []config.Decision{config.Allow, config.Approve} {
+		t.Run(string(base), func(t *testing.T) {
+			w := &writer{mailbox: &mailbox{messages: messages("m1")}}
+			s := &subjectScreener{verdicts: map[string]model.Verdict{"m1": model.Red}}
+			policy := defaultPolicy
+			policy.Base.MailTrash = base
+			g, _, path := policyGuard(t, w, nil, s, policy)
+			got, err := g.Trash(context.Background(), []string{"m1"})
+			if err != nil || len(got) != 1 || s.count() != 1 {
+				t.Fatalf("trash=%+v %v screenings=%d", got, err, s.count())
+			}
+			want := []string{"trash"}
+			if base == config.Approve {
+				want = nil
+			}
+			if !reflect.DeepEqual(w.calls, want) {
+				t.Fatalf("trash=%+v writes=%v; want %v", got[0], w.calls, want)
+			}
+			records := policyRecords(t, path)
+			if len(records) == 0 || records[0]["event"] != "policy" || records[0]["decision"] != string(base) || !reflect.DeepEqual(records[0]["reasons"], []any{"policy"}) {
+				t.Fatalf("records=%v; want decision %s reasons [policy]", records, base)
+			}
+		})
 	}
 }
 
@@ -208,13 +359,13 @@ func TestFailedVerdictLookupCountsAsSealed(t *testing.T) {
 
 func TestSealedDecisionThatIsNotStricterSkipsTheLookup(t *testing.T) {
 	sealedAllow := defaultPolicy
-	sealedAllow.Sealed.MailTrash, sealedAllow.Sealed.MailDraft = config.Allow, config.Allow
+	sealedAllow.Sealed.MailTrash = config.Allow
 	bothDeny := defaultPolicy
 	bothDeny.Base.MailTrash, bothDeny.Base.MailDraft = config.Deny, config.Deny
 	for name, tc := range map[string]struct {
 		policy config.Policy
 		trash  model.MutationResult
-		draft  string
+		draft  string // the refusal of a reply; empty skips the reply, which looks up its source unless denied
 	}{
 		"sealed allow": {sealedAllow, model.MutationResult{ID: "m1", OK: true}, ""},
 		"both deny":    {bothDeny, refusal("m1", "mail_trash"), "refused by policy: mail_draft"},
@@ -229,9 +380,10 @@ func TestSealedDecisionThatIsNotStricterSkipsTheLookup(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(got, []model.MutationResult{tc.trash}) {
 				t.Fatalf("trash=%+v %v", got, err)
 			}
-			_, err = g.DraftReply(ctx, "m1", "reply")
-			if tc.draft == "" && err != nil || tc.draft != "" && (err == nil || err.Error() != tc.draft) {
-				t.Fatalf("reply=%v want %q", err, tc.draft)
+			if tc.draft != "" {
+				if _, _, err := g.DraftReply(ctx, "m1", model.Reply{Body: "reply"}); err == nil || err.Error() != tc.draft {
+					t.Fatalf("reply=%v want %q", err, tc.draft)
+				}
 			}
 			if s.count() != 0 || len(b.gets) != 0 {
 				t.Fatalf("looked up the verdict: screenings=%d fetches=%v", s.count(), b.gets)
@@ -483,7 +635,7 @@ func TestPolicyAuditRecordsHoldIDsAndCodesOnly(t *testing.T) {
 	}
 	policy.Base.MailDraft = config.Deny
 	g, _, path2 := policyGuard(t, w, nil, s, policy)
-	if _, err := g.DraftReply(ctx, "m3", "CANARY"); err == nil {
+	if _, _, err := g.DraftReply(ctx, "m3", model.Reply{Body: "CANARY"}); err == nil {
 		t.Fatal("denied reply ran")
 	}
 	strip := func(records []map[string]any) []map[string]any {
@@ -535,6 +687,116 @@ func TestPolicyAuditFailureFailsClosed(t *testing.T) {
 			}
 			if len(w.calls) != 0 {
 				t.Fatalf("provider writes=%v", w.calls)
+			}
+		})
+	}
+}
+
+// A draft update reads its message unless the policy denies it, and refuses one that is not a draft with the fixed
+// public text before the Jev check, any pending item, any record, and any write. A failed read fails closed with a
+// safe code. A change without a field, or with HTML but no body, is refused before the read.
+func TestDraftUpdateRefusesAMessageThatIsNotADraftBeforeAnyWrite(t *testing.T) {
+	body := model.DraftChange{Body: new("CANARY body")}
+	for _, tc := range []struct {
+		name     string
+		decision config.Decision
+		w        *writer
+		change   model.DraftChange
+		want     string
+		reads    int
+	}{
+		{"not a draft", config.Allow, &writer{notDraft: true}, body, "draft update refused: not a draft", 1},
+		{"not a draft under approve", config.Approve, &writer{notDraft: true}, body, "draft update refused: not a draft", 1},
+		{"failed read", config.Allow, &writer{draftErr: model.MailboxError("CANARY provider text")}, body, "MailboxError", 1},
+		{"no field", config.Allow, &writer{}, model.DraftChange{}, "invalid request", 0},
+		{"html without body", config.Allow, &writer{}, model.DraftChange{Subject: new("x"), HTML: true}, "invalid request", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.w.mailbox = &mailbox{}
+			s := scoring(0.08)
+			policy := allowAll
+			policy.Base.MailDraft = tc.decision
+			g, c, path := policyGuard(t, tc.w, nil, s, policy)
+			ctx := context.Background()
+			if _, err := g.DraftUpdate(ctx, "m1", tc.change); err == nil || err.Error() != tc.want {
+				t.Fatalf("err=%v want %q", err, tc.want)
+			}
+			if tc.w.draftReads != tc.reads || len(tc.w.calls) != 0 || len(s.checked()) != 0 {
+				t.Fatalf("reads=%d writes=%v checks=%v", tc.w.draftReads, tc.w.calls, s.checked())
+			}
+			if items, err := c.ListPending(ctx, 10); err != nil || len(items) != 0 {
+				t.Fatalf("pending=%v %v", items, err)
+			}
+			if got := allAuditRecords(t, path); len(got) != 0 {
+				t.Fatalf("records=%v", got)
+			}
+		})
+	}
+	// A denied update reads nothing.
+	w := &writer{mailbox: &mailbox{}, notDraft: true}
+	g, _, _ := policyGuard(t, w, nil, scoring(0.08), config.Policy{})
+	if _, err := g.DraftUpdate(context.Background(), "m1", body); err == nil || err.Error() != "refused by policy: mail_draft" || w.draftReads != 0 {
+		t.Fatalf("denied update: %v reads=%d", err, w.draftReads)
+	}
+}
+
+// A draft delete (mail_draft) and a draft send (mail_send) read their message unless the policy denies them, and
+// refuse one that is not a draft with their fixed public text before the Jev check, any pending item, any record, and
+// any write. A failed read fails closed with a safe code. An approved run reads the draft again, so an approved send
+// of a draft that is gone or is no longer a draft sends nothing.
+func TestDraftDeleteAndSendRefuseAMessageThatIsNotADraftBeforeAnyWrite(t *testing.T) {
+	for _, op := range []struct {
+		name, refusal, denied string
+		call                  func(context.Context, *guard.Guard) error
+		set                   func(*config.Policy, config.Decision)
+	}{
+		{"delete", "draft delete refused: not a draft", "refused by policy: mail_draft", func(ctx context.Context, g *guard.Guard) error { return g.DraftDelete(ctx, "m1") },
+			func(p *config.Policy, d config.Decision) { p.Base.MailDraft = d }},
+		{"send", "draft send refused: not a draft", "refused by policy: mail_send", func(ctx context.Context, g *guard.Guard) error { return g.DraftSend(ctx, "m1") },
+			func(p *config.Policy, d config.Decision) { p.Base.MailSend = d }},
+	} {
+		for _, tc := range []struct {
+			name     string
+			decision config.Decision
+			approved bool
+			w        *writer
+			want     string
+		}{
+			{"not a draft", config.Allow, false, &writer{notDraft: true}, op.refusal},
+			{"not a draft under approve", config.Approve, false, &writer{notDraft: true}, op.refusal},
+			{"failed read", config.Allow, false, &writer{draftErr: model.MailboxError("CANARY provider text")}, "MailboxError"},
+			{"approved run of a message that is no longer a draft", config.Deny, true, &writer{notDraft: true}, op.refusal},
+			{"approved run of a draft that is gone", config.Deny, true, &writer{draftErr: model.MailboxError("NotFoundError")}, "MailboxError"},
+		} {
+			t.Run(op.name+" "+tc.name, func(t *testing.T) {
+				tc.w.mailbox = &mailbox{}
+				s := scoring(0.08)
+				policy := allowAll
+				op.set(&policy, tc.decision)
+				g, c, path := policyGuard(t, tc.w, nil, s, policy)
+				ctx := context.Background()
+				if tc.approved {
+					ctx = guard.WithApproval(ctx)
+				}
+				if err := op.call(ctx, g); err == nil || err.Error() != tc.want {
+					t.Fatalf("err=%v want %q", err, tc.want)
+				}
+				if tc.w.draftReads != 1 || len(tc.w.calls) != 0 || len(s.checked()) != 0 {
+					t.Fatalf("reads=%d writes=%v checks=%v", tc.w.draftReads, tc.w.calls, s.checked())
+				}
+				if items, err := c.ListPending(ctx, 10); err != nil || len(items) != 0 {
+					t.Fatalf("pending=%v %v", items, err)
+				}
+				if got := allAuditRecords(t, path); len(got) != 0 {
+					t.Fatalf("records=%v", got)
+				}
+			})
+		}
+		t.Run(op.name+" denied", func(t *testing.T) {
+			w := &writer{mailbox: &mailbox{}, notDraft: true}
+			g, _, _ := policyGuard(t, w, nil, scoring(0.08), config.Policy{})
+			if err := op.call(context.Background(), g); err == nil || err.Error() != op.denied || w.draftReads != 0 || len(w.calls) != 0 {
+				t.Fatalf("denied: %v reads=%d writes=%v", err, w.draftReads, w.calls)
 			}
 		})
 	}

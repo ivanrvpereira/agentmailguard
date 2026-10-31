@@ -230,13 +230,33 @@ func (c *console) list(ctx context.Context, w http.ResponseWriter) {
 	rows := make([]listRow, 0, len(items))
 	for _, item := range items {
 		args := storedFields(item.Args)
+		// A draft send names only its draft; its recipients and subject are the stored draft fields.
+		if item.Op == "draft.send" {
+			args = storedFields(item.Draft)
+		}
 		// Optional attendees receive the invitation too.
 		recipients := append(texts(args["to"]), texts(args["optional"])...)
 		if args["to"] == nil {
 			recipients = texts(args["add"])
 		}
+		// A reply goes to the original's recipients too, which only the item page reads.
+		if item.Op == "draft.reply" || item.Op == "mail.reply" {
+			recipients = []string{"reply"}
+			if all, _ := args["all"].(bool); all {
+				recipients = []string{"reply all"}
+			}
+		}
+		groups := []string{}
+		if len(recipients) > 0 {
+			groups = append(groups, strings.Join(recipients, ", "))
+		}
+		for _, g := range []struct{ key, label string }{{"cc", "cc: "}, {"bcc", "bcc (hidden): "}} {
+			if list := texts(args[g.key]); len(list) > 0 {
+				groups = append(groups, g.label+strings.Join(list, ", "))
+			}
+		}
 		subject, _ := args["subject"].(string)
-		rows = append(rows, listRow{ID: item.ID, Account: item.Account, Op: item.Op, Recipients: strings.Join(recipients, ", "), Subject: subject, Age: age(now.Sub(item.Created)), State: item.State})
+		rows = append(rows, listRow{ID: item.ID, Account: item.Account, Op: item.Op, Recipients: strings.Join(groups, "; "), Subject: subject, Age: age(now.Sub(item.Created)), State: item.State})
 	}
 	render(w, 200, "list", rows)
 }
@@ -255,7 +275,14 @@ type itemPage struct {
 	RefKind    string
 	Ref        []field
 	RefMissing bool
-	Pending    bool
+	// Reply is true for a reply. Recipients are who it goes to; RecipientsMissing is true when they could not be read.
+	Reply             bool
+	Recipients        []field
+	RecipientsMissing bool
+	// DraftSend is true for a draft send. Draft is the stored draft fields that Jev checked, empty when none are stored.
+	DraftSend bool
+	Draft     []field
+	Pending   bool
 }
 
 // referenceTimeout bounds the guarded read of the referenced message or event.
@@ -283,11 +310,65 @@ func (c *console) item(ctx context.Context, w http.ResponseWriter, id string, st
 	}
 	page.Jev = jevText(item.Jev)
 	args := storedFields(item.Args)
-	for _, key := range slices.Sorted(maps.Keys(args)) {
-		page.Args = append(page.Args, field{key, texts(args[key])})
-	}
+	page.Args = requestFields(args)
 	page.RefKind, page.Ref, page.RefMissing = c.reference(ctx, item, args)
+	if item.Op == "draft.reply" || item.Op == "mail.reply" {
+		page.Reply = true
+		page.Recipients, page.RecipientsMissing = c.replyRecipients(ctx, item, args)
+	}
+	if item.Op == "draft.send" {
+		page.DraftSend, page.Draft = true, requestFields(storedFields(item.Draft))
+	}
 	render(w, status, "item", page)
+}
+
+// replyRecipients works out who a reply goes to: the To and CC that the guard reads from the original message, with
+// the request's cc and bcc added, bcc marked as hidden recipients. missing is true when they cannot be read.
+func (c *console) replyRecipients(ctx context.Context, item cache.Pending, args map[string]any) (out []field, missing bool) {
+	id, _ := args["id"].(string)
+	all, _ := args["all"].(bool)
+	st := c.s.current.Load()
+	if st == nil || st.accounts[item.Account] == nil || id == "" {
+		return nil, true
+	}
+	ctx, cancel := context.WithTimeout(ctx, referenceTimeout)
+	defer cancel()
+	r, err := st.accounts[item.Account].guard.ReplyRecipients(ctx, id, all)
+	if err != nil {
+		return nil, true
+	}
+	r = r.With(texts(args["cc"]), texts(args["bcc"]))
+	return []field{{"to", r.To}, {"cc", r.CC}, {"bcc (hidden recipients)", r.BCC}}, false
+}
+
+// requestFields shows each stored argument under its name: the recipients to, cc, and bcc first, bcc marked as
+// hidden recipients, and an HTML body marked as source text, which the page escapes and never renders.
+func requestFields(args map[string]any) []field {
+	labels := map[string]string{"bcc": "bcc (hidden recipients)"}
+	if args["html"] == true {
+		labels["body"] = "body (HTML source, not rendered)"
+	}
+	recipients := []string{"to", "cc", "bcc"}
+	keys := []string{}
+	for _, key := range recipients {
+		if _, ok := args[key]; ok {
+			keys = append(keys, key)
+		}
+	}
+	for _, key := range slices.Sorted(maps.Keys(args)) {
+		if !slices.Contains(recipients, key) {
+			keys = append(keys, key)
+		}
+	}
+	out := make([]field, 0, len(keys))
+	for _, key := range keys {
+		label, ok := labels[key]
+		if !ok {
+			label = key
+		}
+		out = append(out, field{label, texts(args[key])})
+	}
+	return out
 }
 
 // reference reads the message or event that the action names through the guarded read path. Only the
@@ -302,7 +383,7 @@ func (c *console) reference(ctx context.Context, item cache.Pending, args map[st
 		}
 	case "calendar.update", "calendar.cancel", "calendar.respond":
 		op, kind = "calendar.get", "Event"
-	case "draft.reply", "draft.forward", "draft.update", "mail.reply", "mail.forward":
+	case "draft.reply", "draft.forward", "draft.update", "draft.delete", "mail.reply", "mail.forward":
 	default:
 		return "", nil, false
 	}
@@ -481,7 +562,7 @@ button{font-size:1.1rem;padding:.8rem 1.6rem;border-radius:.4rem;border:1px soli
 {{define "list"}}{{template "head"}}
 <h1>Approvals</h1>
 {{if .}}<table>
-<tr><th>Action</th><th class="wide">Account</th><th>To</th><th>Subject</th><th>State</th><th class="wide">Age</th></tr>
+<tr><th>Action</th><th class="wide">Account</th><th>Recipients</th><th>Subject</th><th>State</th><th class="wide">Age</th></tr>
 {{range .}}<tr><td><a href="/a/{{.ID}}">{{.Op}}</a></td><td class="wide">{{.Account}}</td><td>{{.Recipients}}</td><td>{{.Subject}}</td><td class="state {{.State}}">{{.State}}</td><td class="wide">{{.Age}}</td></tr>
 {{end}}</table>{{else}}<p>No actions wait for approval.</p>{{end}}
 </main></body></html>{{end}}
@@ -503,6 +584,12 @@ button{font-size:1.1rem;padding:.8rem 1.6rem;border-radius:.4rem;border:1px soli
 {{template "fields" .Args}}
 {{if .RefKind}}<h2>{{.RefKind}}</h2>
 {{if .RefMissing}}<p>{{.RefKind}} not available.</p>{{else}}{{template "fields" .Ref}}{{end}}{{end}}
+{{if .Reply}}<h2>Reply recipients</h2>
+{{if .RecipientsMissing}}<p>Reply recipients could not be read.</p>{{else}}<p>Worked out from the original message, with the cc and bcc of the request. Microsoft 365 picks its own list when it makes the reply.</p>
+{{template "fields" .Recipients}}{{end}}{{end}}
+{{if .DraftSend}}<h2>Draft</h2>
+{{if .Draft}}<p>The draft as the daemon read it for the Jev check when the agent asked to send it. The send sends the draft as it is at the provider when it runs.</p>
+{{template "fields" .Draft}}{{else}}<p>Draft fields not available.</p>{{end}}{{end}}
 {{if .Pending}}<form method="post" action="/a/{{.ID}}">
 <button class="approve" type="submit" name="decision" value="approve">Approve</button>
 <button class="deny" type="submit" name="decision" value="deny">Deny</button>

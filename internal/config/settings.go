@@ -32,7 +32,7 @@ type Key struct {
 
 var (
 	baseKeys   = []string{"mail_trash", "mail_draft", "mail_send", "calendar_invite", "calendar_update", "calendar_cancel", "calendar_respond"}
-	sealedKeys = []string{"mail_trash", "mail_draft", "mail_send"}
+	sealedKeys = []string{"mail_trash"}
 )
 
 // policyKey resolves the rest of a policy path: KEY or sealed.KEY.

@@ -133,6 +133,15 @@ func CleanSubject(subject string) string {
 	return finish(strings.Join(strings.Fields(cleanText(subject)), " "), nil)
 }
 
+// CleanList cleans each string of a list, such as addresses, with CleanSubject. nil gives an empty list.
+func CleanList(v []string) []string {
+	out := make([]string, 0, len(v))
+	for _, s := range v {
+		out = append(out, CleanSubject(s))
+	}
+	return out
+}
+
 // RenderBody distinguishes a missing body from a fetched empty body. Unknown content types fail closed.
 func RenderBody(body *string, kind model.ContentType) (Rendered, error) {
 	if body == nil || (kind != model.Text && kind != model.HTML) {

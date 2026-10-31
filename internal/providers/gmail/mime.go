@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime"
 	"net/mail"
@@ -30,6 +31,8 @@ type mimePart struct {
 	Body     struct {
 		Data string
 		Size *int64
+		// AttachmentID names the data that messages.attachments.get gives when Data is not inline.
+		AttachmentID string `json:"attachmentId"`
 	}
 	Parts []mimePart
 }
@@ -108,6 +111,16 @@ func addresses(headers []header, name string) []model.Address {
 	}
 	return out
 }
+
+// errSkipParts, returned by the visit of walk, skips the parts below the visited part.
+var errSkipParts = errors.New("skip parts")
+
+// maxMIMEDepth and maxMIMEParts bound the levels and the parts that walk visits and that parseRaw reads.
+const (
+	maxMIMEDepth = 100
+	maxMIMEParts = 100000
+)
+
 func walk(p *mimePart, visit func(*mimePart, bool) error) error {
 	type item struct {
 		p        *mimePart
@@ -120,12 +133,14 @@ func walk(p *mimePart, visit func(*mimePart, bool) error) error {
 		last := todo[len(todo)-1]
 		todo = todo[:len(todo)-1]
 		count++
-		if last.depth > 100 || count > 100000 {
+		if last.depth > maxMIMEDepth || count > maxMIMEParts {
 			return failure("Gmail", "ValueError")
 		}
 		p := last.p
 		attached := last.attached || p.Filename != "" || strings.HasPrefix(strings.ToLower(strings.TrimSpace(headerValue(p.Headers, "content-disposition"))), "attachment") || strings.EqualFold(p.MimeType, "message/rfc822")
-		if err := visit(p, attached); err != nil {
+		if err := visit(p, attached); errors.Is(err, errSkipParts) {
+			continue
+		} else if err != nil {
 			return err
 		}
 		for i := len(p.Parts) - 1; i >= 0; i-- {
@@ -141,6 +156,24 @@ func decode64(s string) ([]byte, error) {
 	}
 	return b, nil
 }
+
+// textLeaves gives the first text/plain and the first text/html part of payload, in document order, that are not
+// attachments (walk); nil when there is none. They are the body of a message: bodyText shows one of them, and a Gmail
+// draft update replaces them.
+func textLeaves(payload *mimePart) (plain, html *mimePart, err error) {
+	err = walk(payload, func(p *mimePart, attached bool) error {
+		switch kind := strings.ToLower(p.MimeType); {
+		case attached:
+		case kind == "text/plain" && plain == nil:
+			plain = p
+		case kind == "text/html" && html == nil:
+			html = p
+		}
+		return nil
+	})
+	return plain, html, err
+}
+
 func bodyText(payload *mimePart, plainFirst bool) (string, model.ContentType, error) {
 	// Missing/null payloads decode to a zero value, not a fetched-empty MIME body.
 	if payload == nil {
@@ -150,17 +183,11 @@ func bodyText(payload *mimePart, plainFirst bool) (string, model.ContentType, er
 	if err != nil || !strings.Contains(mediaType, "/") {
 		return "", "", failure("Gmail", "ValueError")
 	}
-	found := map[string]*mimePart{}
-	err = walk(payload, func(p *mimePart, attached bool) error {
-		kind := strings.ToLower(p.MimeType)
-		if !attached && (kind == "text/plain" || kind == "text/html") && found[kind] == nil {
-			found[kind] = p
-		}
-		return nil
-	})
+	plain, html, err := textLeaves(payload)
 	if err != nil {
 		return "", "", err
 	}
+	found := map[string]*mimePart{"text/plain": plain, "text/html": html}
 	order := []string{"text/html", "text/plain"}
 	if plainFirst {
 		order = []string{"text/plain", "text/html"}
@@ -290,9 +317,13 @@ func parseMessage(data map[string]json.RawMessage, labels map[string]string, bod
 	if err != nil {
 		return model.Message{}, err
 	}
-	m := model.Message{ID: v.ID, ThreadID: v.ThreadID, Subject: decoded(headerValue(v.Payload.Headers, "subject")), ReceivedAt: received, To: addresses(v.Payload.Headers, "to"), CC: addresses(v.Payload.Headers, "cc"), Folders: []string{}, Attachments: []string{}, Categories: []string{}, IsDraft: contains(v.LabelIDs, "DRAFT"), IsRead: !contains(v.LabelIDs, "UNREAD"), Flag: model.NoFlag}
+	m := model.Message{ID: v.ID, ThreadID: v.ThreadID, Subject: decoded(headerValue(v.Payload.Headers, "subject")), ReceivedAt: received, To: addresses(v.Payload.Headers, "to"), CC: addresses(v.Payload.Headers, "cc"), BCC: []model.Address{}, Folders: []string{}, Attachments: []string{}, Categories: []string{}, IsDraft: contains(v.LabelIDs, "DRAFT"), IsRead: !contains(v.LabelIDs, "UNREAD"), Flag: model.NoFlag}
 	if a := addresses(v.Payload.Headers, "from"); len(a) > 0 {
 		m.Sender = a[0]
+	}
+	// Only drafts and sent mail have a Bcc header that the account wrote; on received mail it is sender text.
+	if m.IsDraft || contains(v.LabelIDs, "SENT") {
+		m.BCC = addresses(v.Payload.Headers, "bcc")
 	}
 	if contains(v.LabelIDs, "STARRED") {
 		m.Flag = model.Flagged

@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -15,11 +16,11 @@ import (
 	"time"
 )
 
-// consoleGet requests the approval console list with a password, as a browser would, and returns the status
-// and the body.
-func (s *server) consoleGet(password string) (int, string) {
+// consoleGet requests a page of the approval console with a password, as a browser would, and returns the
+// status and the body.
+func (s *server) consoleGet(password, path string) (int, string) {
 	s.t.Helper()
-	r, err := http.NewRequest("GET", "http://"+s.console+"/", nil)
+	r, err := http.NewRequest("GET", "http://"+s.console+path, nil)
 	if err != nil {
 		s.t.Fatal(err)
 	}
@@ -48,9 +49,30 @@ func (s *server) auditEvents(events ...string) []map[string]any {
 		if err := json.Unmarshal([]byte(line), &v); err != nil {
 			s.t.Fatal(err)
 		}
-		if slices.Contains(events, v["event"].(string)) {
+		// An operation record has no event.
+		if event, _ := v["event"].(string); slices.Contains(events, event) {
 			delete(v, "time")
 			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// operations gives the operation records of audit.jsonl in order, each as its operation and its IDs.
+func (s *server) operations() []string {
+	s.t.Helper()
+	data, err := os.ReadFile(filepath.Join(s.home, "audit.jsonl"))
+	if err != nil && !os.IsNotExist(err) {
+		s.t.Fatal(err)
+	}
+	out := []string{}
+	for line := range strings.Lines(string(data)) {
+		var v map[string]any
+		if err := json.Unmarshal([]byte(line), &v); err != nil {
+			s.t.Fatal(err)
+		}
+		if _, ok := v["event"]; !ok {
+			out = append(out, fmt.Sprint(v["operation"], " ", v["ids"]))
 		}
 	}
 	return out
@@ -180,7 +202,7 @@ func TestRestartKeysWaitForARestartAndOtherChangesApply(t *testing.T) {
 	}
 	// The policy change applies; the console stays at its old address until the restart.
 	p := s.held("mail", "send", "--to", "ana@example.test", "--subject", "canary-subject-r", "--body", "canary-body-r")
-	if code, _ := s.consoleGet(consolePassword); code != 200 {
+	if code, _ := s.consoleGet(consolePassword, "/"); code != 200 {
 		t.Fatalf("console at the old address: HTTP %d", code)
 	}
 	s.console = other
@@ -217,22 +239,22 @@ func TestConsoleIsOnWithoutAPasswordAndANewPasswordTakesEffectAtTheReload(t *tes
 	s := home(t, "")
 	s.seed()
 	s.serve()
-	if code, body := s.consoleGet("anything"); code != 503 || body != "console password not set; run amgd config set console.password\n" {
+	if code, body := s.consoleGet("anything", "/"); code != 503 || body != "console password not set; run amgd config set console.password\n" {
 		t.Fatalf("console without password: HTTP %d %q", code, body)
 	}
 	before := s.reloads()
 	s.amgdOK(strings.NewReader(consolePassword+"\n"), "config", "set", "console.password")
 	s.awaitReload(before)
-	if code, _ := s.consoleGet(consolePassword); code != 200 {
+	if code, _ := s.consoleGet(consolePassword, "/"); code != 200 {
 		t.Fatalf("console with the new password: HTTP %d", code)
 	}
 	before = s.reloads()
 	s.amgdOK(strings.NewReader("e2e-second-password\n"), "config", "set", "console.password")
 	s.awaitReload(before)
-	if code, _ := s.consoleGet(consolePassword); code != 401 {
+	if code, _ := s.consoleGet(consolePassword, "/"); code != 401 {
 		t.Fatalf("old password after the change: HTTP %d", code)
 	}
-	if code, _ := s.consoleGet("e2e-second-password"); code != 200 {
+	if code, _ := s.consoleGet("e2e-second-password", "/"); code != 200 {
 		t.Fatalf("new password: HTTP %d", code)
 	}
 	if got := s.auditEvents("console_password_set"); len(got) != 2 {

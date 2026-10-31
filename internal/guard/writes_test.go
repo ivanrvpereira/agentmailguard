@@ -20,7 +20,14 @@ type writer struct {
 	calls            []string
 	trashed          []string
 	flags            []model.FlagState
-	updates          []struct{ id, body string }
+	updates          []draftUpdate
+	draftReads       int
+	draftIDs         []string           // the IDs that ReadDraft got, in order
+	beforeWrite      func()             // runs at the start of DraftUpdate, DraftDelete, and DraftSend
+	notDraft         bool               // ReadDraft gives a message that is not a draft
+	draftErr         error              // the ReadDraft error
+	draft            *model.DraftResult // the DraftNew result; nil gives ID d1
+	recipientsErr    error              // the ReplyRecipients error; nil gives the recipients of replyRecipients
 	err              error
 	entered, release chan struct{}
 }
@@ -70,22 +77,79 @@ func (w *writer) Categorize(_ context.Context, ids, _, _ []string) ([]model.Muta
 func (w *writer) Folders(context.Context) ([]model.Folder, error) {
 	return []model.Folder{{ID: "f1", Name: "Finance"}, {ID: "del", Name: "Deleted Items", Trash: true}}, nil
 }
-func (w *writer) DraftNew(context.Context, model.NewDraft) (string, error) {
+func (w *writer) DraftNew(context.Context, model.NewDraft) (model.DraftResult, error) {
 	_, err := w.write("draft_new", nil)
-	return "d1", err
+	if w.draft != nil {
+		return *w.draft, err
+	}
+	return model.DraftResult{ID: "d1"}, err
 }
-func (w *writer) DraftReply(context.Context, string, string) (string, error) {
+func (w *writer) DraftReply(context.Context, string, model.Reply) (model.DraftResult, error) {
 	_, err := w.write("draft_reply", nil)
-	return "d2", err
+	return model.DraftResult{ID: "d2"}, err
 }
-func (w *writer) DraftForward(context.Context, string, []string) (string, error) {
+
+// replyRecipients are the reply recipients that writer gives: the sender, and with all also bo@example.test, so
+// that a test sees which all flag was asked for.
+func replyRecipients(all bool) model.Recipients {
+	r := model.Recipients{To: []string{"ana@example.test"}, CC: []string{}, BCC: []string{}}
+	if all {
+		r.CC = []string{"bo@example.test"}
+	}
+	return r
+}
+func (w *writer) ReplyRecipients(_ context.Context, _ string, all bool) (model.Recipients, error) {
+	if w.recipientsErr != nil {
+		return model.Recipients{}, w.recipientsErr
+	}
+	return replyRecipients(all), nil
+}
+func (w *writer) DraftForward(context.Context, string, model.Forward) (model.DraftResult, error) {
 	_, err := w.write("draft_forward", nil)
-	return "d3", err
+	return model.DraftResult{ID: "d3"}, err
 }
-func (w *writer) DraftUpdate(_ context.Context, id, body string) (string, error) {
-	w.updates = append(w.updates, struct{ id, body string }{id, body})
+
+// draftUpdate is one DraftUpdate call that writer got.
+type draftUpdate struct {
+	id     string
+	change model.DraftChange
+}
+
+// draftContent is what ReadDraft gives for a draft.
+var draftContent = model.DraftContent{IsDraft: true, To: []string{"CANARY-to@example.test"}, CC: []string{}, BCC: []string{"CANARY-bcc@example.test"}, Subject: "CANARY subject", Body: "<p>CANARY body</p>", HTML: true}
+
+func (w *writer) ReadDraft(_ context.Context, id string) (model.DraftContent, error) {
+	w.draftReads++
+	w.draftIDs = append(w.draftIDs, id)
+	if w.draftErr != nil {
+		return model.DraftContent{}, w.draftErr
+	}
+	if w.notDraft {
+		return model.DraftContent{}, nil
+	}
+	return draftContent, nil
+}
+func (w *writer) DraftDelete(context.Context, string) error {
+	if w.beforeWrite != nil {
+		w.beforeWrite()
+	}
+	_, err := w.write("draft_delete", nil)
+	return err
+}
+func (w *writer) DraftSend(context.Context, string) error {
+	if w.beforeWrite != nil {
+		w.beforeWrite()
+	}
+	_, err := w.write("draft_send", nil)
+	return err
+}
+func (w *writer) DraftUpdate(_ context.Context, id string, change model.DraftChange) (string, string, error) {
+	if w.beforeWrite != nil {
+		w.beforeWrite()
+	}
+	w.updates = append(w.updates, draftUpdate{id, change})
 	_, err := w.write("draft_update", nil)
-	return "d4", err
+	return "d4", "t4", err
 }
 
 // auditRecords returns the per-operation records. Policy and approval records have an "event" field;
@@ -191,14 +255,20 @@ func TestEveryManualRouteAndDraftHasContentFreeAudit(t *testing.T) {
 		func() error {
 			_, e := g.DraftNew(ctx, model.NewDraft{To: []string{"CANARY@example.com"}, Subject: "CANARY", Body: "CANARY"})
 			return e
-		}, func() error { _, e := g.DraftReply(ctx, "m1", "CANARY"); return e }, func() error { _, e := g.DraftForward(ctx, "m1", []string{"CANARY@example.com"}); return e }, func() error { _, e := g.DraftUpdate(ctx, "d1", "CANARY"); return e },
+		}, func() error { _, _, e := g.DraftReply(ctx, "m1", model.Reply{Body: "CANARY"}); return e }, func() error {
+			_, _, e := g.DraftForward(ctx, "m1", model.Forward{Body: "CANARY", To: []string{"CANARY@example.com"}})
+			return e
+		}, func() error {
+			_, e := g.DraftUpdate(ctx, "d1", model.DraftChange{Subject: new("CANARY"), Body: new("CANARY")})
+			return e
+		}, func() error { return g.DraftDelete(ctx, "d1") }, func() error { return g.DraftSend(ctx, "d1") },
 	}
 	for _, call := range calls {
 		if err := call(); err != nil {
 			t.Fatal(err)
 		}
 	}
-	want := []string{"trash", "move", "read", "unread", "flag", "categorize", "draft_new", "draft_reply", "draft_forward", "draft_update"}
+	want := []string{"trash", "move", "read", "unread", "flag", "categorize", "draft_new", "draft_reply", "draft_forward", "draft_update", "draft_delete", "draft_send"}
 	if !reflect.DeepEqual(w.calls, want) {
 		t.Fatalf("wrong operations: %v", w.calls)
 	}
@@ -219,6 +289,12 @@ func TestEveryManualRouteAndDraftHasContentFreeAudit(t *testing.T) {
 	}
 	if records[9]["draft_id"] != "d4" || !reflect.DeepEqual(records[9]["ids"], []any{"d1"}) {
 		t.Fatal("draft update lost source/result IDs")
+	}
+	// A draft delete or send records only the draft's ID.
+	for _, r := range records[10:] {
+		if r["draft_id"] != nil || !reflect.DeepEqual(r["ids"], []any{"d1"}) {
+			t.Fatalf("draft delete or send record=%v", r)
+		}
 	}
 	if s.calls != 1 {
 		t.Fatal("writes screened content")
@@ -247,12 +323,12 @@ func TestManualFlagAndDraftUpdatePreserveRequestedPayloads(t *testing.T) {
 	if !reflect.DeepEqual(w.flags, []model.FlagState{model.Flagged, model.Complete, model.NoFlag}) {
 		t.Errorf("provider flag states=%v; want flagged, complete, none", w.flags)
 	}
-	body := "CANARY draft update é <b>requested body</b>"
-	if id, err := g.DraftUpdate(ctx, "draft-source", body); err != nil || id != "d4" {
-		t.Fatalf("draft update result: %q %v", id, err)
+	change := model.DraftChange{CC: new([]string{}), Body: new("CANARY draft update é <b>requested body</b>"), HTML: true}
+	if got, err := g.DraftUpdate(ctx, "draft-source", change); err != nil || got != (guard.UpdatedDraft{ID: "d4", ThreadID: "t4"}) {
+		t.Fatalf("draft update result: %+v %v", got, err)
 	}
-	if len(w.updates) != 1 || w.updates[0].id != "draft-source" || w.updates[0].body != body {
-		t.Error("provider did not receive exact draft source and nonempty body")
+	if !reflect.DeepEqual(w.updates, []draftUpdate{{"draft-source", change}}) {
+		t.Errorf("provider got %+v, not the exact draft and change", w.updates)
 	}
 	if len(auditRecords(t, path)) != 4 {
 		t.Fatal("payload mutations missing safe audit")

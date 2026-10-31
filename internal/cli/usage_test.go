@@ -79,7 +79,7 @@ func TestPositionalsKeepFlagLookingText(t *testing.T) {
 	}{
 		{"separator", []string{"mail", "archive", "--", "--not-a-flag"}, "mail.archive", `{"ids":["--not-a-flag"]}`},
 		{"interspersed", []string{"mail", "archive", "a", "--account", "remote", "b"}, "mail.archive", `{"ids":["a","b"]}`},
-		{"option values", []string{"draft", "new", "--to", "a@test", "--subject", "--x", "--body", "--not-a-flag"}, "draft.new", `{"to":["a@test"],"subject":"--x","body":"--not-a-flag"}`},
+		{"option values", []string{"draft", "new", "--to", "a@test", "--subject", "--x", "--body", "--not-a-flag"}, "draft.new", `{"to":["a@test"],"cc":[],"bcc":[],"subject":"--x","body":"--not-a-flag","html":false}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0

@@ -17,7 +17,7 @@ func TestAPIOperationsAreReviewed(t *testing.T) {
 	reviewed := []string{
 		"account.list", "account.status", "approvals.status",
 		"calendar.availability", "calendar.cancel", "calendar.get", "calendar.invite", "calendar.list", "calendar.respond", "calendar.search", "calendar.update",
-		"draft.forward", "draft.new", "draft.reply", "draft.update",
+		"draft.delete", "draft.forward", "draft.new", "draft.reply", "draft.send", "draft.update",
 		"mail.archive", "mail.categories", "mail.categorize", "mail.flag", "mail.folders", "mail.forward", "mail.get", "mail.link", "mail.list",
 		"mail.move", "mail.organize", "mail.read", "mail.reply", "mail.search", "mail.send", "mail.thread", "mail.trash", "mail.unread",
 		"rules.list", "stats",
@@ -88,7 +88,10 @@ func TestValidatedAccountOperationsReachTheProviderOnlyWhenValid(t *testing.T) {
 	}
 	for _, body := range []struct{ op, params string }{
 		{"mail.get", `{}`}, {"mail.get", `{"id":""}`},
-		{"draft.update", `{"id":"x"}`}, {"mail.archive", `{"ids":[]}`},
+		{"draft.update", `{"id":"x"}`}, {"draft.update", `{"id":"x","html":true}`}, {"draft.update", `{"id":"x","subject":"s","html":true}`},
+		{"draft.update", `{"id":"x","to":null}`}, {"draft.update", `{"id":"x","subject":null}`}, {"draft.update", `{"id":"x","cc":[""]}`}, {"draft.update", `{"id":"x","from":["a@example.test"]}`},
+		{"draft.delete", `{}`}, {"draft.delete", `{"id":""}`}, {"draft.delete", `{"ids":["x"]}`}, {"draft.delete", `{"id":"x","body":"b"}`},
+		{"mail.archive", `{"ids":[]}`},
 		{"mail.list", `{"count":-1}`}, {"mail.list", `{"page":"a b"}`}, {"mail.search", `{"text":"x","page":"a\u0000"}`}, {"calendar.search", `{"text":"x","page":"\u00e9"}`}, {"mail.flag", `{"ids":["x"],"state":"urgent"}`},
 		{"mail.organize", `{"since":"0d"}`}, {"mail.organize", `{"since":"2026-10-08"}`},
 		{"calendar.list", `{"start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:00:00Z"}`},

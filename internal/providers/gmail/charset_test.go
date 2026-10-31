@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
 )
 
@@ -100,7 +101,7 @@ func TestDeclaredCharsetsPreserveBodyHeadersAndReplyQuotes(t *testing.T) {
 			if *got[0].Body != tt.want || got[0].Subject != tt.want || got[0].Sender.Name != tt.want {
 				t.Errorf("body=%q subject=%q sender=%q; want=%q", *got[0].Body, got[0].Subject, got[0].Sender.Name, tt.want)
 			}
-			if id, err := m.DraftReply(ctx, "m", "Thanks"); err != nil || id != "created" {
+			if draft, err := m.DraftReply(ctx, "m", model.Reply{Body: "Thanks"}); err != nil || draft.ID != "created" {
 				t.Fatal("reply failed", err)
 			}
 		})

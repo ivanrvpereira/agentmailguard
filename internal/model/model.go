@@ -79,6 +79,7 @@ type Message struct {
 	Subject         string
 	ReceivedAt      time.Time
 	To, CC          []Address
+	BCC             []Address // filled where the provider returns it: drafts and sent mail
 	Folders         []FolderID
 	Attachments     []string
 	IsDraft, IsRead bool
@@ -143,9 +144,140 @@ func (q SearchQuery) Received(t time.Time) bool {
 	return !t.Equal(UnknownReceived) && (q.After == nil || !t.Before(*q.After)) && (q.Before == nil || t.Before(*q.Before))
 }
 
+// NewDraft is a new message. Every field is optional for a draft; a send needs a recipient (Addressed). HTML marks
+// Body as HTML source, sent unchanged; otherwise Body is plain text.
 type NewDraft struct {
-	To            []string
+	To, CC, BCC   []string
 	Subject, Body string
+	HTML          bool
+}
+
+// Addressed reports a recipient in To, CC, or BCC, which a send needs: both providers refuse a send without one.
+func (d NewDraft) Addressed() bool { return len(d.To)+len(d.CC)+len(d.BCC) > 0 }
+
+// DraftResult is the draft that a provider made: its message ID, its conversation (empty: the provider gave
+// none), and its recipients and subject, from the provider's answer or from what the adapter built. Like all
+// provider data, it is untrusted.
+type DraftResult struct {
+	ID          MessageID
+	ThreadID    ThreadID
+	To, CC, BCC []string
+	Subject     string
+}
+
+// Reply is a reply to a message: Body (empty when absent) goes above the quoted original, plain text unless HTML,
+// which marks Body as HTML source sent unchanged. All replies to everyone on the original. CC and BCC are the
+// agent's extra recipients, added to the ones that the reply picks (Recipients.With), never replacing them.
+type Reply struct {
+	Body    string
+	HTML    bool
+	All     bool
+	CC, BCC []string
+}
+
+// Forward is a forward of a message: Body (empty when absent) is the note above the forwarded original, plain text
+// unless HTML, which marks Body as HTML source sent unchanged. To, CC, and BCC are the recipients; a draft needs
+// none, a send needs one (Addressed).
+type Forward struct {
+	Body        string
+	HTML        bool
+	To, CC, BCC []string
+}
+
+// Addressed reports a recipient in To, CC, or BCC, by the rule of NewDraft.Addressed.
+func (f Forward) Addressed() bool { return NewDraft{To: f.To, CC: f.CC, BCC: f.BCC}.Addressed() }
+
+// DraftChange is an update of a draft. A nil field is unchanged; a list replaces the old list, and an empty list
+// clears it. Body replaces the whole body, a quoted original included: plain text unless HTML, which marks Body as
+// HTML source sent unchanged.
+type DraftChange struct {
+	To, CC, BCC   *[]string
+	Subject, Body *string
+	HTML          bool // valid only with Body (HTMLWithoutBody)
+}
+
+// Empty reports a change with no field set.
+func (c DraftChange) Empty() bool {
+	return c.To == nil && c.CC == nil && c.BCC == nil && c.Subject == nil && c.Body == nil
+}
+
+// HTMLWithoutBody reports an HTML flag without a body: the body type goes only with a body.
+func (c DraftChange) HTMLWithoutBody() bool { return c.HTML && c.Body == nil }
+
+// DraftContent is a message as a draft write reads it: whether it is a draft, its recipients, its subject, and its
+// body, which is HTML source when HTML is true and plain text otherwise. Like all provider data, it is untrusted.
+type DraftContent struct {
+	IsDraft       bool
+	To, CC, BCC   []string
+	Subject, Body string
+	HTML          bool
+}
+
+// ReplySource is what the reply-recipient rule reads from the original message: its bare addresses, and Sent when
+// the account sent it.
+type ReplySource struct {
+	From, ReplyTo, To, CC []string
+	Sent                  bool
+}
+
+// Recipients are the To, CC, and BCC addresses of a message.
+type Recipients struct{ To, CC, BCC []string }
+
+// ReplyRecipients is the reply-recipient rule, as Gmail on the web picks them. To is Reply-To, or From when there
+// is none; for a message that the account sent, To is the original To. Without all, CC is empty. With all, CC is
+// the original To and CC (for a sent message, the original CC), and the own addresses are removed from To and CC.
+// Each address appears once across To and CC, ignoring case. BCC is always empty: only the agent adds BCC.
+func ReplyRecipients(src ReplySource, all bool, own []string) Recipients {
+	to, cc := src.ReplyTo, []string{}
+	if len(to) == 0 {
+		to = src.From
+	}
+	switch {
+	case src.Sent:
+		to = src.To
+		if all {
+			cc = src.CC
+		}
+	case all:
+		cc = slices.Concat(src.To, src.CC)
+	}
+	seen := map[string]bool{}
+	if all {
+		for _, a := range own {
+			seen[strings.ToLower(a)] = true
+		}
+	}
+	pick := func(list []string) []string {
+		out := []string{}
+		for _, a := range list {
+			if k := strings.ToLower(a); a != "" && !seen[k] {
+				seen[k] = true
+				out = append(out, a)
+			}
+		}
+		return out
+	}
+	return Recipients{To: pick(to), CC: pick(cc), BCC: []string{}}
+}
+
+// With adds the agent's CC and BCC to r, never replacing an address of r: an address already in To, CC, or BCC,
+// ignoring case, is not added again.
+func (r Recipients) With(cc, bcc []string) Recipients {
+	seen := map[string]bool{}
+	for _, a := range slices.Concat(r.To, r.CC, r.BCC) {
+		seen[strings.ToLower(a)] = true
+	}
+	add := func(list, extra []string) []string {
+		out := append([]string{}, list...)
+		for _, a := range extra {
+			if k := strings.ToLower(a); !seen[k] {
+				seen[k] = true
+				out = append(out, a)
+			}
+		}
+		return out
+	}
+	return Recipients{To: append([]string{}, r.To...), CC: add(r.CC, cc), BCC: add(r.BCC, bcc)}
 }
 
 // PageRequest asks for one page of a list or search. Size 0 sends no size, so the provider's default page size
@@ -219,17 +351,34 @@ type Mailbox interface {
 	Flag(ctx context.Context, ids []MessageID, state FlagState) ([]MutationResult, error)
 	Categorize(ctx context.Context, ids []MessageID, add, remove []string) ([]MutationResult, error)
 	Categories(ctx context.Context) ([]string, error)
-	DraftNew(ctx context.Context, draft NewDraft) (MessageID, error)
-	DraftReply(ctx context.Context, id MessageID, comment string) (MessageID, error)
-	// DraftForward must be provider-built; unsupported providers must fail, not substitute a new draft.
-	DraftForward(ctx context.Context, id MessageID, to []string) (MessageID, error)
-	// DraftUpdate is restricted to new drafts, and returns the possibly changed message ID.
-	DraftUpdate(ctx context.Context, id MessageID, body string) (MessageID, error)
+	DraftNew(ctx context.Context, draft NewDraft) (DraftResult, error)
+	// DraftReply and SendReply keep the reply in the conversation of message id. The reply goes to the recipients
+	// that the provider's reply picks plus the reply's CC and BCC; on Gmail and the fake provider those are
+	// ReplyRecipients.
+	DraftReply(ctx context.Context, id MessageID, reply Reply) (DraftResult, error)
+	// ReplyRecipients reads message id and gives the To and CC of a reply to it by the ReplyRecipients rule, with
+	// the account's own addresses; all is reply all. It writes nothing. BCC is empty.
+	ReplyRecipients(ctx context.Context, id MessageID, all bool) (Recipients, error)
+	// DraftForward and SendForward keep the forward in the conversation of message id, with the forward's note
+	// above the original and the original's attachments. The forward must be provider-built; unsupported
+	// providers must fail, not substitute a new draft.
+	DraftForward(ctx context.Context, id MessageID, forward Forward) (DraftResult, error)
+	// ReadDraft reads message id for a draft write. It writes nothing. A message that is not a draft gives only
+	// IsDraft false, not an error and none of its content; an unknown ID is the adapter's not-found error.
+	ReadDraft(ctx context.Context, id MessageID) (DraftContent, error)
+	// DraftUpdate applies change to draft id, any draft, and gives the draft's message ID, which may be new, and its
+	// conversation (empty: the provider gave none). It refuses a message that is not a draft before any write.
+	DraftUpdate(ctx context.Context, id MessageID, change DraftChange) (MessageID, ThreadID, error)
+	// DraftDelete deletes draft id the provider's way: Gmail deletes it for good, Microsoft 365 keeps it restorable.
+	// DraftSend sends draft id as it is at the provider. Both refuse a message that is not a draft before any write,
+	// and a request that may have reached the provider is never sent again.
+	DraftDelete(ctx context.Context, id MessageID) error
+	DraftSend(ctx context.Context, id MessageID) error
 	// SendNew, SendReply, and SendForward send mail at once, with the same content as the matching draft
 	// operation. A send request that may have reached the provider is never sent again.
 	SendNew(ctx context.Context, draft NewDraft) error
-	SendReply(ctx context.Context, id MessageID, comment string) error
-	SendForward(ctx context.Context, id MessageID, to []string) error
+	SendReply(ctx context.Context, id MessageID, reply Reply) error
+	SendForward(ctx context.Context, id MessageID, forward Forward) error
 }
 type Calendar interface {
 	List(ctx context.Context, start, end time.Time) ([]Event, error)
@@ -242,6 +391,7 @@ type Calendar interface {
 
 type NewEvent struct {
 	Subject, Body, Location string
+	HTML                    bool // Body is HTML source, sent unchanged; otherwise plain text (EventBodyHTML)
 	Start, End              time.Time
 	Attendees               []string
 	Optional                []string // optional attendees; they receive the invitation too
@@ -255,6 +405,15 @@ var htmlLineBreaks = strings.NewReplacer("\r\n", "<br>", "\r", "<br>", "\n", "<b
 // event bodies as HTML, so body text never becomes markup or a disguised link.
 func HTMLBody(text string) string { return htmlLineBreaks.Replace(html.EscapeString(text)) }
 
+// EventBodyHTML is the HTML that a provider gets as an event body: HTML source unchanged when isHTML, plain
+// text escaped by HTMLBody otherwise.
+func EventBodyHTML(body string, isHTML bool) string {
+	if isHTML {
+		return body
+	}
+	return HTMLBody(body)
+}
+
 // CalendarTimeValid reports whether t has a year from 1 to 9999 in its own zone and in UTC.
 func CalendarTimeValid(t time.Time) bool {
 	return t.Year() >= 1 && t.Year() <= 9999 && t.UTC().Year() >= 1 && t.UTC().Year() <= 9999
@@ -262,7 +421,8 @@ func CalendarTimeValid(t time.Time) bool {
 
 type EventChange struct {
 	Subject, Location             *string
-	Body                          *string // plain text; replaces the whole body
+	Body                          *string // replaces the whole body; plain text unless HTML
+	HTML                          bool    // Body is HTML source, sent unchanged; valid only with Body (HTMLWithoutBody)
 	Start, End                    *time.Time
 	AddAttendees, RemoveAttendees []string
 	Online                        bool // true adds an online meeting if none exists; false leaves it unchanged
@@ -272,6 +432,9 @@ type EventChange struct {
 func (c EventChange) Empty() bool {
 	return c.Subject == nil && c.Location == nil && c.Body == nil && c.Start == nil && c.End == nil && len(c.AddAttendees)+len(c.RemoveAttendees) == 0 && !c.Online
 }
+
+// HTMLWithoutBody reports an HTML flag without a body: the body type goes only with a body.
+func (c EventChange) HTMLWithoutBody() bool { return c.HTML && c.Body == nil }
 
 // AttendeeConflict reports an address that is both added and removed, ignoring case.
 func (c EventChange) AttendeeConflict() bool { return overlap(c.AddAttendees, c.RemoveAttendees) }

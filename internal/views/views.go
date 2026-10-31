@@ -43,8 +43,11 @@ type MailPage struct {
 	NextPage string        `json:"next_page,omitempty"`
 }
 
+// MailView is the result of mail.get. BCC is shown at the verdicts that show To and CC; providers give it for
+// drafts and sent mail.
 type MailView struct {
 	MailSummary
+	BCC       *[]Address         `json:"bcc,omitempty"`
 	Body      *string            `json:"body,omitempty"`
 	Links     *map[string]string `json:"links,omitempty"`
 	Truncated *bool              `json:"truncated,omitempty"`
@@ -144,6 +147,9 @@ func Summary(m model.Message, row Screen, categories []string) MailSummary {
 
 func View(m model.Message, row Screen, categories []string, rendered *content.Rendered) (MailView, error) {
 	result := MailView{MailSummary: Summary(m, row, categories)}
+	if result.To != nil {
+		result.BCC = new(addresses(m.BCC))
+	}
 	if result.Verdict == model.Green {
 		if rendered == nil {
 			return MailView{}, errors.New("green view needs the rendered body")
@@ -161,7 +167,7 @@ func ScreeningState(m model.Message, r content.Rendered) map[string]any {
 	if m.Auth != nil {
 		authentication = auth(*m.Auth)
 	}
-	return map[string]any{"sender": address(m.Sender), "subject": content.CleanSubject(m.Subject), "to": addresses(m.To), "cc": addresses(m.CC), "attachments": cleanStrings(m.Attachments), "auth": authentication, "body": r.Markdown, "links": r.Domains()}
+	return map[string]any{"sender": address(m.Sender), "subject": content.CleanSubject(m.Subject), "to": addresses(m.To), "cc": addresses(m.CC), "bcc": addresses(m.BCC), "attachments": cleanStrings(m.Attachments), "auth": authentication, "body": r.Markdown, "links": r.Domains()}
 }
 
 // ToText uses only the verdict view, so pretty output cannot recover hidden model fields.
@@ -194,6 +200,9 @@ func ToText(v MailView) string {
 	}
 	if v.CC != nil {
 		row("Cc", people(*v.CC))
+	}
+	if v.BCC != nil {
+		row("Bcc", people(*v.BCC))
 	}
 	if v.Subject != nil {
 		row("Subject", *v.Subject)

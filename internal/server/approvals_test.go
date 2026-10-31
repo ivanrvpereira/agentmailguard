@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -20,7 +21,8 @@ import (
 )
 
 // approvalGraph is a fake Graph API. A GET returns the current event. Every other request is a write:
-// it is recorded and answered with {"id":"w1"}, or with failStatus when that is set.
+// it is recorded and answered with {"id":"w1"}, a reply draft also with Graph's quoted body, a PATCH with the
+// patched message as Graph answers it, or with failStatus when that is set.
 type approvalGraph struct {
 	mu         sync.Mutex
 	writes     []meetingRequest
@@ -49,6 +51,14 @@ func (g *approvalGraph) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if status := g.failStatus.Load(); status != 0 {
 		w.WriteHeader(int(status))
 		io.WriteString(w, `{"error":{"code":"CANARY"}}`)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/createReply") || strings.HasSuffix(r.URL.Path, "/createReplyAll") || strings.HasSuffix(r.URL.Path, "/createForward") {
+		io.WriteString(w, `{"id":"w1","body":{"contentType":"html","content":"<html><body>quoted</body></html>"}}`)
+		return
+	}
+	if r.Method == "PATCH" {
+		json.NewEncoder(w).Encode(map[string]string{"id": path.Base(r.URL.Path)})
 		return
 	}
 	io.WriteString(w, `{"id":"w1"}`)
@@ -89,8 +99,8 @@ func pend(t *testing.T, s *server.Server, op, params string) []string {
 // trashApprove holds every trash. The sealed decision is approve too: the fake API serves no messages, so
 // each message counts as sealed, and an approved run must skip the sealed decision to run.
 const trashApprove = "[policy]\nmail_trash='approve'\n[policy.sealed]\nmail_trash='approve'\n"
-const allowAll = "[policy]\nmail_draft='allow'\ncalendar_invite='allow'\ncalendar_update='allow'\ncalendar_cancel='allow'\ncalendar_respond='allow'\n[policy.sealed]\nmail_draft='allow'\n"
-const approveAll = "[policy]\nmail_draft='approve'\ncalendar_invite='approve'\ncalendar_update='approve'\ncalendar_cancel='approve'\ncalendar_respond='approve'\n[policy.sealed]\nmail_draft='approve'\n"
+const allowAll = "[policy]\nmail_draft='allow'\ncalendar_invite='allow'\ncalendar_update='allow'\ncalendar_cancel='allow'\ncalendar_respond='allow'\n"
+const approveAll = "[policy]\nmail_draft='approve'\ncalendar_invite='approve'\ncalendar_update='approve'\ncalendar_cancel='approve'\ncalendar_respond='approve'\n"
 
 // approvalStatus asks for the state of an item. The call names an account that does not exist: the
 // operation is not account-scoped and ignores it.
@@ -131,25 +141,36 @@ func greenMessage(t *testing.T, id string) string {
 	return string(data)
 }
 
-// The same call under an allow policy gives the expected provider write and result.
+// draftJSON is the Graph JSON of the draft d1, which a draft update reads before it writes.
+const draftJSON = `{"id":"d1","isDraft":true,"toRecipients":[],"ccRecipients":[],"bccRecipients":[],"subject":"CANARY draft","body":{"contentType":"text","content":"CANARY body"}}`
+
+// The same call under an allow policy gives the expected provider writes and result: one write, and for a reply or
+// forward draft the createReply or createForward and its PATCH. A stored draft result keeps only the draft IDs (stored).
 func TestApprovedActionMakesTheSameWriteAsTheAllowedCall(t *testing.T) {
-	for _, tc := range []struct{ name, op, params, event string }{
-		{"draft.new", "draft.new", `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body"}`, organizerEvent},
-		{"draft.reply", "draft.reply", `{"id":"m1","body":"CANARY reply"}`, organizerEvent},
-		// The allowed forward runs only when Jev can read the forwarded text, so the Graph API serves a green message.
-		{"draft.forward", "draft.forward", `{"id":"m1","to":["a@example.test","b@example.test"]}`, greenMessage(t, "m1")},
-		{"calendar.invite", "calendar.invite", `{"to":["a@example.test"],"subject":"CANARY","body":"CANARY body","start":"2026-10-09T09:00:00Z","end":"2026-10-09T10:00:00Z","location":"Room","online":false}`, organizerEvent},
-		{"calendar.update duration and attendees", "calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","start":"2026-10-09T12:00:00+01:00","duration":"30m","add":["new@example.test"],"remove":["remove@example.test"],"online":true}`, organizerEvent},
-		{"calendar.update start keeps duration", "calendar.update", `{"id":"e1","start":"2026-10-09T12:00:00+01:00"}`, organizerEvent},
-		{"calendar.update end", "calendar.update", `{"id":"e1","end":"2026-10-09T11:30:00+01:00"}`, organizerEvent},
-		{"calendar.cancel", "calendar.cancel", `{"id":"e1","comment":"CANARY comment"}`, organizerEvent},
-		{"calendar.respond", "calendar.respond", `{"id":"e1","response":"tentative","comment":"CANARY comment"}`, attendeeEvent},
+	for _, tc := range []struct {
+		name, op, params, event, stored string
+		writes                          int
+	}{
+		{"draft.new", "draft.new", `{"to":["CANARY@example.test"],"subject":"CANARY subject","body":"CANARY body"}`, organizerEvent, `{"id":"w1"}`, 1},
+		// A reply or forward runs only when its source is not sealed, and the allowed forward only when Jev can read
+		// the forwarded text, so the Graph API serves a green message.
+		{"draft.reply", "draft.reply", `{"id":"m1","body":"CANARY reply","all":true,"cc":["c@example.test"],"bcc":["d@example.test"],"html":true}`, greenMessage(t, "m1"), `{"id":"w1"}`, 2},
+		{"draft.forward", "draft.forward", `{"id":"m1","to":["a@example.test","b@example.test"],"cc":["c@example.test"],"body":"CANARY note","html":true}`, greenMessage(t, "m1"), `{"id":"w1"}`, 2},
+		{"draft.update", "draft.update", `{"id":"d1","to":[],"bcc":["d@example.test"],"subject":"CANARY subject","body":"<b>CANARY</b>","html":true}`, draftJSON, `{"id":"d1"}`, 1},
+		{"draft.delete", "draft.delete", `{"id":"d1"}`, draftJSON, "", 1},
+		{"calendar.invite", "calendar.invite", `{"to":["a@example.test"],"subject":"CANARY","body":"CANARY body","start":"2026-10-09T09:00:00Z","end":"2026-10-09T10:00:00Z","location":"Room","online":false}`, organizerEvent, "", 1},
+		{"calendar.update duration and attendees", "calendar.update", `{"id":"e1","subject":"CANARY replacement","location":"","start":"2026-10-09T12:00:00+01:00","duration":"30m","add":["new@example.test"],"remove":["remove@example.test"],"online":true}`, organizerEvent, "", 1},
+		{"calendar.update start keeps duration", "calendar.update", `{"id":"e1","start":"2026-10-09T12:00:00+01:00"}`, organizerEvent, "", 1},
+		{"calendar.update end", "calendar.update", `{"id":"e1","end":"2026-10-09T11:30:00+01:00"}`, organizerEvent, "", 1},
+		{"calendar.update html body", "calendar.update", `{"id":"e1","body":"<b>CANARY</b> body","html":true}`, organizerEvent, "", 1},
+		{"calendar.cancel", "calendar.cancel", `{"id":"e1","comment":"CANARY comment"}`, organizerEvent, "", 1},
+		{"calendar.respond", "calendar.respond", `{"id":"e1","response":"tentative","comment":"CANARY comment"}`, attendeeEvent, "", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			allowed, allowedGraph := approvalDaemon(t, allowAll)
 			allowedGraph.event.Store(&tc.event)
 			status, want := accountRPC(t, allowed.s, tc.op, "work", tc.params)
-			if status != 200 || len(allowedGraph.recorded()) != 1 {
+			if status != 200 || len(allowedGraph.recorded()) != tc.writes {
 				t.Fatalf("allowed call: %d %s writes=%+v", status, want, allowedGraph.recorded())
 			}
 			d, graph := approvalDaemon(t, approveAll)
@@ -158,8 +179,11 @@ func TestApprovedActionMakesTheSameWriteAsTheAllowedCall(t *testing.T) {
 			if err := d.s.Approve(context.Background(), id); err != nil {
 				t.Fatal(err)
 			}
-			if got := graph.recorded(); len(got) != 1 || !reflect.DeepEqual(got[0], allowedGraph.recorded()[0]) {
+			if got := graph.recorded(); len(got) != tc.writes || !reflect.DeepEqual(got, allowedGraph.recorded()) {
 				t.Fatalf("approved writes=%+v; allowed=%+v", got, allowedGraph.recorded())
+			}
+			if tc.stored != "" {
+				want = tc.stored
 			}
 			assertState(t, d.s, id, `{"state":"done","result":`+want+`}`)
 		})
@@ -259,6 +283,69 @@ func TestConcurrentApprovalsRunTheActionOnce(t *testing.T) {
 		t.Fatalf("won=%d writes=%d", won, len(graph.recorded()))
 	}
 	assertState(t, d.s, id, `{"state":"done","result":[{"id":"m1","ok":true,"error":null}]}`)
+}
+
+// A person who approves a waiting draft send after a draft update of that draft took the write lock (here while it
+// reads the draft, before Jev and the write) finds the send withdrawn: the update withdraws it first. The update then
+// makes the new waiting send. An approval that claimed the send before the update took the lock is the known window in
+// README "Waiting sends and draft changes".
+func TestApprovalDuringADraftUpdateFindsTheSendWithdrawn(t *testing.T) {
+	var blockRead atomic.Bool
+	reading, release := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	writes := []string{}
+	d := graphDaemon(t, "[policy]\nmail_draft='allow'\nmail_send='approve'\n", writeGrant, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == "GET" {
+			if blockRead.CompareAndSwap(true, false) {
+				close(reading)
+				<-release
+			}
+			io.WriteString(w, draftJSON)
+			return
+		}
+		mu.Lock()
+		writes = append(writes, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		io.WriteString(w, `{"id":"d1"}`)
+	}), newNativeAPI())
+	send := pend(t, d.s, "draft.send", `{"id":"d1"}`)[0]
+	blockRead.Store(true)
+	updated := make(chan string, 1)
+	go func() {
+		_, body := accountRPC(t, d.s, "draft.update", "work", `{"id":"d1","subject":"CANARY changed"}`)
+		updated <- body
+	}()
+	select {
+	case <-reading:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the update did not read the draft")
+	}
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	approved := make(chan error, 1)
+	go func() { approved <- d.s.Approve(context.Background(), send) }()
+	// The approval must answer while the update still holds the lock. A claimed send would wait for the lock instead.
+	select {
+	case err := <-approved:
+		if err != server.ErrAlreadyHandled {
+			t.Fatalf("approve=%v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the approval did not answer while the update held the lock")
+	}
+	unblock()
+	body := <-updated
+	mu.Lock()
+	defer mu.Unlock()
+	if !reflect.DeepEqual(writes, []string{"PATCH /me/messages/d1"}) {
+		t.Fatalf("provider writes=%v", writes)
+	}
+	assertState(t, d.s, send, `{"state":"withdrawn"}`)
+	if m := regexp.MustCompile(`"send_approval_id":"([0-9a-f]{32})"`).FindStringSubmatch(body); m == nil || m[1] == send {
+		t.Fatalf("update=%s", body)
+	}
 }
 
 // A run that fails returns a safe code, is stored and audited as failed, and never runs again.

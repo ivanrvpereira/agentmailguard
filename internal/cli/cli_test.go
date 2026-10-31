@@ -62,13 +62,24 @@ func TestCommandsUseHTTPWithoutLocalState(t *testing.T) {
 		{[]string{"calendar", "get", "e"}, "calendar.get", `{"id":"e"}`},
 		{[]string{"calendar", "search", "budget plan"}, "calendar.search", `{"text":"budget plan"}`},
 		{[]string{"calendar", "search", "budget plan", "--page", "25"}, "calendar.search", `{"text":"budget plan","page":"25"}`},
-		{[]string{"draft", "new", "--to", "a@test", "--to", "b@test", "--subject", "", "--body", "draft-canary"}, "draft.new", `{"to":["a@test","b@test"],"subject":"","body":"draft-canary"}`},
-		{[]string{"draft", "reply", "m", "--body", "reply-canary"}, "draft.reply", `{"id":"m","body":"reply-canary"}`},
-		{[]string{"draft", "forward", "m", "--to", "a@test", "--to", "b@test"}, "draft.forward", `{"id":"m","to":["a@test","b@test"]}`},
+		{[]string{"draft", "new", "--to", "a@test", "--to", "b@test", "--subject", "", "--body", "draft-canary"}, "draft.new", `{"to":["a@test","b@test"],"cc":[],"bcc":[],"subject":"","body":"draft-canary","html":false}`},
+		{[]string{"draft", "new"}, "draft.new", `{"to":[],"cc":[],"bcc":[],"subject":"","body":"","html":false}`},
+		{[]string{"draft", "reply", "m", "--body", "reply-canary"}, "draft.reply", `{"id":"m","body":"reply-canary","html":false,"all":false,"cc":[],"bcc":[]}`},
+		{[]string{"draft", "reply", "m", "--all", "--cc", "c@test", "--cc", "d@test", "--bcc", "e@test", "--body", "<p>reply-canary</p>", "--html"}, "draft.reply", `{"id":"m","body":"<p>reply-canary</p>","html":true,"all":true,"cc":["c@test","d@test"],"bcc":["e@test"]}`},
+		{[]string{"draft", "forward", "m", "--to", "a@test", "--to", "b@test"}, "draft.forward", `{"id":"m","to":["a@test","b@test"],"cc":[],"bcc":[],"body":"","html":false}`},
+		{[]string{"draft", "forward", "m", "--body", "forward-canary"}, "draft.forward", `{"id":"m","to":[],"cc":[],"bcc":[],"body":"forward-canary","html":false}`},
 		{[]string{"draft", "update", "d", "--body", ""}, "draft.update", `{"id":"d","body":""}`},
-		{[]string{"mail", "send", "--to", "a@test", "--to", "b@test", "--subject", "", "--body", "send-canary"}, "mail.send", `{"to":["a@test","b@test"],"subject":"","body":"send-canary"}`},
-		{[]string{"mail", "reply", "m", "--body", ""}, "mail.reply", `{"id":"m","body":""}`},
-		{[]string{"mail", "forward", "m", "--to", "a@test", "--to", "b@test"}, "mail.forward", `{"id":"m","to":["a@test","b@test"]}`},
+		{[]string{"draft", "update", "d", "--to", "a@test", "--to", "b@test", "--cc", "", "--subject", "s", "--body", "<p>update-canary</p>", "--html"}, "draft.update", `{"id":"d","to":["a@test","b@test"],"cc":[],"subject":"s","body":"<p>update-canary</p>","html":true}`},
+		{[]string{"draft", "update", "d", "--bcc", "e@test"}, "draft.update", `{"id":"d","bcc":["e@test"]}`},
+		{[]string{"draft", "delete", "d"}, "draft.delete", `{"id":"d"}`},
+		{[]string{"draft", "send", "d"}, "draft.send", `{"id":"d"}`},
+		{[]string{"mail", "send", "--to", "a@test", "--to", "b@test", "--subject", "", "--body", "send-canary"}, "mail.send", `{"to":["a@test","b@test"],"cc":[],"bcc":[],"subject":"","body":"send-canary","html":false}`},
+		{[]string{"mail", "send", "--cc", "c@test", "--bcc", "d@test", "--bcc", "e@test", "--body", "<p>send-canary</p>", "--html"}, "mail.send", `{"to":[],"cc":["c@test"],"bcc":["d@test","e@test"],"subject":"","body":"<p>send-canary</p>","html":true}`},
+		{[]string{"mail", "reply", "m"}, "mail.reply", `{"id":"m","body":"","html":false,"all":false,"cc":[],"bcc":[]}`},
+		{[]string{"mail", "reply", "m", "--all", "--bcc", "e@test", "--body", "reply-canary"}, "mail.reply", `{"id":"m","body":"reply-canary","html":false,"all":true,"cc":[],"bcc":["e@test"]}`},
+		{[]string{"mail", "forward", "m", "--to", "a@test", "--to", "b@test"}, "mail.forward", `{"id":"m","to":["a@test","b@test"],"cc":[],"bcc":[],"body":"","html":false}`},
+		{[]string{"mail", "forward", "m", "--to", "a@test", "--cc", "c@test", "--bcc", "d@test", "--bcc", "e@test", "--body", "<p>forward-canary</p>", "--html"}, "mail.forward", `{"id":"m","to":["a@test"],"cc":["c@test"],"bcc":["d@test","e@test"],"body":"<p>forward-canary</p>","html":true}`},
+		{[]string{"mail", "forward", "m", "--bcc", "d@test"}, "mail.forward", `{"id":"m","to":[],"cc":[],"bcc":["d@test"],"body":"","html":false}`},
 	}
 	loc, e := time.LoadLocation("America/New_York")
 	if e != nil {
@@ -223,9 +234,9 @@ func TestPrettyAliasesUseLastOption(t *testing.T) {
 }
 
 func TestUsageAndHelpNeedNoServerOrState(t *testing.T) {
-	for _, args := range [][]string{{"mail", "send", "x"}, {"draft", "update", "x"}, {"mail", "flag", "x", "--state", "urgent"}, {"mail", "get", "x", "y"}, {"stats", "--days", "0"}, {"mail", "link", "x"}, {"mail", "link", "x", "L1", "--all"}, {"mail", "get", "x", "--secret", "canary"}, {"calendar", "list", "--from", "tomorrow"}, {"calendar", "list", "--from", "2026-03-07", "--to", "2026-03-06"}, {"calendar", "list", "--text", "x"}, {"calendar", "list", "--organizer", "x"}, {"calendar", "list", "--attendee", "x"}, {"calendar", "search"}, {"calendar", "search", "a", "b"}, {"calendar", "search", "a", "--from", "today"}, {"mail", "thread", "t", "--count", "3"}, {"mail", "list", "--skip", "2"}, {"mail", "thread", "t", "--page", "2"}, {"calendar", "search", "a", "--count", "3"}, {"mail", "organize", "--since", "0d"}, {"mail", "get", "x", "--home", "canary"},
-		{"mail", "send", "--subject", "s", "--body", "b"}, {"mail", "send", "--to", "a", "--body", "b"}, {"mail", "send", "--to", "a", "--subject", "s"},
-		{"mail", "reply", "x"}, {"mail", "reply", "--body", "b"}, {"mail", "reply", "x", "y", "--body", "b"}, {"mail", "forward", "x"}, {"mail", "forward", "--to", "a"}} {
+	for _, args := range [][]string{{"mail", "send", "x"}, {"draft", "update", "x"}, {"draft", "update", "x", "--html"}, {"draft", "delete"}, {"draft", "delete", "x", "y"}, {"draft", "send"}, {"draft", "send", "x", "y"}, {"draft", "send", "x", "--body", "b"}, {"draft", "update", "x", "--subject", "s", "--html"}, {"mail", "flag", "x", "--state", "urgent"}, {"mail", "get", "x", "y"}, {"stats", "--days", "0"}, {"mail", "link", "x"}, {"mail", "link", "x", "L1", "--all"}, {"mail", "get", "x", "--secret", "canary"}, {"calendar", "list", "--from", "tomorrow"}, {"calendar", "list", "--from", "2026-03-07", "--to", "2026-03-06"}, {"calendar", "list", "--text", "x"}, {"calendar", "list", "--organizer", "x"}, {"calendar", "list", "--attendee", "x"}, {"calendar", "search"}, {"calendar", "search", "a", "b"}, {"calendar", "search", "a", "--from", "today"}, {"mail", "thread", "t", "--count", "3"}, {"mail", "list", "--skip", "2"}, {"mail", "thread", "t", "--page", "2"}, {"calendar", "search", "a", "--count", "3"}, {"mail", "organize", "--since", "0d"}, {"mail", "get", "x", "--home", "canary"},
+		{"mail", "send", "--subject", "s", "--body", "b"}, {"mail", "send", "--html"}, {"draft", "new", "--html=maybe"},
+		{"mail", "reply", "--body", "b"}, {"draft", "reply", "x", "--all=maybe"}, {"mail", "reply", "x", "y", "--body", "b"}, {"mail", "forward", "x"}, {"mail", "forward", "--to", "a"}, {"mail", "forward", "x", "--body", "b", "--html"}, {"draft", "forward", "x", "--html=maybe"}} {
 		var out, errout bytes.Buffer
 		code := cli.Run(context.Background(), args, &out, &errout, cli.Options{})
 		if code != 2 || out.Len() != 0 || strings.Contains(errout.String(), "canary") {

@@ -144,7 +144,7 @@ Jev's check of the text that the agent wrote for an action. It can only make an 
 _Avoid_: content check, outbound screening
 
 **Pending action**:
-A write action that the policy or the action check holds until a person approves or denies it. It keeps the name after the decision, with its state: pending, running, done, denied, or failed.
+A write action that the policy or the action check holds until a person approves or denies it. It keeps the name after the decision, with its state: pending, running, done, denied, withdrawn, or failed.
 _Avoid_: pending item, item, approval request, queued action
 
 **Approval console**:
@@ -152,7 +152,7 @@ The password-protected web page where a person approves or denies pending action
 _Avoid_: dashboard, admin UI
 
 **Send**:
-Mail that leaves the account at once: a new message, reply, or forward. A send is never retried.
+Mail that leaves the account at once: a new message, reply, forward, or saved draft. A send is never retried.
 _Avoid_: deliver, submit
 
 **Meeting notification**:
@@ -160,7 +160,7 @@ The message that a provider sends to attendees or the organizer when a meeting i
 _Avoid_: invite email, calendar update
 
 **Trash**:
-A move of a message into the provider's trash. Nothing is ever deleted permanently.
+A move of a message into the provider's trash, never a permanent deletion.
 _Avoid_: delete, remove
 
 ### Organization

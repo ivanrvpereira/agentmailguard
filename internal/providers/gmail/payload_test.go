@@ -55,7 +55,7 @@ func TestFullBodyRequiresUsablePayload(t *testing.T) {
 				m := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), GmailURL: server.URL}).Mailbox()
 				ctx := context.Background()
 				var messages []model.Message
-				var draft string
+				var draft model.DraftResult
 				var err error
 				switch operation {
 				case "get":
@@ -69,10 +69,10 @@ func TestFullBodyRequiresUsablePayload(t *testing.T) {
 					page, err = m.Search(ctx, model.SearchQuery{}, model.PageRequest{Size: 1}, false)
 					messages = page.Messages
 				case "reply":
-					draft, err = m.DraftReply(ctx, "m", "Reply")
+					draft, err = m.DraftReply(ctx, "m", model.Reply{Body: "Reply"})
 				}
 				if !fixture.valid {
-					if err == nil || len(messages) != 0 || draft != "" || writes.Load() != 0 {
+					if err == nil || len(messages) != 0 || draft.ID != "" || writes.Load() != 0 {
 						t.Fatal("unusable payload accepted or draft written")
 					}
 					return
@@ -81,7 +81,7 @@ func TestFullBodyRequiresUsablePayload(t *testing.T) {
 					t.Fatal(err)
 				}
 				if operation == "reply" {
-					if draft != "draft" || writes.Load() != 1 {
+					if draft.ID != "draft" || writes.Load() != 1 {
 						t.Fatal("empty source reply not created")
 					}
 				} else if len(messages) != 1 || messages[0].Body == nil || *messages[0].Body != "" {

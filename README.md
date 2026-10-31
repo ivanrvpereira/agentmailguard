@@ -24,11 +24,11 @@ By default, the daemon sends requests to OpenRouter's System One endpoint for mo
 The [`[screening]`](#screening) table can set another endpoint and model, which then receives the same data.
 The fake screening engine sends nothing, but it is only for tests and local work.
 
-- Mail requests include rendered body text, subject, sender and recipient identities, attachment names, authentication results, and link domains.
+- Mail requests include rendered body text, subject, sender and recipient identities (To, Cc, and the Bcc of drafts and sent mail where the provider gives it), attachment names, authentication results, and link domains.
 - Calendar requests include subject, organizer, attendees, location, recurrence, meeting join URLs, and other event metadata.
 - Private-event bodies are excluded, but private-event metadata and accepted meeting join URLs are still included.
 - Organization requests include the rule instructions used for classification.
-- [Action checks](#jev-action-check) include the recipients, subject, body, comment, and event fields that the agent wrote, and for a forward the subject and body of the forwarded message.
+- [Action checks](#jev-action-check) include the recipients (To, Cc, and Bcc), subject, body (HTML as its source), HTML flag, reply-all flag, comment, and event fields that the agent wrote, for a reply the To and Cc addresses that the reply goes to, worked out from the original message, for a forward the subject and body of the forwarded message, and for a draft send the draft's To, Cc, Bcc, subject, body (HTML as its source), and HTML flag as the daemon reads them from the provider.
 
 These transfers occur before the verdict.
 Content hidden from the agent can still reach the screening service.
@@ -147,7 +147,7 @@ No data is lost, because the data uses the email.
 A key is a dotted path:
 
 - `default_account`.
-- `policy.KEY`, `policy.sealed.KEY`, `accounts.ALIAS.policy.KEY`, and `accounts.ALIAS.policy.sealed.KEY`, for example `policy.mail_send`. See [Write policy](#write-policy).
+- `policy.KEY`, `policy.sealed.mail_trash`, `accounts.ALIAS.policy.KEY`, and `accounts.ALIAS.policy.sealed.mail_trash`, for example `policy.mail_send`. See [Write policy](#write-policy).
 - `accounts.ALIAS.client_id`, `accounts.ALIAS.tenant_id` (Microsoft 365), and `accounts.ALIAS.client_secret` (Gmail).
 - `screening.provider`, `screening.endpoint`, and `screening.model`. See [Screening](#screening).
 - `console.listen`, `console.hosts`, and `console.username`. `console.hosts` takes a comma-separated list. See [Console configuration](#console-configuration).
@@ -224,7 +224,7 @@ sqlite3 ~/.agentmailguard/fake-provider.db "INSERT INTO messages (account, id, s
 sqlite3 ~/.agentmailguard/fake-provider.db "SELECT id, folder, subject, origin FROM messages WHERE account = 'demo@fake.invalid';"
 ```
 
-Trash and archive are moves to the `trash` and `archive` folders; nothing is ever deleted. Drafts go to `drafts`. `mail send`, `mail reply`, and `mail forward` store the message in `sent`, with `origin` (`new`, `reply`, or `forward`) and `source_id`. Nothing leaves the machine.
+Trash and archive are moves to the `trash` and `archive` folders. Only `draft delete` deletes a row, the draft's. Drafts go to `drafts`; `draft send` moves the draft to `sent` with `is_draft` 0 and the send time, and it keeps its ID. `mail send`, `mail reply`, and `mail forward` store the message in `sent`, with `origin` (`new`, `reply`, or `forward`) and `source_id`. Nothing leaves the machine. New drafts, replies, and sends keep their To, Cc, and Bcc lists in `to_addresses`, `cc_addresses`, and `bcc_addresses`, and `content_type` is `html` for an `--html` body. A reply picks its recipients by the Gmail rule (see [Mail send](#mail-send)); the fake has no Reply-To, and a message in `sent` is one that the account sent. A plain-text reply body is the agent's text; an `--html` reply body is the agent's HTML with the original body below it in a `<blockquote>`. A forward goes to its `--to`, `--cc`, and `--bcc`, has the subject `Fw: ` and the original subject, and carries the original's `attachments`; its body follows the same rule as a reply, with the note as the agent's text. A draft update changes only the given columns of any row with `is_draft` 1, whatever its `origin`, and keeps its ID; a message that is not a draft is refused. A `fake-provider.db` made before the `bcc_addresses` column existed gets the column when the daemon first opens it.
 
 To seed a conversation, give its messages the same `thread_id`. A message whose `thread_id` is NULL is its own conversation, and its `thread_id` in results is its message ID. Reply and forward drafts, and sent replies and forwards, join the conversation of their source message; new drafts and new sends are their own conversation. A `fake-provider.db` made before the `thread_id` column existed gets the column when the daemon first opens it. For example, a reply from Ana in the conversation of `m1`:
 
@@ -238,7 +238,7 @@ The calendar uses three tables. `events` holds the events, `attendees` holds the
 sqlite3 ~/.agentmailguard/fake-provider.db "INSERT INTO events (account, id, subject, start_at, end_at, organizer_name, organizer_address) VALUES ('demo@fake.invalid', 'e1', 'Planning', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z', 'Ana', 'ana@example.test'); INSERT INTO attendees (account, event_id, address, name) VALUES ('demo@fake.invalid', 'e1', 'demo@fake.invalid', 'Demo'); INSERT INTO free_busy (account, address, start_at, end_at, status) VALUES ('demo@fake.invalid', 'ana@example.test', '2026-04-02T09:00:00Z', '2026-04-02T10:00:00Z', 'busy');"
 ```
 
-`calendar invite`, `update`, `cancel`, and `respond` change only `fake-provider.db`, under the write policy as for other accounts. No notification leaves the machine. A cancel sets `is_cancelled` and `cancel_comment` and deletes nothing. A response sets the account's own row in `attendees`; `--no-notify` changes nothing else. An invite stores `--optional` attendees with `optional` set to 1 in `attendees`. A `fake-provider.db` made before the `optional` column existed gets the column, with 0 for every existing attendee, when the daemon first opens it.
+`calendar invite`, `update`, `cancel`, and `respond` change only `fake-provider.db`, under the write policy as for other accounts. No notification leaves the machine. A cancel sets `is_cancelled` and `cancel_comment` and deletes nothing. A response sets the account's own row in `attendees`; `--no-notify` changes nothing else. An invite stores `--optional` attendees with `optional` set to 1 in `attendees`. An event `body` is HTML (`content_type` `html`): an `--html` body as given, plain text escaped. A `fake-provider.db` made before the `optional` column existed gets the column, with 0 for every existing attendee, when the daemon first opens it.
 
 Fake mail is untrusted like real mail. The configured [screening](#screening) engine screens it. With the fake screening engine, the daemon needs no screening key.
 
@@ -474,7 +474,7 @@ Forward only the API port (8787). Do not forward the [approval console](#approva
 Run `amg --help` or `amgd --help` without a daemon to see every command and option.
 The table lists the `amg` commands. The `amgd` commands are in [Daemon configuration](#daemon-configuration) and [Credential storage](#credential-storage).
 Recipient and category flags can repeat.
-An explicit empty value, such as `draft update ID --body ''`, is not the same as an omitted flag.
+An explicit empty value, such as `draft update ID --body ''`, is not the same as an omitted flag. For the lists of `draft update`, one empty value, such as `--cc ''`, clears the list.
 
 | Group | Commands |
 | --- | --- |
@@ -483,9 +483,9 @@ An explicit empty value, such as `draft update ID --body ''`, is not the same as
 | Mail changes | `mail archive IDS...`, `mail trash IDS...`, `mail move FOLDER_ID IDS...`, `mail read IDS...`, `mail unread IDS...`, `mail flag IDS... --state flagged|complete|none`, `mail categorize IDS... --add NAME --remove NAME` |
 | Organization and calendar | `mail organize --since 7d [--until DATE] [--apply]`, `calendar list --from today --to +7d`, `calendar get ID`, `calendar search TEXT [--page NEXT_PAGE]` |
 | Availability (Microsoft 365 and fake, read-only) | `calendar availability --to ADDRESS [--to ADDRESS] --start 'YYYY-MM-DD HH:MM' --end 'YYYY-MM-DD HH:MM'` |
-| Meetings (send notifications) | `calendar invite --to ADDRESS --subject TEXT --start 'YYYY-MM-DD HH:MM' --duration 30m\|--end 'YYYY-MM-DD HH:MM' [--optional ADDRESS] [--body TEXT] [--location TEXT] [--no-online]`, `calendar update ID [--subject TEXT] [--location TEXT] [--body TEXT] [--start TIME] [--duration D\|--end TIME] [--add-attendee ADDRESS] [--remove-attendee ADDRESS] [--online]`, `calendar cancel ID [--comment TEXT]`, `calendar respond ID --response accept\|tentative\|decline [--comment TEXT\|--no-notify]` |
-| Mail send (sends at once) | `mail send --to ADDRESS --subject TEXT --body TEXT`, `mail reply ID --body TEXT`, `mail forward ID --to ADDRESS` |
-| Drafts (no send) | `draft new --to ADDRESS --subject TEXT --body TEXT`, `draft reply ID --body TEXT`, `draft forward ID --to ADDRESS`, `draft update ID --body TEXT` |
+| Meetings (send notifications) | `calendar invite --to ADDRESS --subject TEXT --start 'YYYY-MM-DD HH:MM' --duration 30m\|--end 'YYYY-MM-DD HH:MM' [--optional ADDRESS] [--body TEXT] [--html] [--location TEXT] [--no-online]`, `calendar update ID [--subject TEXT] [--location TEXT] [--body TEXT [--html]] [--start TIME] [--duration D\|--end TIME] [--add-attendee ADDRESS] [--remove-attendee ADDRESS] [--online]`, `calendar cancel ID [--comment TEXT]`, `calendar respond ID --response accept\|tentative\|decline [--comment TEXT\|--no-notify]` |
+| Mail send (sends at once) | `mail send [--to ADDRESS] [--cc ADDRESS] [--bcc ADDRESS] [--subject TEXT] [--body TEXT] [--html]`, `mail reply ID [--all] [--cc ADDRESS] [--bcc ADDRESS] [--body TEXT] [--html]`, `mail forward ID [--to ADDRESS] [--cc ADDRESS] [--bcc ADDRESS] [--body TEXT] [--html]`, `draft send ID` |
+| Drafts (no send) | `draft new [--to ADDRESS] [--cc ADDRESS] [--bcc ADDRESS] [--subject TEXT] [--body TEXT] [--html]`, `draft reply ID [--all] [--cc ADDRESS] [--bcc ADDRESS] [--body TEXT] [--html]`, `draft forward ID [--to ADDRESS] [--cc ADDRESS] [--bcc ADDRESS] [--body TEXT] [--html]`, `draft update ID [--to ADDRESS] [--cc ADDRESS] [--bcc ADDRESS] [--subject TEXT] [--body TEXT [--html]]`, `draft delete ID` |
 
 Successful commands print the operation's JSON result.
 `mail list`, `mail search`, and `calendar search` return one page: `{"messages": [...], "next_page": "..."}`, with `"events"` for `calendar search`. `next_page` is present only when the provider has more results. To read the next page, always repeat the same command with the same options and add `--page VALUE`. The daemon checks the form of the value and otherwise passes it to the provider as is; only for Microsoft 365 mail does it also refuse a next link from other options.
@@ -500,11 +500,18 @@ Dates follow one rule: a day runs from 00:00 to the end of the day on the clock 
 On Gmail, `mail search` sends the times in Unix seconds (`after:` and `before:`), because Gmail reads a date there as midnight Pacific time ([Gmail API filtering](https://developers.google.com/workspace/gmail/api/guides/filtering)); the guide does not say whether the boundary second matches, so the daemon asks for one more second on each side. On Microsoft 365, KQL `received` takes only a day, in UTC when no time zone is set ([MS-KQL Date Tokens](https://learn.microsoft.com/en-us/openspecs/sharepoint_protocols/ms-kql/21b23dbb-6c49-4d35-86e4-80fb1d66b301)), so the daemon asks for one more UTC day on each side. On both, the daemon then drops the messages received outside the exact times, and messages without a received time, so a page can hold fewer messages than `--count`, and `next_page` still continues the same search.
 `mail thread` prints JSON only. It returns the messages of the conversation as a plain list of `mail list` messages, without pages, newest first, from every folder, including trash, spam or junk, sent mail, and drafts. Gmail returns the whole thread (`threads.get`); on Microsoft 365 the daemon reads every page of the `conversationId` query. An unknown thread fails. Read bodies with `mail get`.
 `calendar search TEXT` uses the provider's own search: Google Calendar `events.list` with `q` on Gmail, and the Microsoft Search API (`POST /search/query` for events) on Microsoft 365. It returns one page in the provider's default size and order, with `next_page` as above, and has no date range. Each event is screened as `calendar get` screens it, and the result has the fields of a `calendar list` result. The provider matches the text on its side, so a hidden subject or body can decide whether an event is in the result. The fake provider matches the subject, body, location, organizer, and attendees, ignoring case.
-Draft update returns the resulting draft ID, which can change on Gmail.
-`mail send`, `mail reply`, and `mail forward` return `{"ok": true}`. The providers give no ID for a sent message.
+`draft new` takes every option as optional, as the mail apps do, and `--to`, `--cc`, and `--bcc` can each be repeated. `--bcc` adds hidden recipients: the other recipients do not see them. The body is plain text with its line breaks unless `--html` is given; with `--html`, the body is HTML that the daemon sends unchanged, without cleaning or checking it.
+`draft new` returns `{"id", "thread_id", "to", "cc", "bcc", "subject"}`: the draft ID, its conversation ID (left out when the provider gives none), and its recipients and subject. On Microsoft 365, they come from the message that Graph returns; on Gmail, the IDs come from Gmail's answer and the recipients and subject from the message that the daemon built.
+`draft reply` takes the same options as `mail reply` (see [Mail send](#mail-send)) and returns the same fields as `draft new`, or only `{"id", "thread_id"}` when the daemon cannot read the verdict of the replied-to message after the write. The daemon always refuses a reply to a `red`, `sealed`, or `error` message; see [Sealed messages](#sealed-messages).
+`draft forward` takes the same options as `mail forward` (see [Mail send](#mail-send)), but needs no recipient, as the mail apps allow; add the recipients later in the app. It returns the same fields as `draft reply`, and the daemon refuses it for the same messages.
+`mail get` also shows `bcc` on drafts and sent mail, where the provider gives it, at the verdicts that show `to` and `cc`. Sent mail is a Gmail message with the `SENT` label, or a Microsoft 365 message whose `from` is the account's address, so on Microsoft 365 mail sent from an alias, a shared mailbox, or on someone's behalf shows no Bcc; the daemon reads no Bcc of other mail, where a Bcc header is sender text. A message with Bcc is screened again on every `mail get`, as a draft is, so a cached verdict from before Bcc was screened never shows it; each such `mail get` costs one screening.
+`draft update` changes any draft: a new draft, a reply or forward draft, or a draft that the user wrote in the app. Only the fields that it is given change, and it needs at least one of `--to`, `--cc`, `--bcc`, `--subject`, and `--body`. A list replaces the draft's list, and one empty value (`--to ''`) clears it. `--body` replaces the whole body, the quoted original of a reply or forward included, as both providers do; it is plain text unless `--html`, which goes only with `--body`. On Gmail, the update keeps the draft's conversation and its other headers byte for byte, `In-Reply-To` and `References` included, except `Date` and `Message-ID`. `--body` replaces the body text that `mail get` shows (the first text and HTML parts that are not attachments, with the `multipart/alternative` that holds only them) with one base64 text part, and keeps every other part, such as attachments, inline images, and attached messages, byte for byte at its place. A draft with only attachments gets the body as its first part; a draft that cannot take one, or whose MIME does not parse, fails with `Gmail error ValueError`. Without `--body`, the body stays as it is. An update of a message that is not a draft fails with `draft update refused: not a draft` before anything is written.
+`draft update` returns `{"id", "thread_id", "ok": true}` and only the fields that it was given (`to`, `cc`, `bcc`, `subject`), cleaned; it does not read back the other fields. Gmail gives the updated draft a new message ID, so use the returned `id` for later commands; on Microsoft 365 and the fake provider, the ID stays. When the update withdrew a waiting send of the draft, the result also has `send_approval_id`, the approval ID of the new waiting send (see [Waiting sends and draft changes](#waiting-sends-and-draft-changes)).
+`draft delete ID` deletes any draft: on Gmail with `drafts.delete` on the draft that holds the message, which deletes it for good and does not trash it; on Microsoft 365 with Graph `DELETE` of the message, which keeps the item restorable (Graph has a separate permanent delete that the daemon never uses). `draft send ID` sends any draft as it is (see [Mail send](#mail-send)). Both refuse a message that is not a draft, with `draft delete refused: not a draft` or `draft send refused: not a draft`, before anything is written.
+`mail send`, `mail reply`, `mail forward`, `draft send`, and `draft delete` return `{"ok": true}`. The providers give no ID for a sent message.
 `calendar invite` returns the new event ID. The other meeting commands return the event ID and `"ok": true`.
 The [write policy](#write-policy) can refuse trash, draft, send, and meeting commands, or store them as pending actions. See [Results](#results) for these results.
-There is no permanent-delete, folder creation, category creation, or arbitrary provider request command.
+There is no permanent-delete command for mail, and no folder creation, category creation, or arbitrary provider request command. Only `draft delete` deletes, and only a draft; on Gmail it deletes the draft for good.
 
 Exit code `0` means the call ran, including a mutation with failed per-ID results and a `pending` result.
 Exit code `1` means the whole call failed or was refused, or `account status` reports an unusable login.
@@ -522,7 +529,7 @@ Each policy key has one of three decisions:
 
 **Caution:** Do not set `approve` unless the [console password](#console-password) is set.
 Only a person in the [approval console](#approval-console) can approve or deny a pending action. Without the password, the console refuses every request and a pending action stays pending.
-`amg` and the API cannot approve or deny. `approvals status ID` shows the state of a pending action. See [Results](#results).
+`amg` and the API cannot approve or deny. A draft change or delete through the API withdraws a waiting send of that draft and never runs or approves anything (see [Waiting sends and draft changes](#waiting-sends-and-draft-changes)). `approvals status ID` shows the state of a pending action. See [Results](#results).
 
 Example:
 
@@ -548,8 +555,8 @@ mail_trash = "deny"
 | Key | Commands | Default |
 | --- | --- | --- |
 | `mail_trash` | `mail trash`, and rule moves to `trash` | `allow` |
-| `mail_draft` | `draft new`, `draft reply`, `draft forward`, `draft update` | `allow` |
-| `mail_send` | `mail send`, `mail reply`, `mail forward` | `deny` |
+| `mail_draft` | `draft new`, `draft reply`, `draft forward`, `draft update`, `draft delete` | `allow` |
+| `mail_send` | `mail send`, `mail reply`, `mail forward`, `draft send` | `deny` |
 | `calendar_invite` | `calendar invite` | `deny` |
 | `calendar_update` | `calendar update` | `deny` |
 | `calendar_cancel` | `calendar cancel` | `deny` |
@@ -563,29 +570,33 @@ In `mail organize --apply`, only a rule move to `trash` has a key.
 An invalid policy stops `amgd serve` with `config.toml: KEY_PATH: PROBLEM`, and a reload with an invalid policy is refused.
 For example: `config.toml: accounts.personal.policy.sealed.calendar_invite: unknown key`. The error never shows the value.
 `amgd config set` refuses an invalid policy key or value and leaves the file unchanged.
-A policy is invalid if it has an unknown key or table, a value other than `allow`, `approve`, or `deny`, or a calendar key in a sealed table.
+A policy is invalid if it has an unknown key or table, a value other than `allow`, `approve`, or `deny`, or a key other than `mail_trash` in a sealed table.
 
 ### Sealed messages
 
-The sealed tables apply to actions on an existing message: `mail trash`, `draft reply`, `draft forward`, `mail reply`, and `mail forward`.
-A sealed table accepts only `mail_trash`, `mail_draft`, and `mail_send`.
-For each key, the sealed decision is the first value in this order: `[accounts.ALIAS.policy.sealed]`, `[policy.sealed]`, `deny`.
+The daemon always refuses `draft reply`, `draft forward`, `mail reply`, and `mail forward` on a `red`, `sealed`, or `error` message, with the refusal of their key: `refused by policy: mail_draft` or `refused by policy: mail_send`. No setting allows them.
+Unless the base decision is `deny`, the daemon looks up the verdict of the message for each reply and forward.
 
-If the referenced message is `sealed` or `error`, the daemon uses the stricter of the base decision and the sealed decision.
+The sealed tables apply only to `mail trash` and accept only `mail_trash`.
+The sealed decision is the first value in this order: `[accounts.ALIAS.policy.sealed]`, `[policy.sealed]`, `deny`.
+If the message to trash is `sealed` or `error`, the daemon uses the stricter of the base decision and the sealed decision.
 The order is `allow`, then `approve`, then `deny`.
 The daemon looks up the verdict only when the sealed decision is stricter than the base decision.
+
 If the message has no cached verdict, the daemon screens it first. A message that the daemon cannot screen counts as `sealed`.
-For `green`, `yellow`, and `red` messages, only the base decision applies.
-`draft new`, `draft update`, and `mail send` do not reference a received message, so only the base decision applies.
+For replies and forwards of `green` and `yellow` messages, and for `mail trash` of `green`, `yellow`, and `red` messages, only the base decision applies.
+`draft new`, `draft update`, `draft delete`, `draft send`, and `mail send` do not reference a received message, so only the base decision applies. Unless the base decision is `deny`, `draft update`, `draft delete`, and `draft send` first read their message and refuse one that is not a draft, before the Jev action check and any pending action. An approved run reads the message again.
 
 ### Jev action check
 
 Before an action runs, Jev checks the text that the agent wrote for it. The agent can be under prompt injection from mail it read, so the daemon does not trust this text.
 
-- Checked actions: `draft new`, `draft reply`, `draft update`, `draft forward`, `mail send`, `mail reply`, `mail forward`, `calendar invite`, and `calendar update`. `calendar respond` and `calendar cancel` are checked only when they have a comment, so `calendar respond --no-notify` is never checked.
-- Not checked: `mail trash`, rule moves, and the commands without a policy key.
-- Jev sees the operation name, a fixed description of what the action does, and the action fields that the agent gave: recipients (for `calendar invite`, also the `--optional` attendees), subject, body (for `calendar update`, the new `--body`), comment, response, and event fields. It never sees a message or event ID.
+- Checked actions: `draft new`, `draft reply`, `draft update`, `draft forward`, `mail send`, `mail reply`, `mail forward`, `draft send`, `calendar invite`, and `calendar update`. `calendar respond` and `calendar cancel` are checked only when they have a comment, so `calendar respond --no-notify` is never checked.
+- Not checked: `mail trash`, `draft delete`, rule moves, and the commands without a policy key.
+- Jev sees the operation name, a fixed description of what the action does, and the action fields that the agent gave: recipients (for `draft new`, `mail send`, and forwards, To, Cc, and Bcc; for `draft update`, the lists that it gives; for replies, the added Cc and Bcc; for `calendar invite`, also the `--optional` attendees), subject, body (for `calendar update`, the new `--body`; an `--html` body, on mail or meetings, as its HTML source, not rendered), the HTML flag, the reply-all flag, comment, response, and event fields. It never sees a message or event ID. A `draft update` gives only the fields that it changes.
+- For `draft reply` and `mail reply`, Jev also sees `reply_recipients`: the To and Cc addresses that the reply goes to, worked out from the original message with the reply rule of [Mail send](#mail-send). On Microsoft 365 this list is for the check; Microsoft picks the final list when it makes the reply. If the daemon cannot read them, the check fails.
 - For `draft forward` and `mail forward`, Jev also sees the subject and body of the forwarded message, read through the screened read path. If the daemon cannot read this text, for example because the message is not `green`, the check fails.
+- For `draft send`, the agent gives only the draft ID, and Jev sees the draft's To, Cc, Bcc, subject, body (HTML as its source), and HTML flag, as the daemon reads them from the provider.
 
 The check comes after the policy decision:
 
@@ -613,8 +624,8 @@ The daemon trashes the allowed IDs.
 A denied ID gets `"ok": false` and `"error": "refused by policy: mail_trash"`.
 An ID that needs approval gets `"ok": false`, `"error": "pending"`, and an `approval_id`, but no `url`. Each such ID is its own pending action.
 
-`approvals status ID` returns `{"state":"..."}` for a pending action. The state is `pending`, `running`, `done`, `denied`, or `failed`.
-A `done` action also has `result`: the normal result of the command.
+`approvals status ID` returns `{"state":"..."}` for a pending action. The state is `pending`, `running`, `done`, `denied`, `withdrawn`, or `failed`. A `withdrawn` action is a waiting `draft send` that a draft change or delete withdrew; it never runs.
+A `done` action also has `result`: the normal result of the command, except that a `draft new`, `draft reply`, `draft forward`, or `draft update` result keeps only `id` and `thread_id`, and for `draft update` also `send_approval_id`, because the stored result holds no mail content.
 The output never shows the stored request arguments.
 An unknown ID fails with `approval not found` and exit code `1`.
 
@@ -670,15 +681,18 @@ Until you set the [console password](#console-password), the console answers eve
 
 The browser asks for a username and a password. Give the [console username](#console-configuration) (`admin` by default; `amgd config get console.username` shows it) and the [console password](#console-password).
 
-- The list page `/` shows all pending actions, newest first, and then the 50 most recently changed other actions. Each row shows the account, the operation, the recipients, the subject, the state, and the age.
-- The action page `/a/ID` shows the account, the operation, the state, the times, and every stored request field as plain text. Links in the text are never links on the page.
+- The list page `/` shows all pending actions, newest first, and then the 50 most recently changed other actions, `withdrawn` actions among them. Each row shows the account, the operation, the recipients (To, then `cc:` and `bcc (hidden):` lists), the subject, the state, and the age. For a draft send, the recipients and subject are those of the stored draft fields. A reply row starts its recipients with `reply` or, with `--all`, `reply all`, then the request's `cc:` and `bcc (hidden):` lists; the action page shows who the reply goes to.
+- The action page `/a/ID` shows the account, the operation, the state, the times, and every stored request field as plain text, with `to`, `cc`, and `bcc` first. `bcc` is labeled `bcc (hidden recipients)`: these people get the message, and the other recipients do not see them. An `--html` body is labeled `body (HTML source, not rendered)` and shows as source text. Links in the text are never links on the page.
+- For a reply, the action page also shows the recipients that the reply goes to under **Reply recipients**: the To and Cc worked out from the original message with the reply rule of [Mail send](#mail-send), plus the request's `cc`, and the request's `bcc` as `bcc (hidden recipients)`. The daemon reads the original when the page loads; if it cannot, the page shows `Reply recipients could not be read.` On Microsoft 365, Microsoft picks its own list when it makes the reply; it should match.
+- For a draft send, the action page also shows under **Draft** the draft fields that Jev checked, stored when the send began to wait: `to`, `cc`, `bcc (hidden recipients)`, `subject`, and `body` (an HTML body as `body (HTML source, not rendered)`), as plain text. The send sends the draft as it is at the provider when it runs, so a later change that the user makes in the mail app is not on the page. A change or delete of the draft by the agent withdraws the action instead (see [Waiting sends and draft changes](#waiting-sends-and-draft-changes)). If the draft is gone or is no longer a draft when the run starts, the run fails with a safe code and nothing is sent.
 - For an action on an existing message, the action page also shows the sender, subject, received date, and verdict of the message. For an action on an event, it shows the subject, start, end, and organizer. The daemon reads these through the screened read path and never shows a body. If the read fails, the page shows `not available`, and you can still decide.
 - The action page also shows the result of the [Jev action check](#jev-action-check), if a check ran.
 - A pending action has **Approve** and **Deny** buttons.
 
 **Approve** runs the stored action once, with no second policy check. A `done` action shows its result. If the run fails, the action shows `failed` and a safe error code. A failed action never runs again.
 **Deny** stops the action for good. Nothing runs.
-An action that is already handled shows `already handled`, and nothing runs again.
+A `withdrawn` action has no buttons and never runs.
+An action that is already handled, also a `withdrawn` one, shows `already handled`, and nothing runs.
 
 To use the console from a phone, put it behind an HTTPS tunnel, for example `tailscale serve`, and add the tunnel host name to `[console].hosts`.
 Keep `listen` on loopback. If `listen` is not `localhost` or a loopback address, the daemon shows a warning at start.
@@ -696,13 +710,14 @@ Protections:
 
 Pending actions are in the `pending` table of `cache.db`. They do not expire.
 A pending action stores the account key, the operation, and the request arguments: recipients, subject, body, comment, event fields, and the message or event ID.
+A waiting draft send stores only the draft ID as its arguments, and beside them, in the `draft` column, the draft fields that Jev checked: To, Cc, Bcc, subject, body, and the HTML flag. A `cache.db` made before this column or the `withdrawn` state existed gets them when the daemon first opens it.
 It also stores the result of the Jev check, if a check ran: the flag and the score, or the safe error code, and whether the fake screening engine made the check.
 `amgd cache clear` does not delete pending actions. `amgd account remove` denies the pending actions of the removed account.
 
 The audit log gets content-free records for the policy. Their `account` is the account key, and their `operation` is the API operation name, for example `mail.trash`.
 
-- `"event": "policy"` records each decision, also `allow`. It has `time`, `account`, `operation`, `key`, `decision`, and `reasons`: `policy`; `sealed` if the sealed decision made it stricter; `jev_flag` if Jev flagged the action; `jev_error` if the Jev check failed. It can also have `id`, `rule`, and `approval_id`. It never has the Jev score.
-- `"event": "approval"` records each step of a pending action. It has `time`, `account`, `operation`, `state` (`created`, `approved`, `denied`, `done`, or `failed`), and `approval_id`.
+- `"event": "policy"` records each decision, also `allow`. It has `time`, `account`, `operation`, `key`, `decision`, and `reasons`: `policy`; `sealed` if the referenced message is `sealed` or `error` and that made the decision stricter; `red` if the replied-to or forwarded message is `red` and that made the decision stricter; `jev_flag` if Jev flagged the action; `jev_error` if the Jev check failed. It can also have `id`, `rule`, and `approval_id`. It never has the Jev score.
+- `"event": "approval"` records each step of a pending action. It has `time`, `account`, `operation`, `state` (`created`, `approved`, `denied`, `withdrawn`, `done`, or `failed`), and `approval_id`. A `withdrawn` record is written for each waiting draft send that a draft change or delete withdrew.
 - `"event": "console_signin"` records each failed console sign-in: a wrong username or password. It has only `time` and `result` (`failed`). It never has the username, the password, the host name, or the address of the browser.
 
 The audit log also gets content-free records for changes on the daemon host:
@@ -723,20 +738,32 @@ On Gmail, only the daemon code stops a send. The OAuth grant (`gmail.modify`) pe
 
 ## Mail send
 
-**Caution:** If the write policy allows them, `mail send`, `mail reply`, and `mail forward` send real email at once. A sent message cannot be recalled.
+**Caution:** If the write policy allows them, `mail send`, `mail reply`, `mail forward`, and `draft send` send real email at once. A sent message cannot be recalled.
 The [Jev action check](#jev-action-check) can hold a command for approval, but it is a statistical check: it can miss harmful text.
 An agent must run these commands only after the user authorizes that specific send.
 
-The [write policy](#write-policy) key `mail_send` decides all three commands. The default is `deny`.
+The [write policy](#write-policy) key `mail_send` decides all four commands. The default is `deny`.
 To use them, set `mail_send` to `allow` or `approve` in `config.toml`.
 With `approve`, each send waits in the [approval console](#approval-console) and runs only after a person approves it.
-`mail reply` and `mail forward` act on an existing message, so `[policy.sealed] mail_send` applies to them. By default, the daemon refuses a reply to or a forward of a `sealed` or `error` message.
+`mail reply` and `mail forward` act on an existing message. The daemon always refuses a reply to or a forward of a `red`, `sealed`, or `error` message, or of one that it cannot screen. See [Sealed messages](#sealed-messages).
 
 The commands take the same options as the matching draft commands:
 
-- `mail send --to ADDRESS [--to ADDRESS] --subject TEXT --body TEXT` sends a new plain-text message. `--subject` and `--body` can be empty, but you must give them.
-- `mail reply ID --body TEXT` sends a reply to the sender of the message. On Gmail, the reply goes to the `Reply-To` address if the message has one, and the reply quotes the original text. It does not go to the other recipients.
-- `mail forward ID --to ADDRESS [--to ADDRESS]` forwards the message with no added text. On Gmail, the original message is attached unchanged.
+- `mail send [--to ADDRESS]... [--cc ADDRESS]... [--bcc ADDRESS]... [--subject TEXT] [--body TEXT] [--html]` sends a new message. It needs at least one recipient in `--to`, `--cc`, or `--bcc`; a send with only `--bcc` recipients is valid. `--subject` and `--body` are optional and default to empty. The body is plain text with its line breaks unless `--html` is given; an `--html` body goes unchanged, without cleaning or checking.
+- `mail reply ID [--all] [--cc ADDRESS]... [--bcc ADDRESS]... [--body TEXT] [--html]` sends a reply in the conversation of the message. `--body` is optional and defaults to empty; it goes above the quoted original, as plain text with its line breaks unless `--html` is given. An `--html` reply keeps the quoted original below the agent's HTML, which goes unchanged. Without `--all`, the reply goes to the sender; with `--all`, also to everyone on the original. `--cc` and `--bcc` are added to the recipients that the reply picks and never replace them; an address that is already a recipient, ignoring case, is not added again.
+- `mail forward ID [--to ADDRESS]... [--cc ADDRESS]... [--bcc ADDRESS]... [--body TEXT] [--html]` forwards the message in its conversation, with the original's attachments. It needs at least one recipient in `--to`, `--cc`, or `--bcc`. `--body` is an optional note above the forwarded message, plain text with its line breaks unless `--html` is given; an `--html` forward keeps the original below the agent's HTML, which goes unchanged. Forwards with attachments follow the same `mail_send` decision as other sends.
+
+`draft send ID` sends a draft as it is at the provider when the send runs: a new, reply, or forward draft, or one that the user wrote in the app. It has no options and no sealed check, because it acts on a draft; a draft that the user wrote is the user's responsibility. The [Jev action check](#jev-action-check) reads the draft's fields. A waiting send is not tied to a version of the draft: a change that the user makes in the app is sent as changed. A change or delete through `amg` withdraws the waiting send instead; see [Waiting sends and draft changes](#waiting-sends-and-draft-changes). On Microsoft 365, the daemon checks that the message is a draft (`isDraft`) and posts Graph `send` once, without a body; Graph saves the message in Sent Items. On Gmail, it finds the draft that holds the message and calls `drafts.send` once with only the draft ID; Gmail deletes the draft and makes a new sent message. A message that is not a draft is refused with `draft send refused: not a draft`. Approval of a draft write is not approval to send it.
+
+Reply recipients follow each provider's app:
+
+- On Microsoft 365, Microsoft picks them, as Outlook does: the daemon makes the reply draft with Graph `createReply`, or `createReplyAll` with `--all`, with no comment and no body. It then patches the draft once: the agent's text (escaped, with its line breaks) or HTML goes right after the opening `<body>` tag of the quoted reply that Graph made, and `--cc` and `--bcc` are added to Microsoft's lists. When Graph makes a plain-text reply, plain text goes above it after a blank line, and `--html` makes the body HTML with the escaped original text below. Without a body or new recipients, there is no patch. `mail reply` then sends the draft with Graph `send`. Each request goes once; if a step fails, the reply stops and nothing is sent, and the reply draft can stay in Drafts.
+- On Gmail, the daemon picks them the way Gmail on the web does. The reply goes to the `Reply-To` addresses, or the sender when there is none; for a message that the account sent (label `SENT`), it goes to the original To. With `--all`, it also copies the original To and Cc (for a sent message, the original Cc), without the account's address and its send-as addresses (`users.settings.sendAs.list`), and lists each address once, ignoring case. The reply keeps the thread, `In-Reply-To`, `References`, and a `Re:` subject. A plain-text reply quotes the original text with `> `; an `--html` reply quotes the original HTML part, or the escaped original text, in a `<blockquote>`.
+
+Forwards follow each provider's app:
+
+- On Microsoft 365, the daemon makes the forward draft with Graph `createForward`, with no comment and with the `--to` recipients when there are any; Graph writes the quoted original and keeps the attachments. It then patches the draft once: the note goes above the quote as in a reply, and each of To, Cc, and Bcc that differs from the agent's list is set to it. Without a note and recipient changes, there is no patch. `mail forward` then sends the draft with Graph `send`. Each request goes once; if a step fails, the forward stops and nothing is sent, and the forward draft can stay in Drafts.
+- On Gmail, the forward is inline, as Gmail on the web and Google's CLI forward: the note, a blank line, `---------- Forwarded message ---------` with the original's `From:`, `Date:` (when present), `Subject:`, `To:`, and `Cc:` (when present) lines, a blank line, and the original text. An `--html` forward puts the agent's HTML above the same block, with the lines escaped and separated by `<br>`, and the original HTML part, or the escaped original text, below it. The subject gets `Fwd: ` unless it already starts with `fwd:` or `fw:` in any case. The original's parts are read with `messages.attachments.get` when Gmail gives their data that way. A part whose data Gmail gives neither inline nor there fails the forward with `Gmail error ValueError` before anything is written, unless the part is empty. An inline image is an `image/*` part with a `Content-ID` whose `Content-Disposition` is not `attachment`: an `--html` forward carries each inline image with its `Content-ID` in a `multipart/related` beside the HTML part, so the quoted `cid:` images show, and a plain-text forward drops them, as Google's CLI does. Every other part with a file name, including an inline part with a `Content-ID` that is not an image, is attached again as a regular attachment. An attached message (`message/rfc822` or another `message/*` type) is attached as `application/octet-stream` under its file name, or `forwarded.eml` without one, because MIME allows no base64 for `message/rfc822`. The original itself is no longer attached as an `.eml` file. The forward keeps the thread, `In-Reply-To`, and `References`. The limits are in [HTTP interface and limits](#http-interface-and-limits).
 
 Both providers keep a copy in the sent mail folder. On Gmail, the daemon refuses a reply to or a forward of a draft.
 A result of `{"ok": true}` means that the provider accepted the message. It does not prove delivery.
@@ -751,6 +778,19 @@ A timeout, transport error, or `operation failed` does not prove that the send f
 Before you retry such a command, ask the user to check the sent mail folder.
 
 The audit record of a send has no content. A `mail send` record has no message ID, because the providers give none. A `mail reply` or `mail forward` record has the ID of the source message.
+
+### Waiting sends and draft changes
+
+A draft has at most one waiting `draft send`. The daemon withdraws and replaces waiting sends under the account's write lock, which a draft write holds from before its decision to its records:
+
+- A `draft update` or `draft delete`, directly or as an approved run, first withdraws every waiting `draft send` of that draft in the account. It withdraws as soon as it holds the write lock, before the policy, the "not a draft" check, and the [Jev action check](#jev-action-check), so the console can no longer approve the old send once the change holds the lock. The withdrawn sends stay withdrawn also when the update or delete itself waits for approval, when the policy refuses it, when the message is not a draft, or when the write fails; then no new send is made.
+- After a `draft update` that withdrew a send and ran, the daemon makes a new `mail_send` decision for the draft, under its new ID on Gmail, with a new read of the draft and a new [Jev action check](#jev-action-check). Under `allow` and `approve`, the new send waits for approval, also when Jev does not flag it: a draft change never sends mail by itself. Under `deny`, there is no new send. The new send never takes over the approval of an approved update. The update result has `send_approval_id`, the approval ID of the new send; follow it with `approvals status`. The policy record of the new send has the decision `approve` and the reason `policy`, because it always waits. If the daemon cannot make the new send after the update ran (the new read of the draft, the pending action, or an audit record fails), `draft update` fails although the draft changed, on Gmail also its ID, and no send of the draft waits. Read the draft again, for example with `mail list --folder` on the drafts folder or `mail get`, before you retry.
+- `draft delete` makes no new send.
+- A second `draft send` of a draft with a waiting send withdraws the old one first, also when the new send is refused (by a `deny` policy, or because the message is no longer a draft), then decides as usual.
+
+A withdrawn send has the state `withdrawn`: it never runs, and the console cannot approve or deny it. Each withdrawal writes an approval audit record with the state `withdrawn`. Withdrawing never runs or approves anything; only a person in the [approval console](#approval-console) approves. `amgd account remove` still denies the pending actions of the account.
+
+Known window: a send that a person approved before the agent's change reached the daemon's write lock runs with the draft as it is then, also with the change, because a waiting send has no tie to a draft version. A change that the user makes in the app is never noticed.
 
 ## Meetings
 
@@ -775,8 +815,9 @@ An invite needs exactly one of `--end` and `--duration`. An update can use one o
 
 An invite needs one or more `--to` addresses and an explicit `--subject`, which can be empty.
 The body is empty if you omit `--body`.
-`--body` is plain text.
-The invite sends it as escaped HTML and keeps the line breaks, so the text cannot become markup or a link with hidden text.
+`--body` is plain text unless `--html` is given.
+The invite sends plain text as escaped HTML and keeps the line breaks, so the text cannot become markup or a link with hidden text.
+With `--html`, `--body` is HTML that the daemon sends unchanged, without cleaning or checking it: as the Graph event body with content type `html` on Microsoft 365, and as the event description on Gmail.
 Every invite has an online meeting link by default: a Microsoft Teams meeting on Microsoft 365, and a Google Meet link on Gmail.
 For a Teams meeting, Microsoft adds the Teams join block to the body.
 Use `--no-online` to create a meeting without an online meeting.
@@ -785,7 +826,7 @@ On Gmail, guests cannot invite other people to a meeting that the daemon creates
 
 An update needs at least one change and sends only the options that you supply.
 An explicit empty `--subject ''`, `--location ''`, or `--body ''` clears that field.
-`--body` is plain text and replaces the whole body. As in an invite, it goes as escaped HTML that keeps the line breaks. On Microsoft 365, `--body` replaces the whole description, including the Teams join section. On Gmail, the Meet link is not part of the body and stays.
+`--body` replaces the whole body. As in an invite, plain text goes as escaped HTML that keeps the line breaks, and an `--html` body goes unchanged. `--html` without `--body` is invalid usage. On Microsoft 365, `--body` replaces the whole description, including the Teams join section. On Gmail, the Meet link is not part of the body and stays.
 If an update changes only `--start`, the daemon keeps the current duration.
 `--duration` alone or `--end` alone keeps the current start.
 Attendee changes keep the type and the response of existing attendees. Added attendees are required attendees.
@@ -882,8 +923,8 @@ The calendar range has no maximum: Microsoft Graph `calendarView` needs a start 
 
 | Verdict | Visible mail content |
 | --- | --- |
-| green | Cleaned headers, body, attachment names, and link IDs |
-| yellow | Cleaned headers, attachment names, and reason, without body |
+| green | Cleaned headers (sender, subject, To, Cc, and in `mail get` the Bcc of drafts and sent mail), body, attachment names, and link IDs |
+| yellow | Cleaned headers (sender, subject, To, Cc, and in `mail get` the Bcc of drafts and sent mail), attachment names, and reason, without body |
 | red or sealed | Sender address, date, and reason, without display name or subject |
 | error | Date and safe error code, without sender, subject, or body |
 
@@ -918,6 +959,8 @@ The API has no operation that changes credentials, the console password, account
 Meeting times on the HTTP interface are RFC 3339 timestamps. `calendar.update` also accepts a Go `duration` string.
 Date bounds on the HTTP interface are exact RFC 3339 times, never days: `mail.search` `after` (included) and `before` (excluded, later than `after` when both are given), `mail.organize` `since` (required, not later than the daemon clock) and `until` (excluded, later than `since`), and `calendar.list` `start` (included) and `end` (excluded, later than `start`). A date without a time is refused. The CLI computes these times from days, as [Commands and output](#commands-and-output) describes.
 `calendar.invite` takes an optional `optional` address list, `calendar.update` an optional `body`, and `calendar.respond` an optional boolean `no_notify`.
+`calendar.invite` and `calendar.update` take an optional boolean `html` that marks `body` as HTML; a `calendar.update` with `html` and without `body` is refused as `invalid request`.
+`draft.new` and `mail.send` take the optional address lists `to`, `cc`, and `bcc`, the optional strings `subject` and `body` (empty when absent), and the optional boolean `html`. `draft.reply` and `mail.reply` take the message `id`, the optional string `body` (empty when absent), the optional booleans `html` and `all`, and the optional address lists `cc` and `bcc`. `draft.forward` and `mail.forward` take the message `id`, the optional address lists `to`, `cc`, and `bcc`, the optional string `body` (empty when absent), and the optional boolean `html`. `mail.send` and `mail.forward` without an address in `to`, `cc`, or `bcc` are refused as `invalid request` before any policy decision. `draft.update` takes the message `id` and at least one of the address lists `to`, `cc`, and `bcc`, the string `subject`, and the string `body`, with the optional boolean `html` only together with `body`; an absent param stays unchanged and an empty list clears. A `draft.update` without a field is refused as `invalid request`. `draft.delete` and `draft.send` take only the message `id`.
 The `account` field is optional, and `params` must be an object.
 Unknown operations or fields, duplicate keys, malformed JSON, trailing JSON, null fields, invalid types, and oversized requests are refused.
 There is no HTTP login, token, key, raw-message, classification, rules-mutation, or approval endpoint. Only the [approval console](#approval-console), on its own address, approves or denies pending actions.
@@ -928,8 +971,9 @@ A policy refusal returns HTTP 500 with `{"error":"refused by policy: KEY"}`.
 Requests are limited to 1 MiB and 16 JSON nesting levels.
 The client bounds responses at 64 MiB and never follows redirects or retries requests, including stale-connection write replay.
 Mail list and search take an optional `count` of 0 or more; 0 or no count sends no size, so the provider's default applies. They and `calendar.search` take an optional `page`: the `next_page` of an earlier result, at most 16 KiB of printable ASCII without spaces. A `next_page` from the provider that breaks these bounds fails the call. On Gmail the page is the provider's `pageToken`; a Gmail `calendar.search` page with more than the `events.list` default of 250 events fails. On Microsoft 365 a mail page is Graph's whole `@odata.nextLink`, which the daemon follows only with Graph's origin, the path of the same options, each query value of those options, and otherwise only `$top`, `$skip`, and `$skiptoken`; a calendar page is the Microsoft Search `from` offset.
-Manual mutations need at least one ID, and recipient and attendee lists at least one address; the daemon sets no maximum on these lists, because the provider refuses what it does not accept and the request size limit bounds them.
+Manual mutations need at least one ID, and recipient and attendee lists at least one address, except the `to`, `cc`, and `bcc` lists of `draft.new`, `mail.send`, `draft.forward`, `mail.forward`, and `draft.update`, and the `cc` and `bcc` lists of `draft.reply` and `mail.reply`, which can be empty (a `mail.send` or `mail.forward` needs one address among them); the daemon sets no maximum on these lists, because the provider refuses what it does not accept and the request size limit bounds them.
 IDs and search strings are limited to 4,096 bytes.
+A Gmail forward carries at most 100 attachments and inline images together, a bound of the daemon (Gmail documents no count limit), and at most 36,700,160 bytes of their data as encoded in the forward (base64, with a line break every 76 characters, about 4/3 of the raw size), Gmail's 35 MB limit for a raw message through the upload endpoints of `drafts.create` and `messages.send`. The daemon stops reading attachments as soon as the encoded total passes the limit. A forward over either bound fails with `Gmail error SizeError` before anything is written. A Gmail draft update reads the draft's raw message once (bounded like every Gmail response) and saves it through the upload endpoint of `drafts.update`; it has no attachment bounds of its own.
 Stats accepts 1 to 365,000 days.
 
 The daemon admits at most 64 concurrent calls.
@@ -944,12 +988,20 @@ Tests run offline: real loopback HTTP, temporary homes, the fake provider, fake 
 No test needs real mailbox data, a browser, OpenRouter, or Keychain access. CI (`.github/workflows/ci.yml`) runs `make` on Linux only. The macOS-only code (the Keychain backend and the `*_darwin_test.go` tests) runs only in a local `make` on a Mac.
 
 The end-to-end tests in `internal/e2e` build the real `amg` and `amgd` binaries and run `amgd serve` as its own process, on a temporary home with a fake account, the fake screening engine, and the file credential backend. The other `amgd` commands and `amg` run as separate processes, and the tests approve and deny pending actions through the approval console over HTTP.
-After each test, the daemon log, `audit.jsonl`, and every table of `cache.db` except `pending` must contain no seeded name, subject, body, or address.
+After each test, the daemon log, `audit.jsonl`, and every column of `cache.db` except the `args` and `draft` columns of `pending` must contain no seeded name, subject, body, or address.
 
 Not verified against real providers or services:
 
-- mail sends, replies, and forwards;
-- meeting invites, updates, cancellations, and responses;
+- mail sends, replies, and forwards: Cc, Bcc, and `--html` bodies on new drafts and sends were checked live on 2026-10-26 on Microsoft 365 and Gmail (received copies show no Bcc, sent copies show it, and `mail get` shows the Bcc of drafts and sent mail, from Graph `bccRecipients` and the Gmail `Bcc` header); the other cases, such as no Bcc read of received mail (Gmail without the `SENT` label, Microsoft 365 `from` another address) and Cc, Bcc, and `--html` added to replies and forwards, are verified only against fake Graph and Gmail endpoints;
+- forwards: Graph `createForward` with no recipients and an empty body, and the Gmail inline forward with its attachments and inline images, which follows Google's unsupported `gws` CLI, were checked live on 2026-10-26; the other cases are verified only against fake Graph and Gmail endpoints: the patch of the note into Graph's quoted forward and of its recipients, and the Gmail header block byte for byte;
+- a Gmail forward of a message with an attached message (`message/*`) for which Gmail gives neither inline data nor an `attachmentId` fails with `Gmail error ValueError`: the daemon never sends such an attachment empty;
+- a forward on Microsoft 365 that fails after `createForward` leaves its forward draft in Drafts;
+- draft updates: the Microsoft 365 `PATCH` of the given fields, and the Gmail `drafts.update` rebuild from the raw message with a base64 body part that keeps the thread, the inline images, and the attachments, were checked live on 2026-10-26; the other cases are verified only against fake Graph and Gmail endpoints: kept headers byte for byte (folded `References`, `From`), dropped `Date` and `Message-ID`, attached messages and other kept parts, the body added to an attachment-only draft, and the refusals of a message that is not a draft;
+- draft delete and draft send: the refusals of a message that is not a draft and the single write without retry are verified only against fake Graph and Gmail endpoints and the fake provider (checked live on 2026-10-26: Graph `DELETE` moves a draft out of Drafts into a folder that is neither Deleted Items nor in `mail folders`, likely Recoverable Items, where it stays readable by ID and so restorable; Graph `send` of a forward draft sends it and moves it to Sent Items; Gmail `drafts.delete` removes the draft, and later reads fail; Gmail `drafts.send` of an HTML forward draft with inline images sends it and removes the draft);
+- waiting sends and draft changes: the replacement of a waiting send after a Gmail draft update that changed the message ID was checked live on 2026-10-26 (the new waiting send under the new ID was approved and sent); the other cases are verified end to end with the fake provider, which keeps the draft ID on update, and in the guard tests, and an approval that comes while a draft update holds the write lock in the server tests;
+- reply recipients: Microsoft's `createReplyAll` list matched the reply rule, the patch of the agent's body went above Graph's quoted reply, and the Gmail reply-all rule, which follows Google's unsupported `gws` CLI and the Gmail web behavior that it approximates (no Gmail API page states it), held also for a reply to the account's own sent message; these were checked live on 2026-10-26. The other cases, such as Microsoft's `createReply` list and the patch of Cc and Bcc into Microsoft's lists, are verified only against fake Graph and Gmail endpoints;
+- a reply on Microsoft 365 that fails after `createReply` leaves its reply draft in Drafts;
+- meeting invites, updates, cancellations, and responses: `--html` event bodies on `calendar invite` and `calendar update` were checked live on 2026-10-26 on Microsoft 365 and Gmail; the other cases are verified only against fake Graph and Google Calendar endpoints and the fake provider;
 - provider acceptance of generated drafts;
 - `mail thread` on a Microsoft 365 conversation with a message in Junk Email (checked live on 2026-10-26: Gmail threads with drafts, and Microsoft 365 conversations across Inbox, Sent Items, Drafts, Deleted Items, and other folders; `calendar search` on both providers was checked the same day);
 - Microsoft 365 device-code login, which organization policies can also refuse;

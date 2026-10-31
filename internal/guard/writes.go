@@ -6,6 +6,7 @@ import (
 
 	"github.com/ivanrvpereira/agentmailguard/internal/audit"
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
+	"github.com/ivanrvpereira/agentmailguard/internal/content"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
@@ -271,16 +272,26 @@ func (g *Guard) Categorize(ctx context.Context, ids, add, remove []string) ([]mo
 
 // compose applies the mail_draft decision to a draft operation, or the mail_send decision to a send, and the
 // Jev action check, then runs call. source is the message that the action references; a new message has
-// none. Reply and forward reference a received message, so the sealed decision applies to their source;
-// update acts on a draft and has no sealed check. Jev sees the agent fields, and for a forward also the text
-// of the forwarded message. call gives the draft ID; a send gives none, so its operation record has only the
-// source ID, or no ID for a new message.
-func (g *Guard) compose(ctx context.Context, op audit.Operation, source string, args any, call func() (string, error)) (string, error) {
+// none. Reply and forward reference a received message, so the sealed decision applies to their source.
+// Update, delete, and send of a draft act on a draft and have no sealed check, but unless the policy denies them,
+// they are refused before the Jev check and any write when their source is not a draft (onlyDraft); an approved run
+// checks again. Jev sees the agent fields, for a forward also the text of the forwarded message, and for a draft
+// send the draft's fields as read. A draft delete sends nothing and has no Jev check. call gives the draft ID of a
+// draft operation that makes or changes a draft; for other actions it gives none, so the operation record has only
+// the source ID, or no ID for a new message.
+//
+// Under the mutation gate, a draft update, delete, or send first withdraws the waiting sends of its draft, before its
+// decision and any refusal, so one draft has at most one waiting send and no approval can claim an old send once a
+// change of the draft holds the gate. A refused, held, or failed operation leaves them withdrawn. An update that
+// withdrew a send and ran then replaces it (replaceSend) and gives the new approval ID as the second result; it is ""
+// otherwise. A failed replacement gives its error after the update ran, as a failed audit record after a write does,
+// and leaves no waiting send.
+func (g *Guard) compose(ctx context.Context, op audit.Operation, source string, args any, call func() (string, error)) (string, string, error) {
 	if err := g.acquire(ctx); err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer g.release()
-	send := op == audit.MailSend || op == audit.MailReply || op == audit.MailForward
+	send := op == audit.MailSend || op == audit.MailReply || op == audit.MailForward || op == audit.DraftSend
 	key := keyDraft
 	if send {
 		key = keySend
@@ -289,74 +300,274 @@ func (g *Guard) compose(ctx context.Context, op audit.Operation, source string, 
 	if op != audit.DraftNew && op != audit.MailSend {
 		ref = new(source)
 	}
+	onDraft := op == audit.DraftUpdate || op == audit.DraftDelete || op == audit.DraftSend
+	makesDraft := !send && op != audit.DraftDelete
+	// Withdrawing only removes, so an operation on a draft withdraws the waiting sends of its draft before any refusal.
+	withdrawn := 0
+	if onDraft {
+		var err error
+		if withdrawn, err = g.withdrawSends(ctx, source); err != nil {
+			return "", "", err
+		}
+	}
 	d := decision{value: g.base(ctx, key)}
-	if ref != nil && op != audit.DraftUpdate {
+	if ref != nil && !onDraft {
 		decisions, err := g.decide(ctx, key, []string{source})
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		d = decisions[source]
 	}
+	if onDraft && d.value != config.Deny {
+		draft, err := g.onlyDraft(ctx, op, source)
+		if err != nil {
+			return "", "", err
+		}
+		if op == audit.DraftSend {
+			d.draft = new(checkedDraft(draft))
+		}
+	}
 	d, err := g.checkAction(ctx, op, key, d, args)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if err := g.single(ctx, op, key, d, ref, args); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", "", err
 	}
 	id, err := call()
 	if err != nil {
-		return "", safeErr(ctx, err)
+		return "", "", safeErr(ctx, err)
 	}
-	if id == "" && !send {
-		return "", GuardError("ValueError")
+	if id == "" && makesDraft {
+		return "", "", GuardError("ValueError")
 	}
 	var results []model.MutationResult
 	opts := audit.Options{}
 	switch {
 	case ref != nil:
 		results = []model.MutationResult{{ID: source, OK: true}}
-		if !send {
+		if makesDraft {
 			opts.DraftID = &id
 		}
-	case !send:
+	case makesDraft:
 		results = []model.MutationResult{{ID: id, OK: true}}
 	}
 	if err := g.recordDecision(ctx, op, key, d, ref, nil, nil); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if err := g.log.Record(context.WithoutCancel(ctx), g.account, op, results, opts); err != nil {
-		return "", GuardError("AuditError")
+		return "", "", GuardError("AuditError")
 	}
-	return id, nil
+	if op != audit.DraftUpdate || withdrawn == 0 {
+		return id, "", nil
+	}
+	approval, err := g.replaceSend(withoutApproval(ctx), id)
+	if err != nil {
+		return "", "", err
+	}
+	return id, approval, nil
 }
-func (g *Guard) DraftNew(ctx context.Context, draft model.NewDraft) (string, error) {
-	return g.compose(ctx, audit.DraftNew, "", newDraftArgs{draft.To, draft.Subject, draft.Body}, func() (string, error) { return g.mailbox.DraftNew(ctx, draft) })
+
+// withdrawSends withdraws the waiting draft sends of draft in the account, with one approval record each, and gives
+// how many it withdrew. It never runs or approves anything. A failed record fails closed; the items stay withdrawn.
+func (g *Guard) withdrawSends(ctx context.Context, draft string) (int, error) {
+	items, err := g.store.WithdrawDraftSends(ctx, g.account, draft, g.now())
+	if err != nil {
+		return 0, safeErr(ctx, err)
+	}
+	for _, p := range items {
+		if g.log.Approval(context.WithoutCancel(ctx), p.Account, p.Op, "withdrawn", p.ID) != nil {
+			return len(items), GuardError("AuditError")
+		}
+	}
+	return len(items), nil
 }
-func (g *Guard) DraftReply(ctx context.Context, id, comment string) (string, error) {
-	return g.compose(ctx, audit.DraftReply, id, bodyArgs{id, comment}, func() (string, error) { return g.mailbox.DraftReply(ctx, id, comment) })
+
+// replaceSend makes a new mail_send decision for draft id, whose waiting send an update withdrew, with a fresh read
+// of the draft and a fresh Jev check. The caller holds the mutation gate and gives ctx without the approval mark, so
+// the new send never inherits an approved update. allow and approve both store a new waiting send and give its
+// approval ID: a draft change never sends mail by itself. deny stores none and gives "".
+func (g *Guard) replaceSend(ctx context.Context, id string) (string, error) {
+	d := decision{value: g.base(ctx, keySend)}
+	if d.value == config.Deny {
+		return "", g.recordDecision(ctx, audit.DraftSend, keySend, d, &id, nil, nil)
+	}
+	draft, err := g.onlyDraft(ctx, audit.DraftSend, id)
+	if err != nil {
+		return "", err
+	}
+	d.draft = new(checkedDraft(draft))
+	if d, err = g.checkAction(ctx, audit.DraftSend, keySend, d, idArgs{id}); err != nil {
+		return "", err
+	}
+	d.value = config.Approve
+	return g.hold(ctx, audit.DraftSend, keySend, d, &id, nil, idArgs{id})
 }
-func (g *Guard) DraftForward(ctx context.Context, id string, to []string) (string, error) {
-	return g.compose(ctx, audit.DraftForward, id, forwardArgs{id, to}, func() (string, error) { return g.mailbox.DraftForward(ctx, id, to) })
+
+// checkedDraft is the part of a draft that Jev checks and a waiting draft send stores.
+func checkedDraft(d model.DraftContent) newDraftArgs {
+	return newArgs(model.NewDraft{To: d.To, CC: d.CC, BCC: d.BCC, Subject: d.Subject, Body: d.Body, HTML: d.HTML})
 }
-func (g *Guard) DraftUpdate(ctx context.Context, id, body string) (string, error) {
-	return g.compose(ctx, audit.DraftUpdate, id, bodyArgs{id, body}, func() (string, error) { return g.mailbox.DraftUpdate(ctx, id, body) })
+
+// DraftNew returns the draft that the provider made. compose refuses a result without an ID.
+func (g *Guard) DraftNew(ctx context.Context, draft model.NewDraft) (model.DraftResult, error) {
+	var made model.DraftResult
+	_, _, err := g.compose(ctx, audit.DraftNew, "", newArgs(draft), func() (string, error) {
+		var err error
+		made, err = g.mailbox.DraftNew(ctx, draft)
+		return made.ID, err
+	})
+	if err != nil {
+		return model.DraftResult{}, err
+	}
+	return made, nil
+}
+
+// ReplyRecipients gives the To and CC that a reply to message id goes to, worked out from the original by the
+// adapter (all: reply all), each address cleaned. A provider whose reply picks its own recipients makes the final
+// list at send time. A failed read gives sourceUnavailable, never an empty list.
+func (g *Guard) ReplyRecipients(ctx context.Context, id string, all bool) (model.Recipients, error) {
+	if id == "" {
+		return model.Recipients{}, GuardError("invalid request")
+	}
+	r, err := g.mailbox.ReplyRecipients(ctx, id, all)
+	if ctx.Err() != nil {
+		return model.Recipients{}, ctx.Err()
+	}
+	if err != nil {
+		return model.Recipients{}, sourceUnavailable
+	}
+	return model.Recipients{To: content.CleanList(r.To), CC: content.CleanList(r.CC), BCC: []string{}}, nil
+}
+
+// DraftReply returns the reply draft that the provider made, and the screening verdict of its source from the
+// cache after the write: "" when there is none.
+func (g *Guard) DraftReply(ctx context.Context, id string, reply model.Reply) (model.DraftResult, model.Verdict, error) {
+	var made model.DraftResult
+	_, _, err := g.compose(ctx, audit.DraftReply, id, newReplyArgs(id, reply), func() (string, error) {
+		var err error
+		made, err = g.mailbox.DraftReply(ctx, id, reply)
+		return made.ID, err
+	})
+	if err != nil {
+		return model.DraftResult{}, "", err
+	}
+	return made, g.cachedVerdict(ctx, id), nil
+}
+
+// DraftForward returns the forward draft that the provider made, and the screening verdict of its source from the
+// cache after the write: "" when there is none. A forward draft needs no recipient.
+func (g *Guard) DraftForward(ctx context.Context, id string, forward model.Forward) (model.DraftResult, model.Verdict, error) {
+	var made model.DraftResult
+	_, _, err := g.compose(ctx, audit.DraftForward, id, newForwardArgs(id, forward), func() (string, error) {
+		var err error
+		made, err = g.mailbox.DraftForward(ctx, id, forward)
+		return made.ID, err
+	})
+	if err != nil {
+		return model.DraftResult{}, "", err
+	}
+	return made, g.cachedVerdict(ctx, id), nil
+}
+
+// cachedVerdict is the screening verdict of message id in the cache: "" when there is none.
+func (g *Guard) cachedVerdict(ctx context.Context, id string) model.Verdict {
+	rows, err := g.cached(ctx, []string{id})
+	if err != nil {
+		return ""
+	}
+	return rows[id].Verdict
+}
+
+// DraftUpdateNotDraft is the public refusal of a draft update of a message that is not a draft.
+const DraftUpdateNotDraft = GuardError("draft update refused: not a draft")
+
+// UpdatedDraft is the result of a draft update: the draft's message ID, which may be new, its conversation, and the
+// approval ID of the new waiting send that replaced a withdrawn one; "" when the update made none.
+type UpdatedDraft struct{ ID, ThreadID, SendApprovalID string }
+
+// DraftUpdate applies change to draft id. A change without a field, or with HTML but no body, is refused before any
+// policy decision.
+func (g *Guard) DraftUpdate(ctx context.Context, id string, change model.DraftChange) (UpdatedDraft, error) {
+	if id == "" || change.Empty() || change.HTMLWithoutBody() {
+		return UpdatedDraft{}, GuardError("invalid request")
+	}
+	var thread string
+	draft, send, err := g.compose(ctx, audit.DraftUpdate, id, newDraftChangeArgs(id, change), func() (string, error) {
+		var draft string
+		var err error
+		draft, thread, err = g.mailbox.DraftUpdate(ctx, id, change)
+		return draft, err
+	})
+	if err != nil {
+		return UpdatedDraft{}, err
+	}
+	return UpdatedDraft{ID: draft, ThreadID: thread, SendApprovalID: send}, nil
+}
+
+// Public refusals of a draft write on a message that is not a draft.
+const (
+	DraftDeleteNotDraft = GuardError("draft delete refused: not a draft")
+	DraftSendNotDraft   = GuardError("draft send refused: not a draft")
+)
+
+// notDraftRefusals maps each draft write to its refusal of a message that is not a draft.
+var notDraftRefusals = map[audit.Operation]GuardError{audit.DraftUpdate: DraftUpdateNotDraft, audit.DraftDelete: DraftDeleteNotDraft, audit.DraftSend: DraftSendNotDraft}
+
+// onlyDraft reads message id for the draft write op and refuses it with the refusal of op unless it is a draft. A
+// failed read fails closed with its safe code.
+func (g *Guard) onlyDraft(ctx context.Context, op audit.Operation, id string) (model.DraftContent, error) {
+	draft, err := g.mailbox.ReadDraft(ctx, id)
+	if err != nil {
+		return model.DraftContent{}, safeErr(ctx, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return model.DraftContent{}, err
+	}
+	if !draft.IsDraft {
+		return model.DraftContent{}, notDraftRefusals[op]
+	}
+	return draft, nil
+}
+
+// DraftDelete deletes draft id under the mail_draft decision; DraftSend sends it as it is at the provider under the
+// mail_send decision. Their stored args are only the ID; a waiting send also stores the draft fields that Jev checked.
+func (g *Guard) DraftDelete(ctx context.Context, id string) error {
+	if id == "" {
+		return GuardError("invalid request")
+	}
+	_, _, err := g.compose(ctx, audit.DraftDelete, id, idArgs{id}, func() (string, error) { return "", g.mailbox.DraftDelete(ctx, id) })
+	return err
+}
+func (g *Guard) DraftSend(ctx context.Context, id string) error {
+	if id == "" {
+		return GuardError("invalid request")
+	}
+	_, _, err := g.compose(ctx, audit.DraftSend, id, idArgs{id}, func() (string, error) { return "", g.mailbox.DraftSend(ctx, id) })
+	return err
 }
 
 // SendNew, SendReply, and SendForward send mail at once under the mail_send decision. Their params and
-// stored args are those of the matching draft operation.
+// stored args are those of the matching draft operation. SendNew and SendForward refuse a send without a
+// recipient before any policy decision.
 func (g *Guard) SendNew(ctx context.Context, draft model.NewDraft) error {
-	_, err := g.compose(ctx, audit.MailSend, "", newDraftArgs{draft.To, draft.Subject, draft.Body}, func() (string, error) { return "", g.mailbox.SendNew(ctx, draft) })
+	if !draft.Addressed() {
+		return GuardError("invalid request")
+	}
+	_, _, err := g.compose(ctx, audit.MailSend, "", newArgs(draft), func() (string, error) { return "", g.mailbox.SendNew(ctx, draft) })
 	return err
 }
-func (g *Guard) SendReply(ctx context.Context, id, comment string) error {
-	_, err := g.compose(ctx, audit.MailReply, id, bodyArgs{id, comment}, func() (string, error) { return "", g.mailbox.SendReply(ctx, id, comment) })
+func (g *Guard) SendReply(ctx context.Context, id string, reply model.Reply) error {
+	_, _, err := g.compose(ctx, audit.MailReply, id, newReplyArgs(id, reply), func() (string, error) { return "", g.mailbox.SendReply(ctx, id, reply) })
 	return err
 }
-func (g *Guard) SendForward(ctx context.Context, id string, to []string) error {
-	_, err := g.compose(ctx, audit.MailForward, id, forwardArgs{id, to}, func() (string, error) { return "", g.mailbox.SendForward(ctx, id, to) })
+func (g *Guard) SendForward(ctx context.Context, id string, forward model.Forward) error {
+	if !forward.Addressed() {
+		return GuardError("invalid request")
+	}
+	_, _, err := g.compose(ctx, audit.MailForward, id, newForwardArgs(id, forward), func() (string, error) { return "", g.mailbox.SendForward(ctx, id, forward) })
 	return err
 }

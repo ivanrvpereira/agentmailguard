@@ -27,9 +27,9 @@ func (c *calendar) Update(ctx context.Context, id model.EventID, change model.Ev
 	if change.Location != nil {
 		body["location"] = map[string]string{"displayName": *change.Location}
 	}
-	// The plain-text body goes as escaped HTML, as in Invite. It replaces the whole body.
+	// The body goes as HTML, as in Invite. It replaces the whole body.
 	if change.Body != nil {
-		body["body"] = map[string]string{"contentType": "html", "content": model.HTMLBody(*change.Body)}
+		body["body"] = map[string]string{"contentType": "html", "content": model.EventBodyHTML(*change.Body, change.HTML)}
 	}
 	if change.Start != nil {
 		body["start"] = calendarTime(*change.Start)
@@ -129,9 +129,10 @@ func (c *calendar) Invite(ctx context.Context, event model.NewEvent) (model.Even
 		attendee["type"] = "optional"
 		attendees = append(attendees, attendee)
 	}
-	// The plain-text body goes as escaped HTML, so Outlook shows the Teams block that Graph adds as formatted HTML.
+	// The body goes as HTML: the agent's HTML unchanged, or plain text escaped, so Outlook shows the Teams block that
+	// Graph adds as formatted HTML (https://learn.microsoft.com/en-us/graph/api/user-post-events).
 	body := map[string]any{
-		"subject": event.Subject, "body": map[string]string{"contentType": "html", "content": model.HTMLBody(event.Body)},
+		"subject": event.Subject, "body": map[string]string{"contentType": "html", "content": model.EventBodyHTML(event.Body, event.HTML)},
 		"location": map[string]string{"displayName": event.Location},
 		"start":    calendarTime(event.Start), "end": calendarTime(event.End), "attendees": attendees,
 		"isOnlineMeeting": event.Online,

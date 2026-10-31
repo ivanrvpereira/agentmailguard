@@ -53,7 +53,7 @@ func messageJSON(id string, body bool, cats []string) map[string]any {
 	if cats == nil {
 		cats = []string{}
 	}
-	m := map[string]any{"id": id, "subject": "private-subject-" + id, "from": map[string]any{"emailAddress": map[string]string{"address": "sender@example.test", "name": "private-name"}}, "receivedDateTime": "2026-03-30T10:00:00Z", "isDraft": false, "isRead": false, "categories": cats, "parentFolderId": "inbox", "attachments": []any{}}
+	m := map[string]any{"id": id, "subject": "private-subject-" + id, "from": map[string]any{"emailAddress": map[string]string{"address": "sender@example.test", "name": "private-name"}}, "receivedDateTime": "2026-03-30T10:00:00Z", "isDraft": false, "isRead": false, "categories": cats, "parentFolderId": "inbox", "attachments": []any{}, "replyTo": []any{}, "toRecipients": []any{}, "ccRecipients": []any{}}
 	if body {
 		m["body"] = map[string]string{"contentType": "text", "content": "private-body-" + id + " https://example.test/report"}
 		m["internetMessageHeaders"] = []any{map[string]string{"name": "Authentication-Results", "value": "mx; spf=pass dkim=pass dmarc=pass compauth=pass"}}
@@ -79,9 +79,13 @@ func (a *nativeAPI) graph(w http.ResponseWriter, r *http.Request) {
 			io.WriteString(w, `{"error":{"message":"private-provider-canary"}}`)
 			return
 		}
-		if r.Method == "PATCH" {
-			w.WriteHeader(204)
-		} else {
+		switch {
+		case r.Method == "PATCH":
+			// Graph answers a PATCH of a message with the updated message.
+			response(w, map[string]any{"id": strings.TrimPrefix(r.URL.Path, "/me/messages/")})
+		case strings.HasSuffix(r.URL.Path, "/createReply") || strings.HasSuffix(r.URL.Path, "/createReplyAll"):
+			response(w, map[string]any{"id": "draft-1", "body": map[string]string{"contentType": "html", "content": "<html><body><div>quoted</div></body></html>"}})
+		default:
 			response(w, map[string]any{"id": "draft-1"})
 		}
 		return
@@ -118,15 +122,16 @@ func (a *nativeAPI) graph(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(404)
 				return
 			}
-			if strings.Contains(r.URL.Query().Get("$select"), "conversationIndex") {
-				response(w, map[string]any{"isDraft": true, "conversationIndex": base64.StdEncoding.EncodeToString(make([]byte, 22))})
-				return
-			}
 			body := strings.Contains(r.URL.Query().Get("$select"), ",body")
 			if body {
 				a.bodyReads[id]++
 			}
-			response(w, messageJSON(id, body, a.categories[id]))
+			m := messageJSON(id, body, a.categories[id])
+			// The drafts that the workflow makes are draft-1; Graph gives a draft's recipient lists.
+			if strings.HasPrefix(id, "draft-") {
+				m["isDraft"], m["toRecipients"], m["ccRecipients"], m["bccRecipients"] = true, []any{}, []any{}, []any{}
+			}
+			response(w, m)
 			return
 		}
 		w.WriteHeader(404)
@@ -410,8 +415,8 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 		t.Fatal("partial result missing")
 	}
 	ok("draft", "new", "--to", "first@example.test", "--to", "second@example.test", "--subject", "private-draft-subject", "--body", "private-draft-body")
-	ok("draft", "reply", "r", "--body", "private-reply-body")
-	// The Jev action check reads the forwarded text, so the source must be green; a red source would wait for approval.
+	ok("draft", "reply", "y", "--body", "private-reply-body")
+	// The Jev action check reads the forwarded text, so the source must be green; a yellow source would wait for approval.
 	ok("draft", "forward", "g", "--to", "first@example.test", "--to", "second@example.test")
 	assertPatches([]string{"draft", "update", "draft-1", "--body", "private-replacement-body"}, map[string]map[string]any{
 		"/me/messages/draft-1": {"body": map[string]any{"contentType": "text", "content": "private-replacement-body"}},
@@ -422,7 +427,7 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 	api.mu.Lock()
 	writes := append([]externalWrite{}, api.writes...)
 	api.mu.Unlock()
-	foundNew, foundReply, foundForward := false, false, false
+	foundNew, replied, foundReply, foundForward := false, false, false, false
 	flags := map[string]bool{}
 	for _, w := range writes {
 		if f, ok := w.body["flag"].(map[string]any); ok {
@@ -431,8 +436,12 @@ func TestNativeBinaryLongLivedWorkflow(t *testing.T) {
 		if w.path == "/me/messages" && w.method == "POST" {
 			foundNew = w.body["subject"] == "private-draft-subject" && w.body["body"].(map[string]any)["content"] == "private-draft-body" && reflect.DeepEqual(w.body["toRecipients"], []any{map[string]any{"emailAddress": map[string]any{"address": "first@example.test"}}, map[string]any{"emailAddress": map[string]any{"address": "second@example.test"}}})
 		}
+		// The reply draft is createReply without a body, then a PATCH of the agent's text into Graph's quote.
 		if strings.HasSuffix(w.path, "/createReply") {
-			foundReply = w.path == "/me/messages/r/createReply" && w.body["comment"] == "private-reply-body"
+			replied = w.path == "/me/messages/y/createReply" && len(w.body) == 0
+		}
+		if body, _ := w.body["body"].(map[string]any); replied && w.method == "PATCH" && w.path == "/me/messages/draft-1" && body["content"] == "<html><body>private-reply-body<div>quoted</div></body></html>" {
+			foundReply = true
 		}
 		if strings.HasSuffix(w.path, "/createForward") {
 			foundForward = w.path == "/me/messages/g/createForward" && reflect.DeepEqual(w.body["message"].(map[string]any)["toRecipients"], []any{map[string]any{"emailAddress": map[string]any{"address": "first@example.test"}}, map[string]any{"emailAddress": map[string]any{"address": "second@example.test"}}})

@@ -26,7 +26,7 @@ func TestPendingIDsAreDistinct32CharLowercaseHex(t *testing.T) {
 	format := regexp.MustCompile(`^[0-9a-f]{32}$`)
 	seen := map[string]bool{}
 	for range 50 {
-		id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(`{}`), nil, queued)
+		id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(`{}`), nil, nil, queued)
 		if err != nil || !format.MatchString(id) || seen[id] {
 			t.Fatalf("bad or repeated ID %q: %v", id, err)
 		}
@@ -37,7 +37,7 @@ func TestPendingIDsAreDistinct32CharLowercaseHex(t *testing.T) {
 func TestInvalidJSONArgsAreRefused(t *testing.T) {
 	c, path := open(t)
 	for _, args := range []string{``, `{`, `{"body":"RAW CONTENT CANARY"`, `RAW CONTENT CANARY`, `{} {}`} {
-		if id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(args), nil, queued); err == nil {
+		if id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(args), nil, nil, queued); err == nil {
 			t.Errorf("invalid args %q stored as %s", args, id)
 		} else if strings.Contains(err.Error(), "CANARY") {
 			t.Errorf("error echoes args: %v", err)
@@ -51,7 +51,7 @@ func TestInvalidJSONArgsAreRefused(t *testing.T) {
 
 func TestAddedPendingActionReadsBackAfterReopen(t *testing.T) {
 	c, path := open(t)
-	id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(trashArgs), nil, queued)
+	id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(trashArgs), nil, nil, queued)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestPendingActionKeepsItsJevCheck(t *testing.T) {
 	c, _ := open(t)
 	score, code := 0.62, "TimeoutError"
 	for _, check := range []*model.ActionCheck{nil, {Flag: true, Score: &score}, {Flag: true, Error: &code}} {
-		id, err := c.AddPending(ctx, "work", "draft.new", json.RawMessage(`{}`), check, queued)
+		id, err := c.AddPending(ctx, "work", "draft.new", json.RawMessage(`{}`), nil, check, queued)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -90,9 +90,45 @@ func TestPendingActionKeepsItsJevCheck(t *testing.T) {
 	}
 }
 
+// A waiting draft send keeps the draft fields that Jev checked beside its args, also after a reopen. An action
+// without them has none, and fields that are not valid JSON are refused without their text in the error.
+func TestPendingDraftSendKeepsTheCheckedDraftFields(t *testing.T) {
+	c, path := open(t)
+	draft := json.RawMessage(`{"to":["a@example.test"],"cc":[],"bcc":["b@example.test"],"subject":"CANARY","body":"<p>CANARY</p>","html":true}`)
+	id, err := c.AddPending(ctx, "work", "draft.send", json.RawMessage(`{"id":"d1"}`), draft, nil, queued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := c.AddPending(ctx, "work", "mail.send", json.RawMessage(`{}`), nil, nil, queued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := cache.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	for _, read := range []*cache.Cache{c, reopened} {
+		got, err := read.GetPending(ctx, id)
+		if err != nil || string(got.Draft) != string(draft) || string(got.Args) != `{"id":"d1"}` {
+			t.Fatalf("draft send=%+v %v", got, err)
+		}
+		if got, err := read.GetPending(ctx, other); err != nil || got.Draft != nil {
+			t.Fatalf("send without draft fields=%+v %v", got, err)
+		}
+		listed, err := read.ListPending(ctx, 0)
+		if err != nil || len(listed) != 2 || string(listed[1].Draft) != string(draft) {
+			t.Fatalf("listed=%+v %v", listed, err)
+		}
+	}
+	if _, err := c.AddPending(ctx, "work", "draft.send", json.RawMessage(`{"id":"d1"}`), json.RawMessage(`{"body":"CANARY"`), nil, queued); err == nil || strings.Contains(err.Error(), "CANARY") {
+		t.Fatalf("invalid draft fields: %v", err)
+	}
+}
+
 func TestClaimMovesPendingToRunningOnce(t *testing.T) {
 	c, _ := open(t)
-	id, err := c.AddPending(ctx, "work", "draft.reply", json.RawMessage(trashArgs), nil, queued)
+	id, err := c.AddPending(ctx, "work", "draft.reply", json.RawMessage(trashArgs), nil, nil, queued)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +161,7 @@ func TestConcurrentClaimsHaveExactlyOneWinner(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer second.Close()
-	id, err := first.AddPending(ctx, "work", "mail.trash", json.RawMessage(trashArgs), nil, queued)
+	id, err := first.AddPending(ctx, "work", "mail.trash", json.RawMessage(trashArgs), nil, nil, queued)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,11 +188,11 @@ func TestConcurrentClaimsHaveExactlyOneWinner(t *testing.T) {
 
 func TestDenyOnlyFromPending(t *testing.T) {
 	c, _ := open(t)
-	waiting, err := c.AddPending(ctx, "work", "calendar.update", json.RawMessage(trashArgs), nil, queued)
+	waiting, err := c.AddPending(ctx, "work", "calendar.update", json.RawMessage(trashArgs), nil, nil, queued)
 	if err != nil {
 		t.Fatal(err)
 	}
-	running, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(`{}`), nil, queued)
+	running, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(`{}`), nil, nil, queued)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,11 +223,103 @@ func TestDenyOnlyFromPending(t *testing.T) {
 	}
 }
 
+// Withdrawing the waiting sends of a draft moves only the pending draft.send items of that account whose args name
+// that draft to withdrawn, and returns them. A send in any other state, a send of another draft or account, and any
+// other operation on the draft stay as they are. A withdrawn item can never be claimed, denied, or withdrawn again.
+func TestWithdrawDraftSendsChangesOnlyWaitingSendsOfTheDraft(t *testing.T) {
+	c, _ := open(t)
+	add := func(account, op, args string) string {
+		t.Helper()
+		id, err := c.AddPending(ctx, account, op, json.RawMessage(args), nil, nil, queued)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	waiting := add("work", "draft.send", `{"id":"d1"}`)
+	second := add("work", "draft.send", `{"id":"d1"}`)
+	running := add("work", "draft.send", `{"id":"d1"}`)
+	denied := add("work", "draft.send", `{"id":"d1"}`)
+	otherDraft := add("work", "draft.send", `{"id":"d2"}`)
+	otherAccount := add("home", "draft.send", `{"id":"d1"}`)
+	update := add("work", "draft.update", `{"id":"d1","subject":"x"}`)
+	trash := add("work", "mail.trash", `{"ids":["d1"]}`)
+	if _, err := c.ClaimPending(ctx, running, queued); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.DenyPending(ctx, denied, queued); err != nil {
+		t.Fatal(err)
+	}
+	later := queued.Add(time.Hour)
+	got, err := c.WithdrawDraftSends(ctx, "work", "d1", later)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("withdrawn=%+v error=%v", got, err)
+	}
+	ids := map[string]bool{}
+	for _, p := range got {
+		ids[p.ID] = true
+		if p.State != cache.StateWithdrawn || p.Op != "draft.send" || p.Account != "work" || p.Result != nil || !p.Updated.Equal(later) {
+			t.Errorf("withdrawn item=%+v", p)
+		}
+	}
+	if !ids[waiting] || !ids[second] {
+		t.Fatalf("withdrawn %v, want %s and %s", ids, waiting, second)
+	}
+	for id, want := range map[string]cache.PendingState{waiting: cache.StateWithdrawn, second: cache.StateWithdrawn, running: cache.StateRunning, denied: cache.StateDenied,
+		otherDraft: cache.StatePending, otherAccount: cache.StatePending, update: cache.StatePending, trash: cache.StatePending} {
+		if p, err := c.GetPending(ctx, id); err != nil || p.State != want {
+			t.Errorf("%s: state=%s error=%v, want %s", id, p.State, err, want)
+		}
+	}
+	if _, err := c.ClaimPending(ctx, waiting, later); !errors.Is(err, cache.ErrPendingHandled) {
+		t.Errorf("claim of withdrawn item: %v", err)
+	}
+	if _, err := c.DenyPending(ctx, waiting, later); !errors.Is(err, cache.ErrPendingHandled) {
+		t.Errorf("deny of withdrawn item: %v", err)
+	}
+	if again, err := c.WithdrawDraftSends(ctx, "work", "d1", later); err != nil || len(again) != 0 {
+		t.Errorf("second withdraw=%+v error=%v", again, err)
+	}
+	if p, err := c.GetPending(ctx, waiting); err != nil || !p.Updated.Equal(later) {
+		t.Errorf("second withdraw changed the item: %+v %v", p, err)
+	}
+}
+
+// A console claim and a withdraw of the same waiting send race on two connections: exactly one of them changes it.
+func TestConcurrentClaimAndWithdrawHaveExactlyOneWinner(t *testing.T) {
+	first, path := open(t)
+	second, err := cache.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	for range 20 {
+		id, err := first.AddPending(ctx, "work", "draft.send", json.RawMessage(`{"id":"d1"}`), nil, nil, queued)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var claimErr, withdrawErr error
+		var withdrawn []cache.Pending
+		var workers sync.WaitGroup
+		workers.Go(func() { _, claimErr = first.ClaimPending(ctx, id, queued) })
+		workers.Go(func() { withdrawn, withdrawErr = second.WithdrawDraftSends(ctx, "work", "d1", queued) })
+		workers.Wait()
+		if withdrawErr != nil || claimErr != nil && !errors.Is(claimErr, cache.ErrPendingHandled) {
+			t.Fatalf("claim=%v withdraw=%v", claimErr, withdrawErr)
+		}
+		claimed := claimErr == nil
+		p, err := first.GetPending(ctx, id)
+		if err != nil || claimed == (len(withdrawn) == 1) || claimed && p.State != cache.StateRunning || !claimed && p.State != cache.StateWithdrawn {
+			t.Fatalf("claimed=%v withdrawn=%d state=%s %v", claimed, len(withdrawn), p.State, err)
+		}
+	}
+}
+
 func TestFinishOnlyFromRunningToDoneOrFailed(t *testing.T) {
 	c, _ := open(t)
 	add := func(claim bool) string {
 		t.Helper()
-		id, err := c.AddPending(ctx, "work", "draft.reply", json.RawMessage(trashArgs), nil, queued)
+		id, err := c.AddPending(ctx, "work", "draft.reply", json.RawMessage(trashArgs), nil, nil, queued)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -247,7 +375,7 @@ func TestCacheClearKeepsPendingActions(t *testing.T) {
 	if err := c.Put(ctx, "work", row("m1")); err != nil {
 		t.Fatal(err)
 	}
-	id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(trashArgs), nil, queued)
+	id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(trashArgs), nil, nil, queued)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +392,7 @@ func TestListPendingShowsWaitingActionsFirstThenRecentlyResolved(t *testing.T) {
 	c, _ := open(t)
 	add := func(at time.Time) string {
 		t.Helper()
-		id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(`{"ids":["m1"]}`), nil, at)
+		id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(`{"ids":["m1"]}`), nil, nil, at)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -309,7 +437,7 @@ func TestListPendingShowsWaitingActionsFirstThenRecentlyResolved(t *testing.T) {
 // Callers tell cancellation apart from storage failures, which get fixed text.
 func TestCancelledPendingIOReturnsCancellation(t *testing.T) {
 	c, _ := open(t)
-	id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(trashArgs), nil, queued)
+	id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(trashArgs), nil, nil, queued)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,12 +445,13 @@ func TestCancelledPendingIOReturnsCancellation(t *testing.T) {
 	cancel()
 	for _, operation := range []func() error{
 		func() error {
-			_, err := c.AddPending(cancelled, "work", "mail.trash", json.RawMessage(`{}`), nil, queued)
+			_, err := c.AddPending(cancelled, "work", "mail.trash", json.RawMessage(`{}`), nil, nil, queued)
 			return err
 		},
 		func() error { _, err := c.GetPending(cancelled, id); return err },
 		func() error { _, err := c.ClaimPending(cancelled, id, queued); return err },
 		func() error { _, err := c.DenyPending(cancelled, id, queued); return err },
+		func() error { _, err := c.WithdrawDraftSends(cancelled, "work", "d1", queued); return err },
 		func() error { return c.FinishPending(cancelled, id, cache.StateDone, "x", queued) },
 		func() error { _, err := c.ListPending(cancelled, 50); return err },
 	} {
@@ -334,9 +463,9 @@ func TestCancelledPendingIOReturnsCancellation(t *testing.T) {
 
 func TestRemovingAnAccountDeniesItsWaitingActionsAndDeletesItsVerdicts(t *testing.T) {
 	c, _ := open(t)
-	waiting, _ := c.AddPending(ctx, "work@example.test", "mail.send", json.RawMessage(`{}`), nil, queued)
-	running, _ := c.AddPending(ctx, "work@example.test", "mail.send", json.RawMessage(`{}`), nil, queued)
-	other, _ := c.AddPending(ctx, "home@example.test", "mail.send", json.RawMessage(`{}`), nil, queued)
+	waiting, _ := c.AddPending(ctx, "work@example.test", "mail.send", json.RawMessage(`{}`), nil, nil, queued)
+	running, _ := c.AddPending(ctx, "work@example.test", "mail.send", json.RawMessage(`{}`), nil, nil, queued)
+	other, _ := c.AddPending(ctx, "home@example.test", "mail.send", json.RawMessage(`{}`), nil, nil, queued)
 	if _, err := c.ClaimPending(ctx, running, queued); err != nil {
 		t.Fatal(err)
 	}

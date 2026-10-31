@@ -15,7 +15,7 @@ import (
 
 type mailbox struct{ p *Provider }
 
-const columns = `id, COALESCE(thread_id, id), folder, sender_name, sender_address, to_addresses, cc_addresses, subject, body, content_type, received_at, is_draft, is_read, flag, categories, attachments, spf, dkim, dmarc, compauth, compauth_reason`
+const columns = `id, COALESCE(thread_id, id), folder, sender_name, sender_address, to_addresses, cc_addresses, bcc_addresses, subject, body, content_type, received_at, is_draft, is_read, flag, categories, attachments, spf, dkim, dmarc, compauth, compauth_reason`
 
 // newest orders by the instant, not the text, because seeded times can have any offset.
 const newest = ` ORDER BY julianday(received_at) DESC, id`
@@ -42,9 +42,9 @@ func addresses(text string) ([]model.Address, error) {
 // scan reads one row of columns. Body, content type, and authentication results are set only when body is true.
 func scan(row interface{ Scan(...any) error }, body bool) (model.Message, error) {
 	var m model.Message
-	var folder, to, cc, text, kind, received, flag, categories, attachments string
+	var folder, to, cc, bcc, text, kind, received, flag, categories, attachments string
 	var auth model.AuthResults
-	err := row.Scan(&m.ID, &m.ThreadID, &folder, &m.Sender.Name, &m.Sender.Address, &to, &cc, &m.Subject, &text, &kind, &received, &m.IsDraft, &m.IsRead, &flag, &categories, &attachments, &auth.SPF, &auth.DKIM, &auth.DMARC, &auth.CompAuth, &auth.CompAuthReason)
+	err := row.Scan(&m.ID, &m.ThreadID, &folder, &m.Sender.Name, &m.Sender.Address, &to, &cc, &bcc, &m.Subject, &text, &kind, &received, &m.IsDraft, &m.IsRead, &flag, &categories, &attachments, &auth.SPF, &auth.DKIM, &auth.DMARC, &auth.CompAuth, &auth.CompAuthReason)
 	if errors.Is(err, sql.ErrNoRows) {
 		return m, notFound
 	}
@@ -55,11 +55,12 @@ func scan(row interface{ Scan(...any) error }, body bool) (model.Message, error)
 	if m.ReceivedAt, err = time.Parse(time.RFC3339Nano, received); err != nil {
 		return m, invalidData
 	}
-	var errs [4]error
+	var errs [5]error
 	m.To, errs[0] = addresses(to)
 	m.CC, errs[1] = addresses(cc)
-	m.Categories, errs[2] = list(categories)
-	m.Attachments, errs[3] = list(attachments)
+	m.BCC, errs[2] = addresses(bcc)
+	m.Categories, errs[3] = list(categories)
+	m.Attachments, errs[4] = list(attachments)
 	if err := errors.Join(errs[:]...); err != nil {
 		return m, invalidData
 	}

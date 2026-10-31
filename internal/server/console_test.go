@@ -121,7 +121,7 @@ func TestConsoleNeedsTheConfiguredUsername(t *testing.T) {
 	}
 }
 
-const draftApprove = "[policy]\nmail_draft='approve'\nmail_trash='approve'\ncalendar_respond='approve'\n[policy.sealed]\nmail_draft='approve'\nmail_trash='approve'\n"
+const draftApprove = "[policy]\nmail_draft='approve'\nmail_trash='approve'\ncalendar_respond='approve'\n[policy.sealed]\nmail_trash='approve'\n"
 
 // Without a console password the console refuses every request with the command that sets one. A password that
 // amgd saves takes effect at the next reload.
@@ -325,6 +325,20 @@ func TestConsoleListShowsOptionalAttendeesAsRecipients(t *testing.T) {
 	pend(t, f.d.s, "calendar.invite", `{"to":["required@example.test"],"optional":["optional@example.test"],"subject":"s","body":"","start":"2026-04-01T09:00:00Z","end":"2026-04-01T10:00:00Z"}`)
 	if page := f.get(t, "/", nil).Body.String(); !strings.Contains(page, "required@example.test, optional@example.test") {
 		t.Fatalf("list misses the recipients: %s", page)
+	}
+}
+
+// A reply goes to the original's recipients too, which only the item page reads, so the list marks a reply row as a
+// reply or a reply all before the cc and bcc of the request.
+func TestConsoleListMarksReplyRows(t *testing.T) {
+	f := consoleDaemon(t, draftApprove, true)
+	pend(t, f.d.s, "draft.reply", `{"id":"g","body":"b","all":true,"cc":["c@example.test"],"bcc":["d@example.test"]}`)
+	pend(t, f.d.s, "draft.reply", `{"id":"g","body":"b"}`)
+	page := f.get(t, "/", nil).Body.String()
+	for _, want := range []string{"<td>reply all; cc: c@example.test; bcc (hidden): d@example.test</td>", "<td>reply</td>"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("list misses %q: %s", want, page)
+		}
 	}
 }
 

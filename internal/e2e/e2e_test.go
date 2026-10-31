@@ -152,6 +152,749 @@ func TestScreeningFlagMakesAnAllowedWriteWaitForApproval(t *testing.T) {
 	}
 }
 
+// newDraft is the result of draft new.
+type newDraft struct {
+	ID       string   `json:"id"`
+	ThreadID string   `json:"thread_id"`
+	To       []string `json:"to"`
+	CC       []string `json:"cc"`
+	BCC      []string `json:"bcc"`
+	Subject  string   `json:"subject"`
+}
+
+// A new draft takes repeated To, CC, and BCC recipients and an HTML body, and every field is optional. The
+// result names the draft and its recipients, and mail get shows the BCC of the draft like its To and CC.
+func TestDraftNewTakesEveryRecipientListAndAnHTMLBody(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	draft := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--to", "bob@example.test", "--cc", "cy@example.test", "--cc", "di@example.test",
+		"--bcc", "ed@example.test", "--bcc", "flo@example.test", "--subject", "canary-subject-html", "--body", "<p>canary-body-html</p>", "--html"))
+	want := newDraft{draft.ID, draft.ID, []string{"ana@example.test", "bob@example.test"}, []string{"cy@example.test", "di@example.test"}, []string{"ed@example.test", "flo@example.test"}, "canary-subject-html"}
+	if draft.ID == "" || !reflect.DeepEqual(draft, want) {
+		t.Fatalf("draft=%+v", draft)
+	}
+	stored := s.column(`SELECT folder || ' ' || is_draft || ' ' || to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || content_type || ' ' || body FROM messages WHERE id = ?`, draft.ID)
+	if !reflect.DeepEqual(stored, []string{`drafts 1 ["ana@example.test","bob@example.test"] ["cy@example.test","di@example.test"] ["ed@example.test","flo@example.test"] html <p>canary-body-html</p>`}) {
+		t.Fatalf("stored draft: %v", stored)
+	}
+	view := decode[struct {
+		Verdict string
+		BCC     []struct{ Address string } `json:"bcc"`
+	}](t, s.ok("mail", "get", draft.ID))
+	if view.Verdict != "green" || fmt.Sprint(view.BCC) != "[{ed@example.test} {flo@example.test}]" {
+		t.Fatalf("mail get: %+v", view)
+	}
+
+	// Without options, the draft is empty plain text, as the apps allow.
+	empty := decode[newDraft](t, s.ok("draft", "new"))
+	if empty.ID == "" || !reflect.DeepEqual(empty, newDraft{empty.ID, empty.ID, []string{}, []string{}, []string{}, ""}) {
+		t.Fatalf("empty draft=%+v", empty)
+	}
+	plain := decode[newDraft](t, s.ok("draft", "new", "--body", "canary-body-line-one\ncanary-body-line-two")).ID
+	if got := s.column(`SELECT content_type || ' ' || body FROM messages WHERE id = ?`, plain); !reflect.DeepEqual(got, []string{"text canary-body-line-one\ncanary-body-line-two"}) {
+		t.Fatalf("plain draft: %q", got)
+	}
+}
+
+// A send needs a recipient in To, CC, or BCC; one with only BCC recipients goes out. A send without any
+// recipient is invalid usage and reaches no policy decision.
+func TestSendNeedsARecipientAndCanGoOnlyToBcc(t *testing.T) {
+	t.Parallel()
+	s := start(t, sendAllowed)
+	before := s.dump()
+	if out, errout, code := s.amg("mail", "send", "--subject", "canary-subject-nobody", "--body", "canary-body-nobody"); code != 2 || out != "" || errout == "" {
+		t.Fatalf("send without a recipient: exit %d stdout %q stderr %q", code, out, errout)
+	}
+	s.assertTables(before)
+	if got := s.auditEvents("policy"); len(got) != 0 {
+		t.Fatalf("policy records of an invalid send: %v", got)
+	}
+	if out := s.ok("mail", "send", "--bcc", "ana@example.test", "--subject", "canary-subject-bcc", "--body", "canary-body-bcc"); !decode[struct{ OK bool }](t, out).OK {
+		t.Fatalf("bcc send: %s", out)
+	}
+	if got := s.column(`SELECT to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || content_type FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{`[] [] ["ana@example.test"] text`}) {
+		t.Fatalf("sent: %v", got)
+	}
+}
+
+const sendAllowed = "[policy]\nmail_send='allow'\n"
+
+// The approval console shows each recipient list of a waiting send, marks the BCC recipients as hidden, and
+// shows an HTML body as its source text. The approved run sends the stored lists and the HTML body unchanged.
+func TestApprovalPageShowsToCcAndMarkedBcc(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='approve'\n")
+	p := s.held("mail", "send", "--to", "ana@example.test", "--cc", "cy@example.test", "--bcc", "ed@example.test", "--subject", "canary-subject-console", "--body", "<b>canary-body-console</b>", "--html")
+	_, list := s.consoleGet(consolePassword, "/")
+	if !strings.Contains(list, "ana@example.test; cc: cy@example.test; bcc (hidden): ed@example.test") {
+		t.Fatalf("list misses the recipients:\n%s", list)
+	}
+	_, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID)
+	for _, want := range []string{"<dt>to</dt><dd><pre>ana@example.test</pre></dd>", "<dt>cc</dt><dd><pre>cy@example.test</pre></dd>", "<dt>bcc (hidden recipients)</dt><dd><pre>ed@example.test</pre></dd>",
+		"<dt>body (HTML source, not rendered)</dt><dd><pre>&lt;b&gt;canary-body-console&lt;/b&gt;</pre></dd>"} {
+		if !strings.Contains(item, want) {
+			t.Errorf("item page misses %q:\n%s", want, item)
+		}
+	}
+	s.approve(p.ApprovalID)
+	if got := s.column(`SELECT to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || content_type || ' ' || body FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{`["ana@example.test"] ["cy@example.test"] ["ed@example.test"] html <b>canary-body-console</b>`}) {
+		t.Fatalf("sent: %v", got)
+	}
+}
+
+// seedTeam adds the message team: from ana, to the account and bob, copied to cy, the account in capitals, and bob
+// again in capitals, with the Reply-To that the fake provider does not have, so a reply goes to the sender.
+func (s *server) seedTeam() {
+	s.t.Helper()
+	s.exec(`INSERT INTO messages (account, id, sender_name, sender_address, to_addresses, cc_addresses, subject, body) VALUES
+		('demo@fake.invalid', 'team', 'canary-name-ana', 'ana@example.test', '["demo@fake.invalid", "bob@example.test"]', '["cy@example.test", "DEMO@fake.invalid", "BOB@example.test"]', 'canary-subject-team', 'canary-body-team: a <b>plan</b>')`)
+}
+
+// A reply all draft goes to the sender and copies everyone on the original except the account, each address once
+// ignoring case, plus the agent's CC and BCC. An HTML reply keeps the quoted original below the agent's HTML, and
+// the reply stays in the conversation. The result of a green source names the draft, its recipients, and subject.
+func TestReplyAllDraftAddsTheAgentCcAndBccAndQuotesBelowHTML(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	s.seedTeam()
+	draft := decode[newDraft](t, s.ok("draft", "reply", "team", "--all", "--cc", "di@example.test", "--cc", "CY@example.test", "--bcc", "ed@example.test", "--body", "<p>canary-body-reply-all</p>", "--html"))
+	want := newDraft{draft.ID, "team", []string{"ana@example.test"}, []string{"bob@example.test", "cy@example.test", "di@example.test"}, []string{"ed@example.test"}, "Re: canary-subject-team"}
+	if draft.ID == "" || !reflect.DeepEqual(draft, want) {
+		t.Fatalf("draft=%+v", draft)
+	}
+	stored := s.column(`SELECT folder || ' ' || thread_id || ' ' || to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || content_type || ' ' || body FROM messages WHERE id = ?`, draft.ID)
+	if !reflect.DeepEqual(stored, []string{`drafts team ["ana@example.test"] ["bob@example.test","cy@example.test","di@example.test"] ["ed@example.test"] html <p>canary-body-reply-all</p><blockquote>canary-body-team: a &lt;b&gt;plan&lt;/b&gt;</blockquote>`}) {
+		t.Fatalf("stored draft: %v", stored)
+	}
+	// Without --all, the reply goes to the sender only, with the agent's CC.
+	single := decode[newDraft](t, s.ok("draft", "reply", "team", "--cc", "di@example.test"))
+	if !reflect.DeepEqual([][]string{single.To, single.CC, single.BCC}, [][]string{{"ana@example.test"}, {"di@example.test"}, {}}) {
+		t.Fatalf("reply=%+v", single)
+	}
+}
+
+// The daemon screens a draft on every read and never caches its verdict, so after a reply draft or a forward draft
+// of a draft it cannot read the verdict of the source. The result then names only the draft: its recipients and
+// subject come from a message whose verdict is unknown.
+func TestDraftOfASourceWithoutACachedVerdictGivesOnlyItsIDs(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	source := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--subject", "canary-subject-source", "--body", "canary-body-source")).ID
+	for _, args := range [][]string{
+		{"draft", "reply", source, "--body", "canary-body-reply-unknown"},
+		{"draft", "forward", source, "--to", "ana@example.test"},
+	} {
+		out := s.ok(args...)
+		got := decode[map[string]any](t, out)
+		id, _ := got["id"].(string)
+		if want := map[string]any{"id": id, "thread_id": source}; id == "" || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%v: %s", args, out)
+		}
+	}
+}
+
+// mail reply --all sends at once under allow, to the recipients that reply all picks plus the agent's CC and BCC.
+func TestMailReplyAllSendsToEveryoneAndTheAgentCopies(t *testing.T) {
+	t.Parallel()
+	s := start(t, sendAllowed)
+	s.seedTeam()
+	if out := s.ok("mail", "reply", "team", "--all", "--cc", "di@example.test", "--bcc", "ed@example.test", "--body", "canary-body-reply-sent"); !decode[struct{ OK bool }](t, out).OK {
+		t.Fatalf("reply: %s", out)
+	}
+	if got := s.column(`SELECT thread_id || ' ' || to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || content_type || ' ' || body FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{`team ["ana@example.test"] ["bob@example.test","cy@example.test","di@example.test"] ["ed@example.test"] text canary-body-reply-sent`}) {
+		t.Fatalf("sent: %v", got)
+	}
+}
+
+// The approval page of a waiting reply shows the recipients worked out from the original, with the agent's CC
+// added and its BCC marked as hidden. The approved run sends to them. An approved reply draft stores only its IDs.
+func TestApprovalPageShowsTheReplyRecipients(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='approve'\nmail_draft='approve'\n")
+	s.seedTeam()
+	p := s.held("mail", "reply", "team", "--all", "--cc", "di@example.test", "--bcc", "ed@example.test", "--body", "canary-body-reply-held")
+	_, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID)
+	for _, want := range []string{"<h2>Reply recipients</h2>", "<dt>to</dt><dd><pre>ana@example.test</pre></dd>",
+		"<dt>cc</dt><dd><pre>bob@example.test</pre><pre>cy@example.test</pre><pre>di@example.test</pre></dd>", "<dt>bcc (hidden recipients)</dt><dd><pre>ed@example.test</pre></dd>"} {
+		if !strings.Contains(item, want) {
+			t.Errorf("item page misses %q:\n%s", want, item)
+		}
+	}
+	s.approve(p.ApprovalID)
+	if got := s.column(`SELECT to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{`["ana@example.test"] ["bob@example.test","cy@example.test","di@example.test"] ["ed@example.test"]`}) {
+		t.Fatalf("sent: %v", got)
+	}
+	d := s.held("draft", "reply", "team", "--all", "--body", "canary-body-reply-draft")
+	s.approve(d.ApprovalID)
+	status := decode[struct {
+		State  string
+		Result map[string]any
+	}](t, s.ok("approvals", "status", d.ApprovalID))
+	if id, _ := status.Result["id"].(string); status.State != "done" || id == "" || !reflect.DeepEqual(status.Result, map[string]any{"id": id, "thread_id": "team"}) {
+		t.Fatalf("approved draft: %+v", status)
+	}
+	// When the original can no longer be read, the page says so instead of showing no recipients.
+	gone := s.held("mail", "reply", "team", "--body", "canary-body-reply-gone")
+	s.exec(`UPDATE messages SET account = 'someone-else' WHERE id = 'team'`)
+	if _, item := s.consoleGet(consolePassword, "/a/"+gone.ApprovalID); !strings.Contains(item, "<p>Reply recipients could not be read.</p>") || strings.Contains(item, "<dt>to</dt><dd><pre>ana@example.test") {
+		t.Fatalf("item page of an unreadable original:\n%s", item)
+	}
+}
+
+// seedReport adds the message report: from bob to the account, with an HTML-like body and two attachments.
+func (s *server) seedReport() {
+	s.t.Helper()
+	s.exec(`INSERT INTO messages (account, id, sender_name, sender_address, to_addresses, subject, body, attachments) VALUES
+		('demo@fake.invalid', 'report', 'canary-name-bob', 'bob@example.test', '["demo@fake.invalid"]', 'canary-subject-report', 'canary-body-report: a <b>plan</b>', '["canary-file-plan.pdf","canary-file-notes.txt"]')`)
+}
+
+// A forward draft needs no recipient: it carries the agent's note, the original attachments, and the conversation of
+// the original. The result of a green source names the draft, its recipients, and subject.
+func TestDraftForwardCarriesTheNoteAndTheAttachmentsWithoutARecipient(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	s.seedReport()
+	draft := decode[newDraft](t, s.ok("draft", "forward", "report", "--body", "canary-body-note\nline two"))
+	if want := (newDraft{draft.ID, "report", []string{}, []string{}, []string{}, "Fw: canary-subject-report"}); draft.ID == "" || !reflect.DeepEqual(draft, want) {
+		t.Fatalf("draft=%+v", draft)
+	}
+	stored := s.column(`SELECT folder || ' ' || thread_id || ' ' || to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || attachments || ' ' || content_type || ' ' || body FROM messages WHERE id = ?`, draft.ID)
+	if !reflect.DeepEqual(stored, []string{`drafts report [] [] [] ["canary-file-plan.pdf","canary-file-notes.txt"] text canary-body-note` + "\nline two"}) {
+		t.Fatalf("stored draft: %q", stored)
+	}
+}
+
+// mail forward needs a recipient: without one it is invalid usage and reaches no policy decision. With To, CC, and
+// BCC and an HTML note, it sends at once under allow, with the original below the note and its attachments.
+func TestMailForwardSendsToEveryListWithTheOriginalBelowTheHTMLNote(t *testing.T) {
+	t.Parallel()
+	s := start(t, sendAllowed)
+	s.seedReport()
+	before := s.dump()
+	if out, errout, code := s.amg("mail", "forward", "report", "--body", "canary-body-nobody"); code != 2 || out != "" || errout == "" {
+		t.Fatalf("forward without a recipient: exit %d stdout %q stderr %q", code, out, errout)
+	}
+	s.assertTables(before)
+	if got := s.auditEvents("policy"); len(got) != 0 {
+		t.Fatalf("policy records of an invalid forward: %v", got)
+	}
+	if out := s.ok("mail", "forward", "report", "--to", "ana@example.test", "--cc", "cy@example.test", "--bcc", "ed@example.test", "--body", "<p>canary-body-note</p>", "--html"); !decode[struct{ OK bool }](t, out).OK {
+		t.Fatalf("forward: %s", out)
+	}
+	if got := s.column(`SELECT thread_id || ' ' || to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || attachments || ' ' || content_type || ' ' || body FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{
+		`report ["ana@example.test"] ["cy@example.test"] ["ed@example.test"] ["canary-file-plan.pdf","canary-file-notes.txt"] html <p>canary-body-note</p><blockquote>canary-body-report: a &lt;b&gt;plan&lt;/b&gt;</blockquote>`}) {
+		t.Fatalf("sent: %v", got)
+	}
+}
+
+// The approval page of a waiting forward shows its To and CC and marks its BCC as hidden; the approved run sends
+// to them.
+func TestApprovalPageShowsTheForwardRecipients(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='approve'\n")
+	s.seedReport()
+	p := s.held("mail", "forward", "report", "--to", "ana@example.test", "--cc", "cy@example.test", "--bcc", "ed@example.test", "--body", "canary-body-forward-held")
+	if _, list := s.consoleGet(consolePassword, "/"); !strings.Contains(list, "ana@example.test; cc: cy@example.test; bcc (hidden): ed@example.test") {
+		t.Fatalf("list misses the recipients:\n%s", list)
+	}
+	_, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID)
+	for _, want := range []string{"<dt>to</dt><dd><pre>ana@example.test</pre></dd>", "<dt>cc</dt><dd><pre>cy@example.test</pre></dd>", "<dt>bcc (hidden recipients)</dt><dd><pre>ed@example.test</pre></dd>"} {
+		if !strings.Contains(item, want) {
+			t.Errorf("item page misses %q:\n%s", want, item)
+		}
+	}
+	s.approve(p.ApprovalID)
+	if got := s.column(`SELECT to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || attachments || ' ' || body FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{
+		`["ana@example.test"] ["cy@example.test"] ["ed@example.test"] ["canary-file-plan.pdf","canary-file-notes.txt"] canary-body-forward-held`}) {
+		t.Fatalf("sent: %v", got)
+	}
+}
+
+// draft update changes only the fields that it is given: a list replaces the old one, and an empty value clears it.
+// The result gives the draft's IDs, "ok": true, and the changed fields, and the returned ID reads the updated draft.
+func TestDraftUpdateChangesOnlyTheGivenFields(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	id := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--cc", "cy@example.test", "--bcc", "ed@example.test", "--subject", "canary-subject-old", "--body", "canary-body-old")).ID
+	stored := func() string {
+		return strings.Join(s.column(`SELECT folder || ' ' || is_draft || ' ' || to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || subject || ' ' || content_type || ' ' || body FROM messages WHERE id = ?`, id), "\n")
+	}
+	for _, tc := range []struct {
+		args   []string
+		result map[string]any
+		row    string
+	}{
+		{[]string{"--subject", "canary-subject-new"}, map[string]any{"subject": "canary-subject-new"},
+			`drafts 1 ["ana@example.test"] ["cy@example.test"] ["ed@example.test"] canary-subject-new text canary-body-old`},
+		{[]string{"--to", "bob@example.test", "--to", "di@example.test"}, map[string]any{"to": []any{"bob@example.test", "di@example.test"}},
+			`drafts 1 ["bob@example.test","di@example.test"] ["cy@example.test"] ["ed@example.test"] canary-subject-new text canary-body-old`},
+		{[]string{"--cc", ""}, map[string]any{"cc": []any{}},
+			`drafts 1 ["bob@example.test","di@example.test"] [] ["ed@example.test"] canary-subject-new text canary-body-old`},
+		{[]string{"--body", "<p>canary-body-html</p>", "--html"}, map[string]any{},
+			`drafts 1 ["bob@example.test","di@example.test"] [] ["ed@example.test"] canary-subject-new html <p>canary-body-html</p>`},
+		{[]string{"--bcc", "flo@example.test", "--body", "canary-body-plain"}, map[string]any{"bcc": []any{"flo@example.test"}},
+			`drafts 1 ["bob@example.test","di@example.test"] [] ["flo@example.test"] canary-subject-new text canary-body-plain`},
+	} {
+		got := decode[map[string]any](t, s.ok(append([]string{"draft", "update", id}, tc.args...)...))
+		tc.result["id"], tc.result["thread_id"], tc.result["ok"] = id, id, true
+		if !reflect.DeepEqual(got, tc.result) {
+			t.Fatalf("update %v: result %v, want %v", tc.args, got, tc.result)
+		}
+		if row := stored(); row != tc.row {
+			t.Fatalf("update %v: stored %q, want %q", tc.args, row, tc.row)
+		}
+		id = got["id"].(string)
+	}
+	view := decode[struct {
+		Verdict string
+		Subject string
+		Body    string
+	}](t, s.ok("mail", "get", id))
+	if view.Verdict != "green" || view.Subject != "canary-subject-new" || !strings.Contains(view.Body, "canary-body-plain") {
+		t.Fatalf("mail get of the updated draft: %+v", view)
+	}
+}
+
+// draft update works on reply and forward drafts too: --body replaces the whole body, quoted original included,
+// and the draft keeps its conversation, its recipients, and the forwarded attachments.
+func TestDraftUpdateChangesReplyAndForwardDrafts(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	s.seedTeam()
+	s.seedReport()
+	reply := decode[newDraft](t, s.ok("draft", "reply", "team", "--body", "canary-body-reply")).ID
+	if got := decode[map[string]any](t, s.ok("draft", "update", reply, "--body", "canary-body-reply-new")); !reflect.DeepEqual(got, map[string]any{"id": reply, "thread_id": "team", "ok": true}) {
+		t.Fatalf("reply update: %v", got)
+	}
+	forward := decode[newDraft](t, s.ok("draft", "forward", "report", "--body", "canary-body-note")).ID
+	if got := decode[map[string]any](t, s.ok("draft", "update", forward, "--to", "ana@example.test")); !reflect.DeepEqual(got, map[string]any{"id": forward, "thread_id": "report", "ok": true, "to": []any{"ana@example.test"}}) {
+		t.Fatalf("forward update: %v", got)
+	}
+	got := s.column(`SELECT thread_id || ' ' || to_addresses || ' ' || subject || ' ' || attachments || ' ' || body FROM messages WHERE id IN (?, ?) ORDER BY thread_id DESC`, reply, forward)
+	if want := []string{`team ["ana@example.test"] Re: canary-subject-team [] canary-body-reply-new`,
+		`report ["ana@example.test"] Fw: canary-subject-report ["canary-file-plan.pdf","canary-file-notes.txt"] canary-body-note`}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("stored drafts: %q", got)
+	}
+}
+
+// draft update without a field, or with --html but no --body, is invalid usage and reaches no policy decision. An
+// update of a message that is not a draft is refused with a fixed text before any write.
+func TestDraftUpdateRefusesNoFieldAndAMessageThatIsNotADraft(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	id := decode[newDraft](t, s.ok("draft", "new", "--subject", "canary-subject-draft")).ID
+	before := s.dump()
+	audit := func() string {
+		data, err := os.ReadFile(filepath.Join(s.home, "audit.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	records := audit()
+	for _, args := range [][]string{{"draft", "update", id}, {"draft", "update", id, "--html"}, {"draft", "update", id, "--subject", "canary-subject-x", "--html"}} {
+		if out, errout, code := s.amg(args...); code != 2 || out != "" || errout == "" {
+			t.Fatalf("amg %v: exit %d stdout %q stderr %q", args, code, out, errout)
+		}
+	}
+	s.refused("draft update refused: not a draft", "draft", "update", "lunch", "--subject", "canary-subject-x", "--body", "canary-body-x")
+	s.assertTables(before)
+	if audit() != records {
+		t.Fatal("refused updates wrote audit records")
+	}
+}
+
+// A draft that the user wrote in the app can be updated too. An update that waits for approval stores only the fields
+// that it was given; the approval page shows them, and the approved run applies them and stores only the draft IDs.
+func TestApprovedDraftUpdateAppliesOnlyTheGivenFields(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_draft='approve'\n")
+	id := "users-draft"
+	s.exec(`INSERT INTO messages (account, id, folder, to_addresses, cc_addresses, subject, body, is_draft, thread_id) VALUES
+		('demo@fake.invalid', ?, 'drafts', '["ana@example.test"]', '["cy@example.test"]', 'canary-subject-old', 'canary-body-old', 1, 'conversation')`, id)
+	p := s.held("draft", "update", id, "--cc", "", "--subject", "canary-subject-new")
+	if got := s.column(`SELECT cc_addresses || ' ' || subject FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got, []string{`["cy@example.test"] canary-subject-old`}) {
+		t.Fatalf("pending update ran: %v", got)
+	}
+	_, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID)
+	for _, want := range []string{"<dt>cc</dt><dd></dd>", "<dt>subject</dt><dd><pre>canary-subject-new</pre></dd>"} {
+		if !strings.Contains(item, want) {
+			t.Errorf("item page misses %q:\n%s", want, item)
+		}
+	}
+	if strings.Contains(item, "<dt>to</dt>") || strings.Contains(item, "<dt>body</dt>") {
+		t.Errorf("item page shows a field that was not given:\n%s", item)
+	}
+	s.approve(p.ApprovalID)
+	if got := s.column(`SELECT to_addresses || ' ' || cc_addresses || ' ' || subject || ' ' || body FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got, []string{`["ana@example.test"] [] canary-subject-new canary-body-old`}) {
+		t.Fatalf("approved update: %v", got)
+	}
+	status := decode[struct {
+		State  string
+		Result map[string]any
+	}](t, s.ok("approvals", "status", p.ApprovalID))
+	if status.State != "done" || !reflect.DeepEqual(status.Result, map[string]any{"id": id, "thread_id": "conversation"}) {
+		t.Fatalf("approved draft update: %+v", status)
+	}
+}
+
+// draft delete removes the draft under the default policy, with an operation record of its ID only. A received
+// message is never deleted: draft delete refuses it with a fixed text and changes nothing.
+func TestDraftDeleteRemovesTheDraftAndNeverOtherMail(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	id := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--subject", "canary-subject-delete", "--body", "canary-body-delete")).ID
+	if out := s.ok("draft", "delete", id); !decode[struct{ OK bool }](t, out).OK {
+		t.Fatalf("draft delete: %s", out)
+	}
+	if got := s.column(`SELECT id FROM messages WHERE id = ?`, id); len(got) != 0 {
+		t.Fatalf("deleted draft remains: %v", got)
+	}
+	if got := s.operations(); !reflect.DeepEqual(got, []string{"draft_new [" + id + "]", "draft_delete [" + id + "]"}) {
+		t.Fatalf("operation records=%v", got)
+	}
+	before := s.dump()
+	for _, received := range []string{"lunch", "phish"} {
+		s.refused("draft delete refused: not a draft", "draft", "delete", received)
+	}
+	s.refused("refused by policy: mail_send", "draft", "send", "lunch")
+	s.assertTables(before)
+	if got := s.operations(); len(got) != 2 {
+		t.Fatalf("refused deletes wrote operation records: %v", got)
+	}
+}
+
+// draft send under allow sends the draft as it is: it leaves drafts and lands in sent with every recipient list, and
+// the result is ok. A received message is refused with a fixed text, and under the default policy (deny) no draft is
+// sent.
+func TestDraftSendSendsTheDraftAndOnlyADraft(t *testing.T) {
+	t.Parallel()
+	s := start(t, sendAllowed)
+	id := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--cc", "cy@example.test", "--bcc", "ed@example.test", "--subject", "canary-subject-send", "--body", "<p>canary-body-send</p>", "--html")).ID
+	before := s.dump()
+	s.refused("draft send refused: not a draft", "draft", "send", "lunch")
+	s.assertTables(before)
+	if out := s.ok("draft", "send", id); !decode[struct{ OK bool }](t, out).OK {
+		t.Fatalf("draft send: %s", out)
+	}
+	if got := s.column(`SELECT folder || ' ' || is_draft || ' ' || to_addresses || ' ' || cc_addresses || ' ' || bcc_addresses || ' ' || subject || ' ' || content_type || ' ' || body FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got,
+		[]string{`sent 0 ["ana@example.test"] ["cy@example.test"] ["ed@example.test"] canary-subject-send html <p>canary-body-send</p>`}) {
+		t.Fatalf("sent draft: %q", got)
+	}
+	if got := s.operations(); !reflect.DeepEqual(got, []string{"draft_new [" + id + "]", "draft_send [" + id + "]"}) {
+		t.Fatalf("operation records=%v", got)
+	}
+
+	denied := start(t, "")
+	draft := decode[newDraft](t, denied.ok("draft", "new", "--to", "ana@example.test", "--subject", "canary-subject-denied")).ID
+	before = denied.dump()
+	denied.refused("refused by policy: mail_send", "draft", "send", draft)
+	denied.assertTables(before)
+}
+
+// A draft send that waits for approval stores the draft fields that Jev checked: the approval list and page show its
+// recipients, bcc marked as hidden, its subject, and its HTML body as source text. The approved run sends the draft
+// as it is then: a change that the user made in the app after the check is sent as is, because a waiting send has no
+// tie to a draft version. An approved send of a draft that the user deleted in the app fails with a safe code and
+// sends nothing.
+func TestApprovedDraftSendShowsTheCheckedDraftAndSendsItOnce(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='approve'\n")
+	id := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--cc", "cy@example.test", "--bcc", "ed@example.test", "--subject", "canary-subject-checked", "--body", "<b>canary-body-checked</b>", "--html")).ID
+	p := s.held("draft", "send", id)
+	if got := s.column(`SELECT folder FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got, []string{"drafts"}) {
+		t.Fatalf("pending send ran: %v", got)
+	}
+	_, list := s.consoleGet(consolePassword, "/")
+	if !strings.Contains(list, "ana@example.test; cc: cy@example.test; bcc (hidden): ed@example.test") || !strings.Contains(list, "canary-subject-checked") {
+		t.Fatalf("list misses the draft fields:\n%s", list)
+	}
+	_, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID)
+	for _, want := range []string{"<dt>id</dt><dd><pre>" + id + "</pre></dd>", "<h2>Draft</h2>", "<dt>to</dt><dd><pre>ana@example.test</pre></dd>", "<dt>cc</dt><dd><pre>cy@example.test</pre></dd>",
+		"<dt>bcc (hidden recipients)</dt><dd><pre>ed@example.test</pre></dd>", "<dt>subject</dt><dd><pre>canary-subject-checked</pre></dd>",
+		"<dt>body (HTML source, not rendered)</dt><dd><pre>&lt;b&gt;canary-body-checked&lt;/b&gt;</pre></dd>"} {
+		if !strings.Contains(item, want) {
+			t.Errorf("item page misses %q:\n%s", want, item)
+		}
+	}
+	// The user changes the draft in the app, which the daemon does not watch.
+	s.exec(`UPDATE messages SET subject = 'canary-subject-changed' WHERE id = ?`, id)
+	s.approve(p.ApprovalID)
+	if got := s.column(`SELECT folder || ' ' || is_draft || ' ' || subject FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got, []string{"sent 0 canary-subject-changed"}) {
+		t.Fatalf("approved send: %v", got)
+	}
+	status := decode[struct {
+		State  string
+		Result map[string]any
+	}](t, s.ok("approvals", "status", p.ApprovalID))
+	if status.State != "done" || !reflect.DeepEqual(status.Result, map[string]any{"ok": true}) {
+		t.Fatalf("approved draft send: %+v", status)
+	}
+
+	gone := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--subject", "canary-subject-gone")).ID
+	p = s.held("draft", "send", gone)
+	s.exec(`DELETE FROM messages WHERE id = ?`, gone)
+	sent := s.column(`SELECT id FROM messages WHERE folder = 'sent'`)
+	s.approve(p.ApprovalID)
+	if state := s.state(p.ApprovalID); state != "failed" {
+		t.Fatalf("approved send of a deleted draft: %s", state)
+	}
+	if got := s.column(`SELECT id FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, sent) {
+		t.Fatalf("approved send of a deleted draft sent %v", got)
+	}
+	if _, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID); !strings.Contains(item, "<dt>Error</dt><dd><pre>MailboxError</pre></dd>") {
+		t.Fatalf("failed item page:\n%s", item)
+	}
+}
+
+// updatedDraft is the result of draft update.
+type updatedDraft struct {
+	ID             string `json:"id"`
+	SendApprovalID string `json:"send_approval_id"`
+}
+
+// seedFlaggedDraft adds a draft that the user wrote in the app, whose body the fake Jev check flags, and gives its ID.
+func (s *server) seedFlaggedDraft() string {
+	s.t.Helper()
+	s.exec(`INSERT INTO messages (account, id, folder, to_addresses, subject, body, is_draft, thread_id) VALUES
+		('demo@fake.invalid', 'users-draft', 'drafts', '["ana@example.test"]', 'canary-subject-draft', 'canary-body-flagged: my password is hunter2', 1, 'conversation')`)
+	return "users-draft"
+}
+
+// assertWithdrawn checks that the waiting send approval is withdrawn: approvals status reports it, the console lists
+// it among the handled items and shows its state, and it can be neither approved nor denied. Its approval records
+// are created and then withdrawn, with IDs and fixed codes only.
+func (s *server) assertWithdrawn(approval string) {
+	s.t.Helper()
+	if state := s.state(approval); state != "withdrawn" {
+		s.t.Fatalf("approvals status %s: %s", approval, state)
+	}
+	_, list := s.consoleGet(consolePassword, "/")
+	at := strings.Index(list, `<a href="/a/`+approval+`">draft.send</a>`)
+	if at < 0 || !strings.Contains(list[at:at+strings.Index(list[at:], "</tr>")], `<td class="state withdrawn">withdrawn</td>`) {
+		s.t.Fatalf("console list misses the withdrawn send:\n%s", list)
+	}
+	_, item := s.consoleGet(consolePassword, "/a/"+approval)
+	if !strings.Contains(item, `<dt>State</dt><dd class="state withdrawn">withdrawn</dd>`) || strings.Contains(item, "<form") {
+		s.t.Fatalf("item page of the withdrawn send:\n%s", item)
+	}
+	for _, decision := range []string{"approve", "deny"} {
+		if code := s.decide(approval, decision); code != http.StatusConflict {
+			s.t.Fatalf("%s of a withdrawn send: HTTP %d", decision, code)
+		}
+	}
+	records := []map[string]any{}
+	for _, r := range s.auditEvents("approval") {
+		if r["approval_id"] == approval {
+			records = append(records, r)
+		}
+	}
+	record := func(state string) map[string]any {
+		return map[string]any{"event": "approval", "account": demo, "operation": "draft.send", "state": state, "approval_id": approval}
+	}
+	if want := []map[string]any{record("created"), record("withdrawn")}; !reflect.DeepEqual(records, want) {
+		s.t.Fatalf("approval records=%v\nwant %v", records, want)
+	}
+	if state := s.state(approval); state != "withdrawn" {
+		s.t.Fatalf("withdrawn send after console decisions: %s", state)
+	}
+}
+
+// An agent's draft update withdraws the waiting send of the draft and makes a new one with a new Jev check, which
+// waits for approval even under mail_send = allow and when the check no longer flags it. The update result names the
+// new send; approved, it sends the changed draft once.
+func TestDraftUpdateWithdrawsTheWaitingSendAndHoldsANewOne(t *testing.T) {
+	t.Parallel()
+	s := start(t, sendAllowed)
+	id := s.seedFlaggedDraft()
+	old := s.held("draft", "send", id)
+	updated := decode[updatedDraft](t, s.ok("draft", "update", id, "--body", "canary-body-clean: see you at noon"))
+	if updated.ID != id || updated.SendApprovalID == "" || updated.SendApprovalID == old.ApprovalID {
+		t.Fatalf("draft update: %+v", updated)
+	}
+	s.assertWithdrawn(old.ApprovalID)
+	if state := s.state(updated.SendApprovalID); state != "pending" {
+		t.Fatalf("new send: %s", state)
+	}
+	if got := s.column(`SELECT folder FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got, []string{"drafts"}) {
+		t.Fatalf("a draft update sent mail: %v", got)
+	}
+	if _, item := s.consoleGet(consolePassword, "/a/"+updated.SendApprovalID); !strings.Contains(item, "<dt>body</dt><dd><pre>canary-body-clean: see you at noon</pre></dd>") || !strings.Contains(item, "Fake check (keywords only): not flagged") {
+		t.Fatalf("new send page:\n%s", item)
+	}
+	policy := s.auditEvents("policy")
+	if got, want := policy[len(policy)-1], map[string]any{"event": "policy", "account": demo, "operation": "draft.send", "key": "mail_send", "decision": "approve", "reasons": []any{"policy"},
+		"id": id, "approval_id": updated.SendApprovalID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("new send policy record=%v\nwant %v", got, want)
+	}
+	s.approve(updated.SendApprovalID)
+	if got := s.column(`SELECT folder || ' ' || body FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got, []string{"sent canary-body-clean: see you at noon"}) {
+		t.Fatalf("approved new send: %v", got)
+	}
+}
+
+// A draft update that waits for approval withdraws the waiting send at once and makes no new one. A send that the
+// agent makes while the update waits is withdrawn when the user approves the update in the console, and the update
+// makes a new one, which still waits for approval: approving a change is never approving a send. The update's stored
+// result names it.
+func TestApprovedDraftUpdateReplacesTheWaitingSendAndTheNewOneWaits(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='allow'\nmail_draft='approve'\n")
+	id := s.seedFlaggedDraft()
+	first := s.held("draft", "send", id)
+	update := s.held("draft", "update", id, "--body", "canary-body-clean: see you at noon")
+	s.assertWithdrawn(first.ApprovalID)
+	if _, list := s.consoleGet(consolePassword, "/"); strings.Count(list, `class="state pending"`) != 1 {
+		t.Fatalf("a waiting update made a new send:\n%s", list)
+	}
+	old := s.held("draft", "send", id)
+	s.approve(update.ApprovalID)
+	s.assertWithdrawn(old.ApprovalID)
+	status := decode[struct {
+		State  string
+		Result updatedDraft
+	}](t, s.ok("approvals", "status", update.ApprovalID))
+	if status.State != "done" || status.Result.ID != id || status.Result.SendApprovalID == "" || status.Result.SendApprovalID == old.ApprovalID {
+		t.Fatalf("approved update: %+v", status)
+	}
+	if state := s.state(status.Result.SendApprovalID); state != "pending" {
+		t.Fatalf("new send after an approved update: %s", state)
+	}
+	// The new send has its own decision and Jev check: the approval of the update does not cover it.
+	if _, item := s.consoleGet(consolePassword, "/a/"+status.Result.SendApprovalID); !strings.Contains(item, "Fake check (keywords only): not flagged") {
+		t.Fatalf("new send page has no new check:\n%s", item)
+	}
+	policy := s.auditEvents("policy")
+	if got := policy[len(policy)-1]; got["operation"] != "draft.send" || got["decision"] != "approve" || got["approval_id"] != status.Result.SendApprovalID {
+		t.Fatalf("new send policy record=%v", got)
+	}
+	if got := s.column(`SELECT folder || ' ' || body FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got, []string{"drafts canary-body-clean: see you at noon"}) {
+		t.Fatalf("approved update: %v", got)
+	}
+}
+
+// Under mail_send = deny, a draft update still withdraws the waiting send but makes no new one, and its result has no
+// send_approval_id.
+func TestDraftUpdateUnderASendDenyWithdrawsWithoutANewSend(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='approve'\n")
+	id := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--subject", "canary-subject-deny")).ID
+	old := s.held("draft", "send", id)
+	before := s.reloads()
+	s.amgdOK(nil, "config", "set", "policy.mail_send", "deny")
+	if got := s.awaitReload(before); got != "reload ok" {
+		t.Fatalf("reload: %s", got)
+	}
+	if out := s.ok("draft", "update", id, "--subject", "canary-subject-denied"); strings.Contains(out, "send_approval_id") || decode[updatedDraft](t, out).ID != id {
+		t.Fatalf("draft update: %s", out)
+	}
+	s.assertWithdrawn(old.ApprovalID)
+	if _, list := s.consoleGet(consolePassword, "/"); strings.Contains(list, `class="state pending"`) {
+		t.Fatalf("a send waits after an update under deny:\n%s", list)
+	}
+}
+
+// A second draft send of a draft replaces its waiting send, so one draft has at most one waiting send, and a draft
+// delete withdraws the waiting send and makes none. Nothing is sent.
+func TestSecondDraftSendAndDraftDeleteWithdrawTheWaitingSend(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='approve'\n")
+	id := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--subject", "canary-subject-twice")).ID
+	first := s.held("draft", "send", id)
+	second := s.held("draft", "send", id)
+	s.assertWithdrawn(first.ApprovalID)
+	if state := s.state(second.ApprovalID); state != "pending" {
+		t.Fatalf("second send: %s", state)
+	}
+	s.ok("draft", "delete", id)
+	s.assertWithdrawn(second.ApprovalID)
+	if got := s.column(`SELECT id FROM messages WHERE folder = 'sent'`); len(got) != 0 {
+		t.Fatalf("sent: %v", got)
+	}
+	if _, list := s.consoleGet(consolePassword, "/"); strings.Contains(list, `class="state pending"`) {
+		t.Fatalf("a send waits after the draft delete:\n%s", list)
+	}
+}
+
+// A second draft send withdraws the waiting send of the draft also when it is refused itself: for a message that is no
+// longer a draft, and under mail_send = deny. Nothing new waits and nothing is sent.
+func TestRefusedDraftSendStillWithdrawsTheWaitingSend(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='approve'\n")
+	sentByApp := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--subject", "canary-subject-app")).ID
+	old := s.held("draft", "send", sentByApp)
+	// The user sends the draft in the app, so the message is no longer a draft.
+	s.exec(`UPDATE messages SET folder = 'sent', is_draft = 0 WHERE id = ?`, sentByApp)
+	s.refused("draft send refused: not a draft", "draft", "send", sentByApp)
+	s.assertWithdrawn(old.ApprovalID)
+
+	id := decode[newDraft](t, s.ok("draft", "new", "--to", "ana@example.test", "--subject", "canary-subject-denied")).ID
+	old = s.held("draft", "send", id)
+	before := s.reloads()
+	s.amgdOK(nil, "config", "set", "policy.mail_send", "deny")
+	if got := s.awaitReload(before); got != "reload ok" {
+		t.Fatalf("reload: %s", got)
+	}
+	s.refused("refused by policy: mail_send", "draft", "send", id)
+	s.assertWithdrawn(old.ApprovalID)
+	if _, list := s.consoleGet(consolePassword, "/"); strings.Contains(list, `class="state pending"`) {
+		t.Fatalf("a send waits after refused sends:\n%s", list)
+	}
+	if got := s.column(`SELECT id FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{sentByApp}) {
+		t.Fatalf("sent: %v", got)
+	}
+}
+
+// A reply or forward of a red, sealed, or error message is refused even when the policy allows drafts and sends. The
+// policy record names the red source with the reason red, and the sealed and error sources with the reason sealed.
+func TestRepliesAndForwardsOfARedOrSealedMessageAreAlwaysRefused(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_send='allow'\nmail_draft='allow'\n")
+	before := s.dump()
+	want := []map[string]any{}
+	for _, source := range [][2]string{{"phish", "red"}, {"code", "sealed"}, {"broken", "sealed"}} {
+		id, reason := source[0], source[1]
+		for _, tc := range []struct {
+			op, key string
+			args    []string
+		}{
+			{"mail.reply", "mail_send", []string{"mail", "reply", id, "--body", "canary-body-reply"}},
+			{"mail.forward", "mail_send", []string{"mail", "forward", id, "--to", "ana@example.test"}},
+			{"draft.reply", "mail_draft", []string{"draft", "reply", id, "--body", "canary-body-reply"}},
+			{"draft.forward", "mail_draft", []string{"draft", "forward", id, "--to", "ana@example.test"}},
+		} {
+			s.refused("refused by policy: "+tc.key, tc.args...)
+			want = append(want, map[string]any{"event": "policy", "account": "demo@fake.invalid", "operation": tc.op, "key": tc.key, "decision": "deny", "reasons": []any{"policy", reason}, "id": id})
+		}
+	}
+	// A refused write changes no row at the provider: no sent mail and no draft.
+	s.assertTables(before)
+	if got := s.auditEvents("policy"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("policy records=%v\nwant %v", got, want)
+	}
+}
+
+// Only replies, forwards, and trash of a sealed message have a sealed check; the other mail writes act on it as on any message.
+func TestSealedMailCanStillBeOrganizedByHand(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	want := s.dump()
+	for _, message := range want["messages"] {
+		if message["id"] == "code" {
+			message["folder"], message["is_read"], message["flag"], message["categories"] = "archive", int64(1), "flagged", `["Sealed"]`
+		}
+	}
+	for _, args := range [][]string{
+		{"mail", "unread", "code"}, {"mail", "read", "code"}, {"mail", "flag", "code", "--state", "flagged"},
+		{"mail", "categorize", "code", "--add", "Sealed"}, {"mail", "move", "projects", "code"}, {"mail", "archive", "code"},
+	} {
+		if got := decode[[]result](t, s.ok(args...)); len(got) != 1 || !got[0].OK {
+			t.Fatalf("amg %v: %+v", args, got)
+		}
+	}
+	s.assertTables(want)
+}
+
 // result is one entry of a mail mutation result.
 type result struct {
 	ID         string `json:"id"`
@@ -266,6 +1009,49 @@ func TestMeetingsFromAvailabilityToCancel(t *testing.T) {
 	s.ok("calendar", "cancel", ids[0], "--comment", "canary-comment-cancel")
 	if got := s.column(`SELECT is_cancelled || ' ' || cancel_comment FROM events WHERE id = ?`, ids[0]); !reflect.DeepEqual(got, []string{"1 canary-comment-cancel"}) {
 		t.Fatalf("cancel: %v", got)
+	}
+}
+
+// calendar invite and calendar update take an HTML body with --html, and the event keeps it as is; without --html
+// the body is escaped plain text. --html without --body is invalid usage and changes nothing.
+func TestMeetingBodiesAreHTMLOnlyWithTheHTMLOption(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\ncalendar_invite='allow'\ncalendar_update='allow'\n")
+	id := decode[struct{ ID string }](t, s.ok("calendar", "invite", "--to", "ana@example.test", "--subject", "canary-subject-html-meeting", "--body", "<p>canary-body-agenda</p>", "--html",
+		"--start", "2030-01-02 09:00", "--duration", "30m", "--no-online")).ID
+	body := func(want string) {
+		t.Helper()
+		if got := s.column(`SELECT content_type || ' ' || body FROM events WHERE id = ?`, id); !reflect.DeepEqual(got, []string{want}) {
+			t.Fatalf("event body %q, want %q", got, want)
+		}
+	}
+	body("html <p>canary-body-agenda</p>")
+	s.ok("calendar", "update", id, "--body", "<b>canary-body-update</b>\nnext", "--html")
+	body("html <b>canary-body-update</b>\nnext")
+	s.ok("calendar", "update", id, "--body", "<b>canary-body-plain</b>\nnext")
+	body("html &lt;b&gt;canary-body-plain&lt;/b&gt;<br>next")
+
+	before := s.dump()
+	if out, errout, code := s.amg("calendar", "update", id, "--subject", "canary-subject-no-body", "--html"); code != 2 || out != "" || errout == "" {
+		t.Fatalf("--html without --body: exit %d stdout %q stderr %q", code, out, errout)
+	}
+	s.assertTables(before)
+}
+
+// An invitation that waits for approval shows its HTML body as source text on the approval page, and the
+// approved run keeps the HTML as is.
+func TestApprovalPageShowsAnHTMLMeetingBodyAsSource(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\ncalendar_invite='approve'\n")
+	p := s.held("calendar", "invite", "--to", "ana@example.test", "--subject", "canary-subject-html-console", "--body", "<i>canary-body-console</i>", "--html",
+		"--start", "2030-01-02 09:00", "--duration", "30m", "--no-online")
+	_, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID)
+	if want := "<dt>body (HTML source, not rendered)</dt><dd><pre>&lt;i&gt;canary-body-console&lt;/i&gt;</pre></dd>"; !strings.Contains(item, want) {
+		t.Fatalf("item page misses %q:\n%s", want, item)
+	}
+	s.approve(p.ApprovalID)
+	if got := s.column(`SELECT content_type || ' ' || body FROM events WHERE subject = 'canary-subject-html-console'`); !reflect.DeepEqual(got, []string{"html <i>canary-body-console</i>"}) {
+		t.Fatalf("approved invite body %q", got)
 	}
 }
 

@@ -68,7 +68,10 @@ func TestCalendarWriteCommandsSendExactRequests(t *testing.T) {
 			`{"to":["a@example.test"],"subject":"Plan","body":"","online":true,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T09:30:00-04:00"}`},
 		{"invite optional attendees repeated", []string{"calendar", "invite", "--to", "a@example.test", "--optional", "b@example.test", "--optional", "c@example.test", "--subject", "Plan", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar.invite",
 			`{"to":["a@example.test"],"optional":["b@example.test","c@example.test"],"subject":"Plan","body":"","online":true,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T09:30:00-04:00"}`},
+		{"invite html body", []string{"calendar", "invite", "--to", "a@example.test", "--subject", "Plan", "--body", "<p>Agenda</p>", "--html", "--start", "2026-10-09 09:00", "--duration", "30m"}, "calendar.invite",
+			`{"to":["a@example.test"],"subject":"Plan","body":"<p>Agenda</p>","html":true,"online":true,"start":"2026-10-09T09:00:00-04:00","end":"2026-10-09T09:30:00-04:00"}`},
 		{"update subject only", []string{"calendar", "update", "e1", "--subject", "New"}, "calendar.update", `{"id":"e1","subject":"New"}`},
+		{"update html body", []string{"calendar", "update", "e1", "--body", "<p>New</p>", "--html"}, "calendar.update", `{"id":"e1","body":"<p>New</p>","html":true}`},
 		{"update body only", []string{"calendar", "update", "e1", "--body", "New agenda"}, "calendar.update", `{"id":"e1","body":"New agenda"}`},
 		{"update explicit empty body", []string{"calendar", "update", "e1", "--subject", "New", "--body", ""}, "calendar.update", `{"id":"e1","subject":"New","body":""}`},
 		{"update adds online meeting", []string{"calendar", "update", "e1", "--online"}, "calendar.update", `{"id":"e1","online":true}`},
@@ -136,6 +139,7 @@ func TestCalendarWriteUsageErrorsNeedNoServerOrState(t *testing.T) {
 		{"calendar", "update", "e1", "--online=false"},
 		{"calendar", "update", "e1", "--subject", "New", "--online=false"},
 		{"calendar", "update", "e1", "--no-online"},
+		{"calendar", "update", "e1", "--subject", "New", "--html"},
 		{"calendar", "update", "e1", "--teams"},
 		append(invite, "--start", "2026-10-09 09:00", "--duration", "1h", "--no-teams"),
 		{"calendar", "update", "e1", "--to", "a@example.test"},
@@ -170,7 +174,7 @@ func TestCalendarWriteUsageErrorsNeedNoServerOrState(t *testing.T) {
 
 func TestHelpStatesThatCalendarWritesSendNotifications(t *testing.T) {
 	code, out, errout := runOffline(t, "--help")
-	if code != 0 || errout != "" || strings.Contains(out, "No mail send") || !strings.Contains(out, "No permanent delete.") || !strings.Contains(out, "mail send, reply, and forward send email at once") || !strings.Contains(out, "send meeting notifications at once") {
+	if code != 0 || errout != "" || strings.Contains(out, "No mail send") || !strings.Contains(out, "No permanent delete, except draft delete on Gmail") || !strings.Contains(out, "mail send, reply, forward, and draft send send email at once") || !strings.Contains(out, "send meeting notifications at once") {
 		t.Fatalf("root help: exit=%d stdout=%q stderr=%q", code, out, errout)
 	}
 	// Meeting writes work on both providers.

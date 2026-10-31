@@ -11,8 +11,9 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
-// Policy keys. A key is the API operation name with "." changed to "_"; mail_draft covers all draft operations,
-// and mail_send covers mail.send, mail.reply, and mail.forward.
+// Policy keys. A key is the API operation name with "." changed to "_"; mail_draft covers the draft operations
+// draft.new, draft.reply, draft.forward, draft.update, and draft.delete, and mail_send covers mail.send, mail.reply,
+// mail.forward, and draft.send.
 const (
 	keyTrash = "mail_trash"
 	keyDraft = "mail_draft"
@@ -29,6 +30,12 @@ func WithApproval(ctx context.Context) context.Context {
 }
 
 func approved(ctx context.Context) bool { return ctx.Value(approvalKey{}) != nil }
+
+// withoutApproval removes the approval mark of ctx, for a new decision inside an approved run that the approval
+// does not cover.
+func withoutApproval(ctx context.Context) context.Context {
+	return context.WithValue(ctx, approvalKey{}, nil)
+}
 
 // SafeCode gives the safe failure code of err, for storage with a failed approval.
 func SafeCode(err error) string { return safeCode(err) }
@@ -81,24 +88,25 @@ func (g *Guard) baseDecision(key string) config.Decision {
 	return config.Deny
 }
 
+// sealedDecision is the decision of key for a sealed message, and for a red message under any key but mail_trash.
+// Only mail_trash has a sealed setting; every other key, such as a reply or forward under mail_draft or mail_send,
+// is denied.
 func (g *Guard) sealedDecision(key string) config.Decision {
-	switch key {
-	case keyTrash:
+	if key == keyTrash {
 		return normal(g.policy.Sealed.MailTrash)
-	case keyDraft:
-		return normal(g.policy.Sealed.MailDraft)
-	case keySend:
-		return normal(g.policy.Sealed.MailSend)
 	}
 	return config.Deny
 }
 
-// decision is the final policy decision for one action. sealed is true when the sealed decision made it stricter.
-// jev is the Jev action check, nil when no check ran.
+// decision is the final policy decision for one action. reason is the policy record reason, sealed or red, of the
+// referenced message's verdict when it made the decision stricter, and empty otherwise. jev is the Jev action check, nil when no check ran.
+// draft is, for a draft send, the draft fields that the check saw, which a pending item stores beside its args; nil
+// for other actions.
 type decision struct {
 	value  config.Decision
-	sealed bool
+	reason string
 	jev    *model.ActionCheck
+	draft  *newDraftArgs
 }
 
 // actionEffects describes, by policy key, what an action does. Jev gets it beside the API operation name.
@@ -112,15 +120,25 @@ var actionEffects = map[string]string{
 }
 
 // checkAction asks Jev about the agent fields of args, for an action that the policy does not deny. A forward
-// also gives Jev the text of the forwarded message; if that text is unavailable, the check fails. A flag or
-// a failed check changes allow to approve; approve stays approve. An approved run is never checked again.
+// also gives Jev the text of the forwarded message, and a reply the recipients that it goes to (reply_recipients);
+// if they are unavailable, the check fails. A draft send gives Jev the draft fields of d instead of its args. A flag
+// or a failed check changes allow to approve; approve stays approve. An approved run is never checked again.
 func (g *Guard) checkAction(ctx context.Context, op audit.Operation, key string, d decision, args any) (decision, error) {
 	if approved(ctx) || d.value == config.Deny {
 		return d, nil
 	}
+	if d.draft != nil {
+		args = *d.draft
+	}
 	state, err := actionFields(args)
 	if forward, ok := args.(forwardArgs); ok && err == nil {
 		state["forwarded_message"], err = g.forwardedText(ctx, forward.ID)
+	}
+	if reply, ok := args.(replyArgs); ok && err == nil {
+		var to model.Recipients
+		if to, err = g.ReplyRecipients(ctx, reply.ID, reply.All); err == nil {
+			state["reply_recipients"] = map[string]any{"to": to.To, "cc": to.CC}
+		}
 	}
 	if ctx.Err() != nil {
 		return d, ctx.Err()
@@ -165,8 +183,8 @@ func validCheck(c model.ActionCheck) model.ActionCheck {
 	return v
 }
 
-// actionFields gives the agent fields of the stored args without the referenced ID. A response or a
-// cancellation without a comment carries no agent text and gives nil.
+// actionFields gives the agent fields of the stored args without the referenced ID. Args with only the ID, such as
+// a draft delete, and a response or a cancellation without a comment carry no agent text and give nil.
 func actionFields(args any) (map[string]any, error) {
 	data, err := json.Marshal(args)
 	if err != nil {
@@ -177,13 +195,14 @@ func actionFields(args any) (map[string]any, error) {
 		return nil, GuardError("ValueError")
 	}
 	delete(fields, "id")
-	if comment, ok := fields["comment"]; ok && comment == "" {
+	if comment, ok := fields["comment"]; (ok && comment == "") || len(fields) == 0 {
 		return nil, nil
 	}
 	return fields, nil
 }
 
-// sourceUnavailable is the failed-check code when the text of a forwarded message cannot be read.
+// sourceUnavailable is the failed-check code when the text of a forwarded message, or the recipients of a reply,
+// cannot be read.
 const sourceUnavailable = GuardError("SourceUnavailableError")
 
 // forwardedText reads the subject and rendered body of the message to forward through the screened read
@@ -200,8 +219,10 @@ func (g *Guard) forwardedText(ctx context.Context, id string) (map[string]any, e
 }
 
 // decide returns the decision of key for each message ID. It looks up or screens a message only when the
-// sealed decision is stricter than the base decision. A sealed or error verdict, or a failed lookup, counts
-// as sealed. The caller holds the mutation gate and not the security gate: screening can take the security gate.
+// sealed decision is stricter than the base decision; for a reply or forward that is whenever the base is not
+// deny. A sealed or error verdict, or a failed lookup, counts as sealed. A red verdict counts as red, which gives
+// the sealed decision to a reply or forward and leaves the base decision of a trash. The caller holds the mutation
+// gate and not the security gate: screening can take the security gate.
 func (g *Guard) decide(ctx context.Context, key string, ids []string) (map[string]decision, error) {
 	base, sealed := g.base(ctx, key), g.sealedDecision(key)
 	out := make(map[string]decision, len(ids))
@@ -229,9 +250,13 @@ func (g *Guard) decide(ctx context.Context, key string, ids []string) (map[strin
 	}
 	for i, id := range ids {
 		switch verdicts[i] {
-		case model.Green, model.Yellow, model.Red:
+		case model.Green, model.Yellow:
+		case model.Red:
+			if key != keyTrash {
+				out[id] = decision{value: sealed, reason: "red"}
+			}
 		default:
-			out[id] = decision{value: sealed, sealed: true}
+			out[id] = decision{value: sealed, reason: "sealed"}
 		}
 	}
 	return out, nil
@@ -245,7 +270,7 @@ func (e PendingError) Error() string { return audit.Pending }
 // apiOperations maps audit operations to the API operation names that pending actions and policy records use.
 var apiOperations = map[audit.Operation]string{
 	audit.Trash: "mail.trash", audit.DraftNew: "draft.new", audit.DraftReply: "draft.reply", audit.DraftForward: "draft.forward", audit.DraftUpdate: "draft.update",
-	audit.MailSend: "mail.send", audit.MailReply: "mail.reply", audit.MailForward: "mail.forward",
+	audit.DraftDelete: "draft.delete", audit.MailSend: "mail.send", audit.MailReply: "mail.reply", audit.MailForward: "mail.forward", audit.DraftSend: "draft.send",
 	audit.CalendarInvite: "calendar.invite", audit.CalendarUpdate: "calendar.update", audit.CalendarCancel: "calendar.cancel", audit.CalendarRespond: "calendar.respond",
 }
 
@@ -256,8 +281,8 @@ func (g *Guard) recordDecision(ctx context.Context, op audit.Operation, key stri
 		return nil
 	}
 	reasons := []string{"policy"}
-	if d.sealed {
-		reasons = append(reasons, "sealed")
+	if d.reason != "" {
+		reasons = append(reasons, d.reason)
 	}
 	if d.jev != nil && d.jev.Failed() {
 		reasons = append(reasons, "jev_error")
@@ -270,14 +295,21 @@ func (g *Guard) recordDecision(ctx context.Context, op audit.Operation, key stri
 	return nil
 }
 
-// hold stores an approve action with args in the shape of the API params, then records the decision and the
-// new item. If an audit write fails, the item is denied so that it can never run without its records.
+// hold stores an approve action with args in the shape of the API params, and the draft fields of a draft send,
+// then records the decision and the new item. If an audit write fails, the item is denied so that it can never run
+// without its records.
 func (g *Guard) hold(ctx context.Context, op audit.Operation, key string, d decision, id, rule *string, args any) (string, error) {
 	data, err := json.Marshal(args)
 	if err != nil {
 		return "", GuardError("ValueError")
 	}
-	approval, err := g.store.AddPending(ctx, g.account, apiOperations[op], data, d.jev, g.now())
+	var draft []byte
+	if d.draft != nil {
+		if draft, err = json.Marshal(d.draft); err != nil {
+			return "", GuardError("ValueError")
+		}
+	}
+	approval, err := g.store.AddPending(ctx, g.account, apiOperations[op], data, draft, d.jev, g.now())
 	if err != nil {
 		return "", safeErr(ctx, err)
 	}
@@ -354,24 +386,82 @@ func (g *Guard) trashPolicy(ctx context.Context, ids []string, rule *string) (ma
 type idsArgs struct {
 	IDs []string `json:"ids"`
 }
+type idArgs struct {
+	ID string `json:"id"`
+}
 type newDraftArgs struct {
 	To      []string `json:"to"`
+	CC      []string `json:"cc"`
+	BCC     []string `json:"bcc"`
 	Subject string   `json:"subject"`
 	Body    string   `json:"body"`
+	HTML    bool     `json:"html"`
 }
-type bodyArgs struct {
-	ID   string `json:"id"`
-	Body string `json:"body"`
+
+// storedList copies an address list for stored args. A nil list becomes an empty list, because the API refuses null.
+func storedList(v []string) []string { return append([]string{}, v...) }
+
+// newArgs stores every field of a new message. A nil list becomes an empty list, because the API refuses null.
+func newArgs(d model.NewDraft) newDraftArgs {
+	return newDraftArgs{storedList(d.To), storedList(d.CC), storedList(d.BCC), d.Subject, d.Body, d.HTML}
 }
+
+type replyArgs struct {
+	ID   string   `json:"id"`
+	Body string   `json:"body"`
+	HTML bool     `json:"html"`
+	All  bool     `json:"all"`
+	CC   []string `json:"cc"`
+	BCC  []string `json:"bcc"`
+}
+
+// newReplyArgs stores every field of a reply. A nil list becomes an empty list, because the API refuses null.
+func newReplyArgs(id string, r model.Reply) replyArgs {
+	return replyArgs{id, r.Body, r.HTML, r.All, storedList(r.CC), storedList(r.BCC)}
+}
+
+type draftChangeArgs struct {
+	ID      string    `json:"id"`
+	To      *[]string `json:"to,omitempty"`
+	CC      *[]string `json:"cc,omitempty"`
+	BCC     *[]string `json:"bcc,omitempty"`
+	Subject *string   `json:"subject,omitempty"`
+	Body    *string   `json:"body,omitempty"`
+	HTML    bool      `json:"html,omitempty"`
+}
+
+// newDraftChangeArgs stores only the fields of the change: a field that was not given stays out. A given list that
+// is nil becomes an empty list, which clears, because the API refuses null.
+func newDraftChangeArgs(id string, c model.DraftChange) draftChangeArgs {
+	list := func(v *[]string) *[]string {
+		if v == nil {
+			return nil
+		}
+		return new(storedList(*v))
+	}
+	return draftChangeArgs{id, list(c.To), list(c.CC), list(c.BCC), c.Subject, c.Body, c.HTML}
+}
+
 type forwardArgs struct {
-	ID string   `json:"id"`
-	To []string `json:"to"`
+	ID   string   `json:"id"`
+	To   []string `json:"to"`
+	CC   []string `json:"cc"`
+	BCC  []string `json:"bcc"`
+	Body string   `json:"body"`
+	HTML bool     `json:"html"`
 }
+
+// newForwardArgs stores every field of a forward. A nil list becomes an empty list, because the API refuses null.
+func newForwardArgs(id string, f model.Forward) forwardArgs {
+	return forwardArgs{id, storedList(f.To), storedList(f.CC), storedList(f.BCC), f.Body, f.HTML}
+}
+
 type inviteArgs struct {
 	To       []string `json:"to"`
 	Optional []string `json:"optional,omitempty"`
 	Subject  string   `json:"subject"`
 	Body     string   `json:"body"`
+	HTML     bool     `json:"html"`
 	Start    string   `json:"start"`
 	End      string   `json:"end"`
 	Location string   `json:"location"`
@@ -382,6 +472,7 @@ type changeArgs struct {
 	Subject  *string  `json:"subject,omitempty"`
 	Location *string  `json:"location,omitempty"`
 	Body     *string  `json:"body,omitempty"`
+	HTML     bool     `json:"html,omitempty"`
 	Start    *string  `json:"start,omitempty"`
 	End      *string  `json:"end,omitempty"`
 	Duration *string  `json:"duration,omitempty"`
@@ -409,7 +500,7 @@ func stamp3339(t *time.Time) *string {
 
 // updateArgs gives only the fields of the original request: optional fields that were not given stay out.
 func updateArgs(id string, change model.EventChange, duration time.Duration) changeArgs {
-	args := changeArgs{ID: id, Subject: change.Subject, Location: change.Location, Body: change.Body, Start: stamp3339(change.Start), End: stamp3339(change.End)}
+	args := changeArgs{ID: id, Subject: change.Subject, Location: change.Location, Body: change.Body, HTML: change.HTML, Start: stamp3339(change.Start), End: stamp3339(change.End)}
 	if duration > 0 {
 		args.Duration = new(duration.String())
 	}
