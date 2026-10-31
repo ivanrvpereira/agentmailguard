@@ -98,24 +98,24 @@ func TestFailedConversationReadChangesNothing(t *testing.T) {
 	}
 }
 
-// Messages never leave the trash: a move or archive from the trash is refused before any write. Other actions work there.
-func TestConversationMoveAndArchiveFromTheTrashAreRefused(t *testing.T) {
+// A move from the trash is refused before any write. Other actions, archive included, work there.
+func TestConversationMoveFromTheTrashIsRefused(t *testing.T) {
 	w := conversationWriter()
 	g, _, path := setup(t, w, &screener{verdict: model.Green})
 	ctx := context.Background()
-	for name, run := range map[string]func() ([]model.MutationResult, error){
-		"move":    func() ([]model.MutationResult, error) { return g.MoveConversation(ctx, "t1", "del", "f1") },
-		"archive": func() ([]model.MutationResult, error) { return g.ArchiveConversation(ctx, "t1", "del") },
-	} {
-		if got, err := run(); err != guard.GuardError("refused: messages in the trash stay there") || got != nil {
-			t.Fatalf("%s: results=%+v err=%v", name, got, err)
-		}
+	if got, err := g.MoveConversation(ctx, "t1", "del", "f1"); err != guard.GuardError("move refused: messages in the trash stay there") || got != nil {
+		t.Fatalf("move: results=%+v err=%v", got, err)
 	}
 	if len(w.calls) != 0 || len(allAuditRecords(t, path)) != 0 {
 		t.Fatalf("writes=%v records=%v", w.calls, allAuditRecords(t, path))
 	}
-	if got, err := g.MarkReadConversation(ctx, "t1", "del", true); err != nil || !reflect.DeepEqual(got, []model.MutationResult{{ID: "m4", OK: true}}) {
-		t.Fatalf("read in the trash: results=%+v err=%v", got, err)
+	for name, run := range map[string]func() ([]model.MutationResult, error){
+		"read":    func() ([]model.MutationResult, error) { return g.MarkReadConversation(ctx, "t1", "del", true) },
+		"archive": func() ([]model.MutationResult, error) { return g.ArchiveConversation(ctx, "t1", "del") },
+	} {
+		if got, err := run(); err != nil || !reflect.DeepEqual(got, []model.MutationResult{{ID: "m4", OK: true}}) {
+			t.Fatalf("%s in the trash: results=%+v err=%v", name, got, err)
+		}
 	}
 }
 

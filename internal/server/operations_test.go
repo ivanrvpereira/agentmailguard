@@ -152,8 +152,8 @@ func TestMoveIntoDeletedItemsIsRefusedWithPublicReason(t *testing.T) {
 	}
 }
 
-// A conversation move or archive from the trash is refused with its public reason before any write.
-func TestConversationMoveAndArchiveFromDeletedItemsAreRefusedWithPublicReason(t *testing.T) {
+// A conversation move from the trash is refused with its public reason before any write.
+func TestConversationMoveFromDeletedItemsIsRefusedWithPublicReason(t *testing.T) {
 	var writes atomic.Int32
 	d := graphDaemon(t, "", m365Grant, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
@@ -174,11 +174,9 @@ func TestConversationMoveAndArchiveFromDeletedItemsAreRefusedWithPublicReason(t 
 			w.WriteHeader(500)
 		}
 	}), newNativeAPI())
-	for op, params := range map[string]string{"mail.archive": `{"thread":"c-1","in":"deleteditems"}`, "mail.move": `{"thread":"c-1","in":"deleteditems","folder":"f1"}`} {
-		status, b := accountRPC(t, d.s, op, "", params)
-		if status != 500 || b != `{"error":"refused: messages in the trash stay there"}` {
-			t.Fatalf("%s: %d %s", op, status, b)
-		}
+	status, b := accountRPC(t, d.s, "mail.move", "", `{"thread":"c-1","in":"deleteditems","folder":"f1"}`)
+	if status != 500 || b != `{"error":"move refused: messages in the trash stay there"}` {
+		t.Fatalf("%d %s", status, b)
 	}
 	if writes.Load() != 0 {
 		t.Fatal("refused conversation action reached a provider write")

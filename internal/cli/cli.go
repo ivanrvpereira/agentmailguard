@@ -180,7 +180,7 @@ type target struct{ thread, in string }
 
 func (t *target) flags(c *cobra.Command) {
 	c.Flags().StringVar(&t.thread, "thread", "", "act on the messages of this conversation (a thread_id) in one folder, instead of IDS")
-	c.Flags().StringVar(&t.in, "in", "", "with --thread, the folder ID whose messages change, as mail list --folder takes it; default: the Inbox. move and archive refuse the trash")
+	c.Flags().StringVar(&t.in, "in", "", "with --thread, the folder ID whose messages change, as mail list --folder takes it; default: the Inbox. move refuses the trash")
 }
 
 // set puts ids, or thread and in, into p. It is false for both, for neither, and for --in without --thread. The

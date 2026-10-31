@@ -253,9 +253,8 @@ func (g *Guard) manual(ctx context.Context, op audit.Operation, ids []string, op
 	return g.mutationCall(ctx, op, ids, model.Inbox, opts)
 }
 
-// TrashMoveRefused refuses a conversation move or archive from the trash: messages never leave the trash through
-// the guard.
-const TrashMoveRefused = GuardError("refused: messages in the trash stay there")
+// TrashMoveRefused refuses a conversation move from the trash: a move never takes messages out of the trash.
+const TrashMoveRefused = GuardError("move refused: messages in the trash stay there")
 
 // conversation runs op on the messages of conversation thread in folder in, as manual runs it on message IDs. The
 // provider chooses the messages under the write lock, right before the writes. A failed or invalid choice changes
@@ -280,7 +279,7 @@ func (g *Guard) conversation(ctx context.Context, op audit.Operation, thread, in
 		}
 		seen[id] = true
 	}
-	if trash && (op == audit.Move || op == audit.Archive) {
+	if trash && op == audit.Move {
 		return nil, TrashMoveRefused
 	}
 	if len(ids) == 0 {

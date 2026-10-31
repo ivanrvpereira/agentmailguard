@@ -1184,16 +1184,20 @@ func TestConversationActionsChangeOnlyTheConversationMessagesInOneFolder(t *test
 	if out := s.ok("mail", "archive", "--thread", "lunch"); strings.TrimSpace(out) != "[]" {
 		t.Fatalf("repeated archive: %s", out)
 	}
-	// Messages never leave the trash, and a flag is set on single messages only.
-	s.refused("refused: messages in the trash stay there", "mail", "archive", "--thread", "lunch", "--in", "old-trash")
-	s.refused("refused: messages in the trash stay there", "mail", "move", "projects", "--thread", "lunch", "--in", "trash")
+	// A move from the trash is refused, and a flag is set on single messages only. An archive works there.
+	s.refused("move refused: messages in the trash stay there", "mail", "move", "projects", "--thread", "lunch", "--in", "trash")
+	s.refused("move refused: messages in the trash stay there", "mail", "move", "projects", "--thread", "lunch", "--in", "old-trash")
+	if got := ids(s.ok("mail", "archive", "--thread", "lunch", "--in", "old-trash")); !reflect.DeepEqual(got, []string{"lunch-binned"}) {
+		t.Fatalf("archive from the trash: %v", got)
+	}
+	row("lunch-binned")["folder"] = "archive"
 	if _, errout, code := s.amg("mail", "flag", "--thread", "lunch", "--state", "flagged"); code != 2 || errout != "error: invalid command usage; use --help\n" {
 		t.Fatalf("flag --thread: exit %d stderr %q", code, errout)
 	}
 	s.refused("operation failed", "mail", "archive", "--thread", "nowhere")
-	// Sent, the trash, and every other message stay as they were.
+	// Sent and every other message stay as they were.
 	s.assertTables(want)
-	wantRecords := []string{"read lunch [lunch-new lunch]", "categorize lunch [lunch-filed]", "move lunch [lunch-new lunch]", "archive lunch [lunch-new lunch-filed lunch]"}
+	wantRecords := []string{"read lunch [lunch-new lunch]", "categorize lunch [lunch-filed]", "move lunch [lunch-new lunch]", "archive lunch [lunch-new lunch-filed lunch]", "archive lunch [lunch-binned]"}
 	if got := s.threadRecords(); !reflect.DeepEqual(got, wantRecords) {
 		t.Fatalf("audit records with a thread: %q", got)
 	}

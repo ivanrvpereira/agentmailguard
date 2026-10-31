@@ -69,7 +69,7 @@ func TestClientCancellationAndRequestReplayDisabled(t *testing.T) {
 func TestClientDisplaysOnlyExactFixedRefusals(t *testing.T) {
 	for _, fixed := range []string{
 		"move refused: use mail.trash",
-		"refused: messages in the trash stay there",
+		"move refused: messages in the trash stay there",
 		"calendar writes are not supported for this account",
 		"calendar availability is not supported for this account",
 		"calendar write refused: recurring events are not supported",
