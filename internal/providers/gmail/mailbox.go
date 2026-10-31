@@ -259,18 +259,18 @@ func (m *mailbox) Thread(ctx context.Context, thread string) ([]model.Message, e
 // Trash and spam keep a message's other labels, such as SENT and user labels, so a folder other than TRASH or SPAM
 // skips their messages, as messages.list does by default (includeSpamTrash,
 // https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list).
-func (m *mailbox) ThreadMessagesIn(ctx context.Context, thread, folder string) ([]string, error) {
+func (m *mailbox) ThreadMessagesIn(ctx context.Context, thread, folder string) ([]string, bool, error) {
 	all, err := m.Thread(ctx, thread)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	a, err := m.labels(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	id := labelIn(a, folder)
 	if !slices.ContainsFunc(a, func(l label) bool { return l.ID == id }) {
-		return nil, failure("Gmail", "FolderError")
+		return nil, false, failure("Gmail", "FolderError")
 	}
 	out := []string{}
 	for _, msg := range all {
@@ -282,7 +282,7 @@ func (m *mailbox) ThreadMessagesIn(ctx context.Context, thread, folder string) (
 		}
 		out = append(out, msg.ID)
 	}
-	return out, nil
+	return out, id == "TRASH", nil
 }
 
 // run limits goroutines as well as shared HTTP slots, while preserving caller order.

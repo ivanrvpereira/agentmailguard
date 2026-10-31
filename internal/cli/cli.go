@@ -160,11 +160,43 @@ func (r *runner) none(op string) func(*cobra.Command, []string) error {
 	return func(c *cobra.Command, _ []string) error { return r.call(c, op, map[string]any{}, false) }
 }
 
-// ids runs a data command over one or more message identifiers.
-func (r *runner) ids(op string) func(*cobra.Command, []string) error {
-	return func(c *cobra.Command, args []string) error {
-		return r.call(c, op, map[string]any{"ids": args}, false)
+// organize builds an organize command that acts on message IDs or, with --thread, on a conversation's messages in
+// one folder (see target).
+func (r *runner) organize(use, short string, op string) *cobra.Command {
+	var t target
+	c := r.leaf(use, short, 0, -1, func(c *cobra.Command, args []string) error {
+		p := map[string]any{}
+		if !t.set(c, p, args) {
+			return errUsage
+		}
+		return r.call(c, op, p, false)
+	})
+	t.flags(c)
+	return c
+}
+
+// target is the messages of an organize command: IDS..., or --thread with --in, never both.
+type target struct{ thread, in string }
+
+func (t *target) flags(c *cobra.Command) {
+	c.Flags().StringVar(&t.thread, "thread", "", "act on the messages of this conversation (a thread_id) in one folder, instead of IDS")
+	c.Flags().StringVar(&t.in, "in", "", "with --thread, the folder ID whose messages change, as mail list --folder takes it; default: the Inbox. move and archive refuse the trash")
+}
+
+// set puts ids, or thread and in, into p. It is false for both, for neither, and for --in without --thread. The
+// daemon applies the Inbox default, so in goes only when the command line sets it.
+func (t *target) set(c *cobra.Command, p map[string]any, ids []string) bool {
+	thread := c.Flags().Changed("thread")
+	if thread == (len(ids) > 0) || (c.Flags().Changed("in") && !thread) {
+		return false
 	}
+	if !thread {
+		p["ids"] = ids
+		return true
+	}
+	p["thread"] = t.thread
+	optional(c, p, "in", &t.in)
+	return true
 }
 
 // optional copies a string option into the parameters only when the command line set it.
@@ -331,10 +363,10 @@ func mailCmd(r *runner) *cobra.Command {
 	c.AddCommand(mailListCmd(r), mailGetCmd(r), mailThreadCmd(r), mailSearchCmd(r), mailLinkCmd(r),
 		r.leaf("folders", "List mail folders", 0, 0, r.none("mail.folders")),
 		r.leaf("categories", "List mail categories", 0, 0, r.none("mail.categories")),
-		r.leaf("archive IDS...", "Move messages to the archive", 1, -1, r.ids("mail.archive")),
-		r.leaf("trash IDS...", "Move messages to the trash", 1, -1, r.ids("mail.trash")),
-		r.leaf("read IDS...", "Mark messages as read", 1, -1, r.ids("mail.read")),
-		r.leaf("unread IDS...", "Mark messages as unread", 1, -1, r.ids("mail.unread")),
+		r.organize("archive (IDS... | --thread THREAD_ID)", "Move messages, or a conversation's messages in one folder, to the archive", "mail.archive"),
+		r.organize("trash (IDS... | --thread THREAD_ID)", "Move messages, or a conversation's messages in one folder, to the trash", "mail.trash"),
+		r.organize("read (IDS... | --thread THREAD_ID)", "Mark messages, or a conversation's messages in one folder, as read", "mail.read"),
+		r.organize("unread (IDS... | --thread THREAD_ID)", "Mark messages, or a conversation's messages in one folder, as unread", "mail.unread"),
 		mailMoveCmd(r), mailFlagCmd(r), mailCategorizeCmd(r), mailOrganizeCmd(r),
 		newMessageCmd(r, "send", "mail.send", "Send a new message at once; needs a --to, --cc, or --bcc"),
 		replyCmd(r, "mail.reply", "Send a reply to a message at once"),
@@ -358,7 +390,7 @@ func paged(c *cobra.Command, p map[string]any, count int, page *string) {
 }
 
 func mailListCmd(r *runner) *cobra.Command {
-	folder, count, page := "inbox", 0, ""
+	folder, count, page := model.Inbox, 0, ""
 	pretty := false
 	c := r.leaf("list", "List one page of screened messages in a folder", 0, 0, func(c *cobra.Command, _ []string) error {
 		p := map[string]any{"folder": folder}
@@ -464,9 +496,16 @@ func mailLinkCmd(r *runner) *cobra.Command {
 }
 
 func mailMoveCmd(r *runner) *cobra.Command {
-	return r.leaf("move FOLDER_ID IDS...", "Move messages to a folder", 2, -1, func(c *cobra.Command, args []string) error {
-		return r.call(c, "mail.move", map[string]any{"folder": args[0], "ids": args[1:]}, false)
+	var t target
+	c := r.leaf("move FOLDER_ID (IDS... | --thread THREAD_ID)", "Move messages, or a conversation's messages in one folder, to a folder", 1, -1, func(c *cobra.Command, args []string) error {
+		p := map[string]any{"folder": args[0]}
+		if !t.set(c, p, args[1:]) {
+			return errUsage
+		}
+		return r.call(c, "mail.move", p, false)
 	})
+	t.flags(c)
+	return c
 }
 
 func mailFlagCmd(r *runner) *cobra.Command {
@@ -483,8 +522,12 @@ func mailFlagCmd(r *runner) *cobra.Command {
 
 func mailCategorizeCmd(r *runner) *cobra.Command {
 	var add, remove []string
-	c := r.leaf("categorize IDS...", "Add or remove categories of messages", 1, -1, func(c *cobra.Command, args []string) error {
-		p := map[string]any{"ids": args}
+	var t target
+	c := r.leaf("categorize (IDS... | --thread THREAD_ID)", "Add or remove categories of messages, or of a conversation's messages in one folder", 0, -1, func(c *cobra.Command, args []string) error {
+		p := map[string]any{}
+		if !t.set(c, p, args) {
+			return errUsage
+		}
 		if len(add) > 0 {
 			p["add"] = add
 		}
@@ -495,6 +538,7 @@ func mailCategorizeCmd(r *runner) *cobra.Command {
 	})
 	c.Flags().StringArrayVar(&add, "add", nil, "category to add; repeatable")
 	c.Flags().StringArrayVar(&remove, "remove", nil, "category to remove; repeatable")
+	t.flags(c)
 	return c
 }
 

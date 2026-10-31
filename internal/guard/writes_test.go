@@ -22,12 +22,17 @@ type writer struct {
 	flags            []model.FlagState
 	updates          []draftUpdate
 	draftReads       int
-	draftIDs         []string           // the IDs that ReadDraft got, in order
-	beforeWrite      func()             // runs at the start of DraftUpdate, DraftDelete, and DraftSend
-	notDraft         bool               // ReadDraft gives a message that is not a draft
-	draftErr         error              // the ReadDraft error
-	draft            *model.DraftResult // the DraftNew result; nil gives ID d1
-	recipientsErr    error              // the ReplyRecipients error; nil gives the recipients of replyRecipients
+	draftIDs         []string            // the IDs that ReadDraft got, in order
+	beforeWrite      func()              // runs at the start of DraftUpdate, DraftDelete, and DraftSend
+	notDraft         bool                // ReadDraft gives a message that is not a draft
+	draftErr         error               // the ReadDraft error
+	draft            *model.DraftResult  // the DraftNew result; nil gives ID d1
+	recipientsErr    error               // the ReplyRecipients error; nil gives the recipients of replyRecipients
+	chosen           map[string][]string // the ThreadMessagesIn IDs by "thread/folder"; a missing key gives none
+	trashFolder      string              // the folder that ThreadMessagesIn reports as the trash
+	chooseErr        error               // the ThreadMessagesIn error
+	choices          []string            // the "thread/folder" of each ThreadMessagesIn call, in order
+	moveSources      []string            // the source folder of each Move call, in order
 	err              error
 	entered, release chan struct{}
 }
@@ -58,8 +63,20 @@ func (w *writer) Trash(_ context.Context, ids []string) ([]model.MutationResult,
 	w.trashed = append(w.trashed, ids...)
 	return w.write("trash", ids)
 }
-func (w *writer) Move(_ context.Context, ids []string, _, _ string) ([]model.MutationResult, error) {
+func (w *writer) Move(_ context.Context, ids []string, from, _ string) ([]model.MutationResult, error) {
+	w.moveSources = append(w.moveSources, from)
 	return w.write("move", ids)
+}
+func (w *writer) ThreadMessagesIn(_ context.Context, thread, folder string) ([]string, bool, error) {
+	w.choices = append(w.choices, thread+"/"+folder)
+	if w.chooseErr != nil {
+		return nil, false, w.chooseErr
+	}
+	ids := w.chosen[thread+"/"+folder]
+	if ids == nil {
+		ids = []string{}
+	}
+	return ids, folder == w.trashFolder, nil
 }
 func (w *writer) MarkRead(_ context.Context, ids []string, read bool) ([]model.MutationResult, error) {
 	if read {

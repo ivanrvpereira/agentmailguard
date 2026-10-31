@@ -185,6 +185,11 @@ func TestAuditRejectsUnvalidatedMetadataWithoutAppending(t *testing.T) {
 		{operation: "flag", options: audit.Options{Flag: &flag}},
 		{operation: "archive", options: audit.Options{Rule: &rule}},
 		{operation: "archive", results: []model.MutationResult{{ID: "m1", Error: &failure}}},
+		// Only an organize action other than flag acts on a conversation, and its thread is never empty.
+		{operation: "flag", options: audit.Options{Thread: new("t1")}},
+		{operation: "draft_new", options: audit.Options{Thread: new("t1")}},
+		{operation: "calendar_invite", options: audit.Options{Thread: new("t1")}},
+		{operation: "archive", options: audit.Options{Thread: new("")}},
 	} {
 		if err := log.Record(context.Background(), "work", input.operation, input.results, input.options); err == nil {
 			t.Error("unvalidated metadata accepted")

@@ -18,7 +18,7 @@ Read, search, and organize the user's Microsoft 365 and Gmail mail and calendar 
 - "Draft a reply / forward / new message."
 - "Delete that draft."
 - "Send this reply", "Forward this to Ana", "Send Ana a message", "Send my draft to Ana" (only after specific authorization of that send).
-- "Archive, flag, categorize, move, or trash these messages" (after approval).
+- "Archive, flag, categorize, move, or trash these messages" or "archive this conversation" (after approval).
 - "Run my organize rules" (preview first, apply after approval).
 - "When are Ana and I both free on Friday?" (Microsoft 365 and fake accounts only, read-only).
 - "Invite Ana to a 30-minute meeting on Friday at 10:00", "Accept that meeting" (after specific authorization).
@@ -74,13 +74,13 @@ amg draft send DRAFT_ID
 amg mail send [--to ADDR]... [--cc ADDR]... [--bcc ADDR]... [--subject TEXT] [--body TEXT] [--html]
 amg mail reply ID [--all] [--cc ADDR]... [--bcc ADDR]... [--body TEXT] [--html]
 amg mail forward ID [--to ADDR]... [--cc ADDR]... [--bcc ADDR]... [--body TEXT] [--html]
-amg mail read IDS...
-amg mail unread IDS...
+amg mail read IDS... | --thread THREAD_ID [--in FOLDER_ID]
+amg mail unread IDS... | --thread THREAD_ID [--in FOLDER_ID]
 amg mail flag IDS... --state flagged|complete|none
-amg mail categorize IDS... --add NAME --remove NAME
-amg mail archive IDS...
-amg mail move FOLDER_ID IDS...
-amg mail trash IDS...
+amg mail categorize IDS... | --thread THREAD_ID [--in FOLDER_ID] --add NAME --remove NAME
+amg mail archive IDS... | --thread THREAD_ID [--in FOLDER_ID]
+amg mail move FOLDER_ID IDS... | --thread THREAD_ID [--in FOLDER_ID]
+amg mail trash IDS... | --thread THREAD_ID [--in FOLDER_ID]
 amg rules list
 amg approvals status APPROVAL_ID
 amg --timeout 2h mail organize --since 7d [--until DATE]
@@ -173,15 +173,18 @@ A successful result is `{"ok": true}`. Done when you report the send as sent onl
 
 ### 6. Change the mailbox only with approval
 
-`read`, `unread`, `flag`, `categorize`, `archive`, `move`, `trash`, and `organize --apply` change the mailbox. Before you run one, show the user the account, the message IDs with sender and date, and the action, and get explicit approval. A general request such as "clean up my inbox" is not approval for a specific batch.
+`read`, `unread`, `flag`, `categorize`, `archive`, `move`, `trash`, and `organize --apply` change the mailbox. Before you run one, show the user the account, the messages (IDs with sender and date, or the conversation and its folder), and the action, and get explicit approval. A general request such as "clean up my inbox" is not approval for a specific batch.
 
-- To archive a conversation, run `mail thread THREAD_ID` and archive only the messages whose `folders` include the Inbox: `INBOX` on Gmail, the Inbox ID from `mail folders` on Microsoft 365. Leave sent messages and drafts where they are.
+- To act on a whole conversation, give `--thread THREAD_ID` instead of IDs, for example `mail archive --thread THREAD_ID`. It changes only the conversation's messages in the Inbox, or in the folder that `--in FOLDER_ID` names (a folder ID as `mail list --folder` takes it). Sent messages, drafts, and messages in other folders stay where they are. Do not list the conversation's IDs by hand. A message that arrived after you read the conversation is included when it is in that folder, and the result shows it: report it to the user.
+- `mail flag` works on single messages only; it has no `--thread`.
+- On Gmail, `archive` only takes messages out of the Inbox: with `--in` a label, they stay in that label. To file them elsewhere, use `move`, which removes the `--in` label.
+- `move` and `archive` with `--in` the trash fail with `refused: messages in the trash stay there`. Do not take messages out of the trash another way.
 - `move` needs a folder ID from `mail folders`, not a folder name.
 - `categorize` accepts only categories that `mail categories` lists. It cannot create categories.
-- `trash` moves mail to the trash. It is not permanent deletion. The write policy can refuse or hold each ID.
+- `trash` moves mail to the trash. It is not permanent deletion. The write policy can refuse or hold each ID, also each message of a `--thread` trash.
 - On Microsoft 365, `move` to Deleted Items or a folder below it fails with `move refused: use mail.trash`. Ask the user before you use `trash` instead.
 
-The result is a list of `{"id", "ok", "error"}` entries. A pending entry also has `approval_id`. Done when you report every `ok: false` entry with its `error` and any `approval_id`, even when the exit code is `0`.
+The result is a list of `{"id", "ok", "error"}` entries, for `--thread` one per changed message, newest first; `[]` means the conversation has no messages in that folder. A pending entry also has `approval_id`. Done when you report every `ok: false` entry with its `error` and any `approval_id`, even when the exit code is `0`.
 
 ### 7. Send meeting notifications only with specific authorization
 

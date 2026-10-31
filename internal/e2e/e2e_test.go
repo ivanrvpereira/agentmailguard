@@ -1,6 +1,7 @@
 package e2e_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -1103,4 +1104,134 @@ func TestThreadShowsTheWholeConversationScreenedWithItsFolders(t *testing.T) {
 		t.Fatalf("thread=%+v", got)
 	}
 	s.refused("operation failed", "mail", "thread", "nowhere")
+}
+
+// conversation makes lunch one conversation over five folders, newest first: lunch-new and lunch in the Inbox,
+// lunch-filed in projects, lunch-reply in sent, and lunch-binned in old-trash, a folder in the trash.
+func conversation(s *server) {
+	s.t.Helper()
+	s.exec(`UPDATE messages SET thread_id = 'lunch', received_at = '2020-01-01T09:00:00Z' WHERE id = 'lunch'`)
+	s.exec(`INSERT INTO messages (account, id, folder, sender_name, sender_address, to_addresses, subject, body, received_at, thread_id) VALUES
+		('demo@fake.invalid', 'lunch-binned', 'old-trash', 'canary-name-ana', 'ana@example.test', '["demo@fake.invalid"]', 'canary-subject-lunch-binned', 'canary-body-lunch-binned: or Monday?', '2020-01-01T08:00:00Z', 'lunch'),
+		('demo@fake.invalid', 'lunch-reply', 'sent', 'canary-name-me', 'demo@fake.invalid', '["ana@example.test"]', 'canary-subject-lunch-reply', 'canary-body-lunch-reply: Friday works.', '2020-01-01T10:00:00Z', 'lunch'),
+		('demo@fake.invalid', 'lunch-filed', 'projects', 'canary-name-ana', 'ana@example.test', '["demo@fake.invalid"]', 'canary-subject-lunch-filed', 'canary-body-lunch-filed: the agenda.', '2020-01-01T11:00:00Z', 'lunch'),
+		('demo@fake.invalid', 'lunch-new', 'inbox', 'canary-name-ana', 'ana@example.test', '["demo@fake.invalid"]', 'canary-subject-lunch-new', 'canary-body-lunch-new: great, see you.', '2020-01-01T12:00:00Z', 'lunch')`)
+}
+
+// threadRecords gives the operation records of audit.jsonl that carry a thread, each as operation, thread, and IDs.
+func (s *server) threadRecords() []string {
+	s.t.Helper()
+	data, err := os.ReadFile(filepath.Join(s.home, "audit.jsonl"))
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	out := []string{}
+	for line := range strings.Lines(string(data)) {
+		var v map[string]any
+		if err := json.Unmarshal([]byte(line), &v); err != nil {
+			s.t.Fatal(err)
+		}
+		if _, ok := v["thread"]; ok {
+			out = append(out, fmt.Sprint(v["operation"], " ", v["thread"], " ", v["ids"]))
+		}
+	}
+	return out
+}
+
+func TestConversationActionsChangeOnlyTheConversationMessagesInOneFolder(t *testing.T) {
+	t.Parallel()
+	s := start(t, "")
+	conversation(s)
+	want := s.dump()
+	row := func(id string) map[string]any {
+		for _, m := range want["messages"] {
+			if m["id"] == id {
+				return m
+			}
+		}
+		t.Fatalf("no message %s", id)
+		return nil
+	}
+	ids := func(out string) []string {
+		got := []string{}
+		for _, r := range decode[[]result](t, out) {
+			if !r.OK {
+				t.Fatalf("result %+v", r)
+			}
+			got = append(got, r.ID)
+		}
+		return got
+	}
+	// Without --in, a conversation action changes the conversation's messages in the Inbox, newest first.
+	if got := ids(s.ok("mail", "read", "--thread", "lunch")); !reflect.DeepEqual(got, []string{"lunch-new", "lunch"}) {
+		t.Fatalf("read: %v", got)
+	}
+	row("lunch-new")["is_read"], row("lunch")["is_read"] = int64(1), int64(1)
+	if got := ids(s.ok("mail", "categorize", "--thread", "lunch", "--in", "projects", "--add", "Invoices")); !reflect.DeepEqual(got, []string{"lunch-filed"}) {
+		t.Fatalf("categorize: %v", got)
+	}
+	row("lunch-filed")["categories"] = `["Invoices"]`
+	if got := ids(s.ok("mail", "move", "projects", "--thread", "lunch")); !reflect.DeepEqual(got, []string{"lunch-new", "lunch"}) {
+		t.Fatalf("move: %v", got)
+	}
+	if got := ids(s.ok("mail", "archive", "--thread", "lunch", "--in", "projects")); !reflect.DeepEqual(got, []string{"lunch-new", "lunch-filed", "lunch"}) {
+		t.Fatalf("archive: %v", got)
+	}
+	for _, id := range []string{"lunch-new", "lunch-filed", "lunch"} {
+		row(id)["folder"] = "archive"
+	}
+	// The Inbox no longer holds a message of the conversation, so a repeated action changes nothing.
+	if out := s.ok("mail", "archive", "--thread", "lunch"); strings.TrimSpace(out) != "[]" {
+		t.Fatalf("repeated archive: %s", out)
+	}
+	// Messages never leave the trash, and a flag is set on single messages only.
+	s.refused("refused: messages in the trash stay there", "mail", "archive", "--thread", "lunch", "--in", "old-trash")
+	s.refused("refused: messages in the trash stay there", "mail", "move", "projects", "--thread", "lunch", "--in", "trash")
+	if _, errout, code := s.amg("mail", "flag", "--thread", "lunch", "--state", "flagged"); code != 2 || errout != "error: invalid command usage; use --help\n" {
+		t.Fatalf("flag --thread: exit %d stderr %q", code, errout)
+	}
+	s.refused("operation failed", "mail", "archive", "--thread", "nowhere")
+	// Sent, the trash, and every other message stay as they were.
+	s.assertTables(want)
+	wantRecords := []string{"read lunch [lunch-new lunch]", "categorize lunch [lunch-filed]", "move lunch [lunch-new lunch]", "archive lunch [lunch-new lunch-filed lunch]"}
+	if got := s.threadRecords(); !reflect.DeepEqual(got, wantRecords) {
+		t.Fatalf("audit records with a thread: %q", got)
+	}
+}
+
+func TestConversationTrashWaitsForTheApprovalOfEachMessage(t *testing.T) {
+	t.Parallel()
+	s := start(t, "[policy]\nmail_trash='approve'\n")
+	conversation(s)
+	want := s.dump()
+	got := decode[[]result](t, s.ok("mail", "trash", "--thread", "lunch"))
+	if len(got) != 2 || got[0].ID != "lunch-new" || got[1].ID != "lunch" {
+		t.Fatalf("trash: %+v", got)
+	}
+	for _, r := range got {
+		if r.OK || r.Error != "pending" || r.ApprovalID == "" {
+			t.Fatalf("not pending: %+v", r)
+		}
+	}
+	// Nothing moves before an approval.
+	s.assertTables(want)
+	// A message that arrives later is not part of an approval: each approval trashes its own message only.
+	s.exec(`INSERT INTO messages (account, id, folder, sender_name, sender_address, to_addresses, subject, body, received_at, thread_id) VALUES
+		('demo@fake.invalid', 'lunch-later', 'inbox', 'canary-name-ana', 'ana@example.test', '["demo@fake.invalid"]', 'canary-subject-lunch-later', 'canary-body-lunch-later: one more thing.', '2020-01-01T13:00:00Z', 'lunch')`)
+	want = s.dump()
+	s.approve(got[0].ApprovalID)
+	s.approve(got[1].ApprovalID)
+	for _, m := range want["messages"] {
+		if m["id"] == "lunch-new" || m["id"] == "lunch" {
+			m["folder"] = "trash"
+		}
+	}
+	s.assertTables(want)
+	if records := s.threadRecords(); !reflect.DeepEqual(records, []string{"trash lunch [lunch-new lunch]"}) {
+		t.Fatalf("audit records with a thread: %q", records)
+	}
+	// One policy decision per message, as for a trash by ID.
+	if policy := s.auditEvents("policy"); len(policy) != 2 || policy[0]["id"] != "lunch-new" || policy[1]["id"] != "lunch" {
+		t.Fatalf("policy records: %v", policy)
+	}
 }

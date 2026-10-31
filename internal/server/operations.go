@@ -50,7 +50,7 @@ func publicError(e error) (string, bool) {
 			return string(e), true
 		case "refused by policy: mail_draft", "refused by policy: mail_send", "refused by policy: calendar_invite", "refused by policy: calendar_update", "refused by policy: calendar_cancel", "refused by policy: calendar_respond":
 			return string(e), true
-		case "move refused: the destination must be a folder ID from `folders`", "move refused: use mail.trash", "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
+		case "move refused: the destination must be a folder ID from `folders`", "move refused: use mail.trash", guard.TrashMoveRefused, "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
 			"link refused: message is red, not green", "link refused: message is yellow, not green", "link refused: message is sealed, not green", "link refused: message is error, not green",
 			"search needs at least one of text, from, to, subject, after, before":
 			return string(e), true
@@ -89,11 +89,32 @@ type none struct{}
 
 func always[P any](*P) bool { return true }
 
-// ids is the decoder of a mail action on one or more message IDs.
-func ids(run func(ctx context.Context, g *guard.Guard, ids []string) ([]model.MutationResult, error)) decoder {
-	return typed(idsParam{}, func(p *idsParam) bool { return listValid(p.IDs, 1, noMax) }, func(ctx context.Context, _ *Server, p idsParam, a *account) (any, error) {
+// ids is the decoder of a mail action on one or more message IDs, or with thread on a conversation's messages in
+// folder in (see targetValid).
+func ids(run func(ctx context.Context, g *guard.Guard, ids []string) ([]model.MutationResult, error), conversation func(ctx context.Context, g *guard.Guard, thread, in string) ([]model.MutationResult, error)) decoder {
+	return typed(idsParam{}, func(p *idsParam) bool { return targetValid(p.IDs, p.Thread, p.In) }, func(ctx context.Context, _ *Server, p idsParam, a *account) (any, error) {
+		if p.Thread != nil {
+			return mutations(conversation(ctx, a.guard, *p.Thread, inOrInbox(p.In)))
+		}
 		return mutations(run(ctx, a.guard, p.IDs))
 	})
+}
+
+// targetValid checks the messages of an organize action: either one or more message IDs, or a thread (a
+// conversation ID) with an optional in (a folder ID), never both. in needs a thread.
+func targetValid(ids []string, thread, in *string) bool {
+	if thread == nil {
+		return in == nil && listValid(ids, 1, noMax)
+	}
+	return ids == nil && idValid(*thread) && (in == nil || idValid(*in))
+}
+
+// inOrInbox is the folder of a conversation action: in, or the Inbox, as mail.list defaults to it.
+func inOrInbox(in *string) string {
+	if in == nil {
+		return model.Inbox
+	}
+	return *in
 }
 
 // operations is the whole API: one entry per operation name, and any other name is refused. No entry writes
@@ -112,7 +133,7 @@ var operations = map[string]operation{
 	"mail.get": {decode: typed(idParam{}, func(p *idParam) bool { return idValid(p.ID) }, func(ctx context.Context, _ *Server, p idParam, a *account) (any, error) {
 		return a.guard.Get(ctx, p.ID)
 	})},
-	"mail.list": {decode: typed(listParam{Folder: "inbox"}, func(p *listParam) bool {
+	"mail.list": {decode: typed(listParam{Folder: model.Inbox}, func(p *listParam) bool {
 		return idValid(p.Folder) && p.Count >= 0 && model.ValidPage(p.Page)
 	}, func(ctx context.Context, _ *Server, p listParam, a *account) (any, error) {
 		return a.guard.List(ctx, p.Folder, model.PageRequest{Size: p.Count, Page: p.Page})
@@ -139,17 +160,28 @@ var operations = map[string]operation{
 	})},
 	"mail.archive": {decode: ids(func(ctx context.Context, g *guard.Guard, ids []string) ([]model.MutationResult, error) {
 		return g.Archive(ctx, ids)
+	}, func(ctx context.Context, g *guard.Guard, thread, in string) ([]model.MutationResult, error) {
+		return g.ArchiveConversation(ctx, thread, in)
 	})},
 	"mail.trash": {decode: ids(func(ctx context.Context, g *guard.Guard, ids []string) ([]model.MutationResult, error) {
 		return g.Trash(ctx, ids)
+	}, func(ctx context.Context, g *guard.Guard, thread, in string) ([]model.MutationResult, error) {
+		return g.TrashConversation(ctx, thread, in)
 	})},
 	"mail.read": {decode: ids(func(ctx context.Context, g *guard.Guard, ids []string) ([]model.MutationResult, error) {
 		return g.MarkRead(ctx, ids, true)
+	}, func(ctx context.Context, g *guard.Guard, thread, in string) ([]model.MutationResult, error) {
+		return g.MarkReadConversation(ctx, thread, in, true)
 	})},
 	"mail.unread": {decode: ids(func(ctx context.Context, g *guard.Guard, ids []string) ([]model.MutationResult, error) {
 		return g.MarkRead(ctx, ids, false)
+	}, func(ctx context.Context, g *guard.Guard, thread, in string) ([]model.MutationResult, error) {
+		return g.MarkReadConversation(ctx, thread, in, false)
 	})},
-	"mail.move": {decode: typed(moveParam{}, func(p *moveParam) bool { return listValid(p.IDs, 1, noMax) && idValid(p.Folder) }, func(ctx context.Context, _ *Server, p moveParam, a *account) (any, error) {
+	"mail.move": {decode: typed(moveParam{}, func(p *moveParam) bool { return targetValid(p.IDs, p.Thread, p.In) && idValid(p.Folder) }, func(ctx context.Context, _ *Server, p moveParam, a *account) (any, error) {
+		if p.Thread != nil {
+			return mutations(a.guard.MoveConversation(ctx, *p.Thread, inOrInbox(p.In), p.Folder))
+		}
 		return mutations(a.guard.Move(ctx, p.IDs, p.Folder))
 	})},
 	"mail.flag": {decode: typed(flagParam{}, func(p *flagParam) bool {
@@ -158,8 +190,11 @@ var operations = map[string]operation{
 		return mutations(a.guard.Flag(ctx, p.IDs, p.State))
 	})},
 	"mail.categorize": {decode: typed(categoryParam{}, func(p *categoryParam) bool {
-		return listValid(p.IDs, 1, noMax) && listValid(p.Add, 0, noMax) && listValid(p.Remove, 0, noMax)
+		return targetValid(p.IDs, p.Thread, p.In) && listValid(p.Add, 0, noMax) && listValid(p.Remove, 0, noMax)
 	}, func(ctx context.Context, _ *Server, p categoryParam, a *account) (any, error) {
+		if p.Thread != nil {
+			return mutations(a.guard.CategorizeConversation(ctx, *p.Thread, inOrInbox(p.In), p.Add, p.Remove))
+		}
 		return mutations(a.guard.Categorize(ctx, p.IDs, p.Add, p.Remove))
 	})},
 	"mail.organize": {decode: mailOrganize},
@@ -225,7 +260,9 @@ type idParam struct {
 	ID string `json:"id"`
 }
 type idsParam struct {
-	IDs []string `json:"ids"`
+	IDs    []string `json:"ids"`
+	Thread *string  `json:"thread"`
+	In     *string  `json:"in"`
 }
 type listParam struct {
 	Folder string `json:"folder"`
@@ -253,6 +290,8 @@ type linkParam struct {
 }
 type moveParam struct {
 	IDs    []string `json:"ids"`
+	Thread *string  `json:"thread"`
+	In     *string  `json:"in"`
 	Folder string   `json:"folder"`
 }
 type flagParam struct {
@@ -261,6 +300,8 @@ type flagParam struct {
 }
 type categoryParam struct {
 	IDs    []string `json:"ids"`
+	Thread *string  `json:"thread"`
+	In     *string  `json:"in"`
 	Add    []string `json:"add"`
 	Remove []string `json:"remove"`
 }

@@ -92,6 +92,12 @@ func TestValidatedAccountOperationsReachTheProviderOnlyWhenValid(t *testing.T) {
 		{"draft.update", `{"id":"x","to":null}`}, {"draft.update", `{"id":"x","subject":null}`}, {"draft.update", `{"id":"x","cc":[""]}`}, {"draft.update", `{"id":"x","from":["a@example.test"]}`},
 		{"draft.delete", `{}`}, {"draft.delete", `{"id":""}`}, {"draft.delete", `{"ids":["x"]}`}, {"draft.delete", `{"id":"x","body":"b"}`},
 		{"mail.archive", `{"ids":[]}`},
+		// A conversation action has a thread instead of IDs, never both; in only with a thread; never on mail.flag.
+		{"mail.archive", `{"ids":["m1"],"thread":"t1"}`}, {"mail.trash", `{"ids":[],"thread":"t1"}`}, {"mail.read", `{"in":"inbox"}`}, {"mail.unread", `{"ids":["m1"],"in":"inbox"}`},
+		{"mail.archive", `{"thread":""}`}, {"mail.archive", `{"thread":"t1","in":""}`}, {"mail.archive", `{"thread":"t1","in":null}`}, {"mail.archive", `{"thread":["t1"]}`},
+		{"mail.move", `{"folder":"f1","ids":["m1"],"thread":"t1"}`}, {"mail.move", `{"folder":"f1","in":"inbox"}`}, {"mail.move", `{"thread":"t1"}`},
+		{"mail.categorize", `{"add":["Work"],"ids":["m1"],"thread":"t1"}`}, {"mail.categorize", `{"add":["Work"],"in":"inbox"}`},
+		{"mail.flag", `{"thread":"t1","state":"flagged"}`}, {"mail.flag", `{"ids":["x"],"state":"flagged","in":"inbox"}`},
 		{"mail.list", `{"count":-1}`}, {"mail.list", `{"page":"a b"}`}, {"mail.search", `{"text":"x","page":"a\u0000"}`}, {"calendar.search", `{"text":"x","page":"\u00e9"}`}, {"mail.flag", `{"ids":["x"],"state":"urgent"}`},
 		{"mail.organize", `{"since":"0d"}`}, {"mail.organize", `{"since":"2026-10-08"}`},
 		{"calendar.list", `{"start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:00:00Z"}`},
@@ -143,5 +149,38 @@ func TestMoveIntoDeletedItemsIsRefusedWithPublicReason(t *testing.T) {
 	status, b := accountRPC(t, d.s, "mail.folders", "", `{}`)
 	if status != 200 || b != `[{"id":"f1","name":"Finance"},{"id":"del","name":"Deleted Items"},{"id":"old","name":"Old"},{"id":"older","name":"Older"}]` {
 		t.Fatalf("folders %d %s", status, b)
+	}
+}
+
+// A conversation move or archive from the trash is refused with its public reason before any write.
+func TestConversationMoveAndArchiveFromDeletedItemsAreRefusedWithPublicReason(t *testing.T) {
+	var writes atomic.Int32
+	d := graphDaemon(t, "", m365Grant, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			writes.Add(1)
+			w.WriteHeader(500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/me/mailFolders/deleteditems":
+			io.WriteString(w, `{"id":"del"}`)
+		case "/me/mailFolders":
+			io.WriteString(w, `{"value":[{"id":"f1","displayName":"Finance","childFolderCount":0},{"id":"del","displayName":"Deleted Items","childFolderCount":0}]}`)
+		case "/me/messages":
+			io.WriteString(w, `{"value":[{"id":"m1","conversationId":"c-1","receivedDateTime":"2026-03-01T09:00:00Z","parentFolderId":"del"}]}`)
+		default:
+			t.Errorf("unexpected provider request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(500)
+		}
+	}), newNativeAPI())
+	for op, params := range map[string]string{"mail.archive": `{"thread":"c-1","in":"deleteditems"}`, "mail.move": `{"thread":"c-1","in":"deleteditems","folder":"f1"}`} {
+		status, b := accountRPC(t, d.s, op, "", params)
+		if status != 500 || b != `{"error":"refused: messages in the trash stay there"}` {
+			t.Fatalf("%s: %d %s", op, status, b)
+		}
+	}
+	if writes.Load() != 0 {
+		t.Fatal("refused conversation action reached a provider write")
 	}
 }

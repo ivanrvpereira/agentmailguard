@@ -97,7 +97,7 @@ func (c *Client) Call(ctx context.Context, operation, account string, params any
 		}
 		if json.Unmarshal(b, &v) == nil {
 			switch v.Error {
-			case "invalid request", "operation failed", "no accounts; run amgd account add", "unknown account; run amg account list", "sign-in failed; check the network, or run amgd account login", "daemon unavailable", "daemon busy", "browser requests refused", "move refused: the destination must be a folder ID from `folders`", "move refused: use mail.trash", "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
+			case "invalid request", "operation failed", "no accounts; run amgd account add", "unknown account; run amg account list", "sign-in failed; check the network, or run amgd account login", "daemon unavailable", "daemon busy", "browser requests refused", "move refused: the destination must be a folder ID from `folders`", "move refused: use mail.trash", "refused: messages in the trash stay there", "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
 				"link refused: message is red, not green", "link refused: message is yellow, not green", "link refused: message is sealed, not green", "link refused: message is error, not green",
 				"search needs at least one of text, from, to, subject, after, before",
 				"calendar writes are not supported for this account", "calendar availability is not supported for this account", "missing_scopes",

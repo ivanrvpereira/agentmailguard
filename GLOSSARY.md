@@ -169,6 +169,14 @@ _Avoid_: delete, remove
 A named instruction in `rules.toml` for one account that files matching mail into a folder or a category.
 _Avoid_: filter, policy
 
+**Conversation**:
+The messages that the provider groups under one conversation ID (`thread_id`): the Gmail thread or the Microsoft 365 conversation. They can be in many folders.
+_Avoid_: thread (except in the `--thread` option and `thread_id`), email chain
+
+**Conversation action**:
+An organize command with `--thread` that changes the conversation's messages in one folder only, the Inbox unless `--in` names another.
+_Avoid_: thread action, bulk action
+
 **Organize run**:
 One pass over a date range that matches messages against the rules, and changes them only when asked to apply.
 _Avoid_: sweep, sync, triage

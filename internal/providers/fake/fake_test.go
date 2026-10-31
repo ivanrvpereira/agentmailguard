@@ -638,18 +638,25 @@ func TestThreadMessagesInKeepsTheConversationMessagesOfOneFolderNewestFirst(t *t
 		('demo@fake.test', 'inbox-reply', 'inbox', 'ana@example.test', 'Re: Old report', '2026-03-05T09:00:00Z', 0, 'old'),
 		('demo@fake.test', 'sent-reply', 'sent', 'demo@fake.test', 'Re: Old report', '2026-03-02T09:00:00Z', 0, 'old'),
 		('demo@fake.test', 'reply-draft', 'drafts', 'demo@fake.test', 'Re: Old report', '2026-03-04T09:00:00Z', 1, 'old'),
+		('demo@fake.test', 'binned-reply', 'trash', 'ana@example.test', 'Re: Old report', '2026-03-07T09:00:00Z', 0, 'old'),
+		('demo@fake.test', 'filed-reply', 'old-bin', 'ana@example.test', 'Re: Old report', '2026-03-08T09:00:00Z', 0, 'old'),
 		('other', 'their-reply', 'inbox', 'ana@example.test', 'Re: Old report', '2026-03-06T09:00:00Z', 0, 'old')`)
-	for folder, want := range map[string][]string{"inbox": {"inbox-reply", "old"}, "sent": {"sent-reply"}, "archive": {}} {
-		if got, err := m.ThreadMessagesIn(ctx, "old", folder); err != nil || got == nil || !reflect.DeepEqual(got, want) {
-			t.Errorf("%s: ids=%#v err=%v", folder, got, err)
+	seed(t, home, `INSERT INTO folders (account, id, name, parent) VALUES ('demo@fake.test', 'old-bin', 'Old', 'trash')`)
+	for _, tt := range []struct {
+		folder string
+		want   []string
+		trash  bool
+	}{{"inbox", []string{"inbox-reply", "old"}, false}, {"sent", []string{"sent-reply"}, false}, {"archive", []string{}, false}, {"trash", []string{"binned-reply"}, true}, {"old-bin", []string{"filed-reply"}, true}} {
+		if got, trash, err := m.ThreadMessagesIn(ctx, "old", tt.folder); err != nil || got == nil || !reflect.DeepEqual(got, tt.want) || trash != tt.trash {
+			t.Errorf("%s: ids=%#v trash=%v err=%v", tt.folder, got, trash, err)
 		}
 	}
 	for _, unknown := range []string{"gone", "theirs"} {
-		if got, err := m.ThreadMessagesIn(ctx, unknown, "inbox"); !errors.Is(err, model.MailboxError("NotFoundError")) || len(got) != 0 {
+		if got, _, err := m.ThreadMessagesIn(ctx, unknown, "inbox"); !errors.Is(err, model.MailboxError("NotFoundError")) || len(got) != 0 {
 			t.Errorf("%s: ids=%v err=%v", unknown, got, err)
 		}
 	}
-	if got, err := m.ThreadMessagesIn(ctx, "old", "nowhere"); !errors.Is(err, model.MailboxError("NotFoundError")) || len(got) != 0 {
+	if got, _, err := m.ThreadMessagesIn(ctx, "old", "nowhere"); !errors.Is(err, model.MailboxError("NotFoundError")) || len(got) != 0 {
 		t.Errorf("unknown folder: ids=%v err=%v", got, err)
 	}
 }

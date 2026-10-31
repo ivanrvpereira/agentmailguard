@@ -54,6 +54,12 @@ func TestCommandsUseHTTPWithoutLocalState(t *testing.T) {
 		{[]string{"mail", "unread", "a"}, "mail.unread", `{"ids":["a"]}`},
 		{[]string{"mail", "flag", "a", "--state", "complete", "b"}, "mail.flag", `{"ids":["a","b"],"state":"complete"}`},
 		{[]string{"mail", "categorize", "a", "--add", "One", "--add", "Two", "--remove", "Old"}, "mail.categorize", `{"ids":["a"],"add":["One","Two"],"remove":["Old"]}`},
+		{[]string{"mail", "archive", "--thread", "t"}, "mail.archive", `{"thread":"t"}`},
+		{[]string{"mail", "trash", "--thread", "t", "--in", "f"}, "mail.trash", `{"thread":"t","in":"f"}`},
+		{[]string{"mail", "move", "f", "--thread", "t", "--in", "Label_2"}, "mail.move", `{"folder":"f","thread":"t","in":"Label_2"}`},
+		{[]string{"mail", "read", "--thread", "t"}, "mail.read", `{"thread":"t"}`},
+		{[]string{"mail", "unread", "--in", "inbox", "--thread", "t"}, "mail.unread", `{"thread":"t","in":"inbox"}`},
+		{[]string{"mail", "categorize", "--thread", "t", "--add", "One"}, "mail.categorize", `{"thread":"t","add":["One"]}`},
 		{[]string{"mail", "organize", "--since", "1m", "--until", "1d", "--apply"}, "mail.organize", `{"since":"2026-02-28T00:00:00-05:00","until":"2026-03-31T00:00:00-04:00","apply":true}`},
 		{[]string{"mail", "organize"}, "mail.organize", `{"since":"2026-03-24T00:00:00-04:00"}`},
 		{[]string{"calendar", "list", "--from", "2026-03-07", "--to", "+1d"}, "calendar.list", `{"start":"2026-03-07T00:00:00-05:00","end":"2026-03-09T00:00:00-04:00"}`},
@@ -236,6 +242,9 @@ func TestPrettyAliasesUseLastOption(t *testing.T) {
 func TestUsageAndHelpNeedNoServerOrState(t *testing.T) {
 	for _, args := range [][]string{{"mail", "send", "x"}, {"draft", "update", "x"}, {"draft", "update", "x", "--html"}, {"draft", "delete"}, {"draft", "delete", "x", "y"}, {"draft", "send"}, {"draft", "send", "x", "y"}, {"draft", "send", "x", "--body", "b"}, {"draft", "update", "x", "--subject", "s", "--html"}, {"mail", "flag", "x", "--state", "urgent"}, {"mail", "get", "x", "y"}, {"stats", "--days", "0"}, {"mail", "link", "x"}, {"mail", "link", "x", "L1", "--all"}, {"mail", "get", "x", "--secret", "canary"}, {"calendar", "list", "--from", "tomorrow"}, {"calendar", "list", "--from", "2026-03-07", "--to", "2026-03-06"}, {"calendar", "list", "--text", "x"}, {"calendar", "list", "--organizer", "x"}, {"calendar", "list", "--attendee", "x"}, {"calendar", "search"}, {"calendar", "search", "a", "b"}, {"calendar", "search", "a", "--from", "today"}, {"mail", "thread", "t", "--count", "3"}, {"mail", "list", "--skip", "2"}, {"mail", "thread", "t", "--page", "2"}, {"calendar", "search", "a", "--count", "3"}, {"mail", "organize", "--since", "0d"}, {"mail", "get", "x", "--home", "canary"},
 		{"mail", "send", "--subject", "s", "--body", "b"}, {"mail", "send", "--html"}, {"draft", "new", "--html=maybe"},
+		{"mail", "archive"}, {"mail", "archive", "a", "--thread", "t"}, {"mail", "trash", "--in", "inbox"}, {"mail", "read", "a", "--in", "inbox"}, {"mail", "unread"},
+		{"mail", "move", "f"}, {"mail", "move", "f", "a", "--thread", "t"}, {"mail", "move", "--thread", "t"}, {"mail", "move", "f", "--in", "inbox", "a"},
+		{"mail", "categorize", "--add", "One"}, {"mail", "categorize", "a", "--thread", "t", "--add", "One"}, {"mail", "flag", "--thread", "t", "--state", "flagged"}, {"mail", "flag", "a", "--state", "flagged", "--in", "inbox"},
 		{"mail", "reply", "--body", "b"}, {"draft", "reply", "x", "--all=maybe"}, {"mail", "reply", "x", "y", "--body", "b"}, {"mail", "forward", "x"}, {"mail", "forward", "--to", "a"}, {"mail", "forward", "x", "--body", "b", "--html"}, {"draft", "forward", "x", "--html=maybe"}} {
 		var out, errout bytes.Buffer
 		code := cli.Run(context.Background(), args, &out, &errout, cli.Options{})
@@ -246,7 +255,9 @@ func TestUsageAndHelpNeedNoServerOrState(t *testing.T) {
 	for _, tc := range []struct {
 		args []string
 		want []string
-	}{{nil, []string{"account", "mail", "calendar", "draft", "AMG_HOST"}}, {[]string{"mail"}, []string{"organize", "categorize", "link"}}} {
+	}{{nil, []string{"account", "mail", "calendar", "draft", "AMG_HOST"}}, {[]string{"mail"}, []string{"organize", "categorize", "link"}},
+		{[]string{"mail", "archive"}, []string{"--thread", "--in", "Inbox"}}, {[]string{"mail", "trash"}, []string{"--thread", "--in"}}, {[]string{"mail", "move"}, []string{"--thread", "--in"}},
+		{[]string{"mail", "read"}, []string{"--thread", "--in"}}, {[]string{"mail", "unread"}, []string{"--thread", "--in"}}, {[]string{"mail", "categorize"}, []string{"--thread", "--in"}}} {
 		var out, errout bytes.Buffer
 		args := append([]string{}, tc.args...)
 		code := cli.Run(context.Background(), append(args, "--help"), &out, &errout, cli.Options{LookupEnv: func(k string) string {

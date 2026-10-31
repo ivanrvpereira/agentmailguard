@@ -18,6 +18,11 @@ type MessageID = string
 type ThreadID = string
 
 type FolderID = string
+
+// Inbox is the folder ID of the Inbox on every provider: mail list reads it without a folder, and a move by message
+// ID or a conversation action without a folder takes the messages from it.
+const Inbox FolderID = "inbox"
+
 type EventID = string
 
 // MailboxError carries safe status/code text only. Adapters must not construct it from raw provider error messages.
@@ -343,8 +348,9 @@ type Mailbox interface {
 	// not-found error, as for an unknown message ID.
 	Thread(ctx context.Context, thread ThreadID) ([]Message, error)
 	// ThreadMessagesIn returns the IDs of the conversation's messages in folder, newest first as Thread gives them; none
-	// is an empty list. An unknown thread is the adapter's not-found error, as for Thread.
-	ThreadMessagesIn(ctx context.Context, thread ThreadID, folder FolderID) ([]MessageID, error)
+	// is an empty list. trash reports whether folder is the provider's trash (Gmail TRASH; Microsoft 365 Deleted Items
+	// or a folder below it). An unknown thread is the adapter's not-found error, as for Thread.
+	ThreadMessagesIn(ctx context.Context, thread ThreadID, folder FolderID) (ids []MessageID, trash bool, err error)
 	ScanInbox(ctx context.Context, since time.Time, until *time.Time) (InboxScan, error)
 	Folders(ctx context.Context) ([]Folder, error)
 	Archive(ctx context.Context, ids []MessageID) ([]MutationResult, error)
