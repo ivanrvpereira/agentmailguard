@@ -76,18 +76,7 @@ func (g *Guard) audited(ctx context.Context, op audit.Operation, ids []string, h
 		results, err = call(send)
 	}
 	if err != nil && opts.Rule == nil && len(held) == 0 {
-		// Only these fixed refusals are public prose; external GuardError text is not trusted.
-		if ctx.Err() == nil {
-			switch err {
-			case GuardError("move refused: the destination must be a folder ID from `folders`"),
-				GuardError("move refused: use mail.trash"),
-				GuardError("flag state must be one of flagged, complete, none"),
-				GuardError("categorize needs at least one category to add or remove"),
-				GuardError("categorize refused: not in the category list"):
-				return nil, err
-			}
-		}
-		return nil, safeErr(ctx, err)
+		return nil, publicErr(ctx, err)
 	}
 	if err != nil {
 		results = make([]model.MutationResult, 0, len(send))
@@ -121,6 +110,22 @@ func (g *Guard) audited(ctx context.Context, op audit.Operation, ids []string, h
 	return merged, nil
 }
 
+// publicErr gives err itself when it is one of the fixed refusals, the only public prose (external GuardError text
+// is not trusted), and its safe form otherwise.
+func publicErr(ctx context.Context, err error) error {
+	if ctx.Err() == nil {
+		switch err {
+		case GuardError("move refused: the destination must be a folder ID from `folders`"),
+			GuardError("move refused: use mail.trash"),
+			GuardError("flag state must be one of flagged, complete, none"),
+			GuardError("categorize needs at least one category to add or remove"),
+			GuardError("categorize refused: not in the category list"):
+			return err
+		}
+	}
+	return safeErr(ctx, err)
+}
+
 // mutationCall runs op on ids. A move takes the messages from folder from.
 func (g *Guard) mutationCall(ctx context.Context, op audit.Operation, ids []string, from string, opts audit.Options) ([]model.MutationResult, error) {
 	if err := checkIDs(ids); err != nil {
@@ -138,69 +143,79 @@ func (g *Guard) mutationCall(ctx context.Context, op audit.Operation, ids []stri
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		var call func([]string) ([]model.MutationResult, error)
-		switch op {
-		case audit.Archive:
-			call = func(ids []string) ([]model.MutationResult, error) { return g.mailbox.Archive(ctx, ids) }
-		case audit.Trash:
-			call = func(ids []string) ([]model.MutationResult, error) { return g.mailbox.Trash(ctx, ids) }
-		case audit.Move:
-			folders, err := g.mailbox.Folders(ctx)
-			if err != nil {
-				return nil, err
-			}
-			i := slices.IndexFunc(folders, func(f model.Folder) bool { return f.ID == *opts.Folder })
-			if i < 0 {
-				return nil, GuardError("move refused: the destination must be a folder ID from `folders`")
-			}
-			// A move into deleted items would bypass the trash operation.
-			if folders[i].Trash {
-				return nil, GuardError("move refused: use mail.trash")
-			}
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			call = func(ids []string) ([]model.MutationResult, error) {
-				return g.mailbox.Move(ctx, ids, from, *opts.Folder)
-			}
-		case audit.Read, audit.Unread:
-			call = func(ids []string) ([]model.MutationResult, error) {
-				return g.mailbox.MarkRead(ctx, ids, op == audit.Read)
-			}
-		case audit.Flag:
-			if opts.Flag == nil || (*opts.Flag != model.Flagged && *opts.Flag != model.Complete && *opts.Flag != model.NoFlag) {
-				return nil, GuardError("flag state must be one of flagged, complete, none")
-			}
-			call = func(ids []string) ([]model.MutationResult, error) { return g.mailbox.Flag(ctx, ids, *opts.Flag) }
-		case audit.Categorize:
-			if len(opts.Add)+len(opts.Remove) == 0 {
-				return nil, GuardError("categorize needs at least one category to add or remove")
-			}
-			categories, err := g.mailbox.Categories(ctx)
-			if err != nil {
-				return nil, err
-			}
-			for _, names := range [][]string{opts.Add, opts.Remove} {
-				for _, name := range names {
-					if !slices.Contains(categories, name) {
-						return nil, GuardError("categorize refused: not in the category list")
-					}
-				}
-			}
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			call = func(ids []string) ([]model.MutationResult, error) {
-				return g.mailbox.Categorize(ctx, ids, opts.Add, opts.Remove)
-			}
-		default:
-			return nil, GuardError("invalid operation")
+		call, err := g.writer(ctx, op, from, opts)
+		if err != nil {
+			return nil, err
 		}
 		if opts.Rule == nil {
 			return call(ids)
 		}
 		return g.authorizedWrite(ctx, ids, *opts.Rule, call)
 	})
+}
+
+// writer checks the arguments of op and gives the provider call that runs op. A move takes the messages from folder
+// from.
+func (g *Guard) writer(ctx context.Context, op audit.Operation, from string, opts audit.Options) (func([]string) ([]model.MutationResult, error), error) {
+	var call func([]string) ([]model.MutationResult, error)
+	switch op {
+	case audit.Archive:
+		call = func(ids []string) ([]model.MutationResult, error) { return g.mailbox.Archive(ctx, ids) }
+	case audit.Trash:
+		call = func(ids []string) ([]model.MutationResult, error) { return g.mailbox.Trash(ctx, ids) }
+	case audit.Move:
+		folders, err := g.mailbox.Folders(ctx)
+		if err != nil {
+			return nil, err
+		}
+		i := slices.IndexFunc(folders, func(f model.Folder) bool { return f.ID == *opts.Folder })
+		if i < 0 {
+			return nil, GuardError("move refused: the destination must be a folder ID from `folders`")
+		}
+		// A move into deleted items would bypass the trash operation.
+		if folders[i].Trash {
+			return nil, GuardError("move refused: use mail.trash")
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		call = func(ids []string) ([]model.MutationResult, error) {
+			return g.mailbox.Move(ctx, ids, from, *opts.Folder)
+		}
+	case audit.Read, audit.Unread:
+		call = func(ids []string) ([]model.MutationResult, error) {
+			return g.mailbox.MarkRead(ctx, ids, op == audit.Read)
+		}
+	case audit.Flag:
+		if opts.Flag == nil || (*opts.Flag != model.Flagged && *opts.Flag != model.Complete && *opts.Flag != model.NoFlag) {
+			return nil, GuardError("flag state must be one of flagged, complete, none")
+		}
+		call = func(ids []string) ([]model.MutationResult, error) { return g.mailbox.Flag(ctx, ids, *opts.Flag) }
+	case audit.Categorize:
+		if len(opts.Add)+len(opts.Remove) == 0 {
+			return nil, GuardError("categorize needs at least one category to add or remove")
+		}
+		categories, err := g.mailbox.Categories(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, names := range [][]string{opts.Add, opts.Remove} {
+			for _, name := range names {
+				if !slices.Contains(categories, name) {
+					return nil, GuardError("categorize refused: not in the category list")
+				}
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		call = func(ids []string) ([]model.MutationResult, error) {
+			return g.mailbox.Categorize(ctx, ids, opts.Add, opts.Remove)
+		}
+	default:
+		return nil, GuardError("invalid operation")
+	}
+	return call, nil
 }
 
 // Validation above may wait on provider/auth permits. Only the final verdict check and write hold the security gate.
@@ -258,7 +273,8 @@ const TrashMoveRefused = GuardError("move refused: messages in the trash stay th
 
 // conversation runs op on the messages of conversation thread in folder in, as manual runs it on message IDs. The
 // provider chooses the messages under the write lock, right before the writes. A failed or invalid choice changes
-// nothing; an empty one gives an empty result and writes no record, because nothing ran. The operation record
+// nothing; an empty one gets the argument checks of a run, then gives an empty result and writes no record, because
+// nothing ran. The operation record
 // carries thread; policy and approval records stay one per message.
 func (g *Guard) conversation(ctx context.Context, op audit.Operation, thread, in string, opts audit.Options) ([]model.MutationResult, error) {
 	if thread == "" || in == "" {
@@ -272,6 +288,9 @@ func (g *Guard) conversation(ctx context.Context, op audit.Operation, thread, in
 	if err != nil {
 		return nil, safeErr(ctx, err)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	seen := map[string]bool{}
 	for _, id := range ids {
 		if id == "" || seen[id] {
@@ -283,6 +302,10 @@ func (g *Guard) conversation(ctx context.Context, op audit.Operation, thread, in
 		return nil, TrashMoveRefused
 	}
 	if len(ids) == 0 {
+		// Nothing changes, but the arguments get the checks of a run on messages.
+		if _, err := g.writer(ctx, op, in, opts); err != nil {
+			return nil, publicErr(ctx, err)
+		}
 		return []model.MutationResult{}, nil
 	}
 	opts.Thread = &thread

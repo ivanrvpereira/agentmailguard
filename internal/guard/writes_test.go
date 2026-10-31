@@ -32,6 +32,7 @@ type writer struct {
 	trashFolder      string              // the folder that ThreadMessagesIn reports as the trash
 	chooseErr        error               // the ThreadMessagesIn error
 	choices          []string            // the "thread/folder" of each ThreadMessagesIn call, in order
+	afterChoose      func()              // runs at the end of ThreadMessagesIn
 	moveSources      []string            // the source folder of each Move call, in order
 	err              error
 	entered, release chan struct{}
@@ -69,6 +70,9 @@ func (w *writer) Move(_ context.Context, ids []string, from, _ string) ([]model.
 }
 func (w *writer) ThreadMessagesIn(_ context.Context, thread, folder string) ([]string, bool, error) {
 	w.choices = append(w.choices, thread+"/"+folder)
+	if w.afterChoose != nil {
+		defer w.afterChoose()
+	}
 	if w.chooseErr != nil {
 		return nil, false, w.chooseErr
 	}

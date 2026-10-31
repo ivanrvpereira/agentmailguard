@@ -119,18 +119,44 @@ func TestConversationMoveFromTheTrashIsRefused(t *testing.T) {
 	}
 }
 
+// The refusals of a run on message IDs apply also when the folder holds no message of the conversation (f1).
 func TestConversationActionsKeepTheFixedRefusals(t *testing.T) {
 	w := conversationWriter()
 	g, _, path := setup(t, w, &screener{verdict: model.Green})
 	ctx := context.Background()
-	if _, err := g.MoveConversation(ctx, "t1", "inbox", "del"); err != guard.GuardError("move refused: use mail.trash") {
-		t.Fatalf("move into the trash: %v", err)
-	}
-	if _, err := g.CategorizeConversation(ctx, "t1", "inbox", []string{"Planted"}, nil); err != guard.GuardError("categorize refused: not in the category list") {
-		t.Fatalf("unknown category: %v", err)
+	for _, in := range []string{"inbox", "f1"} {
+		for want, run := range map[string]func() ([]model.MutationResult, error){
+			"move refused: use mail.trash": func() ([]model.MutationResult, error) { return g.MoveConversation(ctx, "t1", in, "del") },
+			"move refused: the destination must be a folder ID from `folders`": func() ([]model.MutationResult, error) {
+				return g.MoveConversation(ctx, "t1", in, "nowhere")
+			},
+			"categorize refused: not in the category list": func() ([]model.MutationResult, error) {
+				return g.CategorizeConversation(ctx, "t1", in, []string{"Planted"}, nil)
+			},
+			"categorize needs at least one category to add or remove": func() ([]model.MutationResult, error) {
+				return g.CategorizeConversation(ctx, "t1", in, nil, nil)
+			},
+		} {
+			if got, err := run(); err != guard.GuardError(want) || got != nil {
+				t.Fatalf("in %s, want %q: results=%+v err=%v", in, want, got, err)
+			}
+		}
 	}
 	if len(w.calls) != 0 || len(allAuditRecords(t, path)) != 0 {
 		t.Fatalf("writes=%v records=%v", w.calls, allAuditRecords(t, path))
+	}
+}
+
+func TestConversationActionNeedsAThreadAndAFolder(t *testing.T) {
+	w := conversationWriter()
+	g, _, path := setup(t, w, &screener{verdict: model.Green})
+	for _, target := range [][2]string{{"", "inbox"}, {"t1", ""}} {
+		if got, err := g.ArchiveConversation(context.Background(), target[0], target[1]); err != guard.GuardError("give a thread ID and a folder ID") || got != nil {
+			t.Fatalf("%q: results=%+v err=%v", target, got, err)
+		}
+	}
+	if len(w.choices) != 0 || len(w.calls) != 0 || len(allAuditRecords(t, path)) != 0 {
+		t.Fatalf("choices=%v writes=%v records=%v", w.choices, w.calls, allAuditRecords(t, path))
 	}
 }
 
@@ -211,6 +237,22 @@ func TestConversationActionCancelledBeforeTheLockReadsNothing(t *testing.T) {
 	cancel()
 	if _, err := g.ArchiveConversation(ctx, "t1", "inbox"); !errors.Is(err, context.Canceled) || len(w.choices) != 0 {
 		t.Fatalf("err=%v choices=%v", err, w.choices)
+	}
+}
+
+// A cancel during the read of the conversation ends the action with the cancel, also when nothing is to change.
+func TestConversationActionCancelledDuringTheReadChangesNothing(t *testing.T) {
+	for _, in := range []string{"inbox", "f1"} {
+		w := conversationWriter()
+		g, _, path := setup(t, w, &screener{verdict: model.Green})
+		ctx, cancel := context.WithCancel(context.Background())
+		w.afterChoose = cancel
+		if got, err := g.ArchiveConversation(ctx, "t1", in); !errors.Is(err, context.Canceled) || got != nil {
+			t.Fatalf("in %s: results=%+v err=%v", in, got, err)
+		}
+		if len(w.calls) != 0 || len(allAuditRecords(t, path)) != 0 {
+			t.Fatalf("in %s: writes=%v records=%v", in, w.calls, allAuditRecords(t, path))
+		}
 	}
 }
 

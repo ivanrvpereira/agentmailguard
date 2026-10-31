@@ -324,14 +324,14 @@ func TestTestAddressesUseReservedDomains(t *testing.T) {
 }
 
 // A refusal reaches the user only when every allowlist on its path lists the exact text:
-// Guard.audited (mail mutations), server.publicError, then the client's display allowlist.
+// guard.publicErr (mail mutations), server.publicError, then the client's display allowlist.
 func TestPublicRefusalsReachTheUser(t *testing.T) {
 	guardSrc := packageFiles(t, "internal/guard")
 	serverSrc := packageFiles(t, "internal/server")
 	guardConsts := stringValues(guardSrc, token.CONST, "GuardError")
 	serverVars := stringValues(serverSrc, token.VAR, "errors.New")
 	maps.Copy(serverVars, stringValues(serverSrc, token.CONST, ""))
-	audited := refusals(t, findFunc(t, guardSrc, "audited"), func(e ast.Expr) (string, bool) {
+	guardPublic := refusals(t, findFunc(t, guardSrc, "publicErr"), func(e ast.Expr) (string, bool) {
 		return guardText(e, guardConsts)
 	})
 	public := refusals(t, findFunc(t, serverSrc, "publicError"), func(e ast.Expr) (string, bool) {
@@ -345,9 +345,9 @@ func TestPublicRefusalsReachTheUser(t *testing.T) {
 		}
 		return guardText(e, nil)
 	})
-	for _, text := range audited {
+	for _, text := range guardPublic {
 		if !slices.Contains(public, text) {
-			t.Errorf("Guard.audited passes %q but server.publicError does not", text)
+			t.Errorf("guard.publicErr passes %q but server.publicError does not", text)
 		}
 	}
 	for _, text := range public {
