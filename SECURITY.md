@@ -5,21 +5,21 @@
 Do not include vulnerability details, credentials, or real mailbox content in a public issue or pull request.
 Use synthetic messages and fake provider endpoints for reproductions.
 
-1. Open this project's GitHub repository, not a fork.
-2. Open **Security → Advisories**.
-3. Select **Report a vulnerability** to submit a private report.
+Report a vulnerability privately through [GitHub's private vulnerability reporting](https://github.com/ivanrvpereira/agentmailguard/security/advisories/new): open the repository's **Security** tab and select **Report a vulnerability**.
 
-If the button is absent, private vulnerability reporting is not enabled.
-Open a public issue requesting a private reporting channel, without vulnerability details or sensitive data.
-Wait for a private channel before sending the report.
+If the form is not available, open a public issue that asks for a private reporting channel, without vulnerability details or sensitive data.
+Wait for a private channel before you send the report.
 
 A report can include the affected commit, operating system, synthetic reproduction, expected result, and actual result.
 Do not attach OAuth tokens, passwords, callback URLs, provider responses, or daemon-home files.
 
-## Support status
+The project has one maintainer and no guaranteed response time.
+The maintainer agrees on a disclosure date with the reporter after a fix is ready.
 
-The project is experimental.
-There is no published release-support schedule or guaranteed response time.
+## Supported versions
+
+The project is experimental and has no long-term support releases.
+Security fixes go into `main` and the next release. Only the latest release is supported.
 
 ## Supported deployment
 
@@ -91,4 +91,4 @@ Content hidden from the agent can still reach the screening service before a ver
 
 The project does not guarantee zero retention, no training, or a processing region.
 Review the applicable service and provider policies before using real or organizational mail.
-See [Privacy and external screening](README.md#privacy-and-external-screening) for the transferred fields and service references.
+See [Privacy and external screening](docs/screening.md#privacy-and-external-screening) for the transferred fields and service references.
