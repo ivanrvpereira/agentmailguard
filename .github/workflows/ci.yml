@@ -21,9 +21,10 @@ env:
 jobs:
   checks:
     name: Go (${{ matrix.go-version }})
-    # Linux only: `make` on a Mac covers the macOS-only code (the Keychain backend and its tests).
-    # A local runner (gh local-runner) sets LINUX_RUNNER while it runs; otherwise GitHub-hosted.
-    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-24.04' }}
+    # Linux only: `make` on a Mac covers the macOS-only Keychain backend.
+    # The repository variable LINUX_RUNNER can name a self-hosted runner. It runs pushes and pull requests from
+    # branches of this repository only; pull requests from forks always run on a GitHub-hosted runner.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -61,7 +62,7 @@ jobs:
 
   secrets:
     name: Secret scan
-    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 10
     steps:
       - name: Check out complete history
