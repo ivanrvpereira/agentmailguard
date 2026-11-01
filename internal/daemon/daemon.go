@@ -22,6 +22,7 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 	"github.com/ivanrvpereira/agentmailguard/internal/server"
 	"github.com/ivanrvpereira/agentmailguard/internal/term"
+	"github.com/ivanrvpereira/agentmailguard/internal/version"
 )
 
 // Options are the external seams of amgd. Zero values use the real host.
@@ -81,7 +82,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Opti
 	}
 	r := &runner{opts: opts, passwordEnv: passwordEnv, stdin: stdin, stdout: stdout, stderr: stderr}
 	var help bytes.Buffer
-	root := &cobra.Command{Use: "amgd", Short: "Run and manage the agentmailguard daemon on this host", Long: notes, Args: cobra.ArbitraryArgs, SilenceErrors: true, SilenceUsage: true}
+	root := &cobra.Command{Use: "amgd", Short: "Run and manage the agentmailguard daemon on this host", Long: notes, Version: version.String(), Args: cobra.ArbitraryArgs, SilenceErrors: true, SilenceUsage: true}
 	root.RunE = func(c *cobra.Command, rest []string) error {
 		if len(rest) > 1 || len(rest) == 0 && len(args) > 0 {
 			return errUsage
