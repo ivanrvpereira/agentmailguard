@@ -2,6 +2,8 @@ package gmail
 
 import (
 	"context"
+	"slices"
+
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
@@ -60,18 +62,24 @@ func (m *mailbox) Flag(ctx context.Context, ids []string, state model.FlagState)
 		return nil, failure("Gmail", "FlagError")
 	}
 }
-func (m *mailbox) Move(ctx context.Context, ids []string, dest string) ([]model.MutationResult, error) {
-	if dest == "INBOX" {
-		return m.modify(ctx, ids, []string{"INBOX"}, nil)
-	}
-	user, err := m.userLabels(ctx)
+
+// Move adds the dest label and removes the label of from, which becomes a label ID as List makes it
+// (https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/modify). One labels read
+// serves the dest check and the source. A source that is the destination is only added, so no label is both added
+// and removed.
+func (m *mailbox) Move(ctx context.Context, ids []string, from, dest string) ([]model.MutationResult, error) {
+	a, err := m.labels(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if _, ok := user[dest]; !ok {
+	if dest != "INBOX" && !slices.ContainsFunc(a, func(l label) bool { return l.Type == "user" && l.ID == dest }) {
 		return nil, failure("Gmail", "FolderError")
 	}
-	return m.modify(ctx, ids, []string{dest}, []string{"INBOX"})
+	var remove []string
+	if source := labelIn(a, from); source != dest {
+		remove = []string{source}
+	}
+	return m.modify(ctx, ids, []string{dest}, remove)
 }
 func (m *mailbox) Categorize(ctx context.Context, ids, add, remove []string) ([]model.MutationResult, error) {
 	user, err := m.userLabels(ctx)

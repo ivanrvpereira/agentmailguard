@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/audit"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"github.com/ivanrvpereira/agentmailguard/internal/rules"
 )
 
@@ -19,7 +20,8 @@ func (g *Guard) batches(ctx context.Context, op audit.Operation, ids []string, o
 			break
 		}
 		chunk := ids[start:min(start+50, len(ids))]
-		results, err := g.mutationCall(ctx, op, chunk, opts)
+		// Organizer rule moves take the messages from the Inbox, which the rules match.
+		results, err := g.mutationCall(ctx, op, chunk, model.Inbox, opts)
 		if err != nil {
 			for _, id := range chunk {
 				outcome[id] = safeCode(err)

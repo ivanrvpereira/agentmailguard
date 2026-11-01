@@ -226,6 +226,71 @@ func TestThreadReadsEveryMessageOfThreadsGetNewestFirst(t *testing.T) {
 	}
 }
 
+func TestThreadMessagesInKeepsTheThreadMessagesThatCarryTheFolderLabel(t *testing.T) {
+	var requests []string
+	var mu sync.Mutex
+	// Trash removes INBOX but keeps SENT and user labels; spam keeps user labels too (live check, 2026-10-29).
+	labels := map[string][]string{"in-old": {"INBOX"}, "sent": {"SENT"}, "labeled": {"Label_7"}, "draft": {"DRAFT"}, "in-new": {"INBOX", "UNREAD", "Label_7"}, "binned": {"TRASH", "SENT", "Label_7"}, "spam": {"SPAM", "Label_7"}}
+	dates := map[string]string{"in-old": "1788220800001", "sent": "1788220800002", "labeled": "1788220800003", "draft": "1788220800004", "in-new": "1788220800005", "binned": "1788220800006", "spam": "1788220800007"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests = append(requests, r.Method+" "+r.URL.EscapedPath()+"?"+r.URL.RawQuery)
+		mu.Unlock()
+		switch r.URL.EscapedPath() {
+		case "/labels":
+			respond(w, map[string]any{"labels": []any{map[string]string{"id": "INBOX", "type": "system", "name": "INBOX"}, map[string]string{"id": "SENT", "type": "system", "name": "SENT"}, map[string]string{"id": "DRAFT", "type": "system", "name": "DRAFT"}, map[string]string{"id": "TRASH", "type": "system", "name": "TRASH"}, map[string]string{"id": "SPAM", "type": "system", "name": "SPAM"}, map[string]string{"id": "Label_7", "type": "user", "name": "Projects"}}})
+		case "/threads/t-7":
+			messages := []any{}
+			for _, id := range []string{"in-old", "sent", "labeled", "draft", "in-new", "binned", "spam"} {
+				messages = append(messages, map[string]any{"id": id, "threadId": "t-7", "labelIds": labels[id]})
+			}
+			respond(w, map[string]any{"id": "t-7", "messages": messages})
+		case "/threads/gone":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(404)
+			_, _ = w.Write([]byte(`{"error":{"errors":[{"reason":"notFound"}]}}`))
+		default:
+			id := strings.TrimPrefix(r.URL.Path, "/messages/")
+			if _, ok := labels[id]; !ok {
+				t.Errorf("unexpected path %s", r.URL.EscapedPath())
+				w.WriteHeader(404)
+				return
+			}
+			respond(w, map[string]any{"id": id, "threadId": "t-7", "internalDate": dates[id], "labelIds": labels[id], "payload": part("text/plain", "text")})
+		}
+	}))
+	defer server.Close()
+	b := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), GmailURL: server.URL}).Mailbox()
+	ctx := t.Context()
+	// A folder other than the trash or spam skips their messages, as messages.list does by default
+	// (includeSpamTrash, https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list).
+	for folder, want := range map[string][]string{"inbox": {"in-new", "in-old"}, "Label_7": {"in-new", "labeled"}, "sent": {"sent"}, "trash": {"binned"}, "spam": {"spam"}} {
+		requests = nil
+		got, err := b.ThreadMessagesIn(ctx, "t-7", folder)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: ids=%q err=%v", folder, got, err)
+		}
+		// threads.get, then Get reads the user labels and each message (in parallel), then the folder becomes a label.
+		reads := slices.Clone(requests[2:9])
+		slices.Sort(reads)
+		seen := append(append(slices.Clone(requests[:2]), reads...), requests[9:]...)
+		wantRequests := []string{"GET /threads/t-7?format=minimal", "GET /labels?", "GET /messages/binned?format=full", "GET /messages/draft?format=full", "GET /messages/in-new?format=full", "GET /messages/in-old?format=full", "GET /messages/labeled?format=full", "GET /messages/sent?format=full", "GET /messages/spam?format=full", "GET /labels?"}
+		if !reflect.DeepEqual(seen, wantRequests) {
+			t.Fatalf("%s: requests=%q", folder, requests)
+		}
+	}
+	requests = nil
+	if got, err := b.ThreadMessagesIn(ctx, "gone", "inbox"); err != model.MailboxError("Gmail error 404 notFound") || len(got) != 0 {
+		t.Fatalf("unknown thread: ids=%q err=%v", got, err)
+	}
+	if !reflect.DeepEqual(requests, []string{"GET /threads/gone?format=minimal"}) {
+		t.Fatalf("unknown thread requests=%q", requests)
+	}
+	if got, err := b.ThreadMessagesIn(ctx, "t-7", "Label_404"); err != model.MailboxError("Gmail error FolderError") || len(got) != 0 {
+		t.Fatalf("unknown folder: ids=%q err=%v", got, err)
+	}
+}
+
 // List and Search read one messages.list page each
 // (https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list): maxResults only when
 // a size is given, as given, so Gmail's default (100) and maximum (500) apply; pageToken is the page; nextPageToken

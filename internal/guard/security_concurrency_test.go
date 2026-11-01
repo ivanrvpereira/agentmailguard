@@ -52,9 +52,9 @@ type validationPauseBox struct {
 	moved               []string
 }
 
-func (b *validationPauseBox) Move(ctx context.Context, ids []string, dest string) ([]model.MutationResult, error) {
+func (b *validationPauseBox) Move(ctx context.Context, ids []string, from, dest string) ([]model.MutationResult, error) {
 	b.moved = append(b.moved, ids...)
-	return b.writer.Move(ctx, ids, dest)
+	return b.writer.Move(ctx, ids, from, dest)
 }
 
 func (b *validationPauseBox) Folders(ctx context.Context) ([]model.Folder, error) {

@@ -18,6 +18,11 @@ type MessageID = string
 type ThreadID = string
 
 type FolderID = string
+
+// Inbox is the folder ID of the Inbox on every provider: mail list reads it without a folder, and a move by message
+// ID or a conversation action without a folder takes the messages from it.
+const Inbox FolderID = "inbox"
+
 type EventID = string
 
 // MailboxError carries safe status/code text only. Adapters must not construct it from raw provider error messages.
@@ -342,11 +347,16 @@ type Mailbox interface {
 	// (trash, spam or junk, sent, and drafts included), metadata only like List. An unknown thread is the adapter's
 	// not-found error, as for an unknown message ID.
 	Thread(ctx context.Context, thread ThreadID) ([]Message, error)
+	// ThreadMessagesIn returns the IDs of the conversation's messages in folder, newest first as Thread gives them; none
+	// is an empty list. An unknown thread is the adapter's not-found error, as for Thread.
+	ThreadMessagesIn(ctx context.Context, thread ThreadID, folder FolderID) ([]MessageID, error)
 	ScanInbox(ctx context.Context, since time.Time, until *time.Time) (InboxScan, error)
 	Folders(ctx context.Context) ([]Folder, error)
 	Archive(ctx context.Context, ids []MessageID) ([]MutationResult, error)
 	Trash(ctx context.Context, ids []MessageID) ([]MutationResult, error)
-	Move(ctx context.Context, ids []MessageID, dest FolderID) ([]MutationResult, error)
+	// Move moves ids from folder from to dest. Gmail removes the label of from; Microsoft 365 and the fake provider
+	// ignore it, because a message there is in one folder only.
+	Move(ctx context.Context, ids []MessageID, from, dest FolderID) ([]MutationResult, error)
 	MarkRead(ctx context.Context, ids []MessageID, read bool) ([]MutationResult, error)
 	Flag(ctx context.Context, ids []MessageID, state FlagState) ([]MutationResult, error)
 	Categorize(ctx context.Context, ids []MessageID, add, remove []string) ([]MutationResult, error)

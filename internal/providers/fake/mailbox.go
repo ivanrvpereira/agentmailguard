@@ -174,6 +174,25 @@ func (b *mailbox) Thread(ctx context.Context, thread string) ([]model.Message, e
 	return out, nil
 }
 
+// ThreadMessagesIn keeps the messages of Thread whose folder column is folder. An unknown folder is notFound, as in
+// List.
+func (b *mailbox) ThreadMessagesIn(ctx context.Context, thread, folder string) ([]string, error) {
+	if err := b.folderExists(ctx, folder); err != nil {
+		return nil, err
+	}
+	all, err := b.Thread(ctx, thread)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, m := range all {
+		if slices.Contains(m.Folders, folder) {
+			out = append(out, m.ID)
+		}
+	}
+	return out, nil
+}
+
 func contains(value string, part *string) bool {
 	return part == nil || strings.Contains(strings.ToLower(value), strings.ToLower(*part))
 }

@@ -92,6 +92,12 @@ func TestValidatedAccountOperationsReachTheProviderOnlyWhenValid(t *testing.T) {
 		{"draft.update", `{"id":"x","to":null}`}, {"draft.update", `{"id":"x","subject":null}`}, {"draft.update", `{"id":"x","cc":[""]}`}, {"draft.update", `{"id":"x","from":["a@example.test"]}`},
 		{"draft.delete", `{}`}, {"draft.delete", `{"id":""}`}, {"draft.delete", `{"ids":["x"]}`}, {"draft.delete", `{"id":"x","body":"b"}`},
 		{"mail.archive", `{"ids":[]}`},
+		// A conversation action has a thread instead of IDs, never both; in only with a thread; never on mail.flag.
+		{"mail.archive", `{"ids":["m1"],"thread":"t1"}`}, {"mail.trash", `{"ids":[],"thread":"t1"}`}, {"mail.read", `{"in":"inbox"}`}, {"mail.unread", `{"ids":["m1"],"in":"inbox"}`},
+		{"mail.archive", `{"thread":""}`}, {"mail.archive", `{"thread":"t1","in":""}`}, {"mail.archive", `{"thread":"t1","in":null}`}, {"mail.archive", `{"thread":["t1"]}`},
+		{"mail.move", `{"folder":"f1","ids":["m1"],"thread":"t1"}`}, {"mail.move", `{"folder":"f1","in":"inbox"}`}, {"mail.move", `{"thread":"t1"}`},
+		{"mail.categorize", `{"add":["Work"],"ids":["m1"],"thread":"t1"}`}, {"mail.categorize", `{"add":["Work"],"in":"inbox"}`},
+		{"mail.flag", `{"thread":"t1","state":"flagged"}`}, {"mail.flag", `{"ids":["x"],"state":"flagged","in":"inbox"}`},
 		{"mail.list", `{"count":-1}`}, {"mail.list", `{"page":"a b"}`}, {"mail.search", `{"text":"x","page":"a\u0000"}`}, {"calendar.search", `{"text":"x","page":"\u00e9"}`}, {"mail.flag", `{"ids":["x"],"state":"urgent"}`},
 		{"mail.organize", `{"since":"0d"}`}, {"mail.organize", `{"since":"2026-10-08"}`},
 		{"calendar.list", `{"start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:00:00Z"}`},

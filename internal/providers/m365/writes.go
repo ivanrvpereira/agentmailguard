@@ -453,12 +453,12 @@ func (b *mailbox) each(ctx context.Context, ids []string, call func(string) erro
 	return out, nil
 }
 func (b *mailbox) Archive(ctx context.Context, ids []string) ([]model.MutationResult, error) {
-	return b.Move(ctx, ids, "archive")
+	return b.Move(ctx, ids, "inbox", "archive")
 }
 func (b *mailbox) Trash(ctx context.Context, ids []string) ([]model.MutationResult, error) {
-	return b.Move(ctx, ids, "deleteditems")
+	return b.Move(ctx, ids, "inbox", "deleteditems")
 }
-func (b *mailbox) Move(ctx context.Context, ids []string, dest string) ([]model.MutationResult, error) {
+func (b *mailbox) Move(ctx context.Context, ids []string, _, dest string) ([]model.MutationResult, error) {
 	return b.each(ctx, ids, func(id string) error {
 		_, err := b.c.request(ctx, http.MethodPost, b.c.endpoint("/me/messages/"+escapeID(id)+"/move", nil), map[string]any{"destinationId": dest}, false)
 		return err

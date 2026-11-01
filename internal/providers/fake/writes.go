@@ -108,12 +108,12 @@ func (b *mailbox) each(ctx context.Context, ids []string, change func(*sql.DB, s
 }
 
 func (b *mailbox) Archive(ctx context.Context, ids []string) ([]model.MutationResult, error) {
-	return b.Move(ctx, ids, "archive")
+	return b.Move(ctx, ids, "inbox", "archive")
 }
 func (b *mailbox) Trash(ctx context.Context, ids []string) ([]model.MutationResult, error) {
-	return b.Move(ctx, ids, "trash")
+	return b.Move(ctx, ids, "inbox", "trash")
 }
-func (b *mailbox) Move(ctx context.Context, ids []string, dest string) ([]model.MutationResult, error) {
+func (b *mailbox) Move(ctx context.Context, ids []string, _, dest string) ([]model.MutationResult, error) {
 	if err := b.folderExists(ctx, dest); err != nil {
 		return nil, err
 	}

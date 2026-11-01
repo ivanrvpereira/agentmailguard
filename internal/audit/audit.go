@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -39,12 +40,14 @@ const (
 )
 
 // Options contains only operation settings. Folder, category, and draft IDs must
-// come from validated mailbox operations, never arbitrary message text.
+// come from validated mailbox operations, never arbitrary message text. Thread is the conversation of a conversation
+// action, an opaque provider ID.
 type Options struct {
 	Folder        *string
 	Flag          *model.FlagState
 	Add, Remove   []string // nil: absent; empty non-nil: explicitly empty
 	DraftID, Rule *string
+	Thread        *string
 }
 type Log struct {
 	path string
@@ -69,6 +72,7 @@ type record struct {
 	Add       *[]string        `json:"add,omitempty"`
 	Remove    *[]string        `json:"remove,omitempty"`
 	DraftID   *string          `json:"draft_id,omitempty"`
+	Thread    *string          `json:"thread,omitempty"`
 	Results   []result         `json:"results"`
 }
 
@@ -85,6 +89,10 @@ func (l *Log) Record(ctx context.Context, account string, operation Operation, r
 	default:
 		return errors.New("invalid audit operation")
 	}
+	// Only an organize action other than flag can act on a conversation.
+	if options.Thread != nil && (*options.Thread == "" || !slices.Contains([]Operation{Archive, Trash, Move, Read, Unread, Categorize}, operation)) {
+		return errors.New("invalid audit thread")
+	}
 	if options.Flag != nil && *options.Flag != model.Flagged && *options.Flag != model.Complete && *options.Flag != model.NoFlag {
 		return errors.New("invalid audit flag")
 	}
@@ -96,7 +104,7 @@ func (l *Log) Record(ctx context.Context, account string, operation Operation, r
 			return err
 		}
 	}
-	line := record{Time: now(), Account: account, Operation: operation, Rule: options.Rule, Folder: options.Folder, Flag: options.Flag, DraftID: options.DraftID, IDs: []string{}, Results: []result{}}
+	line := record{Time: now(), Account: account, Operation: operation, Rule: options.Rule, Folder: options.Folder, Flag: options.Flag, DraftID: options.DraftID, Thread: options.Thread, IDs: []string{}, Results: []result{}}
 	if options.Add != nil {
 		line.Add = &options.Add
 	}
