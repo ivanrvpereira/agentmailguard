@@ -1,0 +1,372 @@
+name: Release
+
+# A version tag (vX.Y.Z, or vX.Y.Z-suffix for a prerelease) builds amg and amgd for Linux and macOS, signs and
+# notarizes the macOS binaries, publishes a GitHub release, and updates the Homebrew formula in
+# ivanrvpereira/homebrew-tap. Secrets and the release steps are in docs/releasing.md.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GOTOOLCHAIN: local
+  # Oldest macOS that the binaries run on. Keep it at the minimum of the Go release that builds them;
+  # the macOS build fails when the linker reports Go objects built for a newer macOS.
+  MACOS_MIN: "13.0"
+  # The signing identifiers. macOS ties the Keychain items of amgd to its team ID and identifier:
+  # changing them makes every user approve Keychain access again.
+  SIGN_ID_PREFIX: io.github.ivanrvpereira.agentmailguard
+  VERSION_FLAG: github.com/ivanrvpereira/agentmailguard/internal/version.version
+
+jobs:
+  check:
+    name: Checks (${{ matrix.runner }})
+    strategy:
+      fail-fast: true
+      matrix:
+        runner: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Check the tag
+        run: |
+          if ! printf '%s' "$GITHUB_REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "Tag is not a version (vX.Y.Z or vX.Y.Z-suffix): $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+      - name: Format, vet, race tests, and build
+        run: make
+
+  linux:
+    name: Build linux/${{ matrix.arch }}
+    needs: check
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+      - name: Install the musl C toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+      # amgd links SQLite through cgo. Linking it statically against musl makes one binary that runs on any
+      # Linux distribution, whatever its C library. amg is pure Go and static already.
+      - name: Build static binaries
+        run: |
+          mkdir -p out
+          CGO_ENABLED=1 CC=musl-gcc go build -trimpath -tags osusergo,netgo,sqlite_omit_load_extension \
+            -ldflags "-s -w -linkmode external -extldflags -static -X $VERSION_FLAG=$GITHUB_REF_NAME" -o out/amgd ./cmd/amgd
+          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X $VERSION_FLAG=$GITHUB_REF_NAME" -o out/amg ./cmd/amg
+      - name: Check that the binaries are static and run without a C library
+        run: |
+          for b in amg amgd; do
+            file "out/$b" | tee /dev/stderr | grep -q 'statically linked'
+          done
+          for b in amg amgd; do
+            test "$(docker run --rm -v "$PWD/out:/b:ro" busybox:stable "/b/$b" --version)" = "$b version $GITHUB_REF_NAME"
+          done
+      - name: Package
+        run: |
+          name="agentmailguard_${GITHUB_REF_NAME#v}_linux_${{ matrix.arch }}"
+          mkdir -p "stage/$name" dist
+          cp out/amg out/amgd LICENSE README.md "stage/$name/"
+          tar -czf "dist/$name.tar.gz" -C stage "$name"
+      - name: Upload archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: archive-linux-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  macos:
+    name: Build, sign, and notarize macOS
+    needs: check
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+
+      # Import the Developer ID identity into a temporary keychain that the last step deletes.
+      - name: Import signing identity
+        env:
+          DEVELOPER_ID_CERT_P12: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+        run: |
+          if [ -z "$DEVELOPER_ID_CERT_P12" ] || [ -z "$DEVELOPER_ID_CERT_PASSWORD" ]; then
+            echo "Missing required secrets: DEVELOPER_ID_CERT_P12 and DEVELOPER_ID_CERT_PASSWORD" >&2
+            exit 1
+          fi
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+          printf '%s' "$DEVELOPER_ID_CERT_P12" | base64 -d > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/signing.p12" -P "$DEVELOPER_ID_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          rm -f "$RUNNER_TEMP/signing.p12"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | sed -n 's/.*"\(Developer ID Application[^"]*\)".*/\1/p' | head -1)"
+          if [ -z "$IDENTITY" ]; then
+            echo "No Developer ID Application identity found in the imported certificate" >&2
+            exit 1
+          fi
+          echo "IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      # Without a deployment target, cgo builds for the runner's macOS and the binary refuses older releases.
+      # The flags go into CGO_CFLAGS and CGO_LDFLAGS, which the Go build cache tracks.
+      - name: Build binaries
+        run: |
+          for arch in arm64 amd64; do
+            mkdir -p "out/$arch"
+            CGO_ENABLED=1 GOARCH=$arch \
+              CGO_CFLAGS="-O2 -g -mmacosx-version-min=$MACOS_MIN" CGO_LDFLAGS="-mmacosx-version-min=$MACOS_MIN" \
+              go build -trimpath -ldflags "-s -w -X $VERSION_FLAG=$GITHUB_REF_NAME" -o "out/$arch/amgd" ./cmd/amgd 2> "$RUNNER_TEMP/link.log" \
+              || { cat "$RUNNER_TEMP/link.log" >&2; exit 1; }
+            cat "$RUNNER_TEMP/link.log" >&2
+            if grep -q "built for newer 'macOS' version" "$RUNNER_TEMP/link.log"; then
+              echo "Objects need a newer macOS than MACOS_MIN=$MACOS_MIN; raise MACOS_MIN" >&2
+              exit 1
+            fi
+            CGO_ENABLED=0 GOARCH=$arch go build -trimpath -ldflags "-s -w -X $VERSION_FLAG=$GITHUB_REF_NAME" -o "out/$arch/amg" ./cmd/amg
+            want=arm64; [ "$arch" = amd64 ] && want=x86_64
+            for b in amg amgd; do
+              test "$(lipo -archs "out/$arch/$b")" = "$want"
+              minos="$(vtool -show-build "out/$arch/$b" | awk '$1 == "minos" { print $2 }')"
+              echo "out/$arch/$b: minos $minos"
+              test "$(printf '%s\n%s\n' "$minos" "$MACOS_MIN" | sort -V | tail -1)" = "$MACOS_MIN"
+            done
+          done
+
+      # Go names every binary a.out. A fixed identifier keeps the Keychain access of amgd across upgrades.
+      - name: Sign binaries
+        run: |
+          for arch in arm64 amd64; do
+            for b in amg amgd; do
+              codesign --force --options runtime --timestamp --sign "$IDENTITY" --identifier "$SIGN_ID_PREFIX.$b" "out/$arch/$b"
+              codesign --verify --strict -vvvv "out/$arch/$b"
+              info="$(codesign -dvvv "out/$arch/$b" 2>&1)"
+              printf '%s\n' "$info" | grep -qx "Identifier=$SIGN_ID_PREFIX.$b"
+              printf '%s\n' "$info" | grep -q '^CodeDirectory .*flags=.*(runtime)'
+              printf '%s\n' "$info" | grep -q '^Timestamp='
+            done
+          done
+
+      # The notary service takes a zip of the signed binaries. A bare binary cannot hold a stapled ticket, so
+      # Gatekeeper looks the ticket up online at the first run of a downloaded copy.
+      - name: Notarize binaries
+        env:
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+        run: |
+          if [ -z "$NOTARY_API_KEY_ID" ] || [ -z "$NOTARY_API_ISSUER_ID" ] || [ -z "$NOTARY_API_KEY_P8" ]; then
+            echo "Missing required secrets: NOTARY_API_KEY_ID, NOTARY_API_ISSUER_ID, and NOTARY_API_KEY_P8" >&2
+            exit 1
+          fi
+          printf '%s' "$NOTARY_API_KEY_P8" > "$RUNNER_TEMP/notary.p8"
+          auth=(--key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_API_KEY_ID" --issuer "$NOTARY_API_ISSUER_ID")
+          ditto -c -k --keepParent out "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" "${auth[@]}" --wait --output-format json | tee "$RUNNER_TEMP/notary.json"
+          id="$(jq -r .id "$RUNNER_TEMP/notary.json")"
+          xcrun notarytool log "$id" "${auth[@]}" "$RUNNER_TEMP/notary-log.json"
+          cat "$RUNNER_TEMP/notary-log.json"
+          test "$(jq -r .status "$RUNNER_TEMP/notary.json")" = "Accepted"
+          test "$(jq '.issues // [] | length' "$RUNNER_TEMP/notary-log.json")" = 0 \
+            || { echo "The notary log reports issues" >&2; exit 1; }
+
+      # Ask Apple's service, as Gatekeeper does, whether each binary is notarized. The ticket can take a
+      # moment to become visible after the submission is accepted.
+      - name: Check notarization and run the binaries
+        run: |
+          for arch in arm64 amd64; do
+            for b in amg amgd; do
+              ok=
+              for _ in $(seq 1 10); do
+                if codesign -vvvv -R="notarized" --check-notarization "out/$arch/$b"; then ok=1; break; fi
+                sleep 15
+              done
+              test -n "$ok" || { echo "out/$arch/$b is not notarized" >&2; exit 1; }
+            done
+          done
+          for b in amg amgd; do
+            test "$(out/arm64/$b --version)" = "$b version $GITHUB_REF_NAME"
+            test "$(/usr/bin/arch -x86_64 out/amd64/$b --version)" = "$b version $GITHUB_REF_NAME"
+          done
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          for arch in arm64 amd64; do
+            name="agentmailguard_${GITHUB_REF_NAME#v}_darwin_$arch"
+            mkdir -p "stage/$name"
+            cp "out/$arch/amg" "out/$arch/amgd" LICENSE README.md "stage/$name/"
+            COPYFILE_DISABLE=1 tar -czf "dist/$name.tar.gz" -C stage "$name"
+          done
+      - name: Upload archives
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: archive-darwin
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+      - name: Delete signing keychain and keys
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/notary.p8"
+          security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" 2>/dev/null || true
+
+  release:
+    name: Publish release
+    needs: [linux, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: archive-*
+          path: dist
+          merge-multiple: true
+      - name: Write checksums
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          cd dist
+          for target in darwin_arm64 darwin_amd64 linux_arm64 linux_amd64; do
+            test -f "agentmailguard_${VERSION}_$target.tar.gz"
+          done
+          sha256sum -- *.tar.gz > checksums.txt
+          cat checksums.txt
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
+
+      - name: Render Homebrew formula
+        run: |
+          sha() { awk -v f="agentmailguard_${VERSION}_$1.tar.gz" '$2 == f { print $1 }' dist/checksums.txt; }
+          sed -e "s/{{VERSION}}/$VERSION/g" \
+            -e "s/{{SHA256_DARWIN_ARM64}}/$(sha darwin_arm64)/" -e "s/{{SHA256_DARWIN_AMD64}}/$(sha darwin_amd64)/" \
+            -e "s/{{SHA256_LINUX_ARM64}}/$(sha linux_arm64)/" -e "s/{{SHA256_LINUX_AMD64}}/$(sha linux_amd64)/" \
+            packaging/homebrew/agentmailguard.rb > dist/agentmailguard.rb
+          if grep -q '{{' dist/agentmailguard.rb; then
+            echo "Unfilled placeholder in the formula" >&2
+            exit 1
+          fi
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@d482da0e602890d3160aade42e72c8556103bf04 # 2026.10.26.1
+      # Check the rendered formula in the real tap, as the tap's CI does, before anything is published.
+      - name: Lint rendered formula
+        run: |
+          brew tap ivanrvpereira/tap
+          brew trust --formula ivanrvpereira/tap/agentmailguard
+          tap="$(brew --repository ivanrvpereira/tap)"
+          mkdir -p "$tap/Formula"
+          install -m 0644 dist/agentmailguard.rb "$tap/Formula/agentmailguard.rb"
+          brew style ivanrvpereira/tap/agentmailguard
+          brew audit --strict --formula ivanrvpereira/tap/agentmailguard
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=()
+          case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt \
+            --verify-tag --title "agentmailguard $VERSION" --generate-notes "${flags[@]}"
+
+      # TAP_PUSH_TOKEN is a fine-grained token with Contents read and write on ivanrvpereira/homebrew-tap only.
+      # Without it the step skips, and the formula from the release run's log must be copied by hand.
+      # Prereleases never reach the tap.
+      - name: Update Homebrew tap
+        env:
+          TAP_PUSH_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
+        run: |
+          case "$GITHUB_REF_NAME" in *-*) echo "Prerelease: the tap keeps the last release."; exit 0 ;; esac
+          if [ -z "$TAP_PUSH_TOKEN" ]; then
+            echo "TAP_PUSH_TOKEN is not set; copy this formula to Formula/agentmailguard.rb in the tap:" >&2
+            cat dist/agentmailguard.rb
+            exit 0
+          fi
+          TAP="ivanrvpereira/homebrew-tap"
+          export GH_TOKEN="$TAP_PUSH_TOKEN"
+          SHA="$(gh api "repos/$TAP/contents/Formula/agentmailguard.rb" --jq .sha 2>/dev/null || true)"
+          CONTENT="$(base64 -w0 dist/agentmailguard.rb)"
+          args=(-f message="agentmailguard $VERSION" -f content="$CONTENT")
+          if [ -n "$SHA" ]; then args+=(-f sha="$SHA"); fi
+          TAP_COMMIT="$(gh api -X PUT "repos/$TAP/contents/Formula/agentmailguard.rb" "${args[@]}" --jq .commit.sha)"
+          echo "Updated $TAP Formula/agentmailguard.rb to $VERSION ($TAP_COMMIT)"
+          echo "TAP_COMMIT=$TAP_COMMIT" >> "$GITHUB_ENV"
+
+      # The tap's CI installs and tests the formula on macOS and Linux. The release passes only when it does.
+      - name: Wait for tap CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "${TAP_COMMIT:-}" ]; then
+            echo "No tap commit to check."
+            exit 0
+          fi
+          TAP="ivanrvpereira/homebrew-tap"
+          for _ in $(seq 1 60); do
+            STATE="$(gh api "repos/$TAP/commits/$TAP_COMMIT/check-runs" --jq '
+              [.check_runs[]] |
+              if length == 0 then "pending"
+              elif any(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out") then "failure"
+              elif all(.status == "completed") then "success"
+              else "pending" end')"
+            case "$STATE" in
+              success) echo "Tap CI passed for $TAP_COMMIT"; exit 0 ;;
+              failure) echo "Tap CI failed for $TAP_COMMIT: https://github.com/$TAP/commits" >&2; exit 1 ;;
+            esac
+            echo "Tap CI $STATE; waiting..."
+            sleep 30
+          done
+          echo "Timed out waiting for tap CI on $TAP_COMMIT" >&2
+          exit 1
