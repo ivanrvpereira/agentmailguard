@@ -39,8 +39,8 @@ Run every command with your shell tool and parse the JSON on stdout:
 amg --account work mail list --count 10
 ```
 
-- Global flags (`--account`, `-H`/`--host`, `--timeout`) go before the command group.
-- Output is JSON by default. Use `--pretty` only to show a table or message text to the user verbatim.
+- Global flags (`--account`, `-H`/`--host`, `--timeout`) go before the command group. `--timeout` defaults to 30 minutes. `amg --version` prints the client version.
+- Output is JSON by default. `mail list`, `mail search`, and `mail get` also take `--pretty`, which prints a table or the message text. Use it only to show that output to the user verbatim.
 - Exit code `0`: the call ran (a mutation can still contain per-ID failures, and a write can be pending). `1`: the whole call failed or was refused, or `account status` reports an unusable login. `2`: invalid command usage.
 - For `mail organize`, pass `--timeout 2h` and give your shell tool a timeout of at least two hours. Scans can take a long time.
 
@@ -51,7 +51,7 @@ amg account list
 amg account status
 amg mail folders
 amg mail categories
-amg mail list [--folder inbox] [--count N] [--page NEXT_PAGE]
+amg mail list [--folder FOLDER] [--count N] [--page NEXT_PAGE]
 amg mail search [--text T] [--from ADDR] [--to ADDR] [--subject T] [--after YYYY-MM-DD] [--before YYYY-MM-DD] [--folder FOLDER_ID] [--count N] [--page NEXT_PAGE]
 amg mail get ID
 amg mail thread THREAD_ID
@@ -77,7 +77,7 @@ amg mail forward ID [--to ADDR]... [--cc ADDR]... [--bcc ADDR]... [--body TEXT] 
 amg mail read IDS... | --thread THREAD_ID [--in FOLDER_ID]
 amg mail unread IDS... | --thread THREAD_ID [--in FOLDER_ID]
 amg mail flag IDS... --state flagged|complete|none
-amg mail categorize IDS... | --thread THREAD_ID [--in FOLDER_ID] --add NAME --remove NAME
+amg mail categorize IDS... | --thread THREAD_ID [--in FOLDER_ID] [--add NAME]... [--remove NAME]...
 amg mail archive IDS... | --thread THREAD_ID [--in FOLDER_ID]
 amg mail move FOLDER_ID IDS... | --thread THREAD_ID [--in FOLDER_ID]
 amg mail trash IDS... | --thread THREAD_ID [--in FOLDER_ID]
@@ -88,7 +88,7 @@ amg --timeout 2h mail organize --since 7d [--until DATE] --apply
 amg stats --days 30
 ```
 
-`mail search` needs at least one of `--text`, `--from`, `--to`, `--subject`, `--after`, or `--before`. `--to` matches the To and Cc addresses.
+`mail list --folder` takes a folder ID from `mail folders` or a well-known name such as `inbox`, and defaults to `inbox`. `mail search` needs at least one of `--text`, `--from`, `--to`, `--subject`, `--after`, or `--before`. `--to` matches the To and Cc addresses.
 
 Dates: a day runs from 00:00 to the end of the day on the machine where you run the CLI, and the last day is included. `mail search --after DAY --before DAY` includes both days, `mail organize --until DAY` includes that day, and `calendar list --to DAY` includes that whole day (default: today through seven days from today). `--to +Nd` counts from `--from`; `Nd`, `Nw`, and `Nm` for `organize` count back from today. `calendar availability` and meeting commands take exact local times, not days. A `mail search` with dates can return fewer messages than `--count` on a page and still have `next_page`.
 
