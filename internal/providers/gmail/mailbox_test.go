@@ -266,9 +266,9 @@ func TestThreadMessagesInKeepsTheThreadMessagesThatCarryTheFolderLabel(t *testin
 	// (includeSpamTrash, https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list).
 	for folder, want := range map[string][]string{"inbox": {"in-new", "in-old"}, "Label_7": {"in-new", "labeled"}, "sent": {"sent"}, "trash": {"binned"}, "spam": {"spam"}} {
 		requests = nil
-		got, trash, err := b.ThreadMessagesIn(ctx, "t-7", folder)
-		if err != nil || !reflect.DeepEqual(got, want) || trash != (folder == "trash") {
-			t.Fatalf("%s: ids=%q trash=%v err=%v", folder, got, trash, err)
+		got, err := b.ThreadMessagesIn(ctx, "t-7", folder)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: ids=%q err=%v", folder, got, err)
 		}
 		// threads.get, then Get reads the user labels and each message (in parallel), then the folder becomes a label.
 		reads := slices.Clone(requests[2:9])
@@ -280,13 +280,13 @@ func TestThreadMessagesInKeepsTheThreadMessagesThatCarryTheFolderLabel(t *testin
 		}
 	}
 	requests = nil
-	if got, _, err := b.ThreadMessagesIn(ctx, "gone", "inbox"); err != model.MailboxError("Gmail error 404 notFound") || len(got) != 0 {
+	if got, err := b.ThreadMessagesIn(ctx, "gone", "inbox"); err != model.MailboxError("Gmail error 404 notFound") || len(got) != 0 {
 		t.Fatalf("unknown thread: ids=%q err=%v", got, err)
 	}
 	if !reflect.DeepEqual(requests, []string{"GET /threads/gone?format=minimal"}) {
 		t.Fatalf("unknown thread requests=%q", requests)
 	}
-	if got, _, err := b.ThreadMessagesIn(ctx, "t-7", "Label_404"); err != model.MailboxError("Gmail error FolderError") || len(got) != 0 {
+	if got, err := b.ThreadMessagesIn(ctx, "t-7", "Label_404"); err != model.MailboxError("Gmail error FolderError") || len(got) != 0 {
 		t.Fatalf("unknown folder: ids=%q err=%v", got, err)
 	}
 }

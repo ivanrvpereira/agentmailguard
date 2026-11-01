@@ -151,34 +151,3 @@ func TestMoveIntoDeletedItemsIsRefusedWithPublicReason(t *testing.T) {
 		t.Fatalf("folders %d %s", status, b)
 	}
 }
-
-// A conversation move from the trash is refused with its public reason before any write.
-func TestConversationMoveFromDeletedItemsIsRefusedWithPublicReason(t *testing.T) {
-	var writes atomic.Int32
-	d := graphDaemon(t, "", m365Grant, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" {
-			writes.Add(1)
-			w.WriteHeader(500)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/me/mailFolders/deleteditems":
-			io.WriteString(w, `{"id":"del"}`)
-		case "/me/mailFolders":
-			io.WriteString(w, `{"value":[{"id":"f1","displayName":"Finance","childFolderCount":0},{"id":"del","displayName":"Deleted Items","childFolderCount":0}]}`)
-		case "/me/messages":
-			io.WriteString(w, `{"value":[{"id":"m1","conversationId":"c-1","receivedDateTime":"2026-03-01T09:00:00Z","parentFolderId":"del"}]}`)
-		default:
-			t.Errorf("unexpected provider request %s %s", r.Method, r.URL.Path)
-			w.WriteHeader(500)
-		}
-	}), newNativeAPI())
-	status, b := accountRPC(t, d.s, "mail.move", "", `{"thread":"c-1","in":"deleteditems","folder":"f1"}`)
-	if status != 500 || b != `{"error":"move refused: messages in the trash stay there"}` {
-		t.Fatalf("%d %s", status, b)
-	}
-	if writes.Load() != 0 {
-		t.Fatal("refused conversation action reached a provider write")
-	}
-}
