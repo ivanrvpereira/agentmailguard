@@ -29,7 +29,6 @@ type writer struct {
 	draft            *model.DraftResult  // the DraftNew result; nil gives ID d1
 	recipientsErr    error               // the ReplyRecipients error; nil gives the recipients of replyRecipients
 	chosen           map[string][]string // the ThreadMessagesIn IDs by "thread/folder"; a missing key gives none
-	trashFolder      string              // the folder that ThreadMessagesIn reports as the trash
 	chooseErr        error               // the ThreadMessagesIn error
 	choices          []string            // the "thread/folder" of each ThreadMessagesIn call, in order
 	afterChoose      func()              // runs at the end of ThreadMessagesIn
@@ -68,19 +67,19 @@ func (w *writer) Move(_ context.Context, ids []string, from, _ string) ([]model.
 	w.moveSources = append(w.moveSources, from)
 	return w.write("move", ids)
 }
-func (w *writer) ThreadMessagesIn(_ context.Context, thread, folder string) ([]string, bool, error) {
+func (w *writer) ThreadMessagesIn(_ context.Context, thread, folder string) ([]string, error) {
 	w.choices = append(w.choices, thread+"/"+folder)
 	if w.afterChoose != nil {
 		defer w.afterChoose()
 	}
 	if w.chooseErr != nil {
-		return nil, false, w.chooseErr
+		return nil, w.chooseErr
 	}
 	ids := w.chosen[thread+"/"+folder]
 	if ids == nil {
 		ids = []string{}
 	}
-	return ids, folder == w.trashFolder, nil
+	return ids, nil
 }
 func (w *writer) MarkRead(_ context.Context, ids []string, read bool) ([]model.MutationResult, error) {
 	if read {

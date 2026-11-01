@@ -59,7 +59,9 @@ func (c *console) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("Referrer-Policy", "no-referrer")
+	// same-origin, not no-referrer: under no-referrer a browser sends `Origin: null` on the console's own form posts, which
+	// sameOrigin must refuse (https://fetch.spec.whatwg.org/#origin-header). Other sites still get no referrer.
+	h.Set("Referrer-Policy", "same-origin")
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Frame-Options", "DENY")
 	defer func() {

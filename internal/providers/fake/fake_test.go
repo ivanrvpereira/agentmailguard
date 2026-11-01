@@ -642,21 +642,17 @@ func TestThreadMessagesInKeepsTheConversationMessagesOfOneFolderNewestFirst(t *t
 		('demo@fake.test', 'filed-reply', 'old-bin', 'ana@example.test', 'Re: Old report', '2026-03-08T09:00:00Z', 0, 'old'),
 		('other', 'their-reply', 'inbox', 'ana@example.test', 'Re: Old report', '2026-03-06T09:00:00Z', 0, 'old')`)
 	seed(t, home, `INSERT INTO folders (account, id, name, parent) VALUES ('demo@fake.test', 'old-bin', 'Old', 'trash')`)
-	for _, tt := range []struct {
-		folder string
-		want   []string
-		trash  bool
-	}{{"inbox", []string{"inbox-reply", "old"}, false}, {"sent", []string{"sent-reply"}, false}, {"archive", []string{}, false}, {"trash", []string{"binned-reply"}, true}, {"old-bin", []string{"filed-reply"}, true}} {
-		if got, trash, err := m.ThreadMessagesIn(ctx, "old", tt.folder); err != nil || got == nil || !reflect.DeepEqual(got, tt.want) || trash != tt.trash {
-			t.Errorf("%s: ids=%#v trash=%v err=%v", tt.folder, got, trash, err)
+	for folder, want := range map[string][]string{"inbox": {"inbox-reply", "old"}, "sent": {"sent-reply"}, "archive": {}, "trash": {"binned-reply"}, "old-bin": {"filed-reply"}} {
+		if got, err := m.ThreadMessagesIn(ctx, "old", folder); err != nil || got == nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: ids=%#v err=%v", folder, got, err)
 		}
 	}
 	for _, unknown := range []string{"gone", "theirs"} {
-		if got, _, err := m.ThreadMessagesIn(ctx, unknown, "inbox"); !errors.Is(err, model.MailboxError("NotFoundError")) || len(got) != 0 {
+		if got, err := m.ThreadMessagesIn(ctx, unknown, "inbox"); !errors.Is(err, model.MailboxError("NotFoundError")) || len(got) != 0 {
 			t.Errorf("%s: ids=%v err=%v", unknown, got, err)
 		}
 	}
-	if got, _, err := m.ThreadMessagesIn(ctx, "old", "nowhere"); !errors.Is(err, model.MailboxError("NotFoundError")) || len(got) != 0 {
+	if got, err := m.ThreadMessagesIn(ctx, "old", "nowhere"); !errors.Is(err, model.MailboxError("NotFoundError")) || len(got) != 0 {
 		t.Errorf("unknown folder: ids=%v err=%v", got, err)
 	}
 }

@@ -348,9 +348,8 @@ type Mailbox interface {
 	// not-found error, as for an unknown message ID.
 	Thread(ctx context.Context, thread ThreadID) ([]Message, error)
 	// ThreadMessagesIn returns the IDs of the conversation's messages in folder, newest first as Thread gives them; none
-	// is an empty list. trash reports whether folder is the provider's trash (Gmail TRASH; Microsoft 365 Deleted Items
-	// or a folder below it). An unknown thread is the adapter's not-found error, as for Thread.
-	ThreadMessagesIn(ctx context.Context, thread ThreadID, folder FolderID) (ids []MessageID, trash bool, err error)
+	// is an empty list. An unknown thread is the adapter's not-found error, as for Thread.
+	ThreadMessagesIn(ctx context.Context, thread ThreadID, folder FolderID) ([]MessageID, error)
 	ScanInbox(ctx context.Context, since time.Time, until *time.Time) (InboxScan, error)
 	Folders(ctx context.Context) ([]Folder, error)
 	Archive(ctx context.Context, ids []MessageID) ([]MutationResult, error)

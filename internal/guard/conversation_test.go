@@ -13,13 +13,11 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
-// conversationWriter chooses m2 and m1 (newest first) for conversation t1 in the Inbox, m3 in folder f2, and
-// m4 in the trash, del.
+// conversationWriter chooses m2 and m1 (newest first) for conversation t1 in the Inbox, and m3 in folder f2.
 func conversationWriter() *writer {
 	return &writer{
-		mailbox:     &mailbox{messages: messages("m1", "m2", "m3", "m4")},
-		chosen:      map[string][]string{"t1/inbox": {"m2", "m1"}, "t1/f2": {"m3"}, "t1/del": {"m4"}},
-		trashFolder: "del",
+		mailbox: &mailbox{messages: messages("m1", "m2", "m3")},
+		chosen:  map[string][]string{"t1/inbox": {"m2", "m1"}, "t1/f2": {"m3"}},
 	}
 }
 
@@ -95,27 +93,6 @@ func TestFailedConversationReadChangesNothing(t *testing.T) {
 	}
 	if len(w.calls) != 0 || len(allAuditRecords(t, path)) != 0 {
 		t.Fatalf("writes=%v records=%v", w.calls, allAuditRecords(t, path))
-	}
-}
-
-// A move from the trash is refused before any write. Other actions, archive included, work there.
-func TestConversationMoveFromTheTrashIsRefused(t *testing.T) {
-	w := conversationWriter()
-	g, _, path := setup(t, w, &screener{verdict: model.Green})
-	ctx := context.Background()
-	if got, err := g.MoveConversation(ctx, "t1", "del", "f1"); err != guard.GuardError("move refused: messages in the trash stay there") || got != nil {
-		t.Fatalf("move: results=%+v err=%v", got, err)
-	}
-	if len(w.calls) != 0 || len(allAuditRecords(t, path)) != 0 {
-		t.Fatalf("writes=%v records=%v", w.calls, allAuditRecords(t, path))
-	}
-	for name, run := range map[string]func() ([]model.MutationResult, error){
-		"read":    func() ([]model.MutationResult, error) { return g.MarkReadConversation(ctx, "t1", "del", true) },
-		"archive": func() ([]model.MutationResult, error) { return g.ArchiveConversation(ctx, "t1", "del") },
-	} {
-		if got, err := run(); err != nil || !reflect.DeepEqual(got, []model.MutationResult{{ID: "m4", OK: true}}) {
-			t.Fatalf("%s in the trash: results=%+v err=%v", name, got, err)
-		}
 	}
 }
 

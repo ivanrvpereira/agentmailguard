@@ -178,7 +178,7 @@ A successful result is `{"ok": true}`. Done when you report the send as sent onl
 - To act on a whole conversation, give `--thread THREAD_ID` instead of IDs, for example `mail archive --thread THREAD_ID`. It changes only the conversation's messages in the Inbox, or in the folder that `--in FOLDER_ID` names (a folder ID as `mail list --folder` takes it). Sent messages, drafts, and messages in other folders stay where they are. Do not list the conversation's IDs by hand. A message that arrived after you read the conversation is included when it is in that folder, and the result shows it: report it to the user.
 - `mail flag` works on single messages only; it has no `--thread`.
 - On Gmail, `archive` only takes messages out of the Inbox: with `--in` a label, they stay in that label. To file them elsewhere, use `move`, which removes the `--in` label.
-- `move` with `--in` the trash fails with `move refused: messages in the trash stay there`. Do not use `move` with message IDs to take messages out of the trash. `archive` with `--in` the trash moves the messages to Archive on Microsoft 365, and changes nothing on Gmail.
+- `move` with `--thread` and `--in` the trash takes the messages out of the trash. On Gmail, `move` with message IDs does not: it removes only `INBOX` and leaves the messages in the trash. `archive` with `--in` the trash moves the messages to Archive on Microsoft 365, and changes nothing on Gmail.
 - `move` needs a folder ID from `mail folders`, not a folder name.
 - `categorize` accepts only categories that `mail categories` lists. It cannot create categories.
 - `trash` moves mail to the trash. It is not permanent deletion. The write policy can refuse or hold each ID, also each message of a `--thread` trash.

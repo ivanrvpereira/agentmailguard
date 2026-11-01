@@ -27,7 +27,7 @@ Protections:
 
 - Every page needs the username and the password (HTTP Basic authentication). The console has no TLS of its own.
 - The console refuses a request whose `Host` is not `listen` or an entry of `hosts`, also before a password exists. This blocks DNS rebinding.
-- Approve and Deny need an `Origin` of the console itself. This blocks form posts from other sites.
+- Approve and Deny need an `Origin` of the console itself. This blocks form posts from other sites. The console pages send `Referrer-Policy: same-origin`, so that the browser sends that `Origin` on the console's own form posts; with `no-referrer` it would send `Origin: null`.
 - After 5 failed sign-ins (a wrong username or password) in one minute, the console refuses every request with HTTP 429 until the oldest failure is more than one minute old.
 - Each failed sign-in adds a `console_signin` record to the audit log.
 - Pages have no scripts and no remote resources, and browsers must not cache or frame them.

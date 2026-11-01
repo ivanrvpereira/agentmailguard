@@ -268,9 +268,6 @@ func (g *Guard) manual(ctx context.Context, op audit.Operation, ids []string, op
 	return g.mutationCall(ctx, op, ids, model.Inbox, opts)
 }
 
-// TrashMoveRefused refuses a conversation move from the trash: a move never takes messages out of the trash.
-const TrashMoveRefused = GuardError("move refused: messages in the trash stay there")
-
 // conversation runs op on the messages of conversation thread in folder in, as manual runs it on message IDs. The
 // provider chooses the messages under the write lock, right before the writes. A failed or invalid choice changes
 // nothing; an empty one gets the argument checks of a run, then gives an empty result and writes no record, because
@@ -284,7 +281,7 @@ func (g *Guard) conversation(ctx context.Context, op audit.Operation, thread, in
 		return nil, err
 	}
 	defer g.release()
-	ids, trash, err := g.mailbox.ThreadMessagesIn(ctx, thread, in)
+	ids, err := g.mailbox.ThreadMessagesIn(ctx, thread, in)
 	if err != nil {
 		return nil, safeErr(ctx, err)
 	}
@@ -297,9 +294,6 @@ func (g *Guard) conversation(ctx context.Context, op audit.Operation, thread, in
 			return nil, GuardError("ValueError")
 		}
 		seen[id] = true
-	}
-	if trash && op == audit.Move {
-		return nil, TrashMoveRefused
 	}
 	if len(ids) == 0 {
 		// Nothing changes, but the arguments get the checks of a run on messages.

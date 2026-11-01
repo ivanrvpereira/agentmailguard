@@ -165,28 +165,19 @@ func (b *mailbox) Thread(ctx context.Context, thread string) ([]model.Message, e
 
 // ThreadMessagesIn keeps the messages of Thread in folder. Messages carry the real folder ID in parentFolderId, so
 // folder, a well-known name such as inbox or a real ID, is looked up first
-// (https://learn.microsoft.com/en-us/graph/api/mailfolder-get?view=graph-rest-1.0). Folders then tells whether it
-// is in the trash. A failed lookup, or a folder that Folders does not list, fails closed.
-func (b *mailbox) ThreadMessagesIn(ctx context.Context, thread, folder string) ([]string, bool, error) {
+// (https://learn.microsoft.com/en-us/graph/api/mailfolder-get?view=graph-rest-1.0). A failed lookup fails closed.
+func (b *mailbox) ThreadMessagesIn(ctx context.Context, thread, folder string) ([]string, error) {
 	d, err := b.c.get(ctx, b.c.endpoint("/me/mailFolders/"+escapeID(folder), url.Values{"$select": {"id"}}), false)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	id := text(d, "id")
 	if id == "" {
-		return nil, false, invalidMetadata
-	}
-	folders, err := b.Folders(ctx)
-	if err != nil {
-		return nil, false, err
-	}
-	i := slices.IndexFunc(folders, func(f model.Folder) bool { return f.ID == id })
-	if i < 0 {
-		return nil, false, invalidMetadata
+		return nil, invalidMetadata
 	}
 	all, err := b.Thread(ctx, thread)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	out := []string{}
 	for _, m := range all {
@@ -194,7 +185,7 @@ func (b *mailbox) ThreadMessagesIn(ctx context.Context, thread, folder string) (
 			out = append(out, m.ID)
 		}
 	}
-	return out, folders[i].Trash, nil
+	return out, nil
 }
 
 // kql builds the $search value. KQL received takes a day and ignores any time, in the search time zone or UTC

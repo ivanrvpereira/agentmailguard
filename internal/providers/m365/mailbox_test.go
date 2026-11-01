@@ -379,21 +379,11 @@ func TestThreadMessagesInLooksUpTheFolderIDThenKeepsTheConversationMessagesInIt(
 			jsonResponse(w, map[string]any{"id": strings.TrimPrefix(r.URL.Path, "/v1.0/me/mailFolders/")})
 		case "/v1.0/me/mailFolders/deleteditems":
 			jsonResponse(w, map[string]any{"id": "deleted-id"})
-		case "/v1.0/me/mailFolders/hidden":
-			jsonResponse(w, map[string]any{"id": "hidden-id"})
 		case "/v1.0/me/mailFolders/blank":
 			jsonResponse(w, map[string]any{"id": ""})
 		case "/v1.0/me/mailFolders/missing":
 			w.WriteHeader(404)
 			jsonResponse(w, map[string]any{"error": map[string]any{"code": "ErrorItemNotFound"}})
-		case "/v1.0/me/mailFolders":
-			jsonResponse(w, map[string]any{"value": []any{
-				map[string]any{"id": "inbox-id", "displayName": "Inbox"},
-				map[string]any{"id": "proj-id", "displayName": "Projects"},
-				map[string]any{"id": "deleted-id", "displayName": "Deleted Items", "childFolderCount": 1},
-			}})
-		case "/v1.0/me/mailFolders/deleted-id/childFolders":
-			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "old-id", "displayName": "Old"}}})
 		case "/v1.0/me/messages":
 			if strings.Contains(r.URL.Query().Get("$filter"), "gone") {
 				jsonResponse(w, map[string]any{"value": []any{}})
@@ -423,40 +413,29 @@ func TestThreadMessagesInLooksUpTheFolderIDThenKeepsTheConversationMessagesInIt(
 			"$expand":  {"attachments($select=name)"},
 		}.Encode()
 	}
-	// folders are the requests of Folders, which marks Deleted Items and the folders below it.
-	listing := url.Values{"$select": {"id,displayName,childFolderCount"}, "$top": {"100"}}.Encode()
-	folders := []string{"GET /v1.0/me/mailFolders/deleteditems?%24select=id", "GET /v1.0/me/mailFolders?" + listing, "GET /v1.0/me/mailFolders/deleted-id/childFolders?" + listing}
-	for _, tt := range []struct {
-		folder string
-		want   []string
-		trash  bool
-	}{{"inbox", []string{"n5", "n1"}, false}, {"proj-id", []string{"n3"}, false}, {"deleteditems", []string{"n6"}, true}, {"old-id", []string{"n7"}, true}} {
+	for folder, want := range map[string][]string{"inbox": {"n5", "n1"}, "proj-id": {"n3"}, "deleteditems": {"n6"}, "old-id": {"n7"}} {
 		requests = nil
-		if got, trash, err := b.ThreadMessagesIn(ctx, "c-1", tt.folder); err != nil || !reflect.DeepEqual(got, tt.want) || trash != tt.trash {
-			t.Fatalf("%s: ids=%q trash=%v err=%v", tt.folder, got, trash, err)
+		if got, err := b.ThreadMessagesIn(ctx, "c-1", folder); err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: ids=%q err=%v", folder, got, err)
 		}
-		if want := append(append([]string{"GET /v1.0/me/mailFolders/" + tt.folder + "?%24select=id"}, folders...), conversation("c-1")); !reflect.DeepEqual(requests, want) {
-			t.Fatalf("%s: requests=%q\nwant %q", tt.folder, requests, want)
+		if want := []string{"GET /v1.0/me/mailFolders/" + folder + "?%24select=id", conversation("c-1")}; !reflect.DeepEqual(requests, want) {
+			t.Fatalf("%s: requests=%q\nwant %q", folder, requests, want)
 		}
 	}
 	requests = nil
-	if got, _, err := b.ThreadMessagesIn(ctx, "gone", "inbox"); err != model.MailboxError("Graph error 404") || len(got) != 0 {
+	if got, err := b.ThreadMessagesIn(ctx, "gone", "inbox"); err != model.MailboxError("Graph error 404") || len(got) != 0 {
 		t.Fatalf("unknown thread: ids=%q err=%v", got, err)
 	}
-	if want := append(append([]string{"GET /v1.0/me/mailFolders/inbox?%24select=id"}, folders...), conversation("gone")); !reflect.DeepEqual(requests, want) {
+	if want := []string{"GET /v1.0/me/mailFolders/inbox?%24select=id", conversation("gone")}; !reflect.DeepEqual(requests, want) {
 		t.Fatalf("unknown thread: requests=%q", requests)
 	}
-	// A folder that the lookup does not give, or that Folders does not list, fails before the conversation read.
-	for folder, want := range map[string][]string{
-		"missing": {"GET /v1.0/me/mailFolders/missing?%24select=id"},
-		"blank":   {"GET /v1.0/me/mailFolders/blank?%24select=id"},
-		"hidden":  append([]string{"GET /v1.0/me/mailFolders/hidden?%24select=id"}, folders...),
-	} {
+	// A folder that the lookup does not give fails before the conversation read.
+	for _, folder := range []string{"missing", "blank"} {
 		requests = nil
-		if got, trash, err := b.ThreadMessagesIn(ctx, "c-1", folder); err == nil || got != nil || trash {
-			t.Fatalf("%s: ids=%q trash=%v err=%v", folder, got, trash, err)
+		if got, err := b.ThreadMessagesIn(ctx, "c-1", folder); err == nil || got != nil {
+			t.Fatalf("%s: ids=%q err=%v", folder, got, err)
 		}
-		if !reflect.DeepEqual(requests, want) {
+		if want := []string{"GET /v1.0/me/mailFolders/" + folder + "?%24select=id"}; !reflect.DeepEqual(requests, want) {
 			t.Fatalf("%s: requests=%q", folder, requests)
 		}
 	}
