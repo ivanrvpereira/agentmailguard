@@ -19,7 +19,7 @@ import (
 
 var now = time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
 
-// seed applies schema.sql to <home>/fake-provider.db by hand, as the README shows, and runs the statements.
+// seed applies schema.sql to <home>/fake-provider.db by hand, as docs/fake-provider.md shows, and runs the statements.
 func seed(t *testing.T, home string, statements ...string) {
 	t.Helper()
 	db := open(t, home)

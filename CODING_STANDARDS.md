@@ -15,7 +15,7 @@ Applies when the diff changes output, a view, the renderer, screening input, or 
 
 - **Views only.** Agent-facing data leaves the server only through explicit DTOs in `internal/views` or the server's `*DTO` types. `model.Message` and `model.Event` stay internal.
 - **Clean each string.** Every email-derived string in a view passes through `content.CleanSubject` or `content.RenderBody`: names, addresses, subjects, folder names, categories, attachment names, and event fields.
-- **Verdict-limited.** A new view field states which verdicts show it, and matches the verdict tables in `README.md` and `skills/agentmailguard/SKILL.md`.
+- **Verdict-limited.** A new view field states which verdicts show it, and matches the verdict tables in `docs/screening.md` and `skills/agentmailguard/SKILL.md`.
 - **Under-hide.** The renderer removes text only on a specific hiding signal backed by evidence. Text it keeps reaches screening; text it removes escapes screening. When in doubt, keep the text. The current signals are inline hides on one element.
 - **One tree.** The renderer decides what to hide and writes Markdown from the same parsed tree that `balancedHTML` returns. Parsing can change content, so a decision made on one parse holds only for output built from that parse ([`x/net/html` security considerations](https://pkg.go.dev/golang.org/x/net/html#hdr-Security_Considerations)).
 - **Escape into markup.** Plain text that a provider renders as HTML is escaped, as `model.HTMLBody` escapes plain-text bodies with `html.EscapeString`, and so is text from a source message placed into HTML (the header block of a Gmail HTML forward). A body that the agent marks with `--html` goes to the provider unchanged by design (#22); whether to clean it is #19.
@@ -41,7 +41,7 @@ Applies when the diff adds a decision, a default, a lookup, or a result type.
 - **Validate before access.** Decode the complete typed request (`params` into a struct, then `idValid`, `listValid`, `validString`, and explicit bounds) before loading an account, reading credentials, or calling a provider, as `server.accountCall` does. Keep the token walk in `strict`: `encoding/json` accepts duplicate keys.
 - **Strict browser refusal.** The server refuses every request that carries an `Origin` header. `http.CrossOriginProtection` does not replace this check: it allows GET, HEAD, OPTIONS, requests without browser headers, and an `Origin` that matches `Host`, which a DNS-rebinding page can satisfy.
 - **Guard re-checks.** The guard validates every input it depends on, even when the server already did. The guard is the trust seam; the server is one of its callers.
-- **Bounded.** Every request, response, list, page walk, loop, and fan-out has an explicit limit. A new client-visible limit goes into "HTTP interface and limits" in `README.md`.
+- **Bounded.** Every request, response, list, page walk, loop, and fan-out has an explicit limit. A new client-visible limit goes into `docs/http-api.md`.
 
 ## Writes (hard)
 
@@ -85,8 +85,9 @@ Applies when the diff adds or changes tests.
 
 Applies when the diff changes a command, flag, operation, limit, refusal, scope, view field, screened field, or provider capability.
 
-- **Docs follow behavior.** Update every surface that states the changed fact: `README.md`, `skills/agentmailguard/SKILL.md`, CLI help (including `notes` in `internal/cli/cli.go`), `SECURITY.md` for boundaries, and `docs/setup.md` for scopes and setup. "Privacy and external screening" in `README.md` lists every field sent to the screening service.
-- **Honest verification.** "Verification and limits" in `README.md` names what each claim was verified against (fake Graph endpoint, fake Keychain `Platform`, live call). A new capability adds what remains unverified live.
+- **Docs follow behavior.** Update every surface that states the changed fact: the topic page in `docs/` (the README is only an overview; change it when a headline feature or the quick start changes), `skills/agentmailguard/SKILL.md`, CLI help (including `notes` in `internal/cli/cli.go`), `SECURITY.md` for boundaries, and `docs/setup.md` for scopes and setup. "Privacy and external screening" in `docs/screening.md` lists every field sent to the screening service.
+- **Changelog.** A change that users notice adds a line under `Unreleased` in `CHANGELOG.md`.
+- **Honest verification.** `docs/testing.md` names what each claim was verified against (fake Graph endpoint, fake Keychain `Platform`, live call). A new capability adds what remains unverified live.
 
 ## Dependencies and toolchain
 
