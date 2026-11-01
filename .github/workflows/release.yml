@@ -17,13 +17,9 @@ concurrency:
 
 env:
   GOTOOLCHAIN: local
-  # Oldest macOS that the binaries run on. Keep it at the minimum of the Go release that builds them;
-  # the macOS build fails when the linker reports Go objects built for a newer macOS.
-  MACOS_MIN: "13.0"
   # The signing identifiers. macOS ties the Keychain items of amgd to its team ID and identifier:
   # changing them makes every user approve Keychain access again.
   SIGN_ID_PREFIX: io.github.ivanrvpereira.agentmailguard
-  VERSION_FLAG: github.com/ivanrvpereira/agentmailguard/internal/version.version
 
 jobs:
   check:
@@ -78,29 +74,10 @@ jobs:
           check-latest: true
       - name: Install the musl C toolchain
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
-      # amgd links SQLite through cgo. Linking it statically against musl makes one binary that runs on any
-      # Linux distribution, whatever its C library. amg is pure Go and static already.
-      - name: Build static binaries
-        run: |
-          mkdir -p out
-          CGO_ENABLED=1 CC=musl-gcc go build -trimpath -tags osusergo,netgo,sqlite_omit_load_extension \
-            -ldflags "-s -w -linkmode external -extldflags -static -X $VERSION_FLAG=$GITHUB_REF_NAME" -o out/amgd ./cmd/amgd
-          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X $VERSION_FLAG=$GITHUB_REF_NAME" -o out/amg ./cmd/amg
-      - name: Check that the binaries are static and run without a C library
-        run: |
-          for b in amg amgd; do
-            file "out/$b" | tee /dev/stderr | grep -q 'statically linked'
-          done
-          for b in amg amgd; do
-            test "$(docker run --rm -v "$PWD/out:/b:ro" busybox:stable "/b/$b" --version)" = "$b version $GITHUB_REF_NAME"
-          done
+      - name: Build static binaries and run them without a C library
+        run: scripts/release/build-linux.sh "$GITHUB_REF_NAME" out
       - name: Package
-        run: |
-          name="agentmailguard_${GITHUB_REF_NAME#v}_linux_${{ matrix.arch }}"
-          mkdir -p "stage/$name" dist
-          cp out/amg out/amgd LICENSE README.md CHANGELOG.md SECURITY.md "stage/$name/"
-          cp -R docs skills "stage/$name/"
-          tar -czf "dist/$name.tar.gz" -C stage "$name"
+        run: scripts/release/package.sh "$GITHUB_REF_NAME" linux "${{ matrix.arch }}" out dist
       - name: Upload archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -151,30 +128,8 @@ jobs:
           fi
           echo "IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
 
-      # Without a deployment target, cgo builds for the runner's macOS and the binary refuses older releases.
-      # The flags go into CGO_CFLAGS and CGO_LDFLAGS, which the Go build cache tracks.
       - name: Build binaries
-        run: |
-          for arch in arm64 amd64; do
-            mkdir -p "out/$arch"
-            CGO_ENABLED=1 GOARCH=$arch \
-              CGO_CFLAGS="-O2 -g -mmacosx-version-min=$MACOS_MIN" CGO_LDFLAGS="-mmacosx-version-min=$MACOS_MIN" \
-              go build -trimpath -ldflags "-s -w -X $VERSION_FLAG=$GITHUB_REF_NAME" -o "out/$arch/amgd" ./cmd/amgd 2> "$RUNNER_TEMP/link.log" \
-              || { cat "$RUNNER_TEMP/link.log" >&2; exit 1; }
-            cat "$RUNNER_TEMP/link.log" >&2
-            if grep -q "built for newer 'macOS' version" "$RUNNER_TEMP/link.log"; then
-              echo "Objects need a newer macOS than MACOS_MIN=$MACOS_MIN; raise MACOS_MIN" >&2
-              exit 1
-            fi
-            CGO_ENABLED=0 GOARCH=$arch go build -trimpath -ldflags "-s -w -X $VERSION_FLAG=$GITHUB_REF_NAME" -o "out/$arch/amg" ./cmd/amg
-            want=arm64; [ "$arch" = amd64 ] && want=x86_64
-            for b in amg amgd; do
-              test "$(lipo -archs "out/$arch/$b")" = "$want"
-              minos="$(vtool -show-build "out/$arch/$b" | awk '$1 == "minos" { print $2 }')"
-              echo "out/$arch/$b: minos $minos"
-              test "$(printf '%s\n%s\n' "$minos" "$MACOS_MIN" | sort -V | tail -1)" = "$MACOS_MIN"
-            done
-          done
+        run: scripts/release/build-macos.sh "$GITHUB_REF_NAME" out
 
       # Go names every binary a.out. A fixed identifier keeps the Keychain access of amgd across upgrades.
       - name: Sign binaries
@@ -234,13 +189,8 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p dist
           for arch in arm64 amd64; do
-            name="agentmailguard_${GITHUB_REF_NAME#v}_darwin_$arch"
-            mkdir -p "stage/$name"
-            cp "out/$arch/amg" "out/$arch/amgd" LICENSE README.md CHANGELOG.md SECURITY.md "stage/$name/"
-            cp -R docs skills "stage/$name/"
-            COPYFILE_DISABLE=1 tar -czf "dist/$name.tar.gz" -C stage "$name"
+            scripts/release/package.sh "$GITHUB_REF_NAME" darwin "$arch" "out/$arch" dist
           done
       - name: Upload archives
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -291,28 +241,12 @@ jobs:
           subject-path: dist/*.tar.gz
 
       - name: Render Homebrew formula
-        run: |
-          sha() { awk -v f="agentmailguard_${VERSION}_$1.tar.gz" '$2 == f { print $1 }' dist/checksums.txt; }
-          sed -e "s/{{VERSION}}/$VERSION/g" \
-            -e "s/{{SHA256_DARWIN_ARM64}}/$(sha darwin_arm64)/" -e "s/{{SHA256_DARWIN_AMD64}}/$(sha darwin_amd64)/" \
-            -e "s/{{SHA256_LINUX_ARM64}}/$(sha linux_arm64)/" -e "s/{{SHA256_LINUX_AMD64}}/$(sha linux_amd64)/" \
-            packaging/homebrew/agentmailguard.rb > dist/agentmailguard.rb
-          if grep -q '{{' dist/agentmailguard.rb; then
-            echo "Unfilled placeholder in the formula" >&2
-            exit 1
-          fi
+        run: scripts/release/render-formula.sh "$VERSION" dist/checksums.txt > dist/agentmailguard.rb
       - name: Set up Homebrew
         uses: Homebrew/actions/setup-homebrew@d482da0e602890d3160aade42e72c8556103bf04 # 2026.10.26.1
-      # Check the rendered formula in the real tap, as the tap's CI does, before anything is published.
-      - name: Lint rendered formula
-        run: |
-          brew tap ivanrvpereira/tap
-          brew trust --formula ivanrvpereira/tap/agentmailguard
-          tap="$(brew --repository ivanrvpereira/tap)"
-          mkdir -p "$tap/Formula"
-          install -m 0644 dist/agentmailguard.rb "$tap/Formula/agentmailguard.rb"
-          brew style ivanrvpereira/tap/agentmailguard
-          brew audit --strict --formula ivanrvpereira/tap/agentmailguard
+      # Check the formula before anything is published.
+      - name: Check rendered formula
+        run: scripts/release/check-formula.sh dist/agentmailguard.rb
 
       - name: Create release
         env:

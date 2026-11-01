@@ -60,6 +60,29 @@ jobs:
       - name: Govulncheck
         run: '"$(go env GOPATH)/bin/govulncheck" ./...'
 
+  workflows:
+    name: Workflow lint
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LINUX_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+      - name: Install pinned actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      # actionlint runs shellcheck on every run: block. Scripts outside the workflows get their own check.
+      - name: Lint workflows and release scripts
+        run: |
+          command -v shellcheck
+          "$(go env GOPATH)/bin/actionlint"
+          shellcheck scripts/release/*.sh
+
   secrets:
     name: Secret scan
     runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LINUX_RUNNER || 'ubuntu-24.04' }}

@@ -17,11 +17,13 @@ A version tag publishes a release. The [release workflow](../.github/workflows/r
 
 ## What the workflow does
 
+The build steps are scripts in [`scripts/release/`](../scripts/release/). The [release check](../.github/workflows/release-check.yml) runs the same scripts without secrets on every pull request that touches the release, so a broken build fails in review, not at tag time.
+
 1. Checks that the tag is a version, then runs `make` on Linux and on macOS.
 2. Builds static Linux binaries for amd64 and arm64, each on its own runner. `amgd` links SQLite statically against musl, so the binaries need no C library on the target. A step runs them in an empty `busybox` container to prove it.
-3. Builds the macOS binaries for arm64 and amd64 on one macOS runner, with a minimum macOS version (`MACOS_MIN`). It signs them with the Developer ID identity and fixed identifiers (`SIGN_ID_PREFIX`), notarizes them, checks the notarization, and runs them.
-4. Packs each platform as `agentmailguard_VERSION_OS_ARCH.tar.gz` with `amg`, `amgd`, `LICENSE`, `README.md`, `CHANGELOG.md`, `SECURITY.md`, the `docs` folder, and the agent skill in `skills`. It writes `checksums.txt` and a [build provenance attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations).
-5. Fills in [the formula template](../packaging/homebrew/agentmailguard.rb) and checks it with `brew style` and `brew audit --strict` in the real tap.
+3. Builds the macOS binaries for arm64 and amd64 on one macOS runner, with a minimum macOS version (`macos_min` in `scripts/release/build-macos.sh`). It signs them with the Developer ID identity and fixed identifiers (`SIGN_ID_PREFIX`), notarizes them, checks the notarization, and runs them.
+4. Packs each platform as `agentmailguard_VERSION_OS_ARCH.tar.gz` with `amg`, `amgd`, `LICENSE`, `README.md`, `CHANGELOG.md`, `SECURITY.md`, the `docs` folder, and the agent skill in `skills` (`scripts/release/package.sh`). It writes `checksums.txt` and a [build provenance attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations).
+5. Fills in [the formula template](../packaging/homebrew/agentmailguard.rb) and checks it with `brew style` and `brew audit --strict` in a temporary tap (`scripts/release/check-formula.sh`).
 6. Creates the GitHub release with the archives and `checksums.txt`.
 7. Pushes the formula to `Formula/agentmailguard.rb` in [ivanrvpereira/homebrew-tap](https://github.com/ivanrvpereira/homebrew-tap), then waits until the tap's CI has installed and tested it on macOS (arm64 and Intel) and Linux (amd64 and arm64).
 
@@ -38,11 +40,11 @@ Every binary reports the tag through `amg --version` and `amgd --version`. The w
 ## Do not change
 
 - **The signing identity and identifiers.** macOS gives a Keychain item to the code that has the team ID and identifier of the program that created it. A new certificate team, or a new `SIGN_ID_PREFIX`, makes every macOS user approve `amgd`'s Keychain access again.
-- **`MACOS_MIN` below the Go minimum.** When a new Go release needs a newer macOS, the macOS build fails with "raise MACOS_MIN". Raise it, and change the macOS version in [Install and build](install.md#install).
+- **`macos_min` below the Go minimum.** When a new Go release needs a newer macOS, `scripts/release/build-macos.sh` fails with "raise macos_min". Raise it, and change the macOS version in [Install and build](install.md#install).
 
 ## Troubleshooting
 
 - **Notarization fails with HTTP 403, "A required agreement is missing or has expired".** The Apple Developer account holder must accept the new agreement at developer.apple.com. HTTP 401 means a wrong key ID or issuer ID, or a key that is not a Team key.
 - **The notary log reports issues.** The log is in the output of the "Notarize binaries" step.
-- **`brew audit` fails.** Change the template in this repository, not the copy in the tap. To check it on a Mac, put a filled-in copy in a temporary tap (`brew tap-new --no-git NAME/local`, `brew trust --formula NAME/local/agentmailguard`), run `brew style` and `brew audit --strict --formula` on it, then remove the temporary tap with `brew untap`.
+- **`brew audit` fails.** Change the template in this repository, not the copy in the tap. To check it on your machine, fill it in with `scripts/release/render-formula.sh VERSION CHECKSUMS > /tmp/agentmailguard.rb`, then run `scripts/release/check-formula.sh /tmp/agentmailguard.rb`. The check uses a temporary tap and removes it.
 - **The tap's CI fails after the push.** The release on GitHub is already public. Fix the template here, then publish a new patch version.

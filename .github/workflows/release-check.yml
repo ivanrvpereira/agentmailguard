@@ -1,0 +1,112 @@
+name: Release check
+
+# A dry run of the release build, without secrets: it runs the same scripts as release.yml, so a change that
+# breaks a release fails here, in review, and not at tag time. Signing, notarization, publishing, and the tap
+# update run only in release.yml.
+
+on:
+  push:
+    branches: [main]
+    paths: &release-paths
+      - ".github/workflows/release.yml"
+      - ".github/workflows/release-check.yml"
+      - "scripts/release/**"
+      - "packaging/**"
+      - "cmd/**"
+      - "go.mod"
+      - "go.sum"
+  pull_request:
+    branches: [main]
+    paths: *release-paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: local
+  TAG: v0.0.0-check
+
+jobs:
+  linux:
+    name: Build linux/${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+      - name: Install the musl C toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+      - name: Build static binaries and run them without a C library
+        run: scripts/release/build-linux.sh "$TAG" out
+      - name: Package
+        run: scripts/release/package.sh "$TAG" linux "${{ matrix.arch }}" out dist
+
+  macos:
+    name: Build macOS
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+      - name: Build binaries
+        run: scripts/release/build-macos.sh "$TAG" out
+      - name: Run the binaries
+        run: |
+          for b in amg amgd; do
+            test "$(out/arm64/$b --version)" = "$b version $TAG"
+            test "$(/usr/bin/arch -x86_64 out/amd64/$b --version)" = "$b version $TAG"
+          done
+      - name: Package
+        run: |
+          for arch in arm64 amd64; do
+            scripts/release/package.sh "$TAG" darwin "$arch" "out/$arch" dist
+          done
+
+  formula:
+    name: Check Homebrew formula
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Synthetic checksums: this checks the template and the scripts; release.yml uses the real archives.
+      - name: Render formula
+        run: |
+          version="${TAG#v}"
+          for target in darwin_arm64 darwin_amd64 linux_arm64 linux_amd64; do
+            printf '%064d  agentmailguard_%s_%s.tar.gz\n' 0 "$version" "$target"
+          done > "$RUNNER_TEMP/checksums.txt"
+          scripts/release/render-formula.sh "$version" "$RUNNER_TEMP/checksums.txt" > "$RUNNER_TEMP/agentmailguard.rb"
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@d482da0e602890d3160aade42e72c8556103bf04 # 2026.10.26.1
+      - name: Check formula
+        run: scripts/release/check-formula.sh "$RUNNER_TEMP/agentmailguard.rb"
