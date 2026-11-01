@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/cli"
+	"github.com/ivanrvpereira/agentmailguard/internal/version"
 )
 
 // runOffline runs a command that must not read local state or reach a server.
@@ -109,5 +110,14 @@ func TestPositionalsKeepFlagLookingText(t *testing.T) {
 				t.Errorf("exit=%d calls=%d stderr=%q", code, calls, errout.String())
 			}
 		})
+	}
+}
+
+func TestVersionPrintsTheBuildVersionWithoutState(t *testing.T) {
+	for _, args := range [][]string{{"--version"}, {"-v"}} {
+		code, out, errout := runOffline(t, args...)
+		if code != 0 || out != "amg version "+version.String()+"\n" || errout != "" {
+			t.Errorf("args=%v exit=%d stdout=%q stderr=%q", args, code, out, errout)
+		}
 	}
 }

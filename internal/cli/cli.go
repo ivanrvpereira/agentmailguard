@@ -20,6 +20,7 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/client"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"github.com/ivanrvpereira/agentmailguard/internal/term"
+	"github.com/ivanrvpereira/agentmailguard/internal/version"
 	"github.com/ivanrvpereira/agentmailguard/internal/views"
 )
 
@@ -102,6 +103,7 @@ func newRoot(r *runner, raw []string) *cobra.Command {
 		Use:           "amg",
 		Short:         "Screened mailbox access through the agentmailguard daemon",
 		Long:          notes,
+		Version:       version.String(),
 		Args:          cobra.ArbitraryArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,

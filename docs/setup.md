@@ -4,10 +4,10 @@ This guide supports macOS and Linux, with one daemon per machine and multiple ac
 The human operator owns every setup step. An AI agent must not perform registration, consent, login, key entry, or credential approval.
 Run every `amgd` command in this guide on the daemon host: the machine that runs `amgd serve`.
 
-## Build
+## Install
 
-Build `amg` and `amgd` as described in [Build and checks](../README.md#build-and-checks).
-The examples use `amg` and `amgd` as if they are on your PATH. Use `./bin/amg` and `./bin/amgd` if they are not.
+Install `amg` and `amgd` as described in [Install](../README.md#install), or build them as described in [Build and checks](../README.md#build-and-checks).
+The examples use `amg` and `amgd` as if they are on your PATH. With a source build, use `./bin/amg` and `./bin/amgd` if they are not.
 
 ## Choose one private home
 
