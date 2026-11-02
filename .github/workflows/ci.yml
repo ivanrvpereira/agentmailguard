@@ -76,10 +76,12 @@ jobs:
           check-latest: true
       - name: Install pinned actionlint
         run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      # GitHub's Ubuntu images include shellcheck; a self-hosted runner can lack it.
+      - name: Install shellcheck
+        run: command -v shellcheck || { sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck; }
       # actionlint runs shellcheck on every run: block. Scripts outside the workflows get their own check.
       - name: Lint workflows and release scripts
         run: |
-          command -v shellcheck
           "$(go env GOPATH)/bin/actionlint"
           shellcheck scripts/release/*.sh
 
