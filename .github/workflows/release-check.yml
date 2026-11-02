@@ -27,9 +27,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    shell: bash
+
 env:
   GOTOOLCHAIN: local
   TAG: v0.0.0-check
+  GO_LICENSES: github.com/google/go-licenses/v2@v2.0.1
 
 jobs:
   linux:
@@ -54,12 +59,16 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-      - name: Install the musl C toolchain
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+      - name: Install the musl C toolchain and go-licenses
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+          go install "$GO_LICENSES"
       - name: Build static binaries and run them without a C library
         run: scripts/release/build-linux.sh "$TAG" out
+      - name: Write the third-party notices
+        run: scripts/release/licenses.sh linux licenses
       - name: Package
-        run: scripts/release/package.sh "$TAG" linux "${{ matrix.arch }}" out dist
+        run: scripts/release/package.sh "$TAG" linux "${{ matrix.arch }}" out dist licenses
 
   # The same three-job hand-off as release.yml, without signing: build, then package from the sealed
   # binaries, then check the sealed archives and run the binaries.
@@ -81,6 +90,10 @@ jobs:
           check-latest: true
       - name: Build binaries
         run: scripts/release/build-macos.sh "$TAG" out
+      - name: Write the third-party notices
+        run: |
+          go install "$GO_LICENSES"
+          scripts/release/licenses.sh darwin out/licenses
       - name: Seal the unsigned binaries
         id: seal
         run: |
@@ -123,7 +136,7 @@ jobs:
         id: seal
         run: |
           for arch in arm64 amd64; do
-            scripts/release/package.sh "$TAG" darwin "$arch" "out/$arch" dist
+            scripts/release/package.sh "$TAG" darwin "$arch" "out/$arch" dist out/licenses
           done
           echo "digest=$(scripts/release/digest.sh write dist)" >> "$GITHUB_OUTPUT"
       - name: Upload archives
@@ -158,6 +171,8 @@ jobs:
           for arch in arm64 amd64; do
             mkdir -p "x/$arch"
             tar -xzf "dist/agentmailguard_${TAG#v}_darwin_$arch.tar.gz" -C "x/$arch" --strip-components 1
+            test -f "x/$arch/THIRD_PARTY_LICENSES/README.txt"
+            test -f "x/$arch/THIRD_PARTY_LICENSES/go/LICENSE"
           done
           for b in amg amgd; do
             test "$(x/arm64/$b --version)" = "$b version $TAG"

@@ -15,8 +15,15 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# bash -eo pipefail for every run step, not the default bash -e.
+defaults:
+  run:
+    shell: bash
+
 env:
   GOTOOLCHAIN: local
+  # go-licenses writes the third-party notices in the archives (scripts/release/licenses.sh).
+  GO_LICENSES: github.com/google/go-licenses/v2@v2.0.1
   # The signing identifiers. macOS ties the Keychain items of amgd to its team ID and identifier:
   # changing them makes every user approve Keychain access again.
   SIGN_ID_PREFIX: io.github.ivanrvpereira.agentmailguard
@@ -41,28 +48,40 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+      # A release publishes only reviewed code: the tagged commit must be on main.
+      - name: Check that the tag is on main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "The tagged commit $GITHUB_SHA is not on main" >&2
+            exit 1
+          fi
+      - name: Check the release notes in CHANGELOG.md
+        run: scripts/release/changelog-notes.sh "$GITHUB_REF_NAME" > /dev/null
+      # No cache: a tag run must not reuse a Go build cache that other runs saved.
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
           check-latest: true
+          cache: false
       - name: Format, vet, race tests, and build
         run: make
+      - name: Check for known vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
-  linux:
-    name: Build linux/${{ matrix.arch }}
+  # One job per architecture, so that each passes its own digest as a job output (a matrix job cannot). The two
+  # jobs share their steps through a YAML anchor.
+  linux-amd64:
+    name: Build linux/amd64
     needs: check
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
-    steps:
+    env:
+      ARCH: amd64
+    outputs:
+      digest: ${{ steps.seal.outputs.digest }}
+    steps: &linux-steps
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -72,18 +91,38 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-      - name: Install the musl C toolchain
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+          cache: false
+      - name: Install the musl C toolchain and go-licenses
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+          go install "$GO_LICENSES"
       - name: Build static binaries and run them without a C library
         run: scripts/release/build-linux.sh "$GITHUB_REF_NAME" out
-      - name: Package
-        run: scripts/release/package.sh "$GITHUB_REF_NAME" linux "${{ matrix.arch }}" out dist
+      - name: Write the third-party notices
+        run: scripts/release/licenses.sh linux licenses
+      - name: Package and seal the archive
+        id: seal
+        run: |
+          scripts/release/package.sh "$GITHUB_REF_NAME" linux "$ARCH" out dist licenses
+          echo "digest=$(scripts/release/digest.sh write dist)" >> "$GITHUB_OUTPUT"
       - name: Upload archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: archive-linux-${{ matrix.arch }}
-          path: dist/*.tar.gz
+          name: archive-linux-${{ env.ARCH }}
+          path: dist/
           if-no-files-found: error
+          retention-days: 7
+
+  linux-arm64:
+    name: Build linux/arm64
+    needs: check
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    env:
+      ARCH: arm64
+    outputs:
+      digest: ${{ steps.seal.outputs.digest }}
+    steps: *linux-steps
 
   # The macOS release is three jobs, so that no job both holds the signing keys and runs code from the build:
   # macos-build builds with no secrets; macos-sign gets the keys but never builds and never runs the binaries;
@@ -107,8 +146,13 @@ jobs:
         with:
           go-version: stable
           check-latest: true
+          cache: false
       - name: Build binaries
         run: scripts/release/build-macos.sh "$GITHUB_REF_NAME" out
+      - name: Write the third-party notices
+        run: |
+          go install "$GO_LICENSES"
+          scripts/release/licenses.sh darwin out/licenses
       # A tar keeps the file modes, which an artifact does not.
       - name: Seal the unsigned binaries
         id: seal
@@ -122,6 +166,7 @@ jobs:
           name: macos-unsigned
           path: handoff/
           if-no-files-found: error
+          retention-days: 7
 
   macos-sign:
     name: Sign and notarize macOS
@@ -225,7 +270,7 @@ jobs:
         id: seal
         run: |
           for arch in arm64 amd64; do
-            scripts/release/package.sh "$GITHUB_REF_NAME" darwin "$arch" "out/$arch" dist
+            scripts/release/package.sh "$GITHUB_REF_NAME" darwin "$arch" "out/$arch" dist out/licenses
           done
           echo "digest=$(scripts/release/digest.sh write dist)" >> "$GITHUB_OUTPUT"
       - name: Upload archives
@@ -234,6 +279,7 @@ jobs:
           name: archive-darwin
           path: dist/
           if-no-files-found: error
+          retention-days: 7
 
       - name: Delete keys
         if: always()
@@ -284,9 +330,81 @@ jobs:
             test "$(/usr/bin/arch -x86_64 x/amd64/$b --version)" = "$b version $GITHUB_REF_NAME"
           done
 
+  # Everything that runs third-party tools (Homebrew) happens here, with no secrets and no write permissions.
+  # The job collects the sealed archives, writes checksums.txt, renders and checks the formula, extracts the
+  # release notes, and seals the result for the release job.
+  formula:
+    name: Collect archives and check the formula
+    needs: [linux-amd64, linux-arm64, macos-sign, macos-verify]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      digest: ${{ steps.seal.outputs.digest }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download linux/amd64 archive
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: archive-linux-amd64
+          path: in/linux-amd64
+      - name: Download linux/arm64 archive
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: archive-linux-arm64
+          path: in/linux-arm64
+      - name: Download macOS archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: archive-darwin
+          path: in/darwin
+      # Only archives that their jobs sealed go further, and exactly the four expected ones.
+      - name: Check the archives against their jobs' digests
+        env:
+          LINUX_AMD64: ${{ needs.linux-amd64.outputs.digest }}
+          LINUX_ARM64: ${{ needs.linux-arm64.outputs.digest }}
+          DARWIN: ${{ needs.macos-sign.outputs.digest }}
+        run: |
+          scripts/release/digest.sh verify in/linux-amd64 "$LINUX_AMD64"
+          scripts/release/digest.sh verify in/linux-arm64 "$LINUX_ARM64"
+          scripts/release/digest.sh verify in/darwin "$DARWIN"
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p bundle/dist
+          for target in linux_amd64 linux_arm64 darwin_arm64 darwin_amd64; do
+            f="agentmailguard_${VERSION}_$target.tar.gz"
+            src="in/${target%_*}-${target#*_}"
+            [ "${target%_*}" = darwin ] && src=in/darwin
+            mv "$src/$f" bundle/dist/
+          done
+          test "$(find bundle/dist -type f | wc -l)" = 4
+          (cd bundle/dist && sha256sum -- *.tar.gz > ../checksums.txt)
+          cat bundle/checksums.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Write the release notes
+        run: scripts/release/changelog-notes.sh "$GITHUB_REF_NAME" > bundle/notes.md
+      - name: Render Homebrew formula
+        run: scripts/release/render-formula.sh "${GITHUB_REF_NAME#v}" bundle/checksums.txt > bundle/agentmailguard.rb
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@d482da0e602890d3160aade42e72c8556103bf04 # 2026.10.26.1
+      - name: Check rendered formula
+        run: scripts/release/check-formula.sh bundle/agentmailguard.rb
+      - name: Seal the release bundle
+        id: seal
+        run: echo "digest=$(scripts/release/digest.sh write bundle)" >> "$GITHUB_OUTPUT"
+      - name: Upload release bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-bundle
+          path: bundle/
+          if-no-files-found: error
+          retention-days: 7
+
+  # The only job with write permissions and the tap key. It runs only the release scripts and pinned actions
+  # on the sealed bundle: it builds nothing, runs no binaries, and runs no Homebrew.
   release:
     name: Publish release
-    needs: [linux, macos-sign, macos-verify]
+    needs: formula
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:
@@ -294,82 +412,79 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - name: Check out source
+      - name: Check out the release scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Download Linux archives
+          sparse-checkout: scripts/release
+      - name: Download release bundle
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: archive-linux-*
-          path: dist
-          merge-multiple: true
-      - name: Download macOS archives
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: archive-darwin
-          path: darwin
-      # Publish only the macOS archives that the sign job sealed and the verify job checked.
-      - name: Check the macOS archives against the sign job's digest
+          name: release-bundle
+          path: bundle
+      - name: Check the bundle against the formula job's digest
         env:
-          DIGEST: ${{ needs.macos-sign.outputs.digest }}
+          DIGEST: ${{ needs.formula.outputs.digest }}
         run: |
-          scripts/release/digest.sh verify darwin "$DIGEST"
-          mv darwin/*.tar.gz dist/
-      - name: Write checksums
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          cd dist
-          for target in darwin_arm64 darwin_amd64 linux_arm64 linux_amd64; do
-            test -f "agentmailguard_${VERSION}_$target.tar.gz"
-          done
-          sha256sum -- *.tar.gz > checksums.txt
-          cat checksums.txt
+          scripts/release/digest.sh verify bundle "$DIGEST"
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/*.tar.gz
-
-      - name: Render Homebrew formula
-        run: scripts/release/render-formula.sh "$VERSION" dist/checksums.txt > dist/agentmailguard.rb
-      - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@d482da0e602890d3160aade42e72c8556103bf04 # 2026.10.26.1
-      # Check the formula before anything is published.
-      - name: Check rendered formula
-        run: scripts/release/check-formula.sh dist/agentmailguard.rb
+          subject-path: bundle/dist/*.tar.gz
 
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           flags=()
           case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
-          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt \
-            --verify-tag --title "agentmailguard $VERSION" --generate-notes "${flags[@]}"
+          gh release create "$GITHUB_REF_NAME" bundle/dist/*.tar.gz bundle/checksums.txt \
+            --verify-tag --title "agentmailguard $VERSION" --notes-file bundle/notes.md "${flags[@]}"
 
-      # TAP_PUSH_TOKEN is a fine-grained token with Contents read and write on ivanrvpereira/homebrew-tap only.
-      # Without it the step skips, and the formula from the release run's log must be copied by hand.
-      # Prereleases never reach the tap.
+      # TAP_DEPLOY_KEY is the private half of a deploy key with write access to ivanrvpereira/homebrew-tap only.
+      # The step pins GitHub's SSH host key. A prerelease proves the key with a dry-run push and changes nothing.
       - name: Update Homebrew tap
         env:
-          TAP_PUSH_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
         run: |
-          case "$GITHUB_REF_NAME" in *-*) echo "Prerelease: the tap keeps the last release."; exit 0 ;; esac
-          if [ -z "$TAP_PUSH_TOKEN" ]; then
-            echo "TAP_PUSH_TOKEN is not set; copy this formula to Formula/agentmailguard.rb in the tap:" >&2
-            cat dist/agentmailguard.rb
-            exit 0
+          if [ -z "$TAP_DEPLOY_KEY" ]; then
+            echo "TAP_DEPLOY_KEY is not set; the release exists, but the tap still has the previous formula" >&2
+            exit 1
           fi
-          TAP="ivanrvpereira/homebrew-tap"
-          export GH_TOKEN="$TAP_PUSH_TOKEN"
-          SHA="$(gh api "repos/$TAP/contents/Formula/agentmailguard.rb" --jq .sha 2>/dev/null || true)"
-          CONTENT="$(base64 -w0 dist/agentmailguard.rb)"
-          args=(-f message="agentmailguard $VERSION" -f content="$CONTENT")
-          if [ -n "$SHA" ]; then args+=(-f sha="$SHA"); fi
-          TAP_COMMIT="$(gh api -X PUT "repos/$TAP/contents/Formula/agentmailguard.rb" "${args[@]}" --jq .commit.sha)"
-          echo "Updated $TAP Formula/agentmailguard.rb to $VERSION ($TAP_COMMIT)"
-          echo "TAP_COMMIT=$TAP_COMMIT" >> "$GITHUB_ENV"
+          ssh_dir="$RUNNER_TEMP/tap-ssh"
+          mkdir -m 700 "$ssh_dir"
+          printf '%s\n' "$TAP_DEPLOY_KEY" > "$ssh_dir/key"
+          chmod 600 "$ssh_dir/key"
+          # GitHub's published ed25519 host key: https://api.github.com/meta
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > "$ssh_dir/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $ssh_dir/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$ssh_dir/known_hosts -o StrictHostKeyChecking=yes"
+          git clone --depth 1 git@github.com:ivanrvpereira/homebrew-tap.git "$RUNNER_TEMP/tap"
+          cd "$RUNNER_TEMP/tap"
+          git config user.name "agentmailguard release"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p Formula
+          install -m 0644 "$GITHUB_WORKSPACE/bundle/agentmailguard.rb" Formula/agentmailguard.rb
+          git add Formula/agentmailguard.rb
+          case "$GITHUB_REF_NAME" in
+            *-*)
+              git commit --allow-empty -q -m "agentmailguard $VERSION (dry run)"
+              git push --dry-run origin HEAD:main
+              echo "Prerelease: the tap key can push; the tap keeps the last release."
+              rm -rf "$ssh_dir"
+              exit 0
+              ;;
+          esac
+          if git diff --cached --quiet; then
+            echo "The tap already has this formula."
+          else
+            git commit -q -m "agentmailguard $VERSION"
+            # Another project can push to the tap at the same time: rebase once and retry.
+            git push origin HEAD:main || { git pull --rebase -q origin main && git push origin HEAD:main; }
+          fi
+          echo "TAP_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          rm -rf "$ssh_dir"
 
       # The tap's CI installs and tests the formula on macOS and Linux. The release passes only when it does.
       - name: Wait for tap CI
