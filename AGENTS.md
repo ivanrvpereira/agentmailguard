@@ -11,6 +11,7 @@ Go, macOS and Linux only. `amgd` needs cgo (SQLite, macOS Keychain); `amg` must 
 - `make` — gofmt check, `go vet`, `go test -race ./...`, builds `bin/amg` and `bin/amgd`. Run before reporting completion. Run package tests with `-race` too.
 - The e2e tests build the binaries themselves, so Go may report them `(cached)` after a code change; run `go test -race -count=1 ./internal/e2e/` after changes to `cmd/`, `internal/daemon`, or `internal/cli`.
 - Read [CODING_STANDARDS.md](CODING_STANDARDS.md) before you write or review a diff.
+- Releases run from version tags: read [docs/releasing.md](docs/releasing.md) before you change `scripts/release/`, `packaging/`, or the release workflows. Push a tag only when Ivan asks.
 - Name domain concepts with the terms in [GLOSSARY.md](GLOSSARY.md).
 
 ## Testing

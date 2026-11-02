@@ -12,7 +12,8 @@ brew install ivanrvpereira/tap/agentmailguard
 
 Without Homebrew, download the archive for your system from [Releases](https://github.com/ivanrvpereira/agentmailguard/releases), check it against `checksums.txt`, unpack it, and put `amg` and `amgd` on your PATH.
 The macOS binaries run on macOS 13 or later; they are signed with a Developer ID and notarized by Apple. Run them from Terminal: the first run of a downloaded copy needs a network connection, so that macOS can confirm the notarization.
-The Linux binaries are static and run on any distribution. To check that an archive was built by this repository's release workflow, run `gh attestation verify ARCHIVE --repo ivanrvpereira/agentmailguard`.
+The Linux binaries are static and run on any distribution. To check that an archive was built by this repository's release workflow, run `gh attestation verify ARCHIVE --repo ivanrvpereira/agentmailguard`. Releases are immutable: to check that an archive is the one that the release published, run `gh release verify-asset TAG ARCHIVE --repo ivanrvpereira/agentmailguard`.
+Each archive has the license notices of the code compiled into the binaries in `THIRD_PARTY_LICENSES`.
 Run `amg --version` and `amgd --version` to see the installed version.
 
 To build from source, see [Build and checks](#build-and-checks).
