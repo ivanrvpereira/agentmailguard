@@ -6,7 +6,7 @@ Run every `amgd` command in this guide on the daemon host: the machine that runs
 
 ## Install
 
-Install `amg` and `amgd` as described in [Install](../README.md#install), or build them as described in [Build and checks](../README.md#build-and-checks).
+Install `amg` and `amgd` as described in [Install](install.md#install), or build them as described in [Build and checks](install.md#build-and-checks).
 The examples use `amg` and `amgd` as if they are on your PATH. With a source build, use `./bin/amg` and `./bin/amgd` if they are not.
 
 ## Choose one private home
@@ -28,7 +28,7 @@ chmod 700 ~/.agentmailguard
 amgd config set credentials.backend keychain
 ```
 
-The home contains the account configuration, credential lock, cache, and audit file. See [Credential storage](../README.md#credential-storage) for both backends.
+The home contains the account configuration, credential lock, cache, and audit file. See [Credential storage](credentials.md#credential-storage) for both backends.
 
 ## Register Microsoft 365
 
@@ -83,11 +83,11 @@ Sources: [installed-app OAuth](https://developers.google.com/identity/protocols/
 
 **CAUTION: Review the data transfers before consent or the first read.** Screening sends email content, calendar event content, and the text of actions that the agent writes outside your machine.
 Organization requests also send rule instructions and criteria to OpenRouter/Jev.
-The default endpoint is `https://openrouter.ai/api/v1/systemone`, with model `typesafe/jev-1.13`. The [`[screening]`](../README.md#screening) table can select another endpoint and model, which then receives the same data.
+The default endpoint is `https://openrouter.ai/api/v1/systemone`, with model `typesafe/jev-1.13`. The [`[screening]`](screening.md#screening) table can select another endpoint and model, which then receives the same data.
 
 OpenRouter documents [data collection](https://openrouter.ai/docs/guides/privacy/data-collection) and [provider logging policies](https://openrouter.ai/docs/guides/privacy/logging).
 Retention and training policies differ by provider. Jev/System One-specific retention remains uncertain. This guide does not promise zero retention.
-See [Privacy and external screening](../README.md#privacy-and-external-screening).
+See [Privacy and external screening](screening.md#privacy-and-external-screening).
 
 1. Review the applicable policies for your mailbox and screening provider.
 2. Create an [OpenRouter API key](https://openrouter.ai/settings/keys) with an appropriate credit limit. See [key documentation](https://openrouter.ai/docs/api/reference/authentication).
@@ -95,7 +95,7 @@ See [Privacy and external screening](../README.md#privacy-and-external-screening
 
 ## Add the accounts
 
-For the file backend, enter the password at the terminal prompts. The first command creates the credential file and asks for the password twice. For other password sources, see [File backend and password input](../README.md#file-backend-and-password-input).
+For the file backend, enter the password at the terminal prompts. The first command creates the credential file and asks for the password twice. For other password sources, see [File backend and password input](credentials.md#file-backend-and-password-input).
 
 1. Add each account. Replace the placeholders with your application values. Each command opens the provider sign-in. Select the correct identity in the browser.
    On Linux or a host without a browser, use the options in [Headless login](#headless-login):
@@ -117,7 +117,7 @@ Do not put tokens, the screening key, or the file password in `config.toml`. The
 
 To sign in again later, run `amgd account login ALIAS`. It accepts only the email that `config.toml` has for the account.
 To remove an account, run `amgd account remove ALIAS` on a terminal and type the alias to confirm.
-For a test account without a provider, run `amgd account add demo --provider fake`. See [Fake provider](../README.md#fake-provider).
+For a test account without a provider, run `amgd account add demo --provider fake`. See [Fake provider](fake-provider.md#fake-provider).
 
 ## Save the secrets and start
 
@@ -127,7 +127,7 @@ For a test account without a provider, run `amgd account add demo --provider fak
 amgd config set screening.api_key
 ```
 
-2. Set the console password for the [approval console](../README.md#approval-console). Until you set it, the console refuses every request, and every action that waits for approval stays pending. That includes a policy of `approve`, and a draft, send, or meeting write that the Jev action check flags or cannot check:
+2. Set the console password for the [approval console](approval-console.md#approval-console). Until you set it, the console refuses every request, and every action that waits for approval stays pending. That includes a policy of `approve`, and a draft, send, or meeting write that the Jev action check flags or cannot check:
 
 ```sh
 amgd config set console.password
@@ -166,7 +166,7 @@ You do not have to restart the daemon after most changes.
 If the new configuration is invalid, the daemon log shows `reload refused: CODE; old settings kept`, and the daemon keeps the old configuration.
 A change of `console.listen` or `credentials.backend` prints `restart needed: KEY changed`. Stop the daemon, for example with Ctrl-C, and start it again.
 After `amgd store migrate` or `amgd store change-password`, start the daemon again. Both commands refuse while the daemon runs.
-See [Settings](../README.md#settings) and [Reload](../README.md#reload) for all keys and messages.
+See [Settings](daemon.md#settings) and [Reload](daemon.md#reload) for all keys and messages.
 
 ## Run as a service
 
@@ -174,7 +174,7 @@ See [Settings](../README.md#settings) and [Reload](../README.md#reload) for all 
 A service has no terminal, so prepare these items before the first start as a service:
 
 - Save the screening key with `amgd config set screening.api_key`. Without a terminal, `amgd serve` does not prompt for a missing key, and the start fails.
-- With the file backend, supply the password in `AMG_CREDENTIALS_PASSWORD` or on stdin. See [File backend and password input](../README.md#file-backend-and-password-input).
+- With the file backend, supply the password in `AMG_CREDENTIALS_PASSWORD` or on stdin. See [File backend and password input](credentials.md#file-backend-and-password-input).
 - If the service uses another home than `~/.agentmailguard`, set the same `AMG_HOME` for the service and for your `amgd` commands.
 
 For systemd, use one of these two reload methods in the service unit:
@@ -226,7 +226,7 @@ The rows of a fake account in `fake-provider.db` use the alias in the `account` 
 
 ## Remote clients
 
-Keep the daemon on its loopback listener and use an SSH tunnel for `amg` on another machine. See [Local and remote clients](../README.md#local-and-remote-clients).
+Keep the daemon on its loopback listener and use an SSH tunnel for `amg` on another machine. See [Local and remote clients](daemon.md#local-and-remote-clients).
 
 ## Troubleshooting
 

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/ivanrvpereira/agentmailguard/security/advisories/new
+    about: Report vulnerabilities privately. Do not open a public issue.
+  - name: Setup guide
+    url: https://github.com/ivanrvpereira/agentmailguard/blob/main/docs/setup.md
+    about: Provider app registration, accounts, secrets, and the first start.

@@ -288,7 +288,7 @@ func TestConcurrentApprovalsRunTheActionOnce(t *testing.T) {
 // A person who approves a waiting draft send after a draft update of that draft took the write lock (here while it
 // reads the draft, before Jev and the write) finds the send withdrawn: the update withdraws it first. The update then
 // makes the new waiting send. An approval that claimed the send before the update took the lock is the known window in
-// README "Waiting sends and draft changes".
+// docs/sending.md "Waiting sends and draft changes".
 func TestApprovalDuringADraftUpdateFindsTheSendWithdrawn(t *testing.T) {
 	var blockRead atomic.Bool
 	reading, release := make(chan struct{}), make(chan struct{})

@@ -98,7 +98,8 @@ jobs:
         run: |
           name="agentmailguard_${GITHUB_REF_NAME#v}_linux_${{ matrix.arch }}"
           mkdir -p "stage/$name" dist
-          cp out/amg out/amgd LICENSE README.md "stage/$name/"
+          cp out/amg out/amgd LICENSE README.md CHANGELOG.md SECURITY.md "stage/$name/"
+          cp -R docs skills "stage/$name/"
           tar -czf "dist/$name.tar.gz" -C stage "$name"
       - name: Upload archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -237,7 +238,8 @@ jobs:
           for arch in arm64 amd64; do
             name="agentmailguard_${GITHUB_REF_NAME#v}_darwin_$arch"
             mkdir -p "stage/$name"
-            cp "out/$arch/amg" "out/$arch/amgd" LICENSE README.md "stage/$name/"
+            cp "out/$arch/amg" "out/$arch/amgd" LICENSE README.md CHANGELOG.md SECURITY.md "stage/$name/"
+            cp -R docs skills "stage/$name/"
             COPYFILE_DISABLE=1 tar -czf "dist/$name.tar.gz" -C stage "$name"
           done
       - name: Upload archives

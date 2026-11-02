@@ -1,3 +1,2 @@
 [env]
 _.path = ["{{config_root}}/bin"]
-_.file = ".env"

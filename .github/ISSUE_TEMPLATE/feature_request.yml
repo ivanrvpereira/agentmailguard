@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest a new command, option, or provider behavior.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What do you or your agent need to do that you cannot do now?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The behavior you suggest. Say how Gmail and Microsoft 365 do it in their own apps, if you know.
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety
+      description: Can an agent under prompt injection misuse this? Should the write policy or the approval console control it?

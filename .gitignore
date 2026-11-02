@@ -10,7 +10,7 @@
 audit.jsonl
 .DS_Store
 
-# The user's global ignore excludes directories named credentials.
+# Some global Git ignore files exclude directories named credentials.
 # Keep this package's source, but do not allow credential artifacts.
 !internal/credentials/
 internal/credentials/*

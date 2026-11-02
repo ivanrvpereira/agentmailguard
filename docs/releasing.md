@@ -20,7 +20,7 @@ A version tag publishes a release. The [release workflow](../.github/workflows/r
 1. Checks that the tag is a version, then runs `make` on Linux and on macOS.
 2. Builds static Linux binaries for amd64 and arm64, each on its own runner. `amgd` links SQLite statically against musl, so the binaries need no C library on the target. A step runs them in an empty `busybox` container to prove it.
 3. Builds the macOS binaries for arm64 and amd64 on one macOS runner, with a minimum macOS version (`MACOS_MIN`). It signs them with the Developer ID identity and fixed identifiers (`SIGN_ID_PREFIX`), notarizes them, checks the notarization, and runs them.
-4. Packs each platform as `agentmailguard_VERSION_OS_ARCH.tar.gz` with `amg`, `amgd`, `LICENSE`, and `README.md`. It writes `checksums.txt` and a [build provenance attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations).
+4. Packs each platform as `agentmailguard_VERSION_OS_ARCH.tar.gz` with `amg`, `amgd`, `LICENSE`, `README.md`, `CHANGELOG.md`, `SECURITY.md`, the `docs` folder, and the agent skill in `skills`. It writes `checksums.txt` and a [build provenance attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations).
 5. Fills in [the formula template](../packaging/homebrew/agentmailguard.rb) and checks it with `brew style` and `brew audit --strict` in the real tap.
 6. Creates the GitHub release with the archives and `checksums.txt`.
 7. Pushes the formula to `Formula/agentmailguard.rb` in [ivanrvpereira/homebrew-tap](https://github.com/ivanrvpereira/homebrew-tap), then waits until the tap's CI has installed and tested it on macOS (arm64 and Intel) and Linux (amd64 and arm64).
@@ -35,12 +35,10 @@ Every binary reports the tag through `amg --version` and `amgd --version`. The w
 | `NOTARY_API_KEY_ID`, `NOTARY_API_ISSUER_ID`, `NOTARY_API_KEY_P8` | An App Store Connect **Team** API key for `notarytool`; individual keys cannot notarize. Store the raw `.p8` text, not base64. |
 | `TAP_PUSH_TOKEN` | A fine-grained token with Contents read and write on `ivanrvpereira/homebrew-tap` only. Without it, the workflow prints the formula in its log, and you copy it to the tap by hand. |
 
-These are the same certificate and notary key as in Fixit. Secrets of a personal account belong to one repository, so add them here too.
-
 ## Do not change
 
 - **The signing identity and identifiers.** macOS gives a Keychain item to the code that has the team ID and identifier of the program that created it. A new certificate team, or a new `SIGN_ID_PREFIX`, makes every macOS user approve `amgd`'s Keychain access again.
-- **`MACOS_MIN` below the Go minimum.** When a new Go release needs a newer macOS, the macOS build fails with "raise MACOS_MIN". Raise it, and change the macOS version in the README's Install section.
+- **`MACOS_MIN` below the Go minimum.** When a new Go release needs a newer macOS, the macOS build fails with "raise MACOS_MIN". Raise it, and change the macOS version in [Install and build](install.md#install).
 
 ## Troubleshooting
 
