@@ -3,6 +3,7 @@
   --bg:#ffffff; --ink:#1b1d20; --ink-2:#50555c; --ink-3:#686d74;
   --line:#e6e5e0; --line-2:#f0efeb; --hover:#f6f6f3; --track:#f1f1ee;
   --accent:#1f56c3; --on-accent:#fff;
+  --pick:color-mix(in srgb,var(--accent) 9%,var(--bg));
   /* Row bars: green = checked, grey = not checked, red = needs review. Mailbox operations add yellow for the
      yellow screening verdict. */
   --green:#2f8a55; --grey:#878c93; --red:#bf3326; --yellow:#d6a100;
@@ -40,6 +41,16 @@ a:hover{text-decoration:underline}
 .top .sum b{color:var(--red);font-weight:600}
 
 .pane{max-width:92rem;margin:0 auto;padding:0 1.5rem 4rem}
+/* List page grid: the filter line, the notice of a batch, then the bulk bar (sticky, only while a box is ticked),
+   the tables and the footer. The selection count is the last element, so that CSS counters have counted the ticked
+   rows of every table; the grid places it into the bar. */
+.listpage{display:grid;grid-template-columns:minmax(0,1fr);counter-reset:sel review}
+.listpage .lead{grid-row:1}
+.listpage .notice{grid-row:2}
+.bar,.selcount{grid-row:3;grid-column:1;position:sticky;top:0}
+.listpage .waiting{grid-row:4}
+.listpage .foot{grid-row:5}
+.notice{margin:.75rem 0 0;padding:.6rem .75rem;border:1px solid var(--line);border-radius:6px;font-size:.8125rem;background:color-mix(in srgb,var(--accent) 5%,var(--bg))}
 
 /* Filters: segmented server-side links. */
 .lead{height:3rem;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:1.5rem;padding-left:.5rem;font-size:.8125rem}
@@ -52,6 +63,24 @@ a:hover{text-decoration:underline}
 .filters a .c{color:var(--ink-3);font-weight:400}
 .filters a[aria-current]{background:var(--bg);color:var(--ink);box-shadow:0 0 0 1px var(--line),0 1px 2px rgb(0 0 0/.06)}
 .filters a[aria-current] .c{color:var(--ink-2)}
+
+/* Bulk bar: its own sticky line under the filters, shown only while a box is ticked in any table. */
+.bar{z-index:3;display:none;min-height:3rem;align-items:center;background:color-mix(in srgb,var(--accent) 5%,var(--bg));border-bottom:1px solid color-mix(in srgb,var(--accent) 30%,var(--line))}
+.bar form{display:flex;justify-content:flex-end;width:100%;padding:.5rem .5rem .5rem 0}
+.bar .live{display:flex;justify-content:flex-end;gap:.5rem;align-items:center}
+.listpage:has(.sel:checked) .bar{display:flex}
+/* Batch approve skips the rows that need review. When every ticked row needs review, the real button is gone, so
+   that it cannot be pressed or focused, and a disabled stand-in takes its place. */
+.bar .btn.off{display:none}
+.listpage:not(:has(.sel:not([data-review]):checked)) .bar .btn.go:not(.off){display:none}
+.listpage:not(:has(.sel:not([data-review]):checked)) .bar .btn.off{display:inline-flex}
+.selcount{margin:0;z-index:4;align-self:start;justify-self:start;padding-left:.75rem;display:none;height:3rem;align-items:center;pointer-events:none;color:var(--ink-2);font-size:.8125rem;white-space:nowrap}
+.listpage:has(.sel:checked) .selcount{display:flex}
+.sel:checked{counter-increment:sel}
+.sel[data-review]:checked{counter-increment:sel review}
+.listpage:has(.sel:checked) .selcount::before{content:counter(sel) " selected";color:var(--ink);font-weight:600}
+.listpage:has(.sel[data-review]:checked) .selcount::after{content:"\00a0· " counter(review) " need review: Approve skips them";color:var(--red)}
+.listpage:has(.sel:checked):not(:has(.sel:not([data-review]):checked)) .selcount::after{content:"\00a0· All need review: approve each from its row"}
 
 /* Tables: one section per group, with its heading (name, count, what approving does), its column header and its
    rows. --cols is the table's own grid; the shared columns keep the same widths. */
@@ -72,13 +101,22 @@ ol{list-style:none;margin:0;padding:0}
 .colhead{border-bottom:1px solid var(--line);font-size:.75rem;color:var(--ink-3);height:1.75rem;align-items:center}
 .colhead .r{text-align:right}
 .cells>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+/* Select all in a table: a link drawn as the header checkbox. The page it opens ticks the rows of the table, keeps
+   the filters, and draws this box ticked with a link back. */
+.colhead .all{display:flex;align-items:center;justify-content:center;align-self:stretch}
+.colhead .all::before{content:"";width:1rem;height:1rem;border:1.5px solid var(--ink-3);border-radius:3px;box-sizing:border-box}
+.colhead .all:hover::before{border-color:var(--ink-2)}
+.colhead .all.on::before{content:"\2713";display:flex;align-items:center;justify-content:center;background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-size:.7rem;font-weight:700;line-height:1}
 @media (hover:hover){.row:hover{background:var(--hover)}.recent .row:hover .text{text-decoration:underline}}
+.row:has(.sel:checked){background:var(--pick)}
 .waiting .row{box-shadow:inset 3px 0 0 var(--bar)}
 .row.ok{--bar:var(--green)}
 .row.none{--bar:var(--grey)}
 .row.risky{--bar:var(--red)}
 .row.warn{--bar:var(--yellow)}
-.pick{height:var(--row)}
+.pick{display:flex;align-items:center;justify-content:center;height:var(--row)}
+label.pick{cursor:pointer}
+.pick input{width:1rem;height:1rem;margin:0;accent-color:var(--accent);cursor:pointer}
 
 summary{list-style:none;cursor:pointer;height:var(--row)}
 summary::-webkit-details-marker{display:none}
@@ -111,6 +149,11 @@ summary>span,a.line>span,.meta>span{min-width:0;overflow:hidden;white-space:nowr
 .text .from+.subj{font-weight:400;color:var(--ink)}
 .recv{font-size:.8125rem;color:var(--ink-2)}
 
+/* Row actions: in the last column, shown on hover, keyboard focus, an open row, and always on touch screens. */
+.acts{position:absolute;top:0;right:.75rem;height:var(--row);display:flex;align-items:center;gap:.25rem;opacity:0;pointer-events:none;z-index:1}
+.row:is(:hover,:focus-within) .acts,.row:has(details[open]) .acts{opacity:1;pointer-events:auto}
+@media (hover:none){.acts{opacity:1;pointer-events:auto}}
+
 /* Open row */
 .open{padding:.25rem 1rem 1.25rem 0;display:grid;grid-template-columns:minmax(0,46rem) minmax(0,1fr);column-gap:2rem;border-top:1px dashed var(--line)}
 .open>*{grid-column:1}
@@ -126,6 +169,13 @@ dl.f .ln{display:block;white-space:pre-wrap}
 .body figcaption{font-size:.75rem;color:var(--ink-3);margin-bottom:.35rem}
 .body pre{margin:0;font-family:var(--letter);font-size:.96rem;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;max-height:18em;overflow:auto;color:var(--ink)}
 .more{font-size:.8125rem;margin-top:.9rem}
+
+/* Approve of an action that needs review: the browser submits the form only with the box ticked. */
+.ack{margin-top:1rem;padding:.75rem .9rem;border:1px solid color-mix(in srgb,var(--red) 35%,var(--line));border-radius:8px;background:var(--red-soft);display:flex;flex-wrap:wrap;align-items:center;gap:.6rem 1rem}
+.ack p{margin:0;flex-basis:100%;color:var(--red);font-weight:600;font-size:.8125rem}
+.ack label{display:flex;gap:.5rem;align-items:center;cursor:pointer;font-size:.875rem}
+.ack input{width:1rem;height:1rem;margin:0;accent-color:var(--red)}
+.ack:not(:has(input:checked)) .btn.go{background:transparent;color:var(--ink-3);border-color:var(--line)}
 
 /* Recents: a closed disclosure at the foot of each table with its last handled actions; quiet, no bar. */
 .recent{margin:0 0 .25rem}
@@ -158,6 +208,11 @@ a.line:hover{text-decoration:none}
 .btn:hover{border-color:var(--ink-3);text-decoration:none}
 .btn.go{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
 .btn.go:hover{background:color-mix(in srgb,var(--accent) 88%,#000)}
+.btn.off,.btn.off:hover{background:transparent;border-color:var(--line);color:var(--ink-3);cursor:not-allowed}
+.btn.quiet{border-color:transparent;background:transparent;color:var(--ink-2)}
+.btn.quiet:hover{border-color:var(--line)}
+.acts .btn:not(.go){border-color:color-mix(in srgb,var(--ink) 28%,var(--bg));font-weight:600}
+.acts .btn:not(.go):hover{border-color:var(--ink-2)}
 
 /* Action page: the parts of the open row on a page of their own, in one column. The Rendered preview is a sandboxed
    frame above the escaped source; Approve and Deny come after the source, away from the frame. */
@@ -176,7 +231,9 @@ a.line:hover{text-decoration:none}
 .actionpage .body{margin-top:1.5rem}
 .actionpage .body pre{max-height:none}
 .rendered iframe{display:block;width:100%;height:24rem;border:1px solid var(--line);border-radius:6px;background:#fff}
-.actionpage .decide{display:flex;gap:.5rem;margin-top:1.5rem;padding-top:1.25rem;border-top:1px solid var(--line)}
+.actionpage .decide{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin-top:1.5rem;padding-top:1.25rem;border-top:1px solid var(--line)}
+.actionpage .decide.ack{padding:.9rem 1rem;border:1px solid color-mix(in srgb,var(--red) 35%,var(--line))}
+.actionpage .decide.ack label{margin-right:.5rem}
 .actionpage .decide .btn{height:2.5rem;padding:0 1.25rem;font-size:.875rem}
 
 /* Phone: three or four lines per row; the column labels go. */
@@ -191,17 +248,32 @@ a.line:hover{text-decoration:none}
   .lead .lbl{flex:none;margin:0;font-size:.75rem}
   .filters a{height:2rem;flex:none;padding:0 .5rem}
   .seg{height:2.25rem}
+  .notice{margin:.75rem 1rem 0}
+  .bar{min-height:0}
+  .bar form{justify-content:flex-start;padding:.5rem .75rem 2.1rem}
+  .selcount{align-self:end;height:2rem;padding:0 .75rem;line-height:1.25;white-space:normal}
+  .listpage:has(.sel:checked) .selcount{display:block}
+  .listpage:has(.sel[data-review]:checked) .selcount::after{content:"\00a0· " counter(review) " need review, Approve skips them"}
+  .listpage:has(.sel:checked):not(:has(.sel:not([data-review]):checked)) .selcount::after{content:"\00a0· All need review"}
 
+  /* Table heading: [select all] Name count, the hint on its own line. */
   .thead{border-bottom:1px solid var(--line);margin-top:1.5rem;min-height:2.5rem}
+  .thead:has(.all){display:grid;grid-template-columns:2.5rem minmax(0,1fr);align-items:center}
   .waiting .tbl:first-child .thead{margin-top:.75rem}
   .thead h2,.waiting .tbl:first-child h2{margin:0;padding:.5rem 1rem;flex-wrap:wrap;row-gap:0}
+  .thead:has(.all) h2{grid-column:2;grid-row:1;padding-left:0}
   .thead h2 .hint{flex-basis:100%;margin-left:0;white-space:normal}
   .colhead{display:none}
+  .thead .colhead{display:contents}
+  .thead .colhead .all{grid-column:1;grid-row:1}
+  .thead .colhead .cells{display:none}
   .recent>summary{padding:0 1rem;height:2.5rem}
   .recent ol{border-top:1px solid var(--line)}
 
   .row{grid-template-columns:1rem minmax(0,1fr)}
+  .tbl>ol>.row{grid-template-columns:2.5rem minmax(0,1fr)}
   .pick{height:auto}
+  label.pick{align-items:flex-start;padding-top:.8rem}
   summary,a.line{height:auto;padding:.6rem 1rem .65rem 0;row-gap:.1rem;grid-template-columns:minmax(0,1fr) auto}
   .t-mail summary{grid-template-areas:"to age" "text text" "op op"}
   .t-meet summary{grid-template-areas:"ev age" "when ppl" "chg chg" "op op"}
@@ -224,6 +296,11 @@ a.line:hover{text-decoration:none}
   .score::before{content:"Score ";font-weight:400;color:var(--ink-3)}
   .recent .score{display:none}
   .st{grid-area:st;justify-self:end}
+  /* Row actions go under the open row; Review is the open row itself. */
+  .acts{position:static;grid-column:2;opacity:1;pointer-events:auto;height:auto;padding:0 1rem 1rem 0;display:none}
+  .row:has(details[open]) .acts{display:flex}
+  .acts a.btn{display:none}
+  .acts .btn,.ack .btn{height:2.5rem;padding:0 1.1rem;font-size:.875rem}
   .open{grid-template-columns:minmax(0,1fr);padding:.25rem 1rem 1rem 0}
   dl.f{grid-template-columns:5.5rem minmax(0,1fr)}
   .actionpage dl.f{grid-template-columns:6.5rem minmax(0,1fr)}

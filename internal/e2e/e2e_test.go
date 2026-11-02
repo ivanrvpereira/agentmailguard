@@ -142,9 +142,12 @@ func TestScreeningFlagMakesAnAllowedWriteWaitForApproval(t *testing.T) {
 	if got := s.column(`SELECT subject FROM messages WHERE folder = 'drafts'`); len(got) != 0 {
 		t.Fatalf("flagged draft ran: %v", got)
 	}
-	// The user decides: an approved run is not checked again.
-	s.approve(flagged.ApprovalID)
-	s.approve(draft.ApprovalID)
+	// The user decides after confirming the review: an approved run is not checked again.
+	if code := s.decide(flagged.ApprovalID, "approve"); code != http.StatusBadRequest || s.state(flagged.ApprovalID) != "pending" {
+		t.Fatalf("approve without the review: HTTP %d", code)
+	}
+	s.approveReviewed(flagged.ApprovalID)
+	s.approveReviewed(draft.ApprovalID)
 	if got := sent(); !reflect.DeepEqual(got, []string{"canary-subject-flagged", "canary-subject-plain"}) {
 		t.Fatalf("approved flagged send: %v", got)
 	}

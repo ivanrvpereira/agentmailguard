@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -89,7 +91,13 @@ func (f *consoleFixture) get(t *testing.T, path string, change func(*http.Reques
 // decide posts a decision form for the action as a signed-in browser on the console address.
 func (f *consoleFixture) decide(t *testing.T, id, decision string, change func(*http.Request)) *httptest.ResponseRecorder {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodPost, "/a/"+id, strings.NewReader("decision="+decision))
+	return f.post(t, "/a/"+id, "decision="+decision, change)
+}
+
+// post posts the form body to path as a signed-in browser on the console address.
+func (f *consoleFixture) post(t *testing.T, path, body string, change func(*http.Request)) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.Header.Set("Origin", "http://"+consoleHost)
 	return f.send(t, r, change)
@@ -286,10 +294,10 @@ func TestConsoleResponsesCarryTheSecurityHeaders(t *testing.T) {
 }
 
 // hrefs are the link targets of a page; consoleLink is a link to the console's own list page, with or without its
-// filters, or action page. tags are the tags of a page, and quoted the attribute values in a tag.
+// filters and a table to tick, or action page. tags are the tags of a page, and quoted the attribute values in a tag.
 var (
 	hrefs       = regexp.MustCompile(`href="([^"]*)"`)
-	consoleLink = regexp.MustCompile(`^/(a/[0-9a-f]{32}|\?(account=[A-Za-z0-9_-]+|status=(review|others)|account=[A-Za-z0-9_-]+&amp;status=(review|others)))?$`)
+	consoleLink = regexp.MustCompile(`^/(a/[0-9a-f]{32}|\?(account=[A-Za-z0-9_-]+&amp;)?(select=(messages|meetings|mailbox)&amp;)?(account=[A-Za-z0-9_-]+|select=(messages|meetings|mailbox)|status=(review|others)))?$`)
 	tags        = regexp.MustCompile(`<[^>]*>`)
 	quoted      = regexp.MustCompile(`"[^"]*"|'[^']*'`)
 	eventAttr   = regexp.MustCompile(`(?i)\son[a-z]+\s*=`)
@@ -364,7 +372,7 @@ func TestConsoleActionShowsTheScore(t *testing.T) {
 		if !strings.Contains(page, tc.want) {
 			t.Errorf("action page misses %q: %s", tc.want, page)
 		}
-		if m := neverOnPage.FindString(page); m != "" {
+		if m := oldWord(page); m != "" {
 			t.Errorf("action page shows %q: %s", m, page)
 		}
 	}
@@ -379,7 +387,7 @@ func TestConsoleActionShowsTheScore(t *testing.T) {
 		if !strings.Contains(page, tc.want) {
 			t.Errorf("%s %s: action page misses %q: %s", tc.op, tc.params, tc.want, page)
 		}
-		if m := neverOnPage.FindString(page); m != "" {
+		if m := oldWord(page); m != "" {
 			t.Errorf("%s %s: action page shows %q: %s", tc.op, tc.params, m, page)
 		}
 	}
@@ -408,7 +416,7 @@ func TestConsoleActionTagsTheFakeCheck(t *testing.T) {
 	} {
 		id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"`+body+`"}`)[0]
 		page := f.get(t, "/a/"+id, nil).Body.String()
-		if !strings.Contains(page, want) || neverOnPage.MatchString(page) || strings.Contains(page, "keywords") {
+		if !strings.Contains(page, want) || oldWord(page) != "" || strings.Contains(page, "keywords") {
 			t.Errorf("%q: action page misses %q or names the engine: %s", body, want, page)
 		}
 	}
@@ -425,7 +433,7 @@ func TestConsoleActionKeepsTheFakeTagAfterARestartWithJev(t *testing.T) {
 	}
 	after := fakeConsole(t, home, draftApproveOnly)
 	page := after.get(t, "/a/"+id, nil).Body.String()
-	if want := `<dt>Score</dt><dd><span class="fake">fake</span>0.05 · Checked</dd>`; !strings.Contains(page, want) || neverOnPage.MatchString(page) {
+	if want := `<dt>Score</dt><dd><span class="fake">fake</span>0.05 · Checked</dd>`; !strings.Contains(page, want) || oldWord(page) != "" {
 		t.Fatalf("action page misses %q or names the engine: %s", want, page)
 	}
 }
@@ -637,6 +645,111 @@ func TestConsoleDenyRunsNothing(t *testing.T) {
 	}
 	if w := f.decide(t, id, "approve", nil); w.Code != 409 || f.writes() != 0 {
 		t.Fatalf("approve after deny: %d writes=%d", w.Code, f.writes())
+	}
+}
+
+// approvalStates are the states of the approval records of the action in the audit log, in order.
+func (f *consoleFixture) approvalStates(t *testing.T, id string) []string {
+	t.Helper()
+	_, records := auditOf(t, f.d.home)
+	out := []string{}
+	for _, r := range records {
+		if r["event"] == "approval" && r["approval_id"] == id {
+			out = append(out, r["state"].(string))
+		}
+	}
+	return out
+}
+
+// Approving an action that needs review takes the confirm field of the "I reviewed it" box: without it the console
+// refuses and nothing runs or is recorded; with it the action runs once. Deny never needs it, nor does a Mailbox
+// operation, even of a red message.
+func TestConsoleApproveOfAnActionThatNeedsReviewNeedsTheConfirm(t *testing.T) {
+	f := consoleDaemon(t, everyWriteWaits, true)
+	f.setScore(.62)
+	risk := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
+	denied := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
+	f.setScore(2)
+	failed := pend(t, f.d.s, "calendar.respond", `{"id":"e","response":"decline","comment":"c"}`)[0]
+	f.setScore(.1)
+	trash := pend(t, f.d.s, "mail.trash", `{"ids":["r"]}`)[0]
+	for _, id := range []string{risk, failed} {
+		for body, want := range map[string]string{
+			"decision=approve":                                       "review required",
+			"decision=approve&confirm=yes":                           "invalid request",
+			"decision=approve&confirm=":                              "invalid request",
+			"decision=approve&confirm=flagged&confirm=flagged":       "invalid request",
+			"decision=approve&return=%2F&return=%2F&confirm=flagged": "invalid request",
+		} {
+			if w := f.post(t, "/a/"+id, body, nil); w.Code != 400 || strings.TrimSpace(w.Body.String()) != want {
+				t.Errorf("%q: %d %s; want 400 %s", body, w.Code, w.Body, want)
+			}
+		}
+		assertState(t, f.d.s, id, `{"state":"pending"}`)
+		if got := f.approvalStates(t, id); !slices.Equal(got, []string{"created"}) || f.writes() != 0 {
+			t.Fatalf("refused approve: records=%q writes=%d", got, f.writes())
+		}
+	}
+	if w := f.post(t, "/a/"+risk, "decision=approve&confirm=flagged", nil); w.Code != 303 || w.Header().Get("Location") != "/a/"+risk || f.writes() != 1 {
+		t.Fatalf("confirmed approve: %d %q writes=%d", w.Code, w.Header().Get("Location"), f.writes())
+	}
+	if w := f.post(t, "/a/"+risk, "decision=approve&confirm=flagged", nil); w.Code != 409 || f.writes() != 1 {
+		t.Fatalf("second confirmed approve: %d writes=%d", w.Code, f.writes())
+	}
+	if got := f.approvalStates(t, risk); !slices.Equal(got, []string{"created", "approved", "done"}) {
+		t.Fatalf("records=%q", got)
+	}
+	if w := f.decide(t, denied, "deny", nil); w.Code != 303 || f.writes() != 1 {
+		t.Fatalf("deny: %d writes=%d", w.Code, f.writes())
+	}
+	assertState(t, f.d.s, denied, `{"state":"denied"}`)
+	if w := f.decide(t, trash, "approve", nil); w.Code != 303 || f.writes() != 2 {
+		t.Fatalf("trash of a red message: %d writes=%d %s", w.Code, f.writes(), w.Body)
+	}
+}
+
+// hostileReturns are return fields that are not a list page of the console with valid filters, or are too long.
+var hostileReturns = []string{
+	"//evil.example", `/\evil.example`, "http://evil.example", "https://evil.example/?account=work", "/?x=1&select=messages",
+	"/a/0123456789abcdef0123456789abcdef", "%2F%2Fevil", "/%2F%2Fevil", "/?account=<script>", "/?account=work\r\nLocation: http://evil.example",
+	"/?account=work\x00", "/?account=work&account=work", "/?account=work//evil", "/?account=work" + strings.Repeat("&", 600), "", " /", "?account=work",
+}
+
+// A decision from the list returns to the list with its filters, rebuilt from the validated filters so that nothing
+// else of the field reaches the redirect, select included. Any other return field is ignored: the decision returns
+// to the action page, and the response never repeats the field.
+func TestConsoleDecisionReturnsToTheListWithItsFilters(t *testing.T) {
+	f := consoleDaemon(t, draftApprove, true)
+	decide := func(ret string) *httptest.ResponseRecorder {
+		t.Helper()
+		id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
+		w := f.post(t, "/a/"+id, "decision=deny&return="+url.QueryEscape(ret), nil)
+		if w.Code != 303 || strings.Contains(w.Body.String(), "evil") {
+			t.Fatalf("return %q: %d %s", ret, w.Code, w.Body)
+		}
+		assertState(t, f.d.s, id, `{"state":"denied"}`)
+		if loc := w.Header().Get("Location"); loc == "/a/"+id {
+			w.Header().Set("Location", "action page")
+		}
+		return w
+	}
+	for ret, want := range map[string]string{
+		"/":                                    "/",
+		"/?":                                   "/",
+		"/?account=work":                       "/?account=work",
+		"/?status=others&account=work":         "/?account=work&status=others",
+		"/?account=work&select=messages":       "/?account=work",
+		"/?status=review&approved=3&handled=1": "/?status=review",
+		"/?account=work" + strings.Repeat("&", 400): "/?account=work",
+	} {
+		if got := decide(ret).Header().Get("Location"); got != want {
+			t.Errorf("return %q: Location %q; want %q", ret, got, want)
+		}
+	}
+	for _, ret := range hostileReturns {
+		if got := decide(ret).Header().Get("Location"); got != "action page" {
+			t.Errorf("return %q: Location %q; want the action page", ret, got)
+		}
 	}
 }
 

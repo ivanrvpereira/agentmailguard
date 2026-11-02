@@ -235,6 +235,12 @@ func pageText(page string) string {
 // neverOnPage are words of the old vocabulary and of the screening service that no console page shows.
 var neverOnPage = regexp.MustCompile(`(?i)jev|flagged`)
 
+// oldWord is the first word of neverOnPage on a page, or empty. The value of the "I reviewed it" box is a form
+// field that the page does not show.
+func oldWord(page string) string {
+	return neverOnPage.FindString(strings.ReplaceAll(page, `name="confirm" value="flagged"`, ""))
+}
+
 // The Score is the action check: green with the value when checked, red with ▲ and Needs review for a risk or a
 // failed check (its fixed code in the title), grey — when not checked. A Mailbox operations row of a message without a
 // screening verdict is grey. The open row shows the value with its label.
@@ -275,7 +281,7 @@ func TestConsoleListShowsTheScoreOfTheActionCheck(t *testing.T) {
 	if want := "Red: needs review · Grey: not checked · Green: checked"; !strings.Contains(pageText(page), want) {
 		t.Errorf("legend misses %q: %s", want, pageText(page))
 	}
-	if m := neverOnPage.FindString(page); m != "" {
+	if m := oldWord(page); m != "" {
 		t.Errorf("page shows %q: %s", m, page)
 	}
 }
@@ -297,7 +303,7 @@ func TestConsoleListTagsTheFakeCheck(t *testing.T) {
 			}
 		}
 	}
-	if m := neverOnPage.FindString(page); m != "" {
+	if m := oldWord(page); m != "" {
 		t.Errorf("page shows %q: %s", m, page)
 	}
 }
@@ -575,6 +581,14 @@ func TestConsoleListShowsHostileAgentTextAsLiteralText(t *testing.T) {
 		if !strings.Contains(summary, escaped) || id != recent && !strings.Contains(open, escaped) {
 			t.Errorf("row misses the literal text: %s", row)
 		}
+	}
+	for id := range rowBoxes(page) {
+		if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(id) {
+			t.Errorf("checkbox value %q is not an ID", id)
+		}
+	}
+	if !strings.Contains(page, `<span class="vh">Select Send: `+escaped+`</span>`) {
+		t.Errorf("checkbox label misses the literal text")
 	}
 	for _, want := range []string{`<span class="to" title="` + escaped + `; cc: ` + escaped + `">`, `<span class="ev">` + escaped + `</span>`, `<span class="snip">` + escaped + `</span>`} {
 		if !strings.Contains(page, want) {

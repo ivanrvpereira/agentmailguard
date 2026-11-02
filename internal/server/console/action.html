@@ -26,8 +26,9 @@
 {{if .Row.Caption}}{{if .Row.BodyHTML}}<figure class="body rendered"><figcaption>Rendered preview: links, images, and forms are off. Hidden text shows only in the source.</figcaption>
 <iframe sandbox="" srcdoc="{{.Row.Body}}" referrerpolicy="no-referrer" title="Rendered preview of the HTML body"></iframe></figure>
 {{end}}<figure class="body"><figcaption>{{.Row.Caption}}</figcaption><pre>{{.Row.Body}}</pre></figure>{{end}}
-{{if .Pending}}<form class="decide" method="post" action="/a/{{.ID}}">
-<button class="btn go" type="submit" name="decision" value="approve">Approve</button>
-<button class="btn" type="submit" name="decision" value="deny">Deny</button>
+{{if .Pending}}<form class="decide{{if .Row.Review}} ack{{end}}" method="post" action="/a/{{.ID}}">
+{{if .Row.Review}}{{template "reviewed"}}
+{{end}}<button class="btn go" type="submit" name="decision" value="approve">Approve</button>
+<button class="btn" type="submit" name="decision" value="deny"{{if .Row.Review}} formnovalidate{{end}}>Deny</button>
 </form>{{end}}
 </main></body></html>{{end}}

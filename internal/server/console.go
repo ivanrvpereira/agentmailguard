@@ -146,6 +146,15 @@ func (c *console) route(ctx context.Context, w http.ResponseWriter, r *http.Requ
 		c.list(ctx, w, r)
 		return
 	}
+	if r.URL.Path == "/batch" {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			plain(w, 405, "method refused")
+			return
+		}
+		c.batch(ctx, w, r)
+		return
+	}
 	id, ok := strings.CutPrefix(r.URL.Path, "/a/")
 	if !ok || !approvalIDPattern.MatchString(id) {
 		plain(w, 404, "not found")
@@ -172,20 +181,37 @@ func sameOrigin(r *http.Request) bool {
 // maxDecisionBytes bounds the decision form body.
 const maxDecisionBytes = 4 << 10
 
-// decide approves or denies the action from a form with the one field decision, then shows the action page again.
-func (c *console) decide(ctx context.Context, w http.ResponseWriter, r *http.Request, id string) {
+// readForm reads a urlencoded form body of at most limit bytes whose fields are all in allowed. ok is false for any
+// other content type, a larger body, a malformed body, or another field.
+func readForm(w http.ResponseWriter, r *http.Request, limit int64, allowed ...string) (url.Values, bool) {
 	typ, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || typ != "application/x-www-form-urlencoded" || len(params) > 1 || (len(params) == 1 && !strings.EqualFold(params["charset"], "utf-8")) {
-		plain(w, 400, "invalid request")
-		return
+		return nil, false
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxDecisionBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
-		plain(w, 400, "invalid request")
-		return
+		return nil, false
 	}
 	form, err := url.ParseQuery(string(body))
-	if err != nil || len(form) != 1 || len(form["decision"]) != 1 {
+	if err != nil {
+		return nil, false
+	}
+	for key := range form {
+		if !slices.Contains(allowed, key) {
+			return nil, false
+		}
+	}
+	return form, true
+}
+
+// confirmReviewed is the only value of the confirm field: the owner ticked "I reviewed it".
+const confirmReviewed = "flagged"
+
+// decide approves or denies the action from a form with one decision, an optional confirm, and an optional return,
+// then shows the action page again. An approve of an action that needs review runs only with the confirm.
+func (c *console) decide(ctx context.Context, w http.ResponseWriter, r *http.Request, id string) {
+	form, ok := readForm(w, r, maxDecisionBytes, "decision", "confirm", "return")
+	if !ok || len(form["decision"]) != 1 || len(form["confirm"]) > 1 || len(form["return"]) > 1 || (form.Has("confirm") && form.Get("confirm") != confirmReviewed) {
 		plain(w, 400, "invalid request")
 		return
 	}
@@ -199,8 +225,19 @@ func (c *console) decide(ctx context.Context, w http.ResponseWriter, r *http.Req
 		plain(w, 400, "invalid request")
 		return
 	}
+	if form.Get("decision") == "approve" && !form.Has("confirm") {
+		item, err := c.s.cache.GetPending(ctx, id)
+		if err != nil && !errors.Is(err, cache.ErrPendingNotFound) {
+			plain(w, 500, "approvals unavailable")
+			return
+		}
+		if err == nil && item.State == cache.StatePending && needsReview(item) {
+			plain(w, 400, "review required")
+			return
+		}
+	}
 	// A run that started finishes even when the browser goes away; Close still cancels it.
-	err = run(context.WithoutCancel(ctx), id)
+	err := run(context.WithoutCancel(ctx), id)
 	switch {
 	case errors.Is(err, ErrApprovalNotFound):
 		plain(w, 404, "not found")
@@ -209,9 +246,22 @@ func (c *console) decide(ctx context.Context, w http.ResponseWriter, r *http.Req
 	case errors.Is(err, ErrUnavailable):
 		plain(w, 503, err.Error())
 	default:
-		// Done, or a failed run whose state and code the action page shows.
-		http.Redirect(w, r, "/a/"+id, http.StatusSeeOther)
+		// Done, or a failed run whose state and code the action page shows, or the list that the form came from.
+		back := "/a/" + id
+		if q, ok := c.formReturn(form); ok {
+			back = q.url()
+		}
+		http.Redirect(w, r, back, http.StatusSeeOther)
 	}
+}
+
+// formReturn is the list filter of the form's return field; ok is false without a valid one.
+func (c *console) formReturn(form url.Values) (listQuery, bool) {
+	st := c.s.current.Load()
+	if st == nil || !form.Has("return") {
+		return listQuery{}, false
+	}
+	return returnQuery(form.Get("return"), st.config)
 }
 
 type field struct {

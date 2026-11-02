@@ -4,7 +4,7 @@
   <span class="sum num">{{.Waiting}} waiting · {{if .Review}}<b>{{.Review}} need review</b>{{else}}0 need review{{end}}</span>
 </header>
 
-<main class="pane">
+<main class="pane listpage">
 <div class="lead">
   <nav class="filters" aria-label="Filters">
     <span class="grp"><span class="lbl">Account</span><span class="seg">
@@ -15,20 +15,33 @@
     </span></span>
   </nav>
 </div>
+{{with .Notice}}<p class="notice" role="status">{{.}}</p>{{end}}
+
+<div class="bar">
+  <form id="batch" method="post" action="/batch" aria-label="Selected actions">
+    <input type="hidden" name="return" value="{{.Return}}">
+    <span class="live">
+      <button class="btn go" type="submit" name="decision" value="approve">Approve selected</button>
+      <button class="btn go off" type="button" disabled title="Every selected action needs review. Approve each from its row.">Approve selected</button>
+      <button class="btn" type="submit" name="decision" value="deny">Deny selected</button>
+      {{with .ClearURL}}<a class="btn quiet" href="{{.}}">Clear</a>{{else}}<button class="btn quiet" type="reset">Clear</button>{{end}}
+    </span>
+  </form>
+</div>
 
 <div class="waiting">
 {{if not .Groups}}<p class="empty">No actions wait for approval.</p>{{end}}
-{{range .Groups}}
+{{range .Groups}}{{$selected := .Selected}}
 <section class="tbl {{.Class}}" aria-labelledby="h-{{.Key}}" data-group="{{.Key}}">
 <div class="thead">
 <h2 id="h-{{.Key}}">{{.Title}} <span class="n num">{{len .Rows}}</span><span class="hint">{{.Hint}}</span></h2>
-{{if .Rows}}<div class="colhead"><span></span><div class="cells" aria-hidden="true">
+{{if .Rows}}<div class="colhead"><a class="all{{if .Selected}} on{{end}}" href="{{.SelectURL}}" title="{{if .Selected}}Clear the selection in{{else}}Select all in{{end}} {{.Title}}"><span class="vh">{{if .Selected}}Clear the selection in{{else}}Select all in{{end}} {{.Title}}</span></a><div class="cells" aria-hidden="true">
   {{template "columns" .Key}}
 </div></div>{{end}}
 </div>
 {{if .Rows}}<ol>
 {{range .Rows}}<li class="row {{.Score.Bar}}">
-  <span class="pick"></span>
+  <label class="pick"><input class="sel" type="checkbox" form="batch" name="id" value="{{.ID}}"{{if .Review}} data-review{{end}}{{if $selected}} checked{{end}}><span class="vh">Select {{template "name" .}}</span></label>
   <details>
     <summary>
       <span class="meta"><span class="op">{{.Label}}</span><span class="acct" title="{{.Account}}">{{.Alias}}</span></span>
@@ -47,9 +60,19 @@
       {{if .Draft}}<p class="sub">The draft fields that the check read when the agent asked to send the draft</p>
       <dl class="f">{{template "openfields" .Draft}}</dl>{{end}}
       {{if .Caption}}<figure class="body"><figcaption>{{.Caption}}</figcaption><pre>{{.Body}}</pre></figure>{{end}}
+      {{if .Review}}<form class="ack" method="post" action="/a/{{.ID}}">
+        <input type="hidden" name="return" value="{{$.Return}}">
+        {{template "reviewed"}}
+        <button class="btn go" type="submit" name="decision" value="approve">Approve<span class="vh">: {{template "name" .}}</span></button>
+      </form>{{end}}
       <p class="more"><a href="/a/{{.ID}}">Open the action page</a></p>
     </div>
   </details>
+  <form class="acts" method="post" action="/a/{{.ID}}">
+    <input type="hidden" name="return" value="{{$.Return}}">
+    {{if .Review}}<a class="btn" href="/a/{{.ID}}">Review<span class="vh">: {{template "name" .}}</span></a>{{else}}<button class="btn go" type="submit" name="decision" value="approve">Approve<span class="vh">: {{template "name" .}}</span></button>{{end}}
+    <button class="btn" type="submit" name="decision" value="deny">Deny<span class="vh">: {{template "name" .}}</span></button>
+  </form>
 </li>
 {{end}}</ol>{{end}}
 {{if .Recents}}<details class="recent">
@@ -74,8 +97,14 @@
   <span class="key risky">Red: needs review</span> · <span class="key none">Grey: not checked</span> · <span class="key ok">Green: checked</span>
   <br>In Mailbox operations, the colour and the score are the message's screening verdict. Recents keeps the last 10 handled actions of each table.
 </p>
+<p class="selcount num" aria-hidden="true"></p>
 </main>
 </body></html>{{end}}
+
+{{define "name"}}{{.Label}}{{with .Subject}}: {{.}}{{end}}{{with .Event}}: {{.}}{{end}}{{end}}
+
+{{define "reviewed"}}<p>This action needs review. Read every field and the body before you approve it.</p>
+        <label><input type="checkbox" name="confirm" value="flagged" required> I reviewed it</label>{{end}}
 
 {{define "filter"}}<a href="{{.URL}}"{{with .Title}} title="{{.}}"{{end}}{{if .Current}} aria-current="true"{{end}}>{{.Label}}<span class="c num">{{.Count}}</span></a>
       {{end}}

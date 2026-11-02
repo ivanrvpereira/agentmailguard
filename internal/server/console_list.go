@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/cache"
@@ -64,42 +65,110 @@ const (
 	showOthers = "others"
 )
 
-// listQuery is the validated filter of the list page; zero shows everything. key is the account key of alias.
-type listQuery struct{ alias, key, show string }
+// listQuery is the validated query of the list page; zero shows everything. The filter is alias, with key its
+// account key, and show. sel is the group whose rows the page renders ticked, and notice the outcome of a batch;
+// neither is a filter, and the filter links and the return of a decision leave them out.
+type listQuery struct {
+	alias, key, show, sel string
+	notice                batchCounts
+}
 
-// parseListQuery validates the list query against the loaded configuration. A key that is not account or show,
-// a repeated key, or an unknown value gives the unfiltered page.
-func parseListQuery(raw string, cfg config.Config) listQuery {
+// batchCounts are the outcome of a batch decision.
+type batchCounts struct{ approved, denied, review, failed, handled int }
+
+type noticePart struct {
+	key, label string
+	count      func(*batchCounts) *int
+}
+
+// noticeParts are the parts of a batch notice in notice order: the list page query key that carries the count, from
+// 0 to maxBatchIDs, the words after the count, and the count.
+var noticeParts = []noticePart{
+	{"approved", "approved", func(n *batchCounts) *int { return &n.approved }},
+	{"denied", "denied", func(n *batchCounts) *int { return &n.denied }},
+	{"review", "skipped (needs review)", func(n *batchCounts) *int { return &n.review }},
+	{"failed", "failed", func(n *batchCounts) *int { return &n.failed }},
+	{"handled", "already handled", func(n *batchCounts) *int { return &n.handled }},
+}
+
+// text is the notice of a batch, with the parts that are not zero, as in "3 approved, 1 skipped (needs review),
+// 1 failed, 2 already handled"; empty when every part is zero.
+func (n batchCounts) text() string {
+	var parts []string
+	for _, p := range noticeParts {
+		if c := *p.count(&n); c > 0 {
+			parts = append(parts, strconv.Itoa(c)+" "+p.label)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// parseListQuery validates the list query against the loaded configuration. ok is false for a key that is none of
+// account, status, select, and the keys of noticeParts, a repeated key, or an unknown value; the list page then shows the
+// unfiltered page.
+func parseListQuery(raw string, cfg config.Config) (q listQuery, ok bool) {
 	values, err := url.ParseQuery(raw)
 	if err != nil {
-		return listQuery{}
+		return listQuery{}, false
 	}
-	var q listQuery
 	for key, v := range values {
 		if len(v) != 1 {
-			return listQuery{}
+			return listQuery{}, false
+		}
+		if i := slices.IndexFunc(noticeParts, func(p noticePart) bool { return p.key == key }); i >= 0 {
+			n, err := strconv.Atoi(v[0])
+			if err != nil || n < 0 || n > maxBatchIDs || strconv.Itoa(n) != v[0] {
+				return listQuery{}, false
+			}
+			*noticeParts[i].count(&q.notice) = n
+			continue
 		}
 		switch key {
 		case "account":
 			a, ok := cfg.Account(v[0])
 			if !ok {
-				return listQuery{}
+				return listQuery{}, false
 			}
 			q.alias, q.key = a.Alias, a.Key()
 		case "status":
 			if v[0] != showReview && v[0] != showOthers {
-				return listQuery{}
+				return listQuery{}, false
 			}
 			q.show = v[0]
+		case "select":
+			if !slices.ContainsFunc(listGroups, func(g listGroup) bool { return g.Key == v[0] }) {
+				return listQuery{}, false
+			}
+			q.sel = v[0]
 		default:
-			return listQuery{}
+			return listQuery{}, false
 		}
 	}
-	return q
+	return q, true
 }
 
-// url is the list page with the filter, its parameters in a fixed order.
-func (q listQuery) url() string {
+// maxReturnBytes bounds the return field of a decision form.
+const maxReturnBytes = 512
+
+// returnQuery validates the return field of a decision form: "/" or "/?" and a valid list query, at most
+// maxReturnBytes, without "//", a backslash, or a control character. ok is false for any other value, which the
+// decision ignores. The redirect is the url of the filter, never the field.
+func returnQuery(v string, cfg config.Config) (listQuery, bool) {
+	if len(v) > maxReturnBytes || strings.Contains(v, "//") || strings.ContainsFunc(v, func(r rune) bool { return r == '\\' || unicode.IsControl(r) }) {
+		return listQuery{}, false
+	}
+	if v == "/" {
+		return listQuery{}, true
+	}
+	raw, ok := strings.CutPrefix(v, "/?")
+	if !ok {
+		return listQuery{}, false
+	}
+	return parseListQuery(raw, cfg)
+}
+
+// values are the filter parameters of the query.
+func (q listQuery) values() url.Values {
 	v := url.Values{}
 	if q.alias != "" {
 		v.Set("account", q.alias)
@@ -107,6 +176,14 @@ func (q listQuery) url() string {
 	if q.show != "" {
 		v.Set("status", q.show)
 	}
+	return v
+}
+
+// url is the list page with the filter, its parameters in a fixed order.
+func (q listQuery) url() string { return listURL(q.values()) }
+
+// listURL is the list page with the parameters v.
+func listURL(v url.Values) string {
 	if len(v) == 0 {
 		return "/"
 	}
@@ -123,6 +200,9 @@ type listPage struct {
 	Waiting, Review int
 	Accounts, Shows []filterLink
 	Groups          []groupView
+	// Notice is the outcome of a batch. Return is the list with the filter, where a decision from the list goes back
+	// to. ClearURL is set on a page that ticks a group: Clear is then a link to the page without the ticks.
+	Notice, Return, ClearURL string
 }
 
 type filterLink struct {
@@ -134,6 +214,9 @@ type filterLink struct {
 type groupView struct {
 	listGroup
 	Rows, Recents []listRow
+	// Selected is true when the page ticks the group's rows. SelectURL ticks them, or clears them when Selected.
+	Selected  bool
+	SelectURL string
 }
 
 // listRow is one pending action in a list table. Every text in it can come from the agent or from mail.
@@ -252,7 +335,8 @@ func (c *console) list(ctx context.Context, w http.ResponseWriter, r *http.Reque
 		plain(w, 503, ErrUnavailable.Error())
 		return
 	}
-	q := parseListQuery(r.URL.RawQuery, st.config)
+	// An invalid query shows the unfiltered page.
+	q, _ := parseListQuery(r.URL.RawQuery, st.config)
 	// Recents follow the Account filter; the waiting actions of every account give the filter counts.
 	items, err := c.s.cache.ListPending(ctx, recentsListed, q.key)
 	if err != nil {
@@ -274,7 +358,10 @@ func (c *console) list(ctx context.Context, w http.ResponseWriter, r *http.Reque
 			recents[row.Group] = append(recents[row.Group], row)
 		}
 	}
-	page := listPage{}
+	page := listPage{Notice: q.notice.text(), Return: q.url()}
+	if q.sel != "" {
+		page.ClearURL = q.url()
+	}
 	count := func(f listQuery) int {
 		n := 0
 		for _, row := range waiting {
@@ -290,15 +377,20 @@ func (c *console) list(ctx context.Context, w http.ResponseWriter, r *http.Reque
 	}
 	page.Accounts = []filterLink{link("All", "", listQuery{show: q.show}, q.key == "")}
 	for _, a := range st.config.Accounts {
-		page.Accounts = append(page.Accounts, link(a.Alias, a.Key(), listQuery{a.Alias, a.Key(), q.show}, q.key == a.Key()))
+		page.Accounts = append(page.Accounts, link(a.Alias, a.Key(), listQuery{alias: a.Alias, key: a.Key(), show: q.show}, q.key == a.Key()))
 	}
 	page.Shows = []filterLink{
-		link("All", "", listQuery{q.alias, q.key, ""}, q.show == ""),
-		link("Needs review", "", listQuery{q.alias, q.key, showReview}, q.show == showReview),
-		link("Others", "", listQuery{q.alias, q.key, showOthers}, q.show == showOthers),
+		link("All", "", listQuery{alias: q.alias, key: q.key}, q.show == ""),
+		link("Needs review", "", listQuery{alias: q.alias, key: q.key, show: showReview}, q.show == showReview),
+		link("Others", "", listQuery{alias: q.alias, key: q.key, show: showOthers}, q.show == showOthers),
 	}
 	for _, g := range listGroups {
-		view := groupView{listGroup: g, Recents: recents[g.Key]}
+		view := groupView{listGroup: g, Recents: recents[g.Key], Selected: q.sel == g.Key}
+		selectURL := q.values()
+		if !view.Selected {
+			selectURL.Set("select", g.Key)
+		}
+		view.SelectURL = listURL(selectURL)
 		for _, row := range waiting {
 			if row.Group == g.Key && q.shows(row) {
 				view.Rows = append(view.Rows, row)
@@ -489,6 +581,12 @@ func accountAliases(cfg config.Config) map[string]string {
 	return out
 }
 
+// needsReview reports whether a pending action needs review: a Messages or Meetings action whose check found a risk
+// or failed. Mailbox operations never need review.
+func needsReview(item cache.Pending) bool {
+	return listedOps[item.Op].group != groupMailbox && checkScore(item.Jev).Risk
+}
+
 // listedRow builds the row of a pending action of a listed operation from its stored fields only. The action page
 // shows the same row.
 func listedRow(item cache.Pending, aliases map[string]string, now time.Time) listRow {
@@ -502,7 +600,7 @@ func listedRow(item cache.Pending, aliases map[string]string, now time.Time) lis
 	if op.group == groupMailbox {
 		row.Score = unscreened
 	}
-	row.Review = op.group != groupMailbox && row.Score.Risk
+	row.Review = needsReview(item)
 	args := storedFields(item.Args)
 	row.args = args
 	fields := args
