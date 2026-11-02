@@ -1,7 +1,7 @@
 # Verification and limits
 
 Tests run offline: real loopback HTTP, temporary homes, the fake provider, fake Graph, Gmail, and Jev endpoints, and a fake Keychain `Platform`.
-No test needs real mailbox data, a browser, OpenRouter, or Keychain access. CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs `make`, `go fix -diff`, `staticcheck`, `govulncheck`, and a Gitleaks scan of the whole history, on Linux only. CI never builds the macOS-only Keychain backend (`internal/credentials/keychain_darwin.go`); only a local `make` on a Mac does.
+No test needs real mailbox data, a browser, OpenRouter, or Keychain access. CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs `make`, `go fix -diff`, `staticcheck`, `govulncheck`, and a Gitleaks scan of the whole history on Linux, and `make` on macOS, which builds and tests the macOS-only Keychain backend (`internal/credentials/keychain_darwin.go`).
 
 The end-to-end tests in `internal/e2e` build the real `amg` and `amgd` binaries and run `amgd serve` as its own process, on a temporary home with a fake account, the fake screening engine, and the file credential backend. The other `amgd` commands and `amg` run as separate processes, and the tests approve and deny pending actions through the approval console over HTTP.
 After each test, the daemon log, `audit.jsonl`, and every column of `cache.db` except the `args` and `draft` columns of `pending` must contain no seeded name, subject, body, or address.

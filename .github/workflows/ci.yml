@@ -21,7 +21,6 @@ env:
 jobs:
   checks:
     name: Go (${{ matrix.go-version }})
-    # Linux only: `make` on a Mac covers the macOS-only Keychain backend.
     # The repository variable LINUX_RUNNER can name a self-hosted runner. It runs pushes and pull requests from
     # branches of this repository only; pull requests from forks always run on a GitHub-hosted runner.
     runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LINUX_RUNNER || 'ubuntu-24.04' }}
@@ -63,6 +62,24 @@ jobs:
         run: '"$(go env GOPATH)/bin/staticcheck" ./...'
       - name: Govulncheck
         run: '"$(go env GOPATH)/bin/govulncheck" ./...'
+
+  # The macOS-only code (the Keychain backend, *_darwin_test.go) builds and runs only here and in the release.
+  macos:
+    name: Go (macos-15)
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+      - name: Format, vet, race tests, and build
+        run: make
 
   workflows:
     name: Workflow lint
