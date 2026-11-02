@@ -2,6 +2,8 @@ package server_test
 
 import (
 	"context"
+	"encoding/json"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -84,7 +86,7 @@ func (f *consoleFixture) get(t *testing.T, path string, change func(*http.Reques
 	return f.send(t, httptest.NewRequest(http.MethodGet, path, nil), change)
 }
 
-// decide posts a decision form for the item as a signed-in browser on the console address.
+// decide posts a decision form for the action as a signed-in browser on the console address.
 func (f *consoleFixture) decide(t *testing.T, id, decision string, change func(*http.Request)) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, "/a/"+id, strings.NewReader("decision="+decision))
@@ -312,9 +314,9 @@ func onlyConsoleLinks(t *testing.T, page string) {
 	}
 }
 
-// The item page shows the stored arguments as text and the referenced message through the guarded read,
-// without its body.
-func TestConsoleItemShowsStoredArgumentsAsTextAndTheMessageSummary(t *testing.T) {
+// The action page shows the action label and operation, the account alias and key, the stored arguments as text,
+// and the referenced message through the guarded read, without its body.
+func TestConsoleActionShowsStoredArgumentsAsTextAndTheMessageSummary(t *testing.T) {
 	f := consoleDaemon(t, draftApprove, true)
 	id := pend(t, f.d.s, "draft.reply", `{"id":"g","body":"<script>alert(1)</script> see https://evil.example/x"}`)[0]
 	w := f.get(t, "/a/"+id, nil)
@@ -322,39 +324,64 @@ func TestConsoleItemShowsStoredArgumentsAsTextAndTheMessageSummary(t *testing.T)
 	if w.Code != 200 {
 		t.Fatalf("%d %s", w.Code, page)
 	}
-	for _, want := range []string{workEmail, "draft.reply", "pending", "&lt;script&gt;alert(1)&lt;/script&gt; see https://evil.example/x", "private-subject-g", "sender@example.test", "green", "2026-03-30", `name="decision" value="approve"`, `name="decision" value="deny"`} {
+	for _, want := range []string{
+		`<h1>Draft reply <span class="opname">draft.reply</span></h1>`,
+		`<dt>State</dt><dd class="state pending">Pending</dd>`,
+		"<dt>Account</dt><dd>work · " + workEmail + "</dd>",
+		"<dt>Created</dt><dd>Tue 31 Mar 2026, 12:00</dd>",
+		`<dt>ID</dt><dd><span class="ln">g</span></dd>`,
+		"<figcaption>Body, plain text as the agent wrote it</figcaption><pre>&lt;script&gt;alert(1)&lt;/script&gt; see https://evil.example/x</pre>",
+		"private-subject-g", "sender@example.test", "green", `<dt>Received</dt><dd><span class="ln">Mon 30 Mar 2026, 10:00</span></dd>`,
+		`<p class="back"><a href="/">All approvals</a></p>`,
+		`name="decision" value="approve"`, `name="decision" value="deny"`,
+	} {
 		if !strings.Contains(page, want) {
-			t.Errorf("item page misses %q", want)
+			t.Errorf("action page misses %q: %s", want, page)
 		}
 	}
-	if strings.Contains(page, "private-body-g") || strings.Contains(page, "example.test/report") {
-		t.Errorf("item page shows the message body: %s", page)
+	if strings.Contains(page, "private-body-g") || strings.Contains(page, "example.test/report") || strings.Contains(page, "<iframe") {
+		t.Errorf("action page shows the message body or a frame: %s", page)
 	}
 	onlyConsoleLinks(t, page)
 }
 
-// The item page shows the Jev action check result; an action without a check shows none.
-func TestConsoleItemShowsTheJevCheck(t *testing.T) {
-	f := consoleDaemon(t, draftApprove, true)
+// The action page shows the same Score as the list's open row: the value and its label, the fixed code of a failed
+// check after the label, and for a trash the screening verdict of its message from the cache. It never names the
+// screening service.
+func TestConsoleActionShowsTheScore(t *testing.T) {
+	f := consoleDaemon(t, everyWriteWaits, true)
 	for _, tc := range []struct {
 		score float64
 		want  string
 	}{
-		{0.62, "Jev: flagged (score 0.62)"},
-		{0.08, "Jev: not flagged (score 0.08)"},
-		{2, "Jev: check failed (ValidationError)"},
+		{0.62, `<dt>Score</dt><dd class="bad">▲ 0.62 · Needs review</dd>`},
+		{0.08, `<dt>Score</dt><dd>0.08 · Checked</dd>`},
+		{2, `<dt>Score</dt><dd class="bad">▲ error · Needs review · ValidationError</dd>`},
 	} {
-		f.api.mu.Lock()
-		f.api.actionScore = tc.score
-		f.api.mu.Unlock()
+		f.setScore(tc.score)
 		id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
-		if page := f.get(t, "/a/"+id, nil).Body.String(); !strings.Contains(page, tc.want) {
-			t.Errorf("item page misses %q: %s", tc.want, page)
+		page := f.get(t, "/a/"+id, nil).Body.String()
+		if !strings.Contains(page, tc.want) {
+			t.Errorf("action page misses %q: %s", tc.want, page)
+		}
+		if m := neverOnPage.FindString(page); m != "" {
+			t.Errorf("action page shows %q: %s", m, page)
 		}
 	}
-	id := pend(t, f.d.s, "mail.trash", `{"ids":["g"]}`)[0]
-	if page := f.get(t, "/a/"+id, nil).Body.String(); strings.Contains(page, "Jev") {
-		t.Errorf("unchecked action shows a Jev result: %s", page)
+	for _, tc := range []struct{ op, params, want string }{
+		{"draft.delete", `{"id":"draft-1"}`, `<dt>Score</dt><dd>— · Not checked</dd>`},
+		{"mail.trash", `{"ids":["r"]}`, `<dt>Score</dt><dd class="bad">▲ 0.90 · Red</dd>`},
+		{"mail.trash", `{"ids":["s"]}`, `<dt>Score</dt><dd class="bad">▲ sealed · Sealed</dd>`},
+		{"mail.trash", `{"ids":["gone"]}`, `<dt>Score</dt><dd>— · Unknown</dd>`},
+	} {
+		id := pend(t, f.d.s, tc.op, tc.params)[0]
+		page := f.get(t, "/a/"+id, nil).Body.String()
+		if !strings.Contains(page, tc.want) {
+			t.Errorf("%s %s: action page misses %q: %s", tc.op, tc.params, tc.want, page)
+		}
+		if m := neverOnPage.FindString(page); m != "" {
+			t.Errorf("%s %s: action page shows %q: %s", tc.op, tc.params, m, page)
+		}
 	}
 }
 
@@ -370,24 +397,26 @@ func fakeConsole(t *testing.T, home, config string) *consoleFixture {
 
 const draftApproveOnly = "[policy]\nmail_draft='approve'\n"
 
-// A check made by the fake engine is labeled as a keyword check, never as a Jev check.
-func TestConsoleItemLabelsTheFakeCheck(t *testing.T) {
+// A check made by the fake engine carries the fake tag before the value, and the page never names the screening
+// service.
+func TestConsoleActionTagsTheFakeCheck(t *testing.T) {
 	f := fakeConsole(t, fakeHome(t), fakeScreen+draftApproveOnly)
 	for body, want := range map[string]string{
-		"See you at noon":        "Fake check (keywords only): not flagged (score 0.05)",
-		"Your new password is x": "Fake check (keywords only): flagged (score 0.90)",
-		"SCREENFAIL":             "Fake check (keywords only): check failed (TypeSafeAPIError 503)",
+		"See you at noon":        `<dt>Score</dt><dd><span class="fake">fake</span>0.05 · Checked</dd>`,
+		"Your new password is x": `<dt>Score</dt><dd class="bad"><span class="fake">fake</span>▲ 0.90 · Needs review</dd>`,
+		"SCREENFAIL":             `<dt>Score</dt><dd class="bad"><span class="fake">fake</span>▲ error · Needs review · TypeSafeAPIError 503</dd>`,
 	} {
 		id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"`+body+`"}`)[0]
-		if page := f.get(t, "/a/"+id, nil).Body.String(); !strings.Contains(page, want) || strings.Contains(page, "Jev") {
-			t.Errorf("%q: item page misses %q or names Jev: %s", body, want, page)
+		page := f.get(t, "/a/"+id, nil).Body.String()
+		if !strings.Contains(page, want) || neverOnPage.MatchString(page) || strings.Contains(page, "keywords") {
+			t.Errorf("%q: action page misses %q or names the engine: %s", body, want, page)
 		}
 	}
 }
 
-// The label follows the engine that made the check, not the engine of the running server: an item checked by
-// the fake engine keeps its label after a restart with Jev screening.
-func TestConsoleItemKeepsTheFakeLabelAfterARestartWithJev(t *testing.T) {
+// The tag follows the engine that made the check, not the engine of the running server: an action checked by the
+// fake engine keeps its tag after a restart with Jev screening.
+func TestConsoleActionKeepsTheFakeTagAfterARestartWithJev(t *testing.T) {
 	home := fakeHome(t)
 	before := fakeConsole(t, home, fakeScreen+draftApproveOnly)
 	id := pend(t, before.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"See you at noon"}`)[0]
@@ -396,8 +425,115 @@ func TestConsoleItemKeepsTheFakeLabelAfterARestartWithJev(t *testing.T) {
 	}
 	after := fakeConsole(t, home, draftApproveOnly)
 	page := after.get(t, "/a/"+id, nil).Body.String()
-	if want := "Fake check (keywords only): not flagged (score 0.05)"; !strings.Contains(page, want) || strings.Contains(page, "Jev") {
-		t.Fatalf("item page misses %q or names Jev: %s", want, page)
+	if want := `<dt>Score</dt><dd><span class="fake">fake</span>0.05 · Checked</dd>`; !strings.Contains(page, want) || neverOnPage.MatchString(page) {
+		t.Fatalf("action page misses %q or names the engine: %s", want, page)
+	}
+}
+
+// iframes are the frame tags of a page; frameTag is a frame whose attribute values hold no quote or angle bracket,
+// so that no value can end its attribute or the tag, and frameAttr one of its attributes.
+var (
+	iframes   = regexp.MustCompile(`<iframe[^>]*>`)
+	frameTag  = regexp.MustCompile(`^<iframe( [a-z]+="[^"<>]*")*>$`)
+	frameAttr = regexp.MustCompile(` ([a-z]+)="([^"<>]*)"`)
+)
+
+// renderedCaption is the fixed caption of the Rendered preview.
+const renderedCaption = "<figcaption>Rendered preview: links, images, and forms are off. Hidden text shows only in the source.</figcaption>"
+
+// renderedFrame is the attributes of the one frame of an action page, or fails.
+func renderedFrame(t *testing.T, page string) map[string]string {
+	t.Helper()
+	frames := iframes.FindAllString(page, -1)
+	if len(frames) != 1 || !frameTag.MatchString(frames[0]) {
+		t.Fatalf("frames=%q", frames)
+	}
+	attrs := map[string]string{}
+	for _, m := range frameAttr.FindAllStringSubmatch(frames[0], -1) {
+		attrs[m[1]] = m[2]
+	}
+	return attrs
+}
+
+// An HTML body shows as a Rendered preview above its escaped source: one frame with an empty sandbox, no referrer,
+// a title, and the body as an escaped srcdoc that hostile text cannot leave, under the fixed caption. Approve and
+// Deny come after the source. A plain-text body gets no frame.
+func TestConsoleActionShowsAnHTMLBodyInASandboxedFrameAboveItsSource(t *testing.T) {
+	f := consoleDaemon(t, everyWriteWaits, true)
+	body := `<p class="x">Hi &amp; bye</p>" onload="alert(1)" x='<script>alert(1)</script><img src=x onerror=alert(1)>`
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := pend(t, f.d.s, "mail.send", `{"to":["a@example.test"],"subject":"s","html":true,"body":`+string(b)+`}`)[0]
+	page := f.get(t, "/a/"+id, nil).Body.String()
+	attrs := renderedFrame(t, page)
+	if attrs["sandbox"] != "" || attrs["referrerpolicy"] != "no-referrer" || attrs["title"] == "" || html.UnescapeString(attrs["srcdoc"]) != body {
+		t.Fatalf("frame=%q", attrs)
+	}
+	if _, ok := attrs["sandbox"]; !ok {
+		t.Fatalf("frame has no sandbox: %q", attrs)
+	}
+	source := "<figcaption>Body, HTML source as the agent wrote it</figcaption><pre>&lt;p class=&#34;x&#34;&gt;Hi &amp;amp; bye&lt;/p&gt;&#34; onload=&#34;alert(1)&#34; x=&#39;&lt;script&gt;"
+	caption, frame, pre, decision := strings.Index(page, renderedCaption), strings.Index(page, "<iframe"), strings.Index(page, source), strings.Index(page, `name="decision"`)
+	if caption < 0 || frame < caption || pre < frame || decision < pre {
+		t.Fatalf("caption=%d frame=%d source=%d decision=%d: %s", caption, frame, pre, decision, page)
+	}
+	if strings.Contains(page, "<img") || strings.Contains(page, "<script") {
+		t.Fatalf("body is markup outside the frame: %s", page)
+	}
+	plain := pend(t, f.d.s, "mail.send", `{"to":["a@example.test"],"subject":"s","body":"<p>Hi</p>"}`)[0]
+	page = f.get(t, "/a/"+plain, nil).Body.String()
+	if strings.Contains(page, "<iframe") || strings.Contains(page, "Rendered preview") || !strings.Contains(page, "<pre>&lt;p&gt;Hi&lt;/p&gt;</pre>") {
+		t.Fatalf("plain-text body: %s", page)
+	}
+}
+
+// A draft send whose stored draft is HTML shows the draft body in the Rendered preview too.
+func TestConsoleActionShowsTheRenderedPreviewOfAnHTMLDraftSend(t *testing.T) {
+	f := fakeConsole(t, fakeHome(t), fakeScreen+"[policy]\nmail_draft='allow'\nmail_send='approve'\n")
+	body := "<p>See you at <b>noon</b></p>"
+	status, made := accountRPC(t, f.d.s, "draft.new", "", `{"to":["a@example.test"],"subject":"s","html":true,"body":"`+body+`"}`)
+	var draft struct{ ID string }
+	if status != 200 || json.Unmarshal([]byte(made), &draft) != nil || draft.ID == "" {
+		t.Fatalf("draft: %d %s", status, made)
+	}
+	id := pend(t, f.d.s, "draft.send", `{"id":"`+draft.ID+`"}`)[0]
+	page := f.get(t, "/a/"+id, nil).Body.String()
+	if attrs := renderedFrame(t, page); html.UnescapeString(attrs["srcdoc"]) != body || !strings.Contains(page, renderedCaption) {
+		t.Fatalf("frame=%q page=%s", attrs, page)
+	}
+	for _, want := range []string{"<figcaption>Body, HTML source as the agent wrote it</figcaption><pre>&lt;p&gt;See you at &lt;b&gt;noon&lt;/b&gt;&lt;/p&gt;</pre>",
+		"The draft as the daemon read it for the action check when the agent asked to send it."} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page misses %q: %s", want, page)
+		}
+	}
+}
+
+// Agent text renders as literal text everywhere on the action page: request fields, the body and its frame, the
+// meeting comment, and the stored draft fields. The page has no script, no event handler attribute, and links only to
+// the console.
+func TestConsoleActionShowsHostileAgentTextAsLiteralText(t *testing.T) {
+	f := consoleDaemon(t, everyWriteWaits, true)
+	h, err := json.Marshal(hostile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	escaped := `&lt;img src=x onerror=alert(1)&gt; {{7*7}} ${7*7}`
+	for _, tc := range []struct{ op, params string }{
+		{"mail.send", `{"to":[` + string(h) + `],"cc":[` + string(h) + `],"subject":` + string(h) + `,"body":` + string(h) + `}`},
+		{"draft.new", `{"to":["a@example.test"],"subject":` + string(h) + `,"html":true,"body":` + string(h) + `}`},
+		{"calendar.invite", `{"to":[` + string(h) + `],"subject":` + string(h) + `,"body":` + string(h) + `,"location":` + string(h) + `,"start":"2026-04-01T09:00:00Z","end":"2026-04-01T10:00:00Z"}`},
+		{"calendar.respond", `{"id":"e","response":"decline","comment":` + string(h) + `}`},
+		{"mail.reply", `{"id":"g","cc":[` + string(h) + `],"bcc":[` + string(h) + `],"body":` + string(h) + `}`},
+	} {
+		id := pend(t, f.d.s, tc.op, tc.params)[0]
+		page := f.get(t, "/a/"+id, nil).Body.String()
+		if strings.Contains(page, "<img") || !strings.Contains(page, escaped) {
+			t.Errorf("%s: hostile text is markup or missing: %s", tc.op, page)
+		}
+		onlyConsoleLinks(t, page)
 	}
 }
 
@@ -418,22 +554,22 @@ func TestFakeCheckMarkStaysOutOfAgentResponsesAndTheAudit(t *testing.T) {
 	}
 }
 
-func TestConsoleItemShowsTheReferencedEvent(t *testing.T) {
+func TestConsoleActionShowsTheReferencedEvent(t *testing.T) {
 	f := consoleDaemon(t, draftApprove, true)
 	id := pend(t, f.d.s, "calendar.respond", `{"id":"e","response":"tentative","comment":"CANARY comment"}`)[0]
 	page := f.get(t, "/a/"+id, nil).Body.String()
-	for _, want := range []string{"calendar.respond", "tentative", "CANARY comment", "private-subject-event", "2026-03-31T10:00:00", "2026-03-31T11:00:00"} {
+	for _, want := range []string{"calendar.respond", "tentative", "CANARY comment", "private-subject-event", `<dt>Start</dt><dd><span class="ln">Tue 31 Mar 2026, 10:00</span></dd>`, `<dt>End</dt><dd><span class="ln">Tue 31 Mar 2026, 11:00</span></dd>`} {
 		if !strings.Contains(page, want) {
-			t.Errorf("item page misses %q: %s", want, page)
+			t.Errorf("action page misses %q: %s", want, page)
 		}
 	}
 	if strings.Contains(page, "private-body-event") {
-		t.Errorf("item page shows the event body: %s", page)
+		t.Errorf("action page shows the event body: %s", page)
 	}
 }
 
 // A referenced message that cannot be read does not block the decision.
-func TestConsoleItemStillOffersTheDecisionWhenTheMessageIsUnavailable(t *testing.T) {
+func TestConsoleActionStillOffersTheDecisionWhenTheMessageIsUnavailable(t *testing.T) {
 	f := consoleDaemon(t, draftApprove, true)
 	id := pend(t, f.d.s, "mail.trash", `{"ids":["gone"]}`)[0]
 	page := f.get(t, "/a/"+id, nil).Body.String()
@@ -477,7 +613,7 @@ func TestConsoleApproveRunsTheActionOnceAndShowsDone(t *testing.T) {
 		t.Fatalf("approve: %d %q writes=%d", w.Code, w.Header().Get("Location"), f.writes())
 	}
 	page := f.get(t, "/a/"+id, nil).Body.String()
-	if !strings.Contains(page, `>done<`) || !strings.Contains(page, "draft-1") || strings.Contains(page, `value="approve"`) {
+	if !strings.Contains(page, `<dd class="state done">Done</dd>`) || !strings.Contains(page, "draft-1") || strings.Contains(page, `value="approve"`) {
 		t.Fatalf("page after approve=%s", page)
 	}
 	w = f.decide(t, id, "approve", nil)
@@ -496,7 +632,7 @@ func TestConsoleDenyRunsNothing(t *testing.T) {
 		t.Fatalf("deny: %d", w.Code)
 	}
 	page := f.get(t, "/a/"+id, nil).Body.String()
-	if !strings.Contains(page, `>denied<`) || strings.Contains(page, `value="approve"`) || f.writes() != 0 {
+	if !strings.Contains(page, `<dd class="state denied">Denied</dd>`) || strings.Contains(page, `value="approve"`) || f.writes() != 0 {
 		t.Fatalf("writes=%d page=%s", f.writes(), page)
 	}
 	if w := f.decide(t, id, "approve", nil); w.Code != 409 || f.writes() != 0 {
@@ -512,7 +648,7 @@ func TestConsoleShowsTheCodeOfAFailedRun(t *testing.T) {
 		t.Fatalf("approve: %d %s", w.Code, w.Body)
 	}
 	page := f.get(t, "/a/"+id, nil).Body.String()
-	if !strings.Contains(page, `>failed<`) || !strings.Contains(page, "Graph error 404") || strings.Contains(page, "private-provider-canary") {
+	if !strings.Contains(page, `<dd class="state failed">Failed</dd>`) || !strings.Contains(page, `<dt>Error</dt><dd class="bad">Graph error 404</dd>`) || strings.Contains(page, "private-provider-canary") {
 		t.Fatalf("page=%s", page)
 	}
 }

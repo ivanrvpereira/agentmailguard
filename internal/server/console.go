@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/cache"
-	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"github.com/ivanrvpereira/agentmailguard/internal/views"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -154,7 +153,7 @@ func (c *console) route(ctx context.Context, w http.ResponseWriter, r *http.Requ
 	}
 	switch r.Method {
 	case http.MethodGet:
-		c.item(ctx, w, id, 200, "")
+		c.action(ctx, w, id, 200, "")
 	case http.MethodPost:
 		c.decide(ctx, w, r, id)
 	default:
@@ -173,7 +172,7 @@ func sameOrigin(r *http.Request) bool {
 // maxDecisionBytes bounds the decision form body.
 const maxDecisionBytes = 4 << 10
 
-// decide approves or denies the item from a form with the one field decision, then shows the item again.
+// decide approves or denies the action from a form with the one field decision, then shows the action page again.
 func (c *console) decide(ctx context.Context, w http.ResponseWriter, r *http.Request, id string) {
 	typ, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || typ != "application/x-www-form-urlencoded" || len(params) > 1 || (len(params) == 1 && !strings.EqualFold(params["charset"], "utf-8")) {
@@ -206,11 +205,11 @@ func (c *console) decide(ctx context.Context, w http.ResponseWriter, r *http.Req
 	case errors.Is(err, ErrApprovalNotFound):
 		plain(w, 404, "not found")
 	case errors.Is(err, ErrAlreadyHandled):
-		c.item(ctx, w, id, 409, "This action was already handled. Nothing ran again.")
+		c.action(ctx, w, id, 409, "This action was already handled. Nothing ran again.")
 	case errors.Is(err, ErrUnavailable):
 		plain(w, 503, err.Error())
 	default:
-		// Done, or a failed run whose state and code the item page shows.
+		// Done, or a failed run whose state and code the action page shows.
 		http.Redirect(w, r, "/a/"+id, http.StatusSeeOther)
 	}
 }
@@ -220,11 +219,12 @@ type field struct {
 	Lines []string
 }
 
-type itemPage struct {
-	// Jev is the result of the Jev action check, empty when no check ran.
-	ID, Account, Op, Created, Updated, Result, Code, Notice, Jev string
-	State                                                        cache.PendingState
-	Args                                                         []field
+// actionPage is the action page of a stored action. Row is the action as the list's open row shows it: the label,
+// alias, Score, request fields, draft fields, and the body under its caption.
+type actionPage struct {
+	Row                                                        listRow
+	ID, Op, StateLabel, Created, Updated, Result, Code, Notice string
+	State                                                      cache.PendingState
 	// Ref is the referenced message or event, RefKind names it, RefMissing is true when the read failed.
 	RefKind    string
 	Ref        []field
@@ -233,16 +233,31 @@ type itemPage struct {
 	Reply             bool
 	Recipients        []field
 	RecipientsMissing bool
-	// DraftSend is true for a draft send. Draft is the stored draft fields that Jev checked, empty when none are stored.
+	// DraftSend is true for a draft send, whose stored draft fields are in Row.Draft.
 	DraftSend bool
-	Draft     []field
 	Pending   bool
+}
+
+// longTime is a full date and time, as in "Tue 31 Mar 2026, 12:00".
+const longTime = "Mon 2 Jan 2006, 15:04"
+
+// longTimeText is the RFC 3339 time v as longTime: in loc, or in the offset of v when loc is nil. A v that is not
+// RFC 3339 stays as it is.
+func longTimeText(v string, loc *time.Location) string {
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return v
+	}
+	if loc != nil {
+		t = t.In(loc)
+	}
+	return t.Format(longTime)
 }
 
 // referenceTimeout bounds the guarded read of the referenced message or event.
 const referenceTimeout = 30 * time.Second
 
-func (c *console) item(ctx context.Context, w http.ResponseWriter, id string, status int, notice string) {
+func (c *console) action(ctx context.Context, w http.ResponseWriter, id string, status int, notice string) {
 	item, err := c.s.cache.GetPending(ctx, id)
 	if err != nil {
 		if errors.Is(err, cache.ErrPendingNotFound) {
@@ -252,8 +267,21 @@ func (c *console) item(ctx context.Context, w http.ResponseWriter, id string, st
 		}
 		return
 	}
-	page := itemPage{ID: item.ID, Account: item.Account, Op: item.Op, State: item.State, Notice: notice, Pending: item.State == cache.StatePending,
-		Created: item.Created.Format(time.RFC3339), Updated: item.Updated.Format(time.RFC3339)}
+	var aliases map[string]string
+	if st := c.s.current.Load(); st != nil {
+		aliases = accountAliases(st.config)
+	}
+	now := c.s.options.Now()
+	page := actionPage{Row: listedRow(item, aliases, now), ID: item.ID, Op: item.Op, State: item.State, Notice: notice, Pending: item.State == cache.StatePending,
+		Created: item.Created.In(now.Location()).Format(longTime), Updated: item.Updated.In(now.Location()).Format(longTime)}
+	if page.Row.Label == "" {
+		page.Row.Label = item.Op
+	}
+	page.StateLabel = stateLabel(item.State)
+	// The Rendered preview shows the HTML above its source, so the source caption does not say "not rendered".
+	if page.Row.BodyHTML {
+		page.Row.Caption = strings.TrimSuffix(page.Row.Caption, notRendered)
+	}
 	if item.Result != nil {
 		switch item.State {
 		case cache.StateDone:
@@ -262,18 +290,16 @@ func (c *console) item(ctx context.Context, w http.ResponseWriter, id string, st
 			page.Code = *item.Result
 		}
 	}
-	page.Jev = jevText(item.Jev)
-	args := storedFields(item.Args)
-	page.Args = requestFields(args)
+	args := page.Row.args
 	page.RefKind, page.Ref, page.RefMissing = c.reference(ctx, item, args)
+	// After the reference read, which screens the message of a trash, so that its verdict is in the cache.
+	c.screenedScores(ctx, []*listRow{&page.Row})
 	if item.Op == "draft.reply" || item.Op == "mail.reply" {
 		page.Reply = true
 		page.Recipients, page.RecipientsMissing = c.replyRecipients(ctx, item, args)
 	}
-	if item.Op == "draft.send" {
-		page.DraftSend, page.Draft = true, requestFields(storedFields(item.Draft))
-	}
-	render(w, status, "item", page)
+	page.DraftSend = item.Op == "draft.send"
+	render(w, status, "action", page)
 }
 
 // replyRecipients works out who a reply goes to: the To and CC that the guard reads from the original message, with
@@ -292,16 +318,13 @@ func (c *console) replyRecipients(ctx context.Context, item cache.Pending, args 
 		return nil, true
 	}
 	r = r.With(texts(args["cc"]), texts(args["bcc"]))
-	return []field{{"to", r.To}, {"cc", r.CC}, {"bcc (hidden recipients)", r.BCC}}, false
+	return openFields([]field{{"to", r.To}, {"cc", r.CC}, {"bcc (hidden recipients)", r.BCC}}), false
 }
 
 // requestFields shows each stored argument under its name: the recipients to, cc, and bcc first, bcc marked as
-// hidden recipients, and an HTML body marked as source text, which the page escapes and never renders.
+// hidden recipients.
 func requestFields(args map[string]any) []field {
 	labels := map[string]string{"bcc": "bcc (hidden recipients)"}
-	if args["html"] == true {
-		labels["body"] = "body (HTML source, not rendered)"
-	}
 	recipients := []string{"to", "cc", "bcc"}
 	keys := []string{}
 	for _, key := range recipients {
@@ -363,12 +386,12 @@ func (c *console) reference(ctx context.Context, item cache.Pending, args map[st
 			add("Sender", new(addressText(*v.Sender)))
 		}
 		add("Subject", v.Subject)
-		add("Received", new(v.ReceivedAt))
+		add("Received", new(longTimeText(v.ReceivedAt, c.s.options.Now().Location())))
 	case views.CalendarView:
 		add("Verdict", new(string(v.Verdict)))
 		add("Subject", v.Subject)
-		add("Start", new(v.Start))
-		add("End", new(v.End))
+		add("Start", new(longTimeText(v.Start, nil)))
+		add("End", new(longTimeText(v.End, nil)))
 		add("Organizer", new(addressText(v.Organizer)))
 	default:
 		return kind, nil, true
@@ -384,27 +407,6 @@ func (c *console) guardedRead(ctx context.Context, op, account, id string) (any,
 		return nil, err
 	}
 	return c.s.runOn(ctx, op, account, params)
-}
-
-// jevText describes the Jev action check of an item, or is empty when no check ran. A check that the fake
-// engine made says so, so that nobody takes a keyword match for a Jev check.
-func jevText(c *model.ActionCheck) string {
-	if c == nil {
-		return ""
-	}
-	engine := "Jev: "
-	if c.Fake {
-		engine = "Fake check (keywords only): "
-	}
-	switch {
-	case c.Error != nil:
-		return engine + "check failed (" + *c.Error + ")"
-	case c.Score == nil:
-		return engine + "check failed"
-	case c.Flag:
-		return engine + fmt.Sprintf("flagged (score %.2f)", *c.Score)
-	}
-	return engine + fmt.Sprintf("not flagged (score %.2f)", *c.Score)
 }
 
 func addressText(a views.Address) string {

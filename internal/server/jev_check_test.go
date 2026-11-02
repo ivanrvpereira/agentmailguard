@@ -39,7 +39,7 @@ func TestJevGetsTheActionFieldsOnly(t *testing.T) {
 	}
 }
 
-// The agent gets the normal pending result, never the score or the flag; TestConsoleItemShowsTheJevCheck shows where
+// The agent gets the normal pending result, never the score or the flag; TestConsoleActionShowsTheScore shows where
 // the operator sees them. The approved run asks Jev no second time.
 func TestJevFlagHoldsAnAllowedActionUntilApproval(t *testing.T) {
 	d, graph, api := jevDaemon(t, allowAll, 0.62)

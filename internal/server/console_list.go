@@ -165,6 +165,8 @@ type listRow struct {
 	Read          []readField
 	Fields, Draft []field
 	Body, Caption string
+	// BodyHTML is true when Body is HTML source, which the action page also shows in a sandboxed frame.
+	BodyHTML bool
 }
 
 // readField is an open-row field from the live read of the event or message. Placeholder marks a Value that stands
@@ -257,10 +259,7 @@ func (c *console) list(ctx context.Context, w http.ResponseWriter, r *http.Reque
 		plain(w, 500, "approvals unavailable")
 		return
 	}
-	aliases := map[string]string{}
-	for _, a := range st.config.Accounts {
-		aliases[a.Key()] = a.Alias
-	}
+	aliases := accountAliases(st.config)
 	now := c.s.options.Now()
 	var waiting []listRow
 	recents := map[string][]listRow{}
@@ -466,11 +465,32 @@ func messageRead(r *listRow, v views.MailView, now time.Time) {
 		if at.Format(time.DateOnly) == now.Format(time.DateOnly) {
 			r.Received = at.Format("Today 15:04")
 		}
-		r.Read = append(r.Read, readField{Label: "Received", Value: at.Format("Mon 2 Jan 2006, 15:04")})
+		r.Read = append(r.Read, readField{Label: "Received", Value: at.Format(longTime)})
 	}
 }
 
-// listedRow builds the row of a pending action of a listed operation from its stored fields only.
+// notRendered ends the caption of an HTML body that the page shows only as source.
+const notRendered = ", not rendered"
+
+// stateLabel is the state of a stored action as the console shows it: Pending, Done, Denied, Failed, Withdrawn.
+func stateLabel(s cache.PendingState) string {
+	if s == "" {
+		return ""
+	}
+	return strings.ToUpper(string(s[:1])) + string(s[1:])
+}
+
+// accountAliases maps each account key of the configuration to its alias.
+func accountAliases(cfg config.Config) map[string]string {
+	out := map[string]string{}
+	for _, a := range cfg.Accounts {
+		out[a.Key()] = a.Alias
+	}
+	return out
+}
+
+// listedRow builds the row of a pending action of a listed operation from its stored fields only. The action page
+// shows the same row.
 func listedRow(item cache.Pending, aliases map[string]string, now time.Time) listRow {
 	op := listedOps[item.Op]
 	alias, ok := aliases[item.Account]
@@ -505,7 +525,7 @@ func listedRow(item cache.Pending, aliases map[string]string, now time.Time) lis
 	if text, ok := fields[key].(string); ok {
 		row.Body, row.Caption = text, caption+", plain text as the agent wrote it"
 		if fields["html"] == true {
-			row.Caption = caption + ", HTML source as the agent wrote it, not rendered"
+			row.BodyHTML, row.Caption = true, caption+", HTML source as the agent wrote it"+notRendered
 		}
 	}
 	switch op.group {
@@ -520,20 +540,11 @@ func listedRow(item cache.Pending, aliases map[string]string, now time.Time) lis
 			row.ref = ids[0]
 		}
 	}
-	switch item.State {
-	case cache.StateDone:
-		row.Outcome = "Done"
-	case cache.StateDenied:
-		row.Outcome = "Denied"
-	case cache.StateWithdrawn:
-		row.Outcome = "Withdrawn"
-	case cache.StateFailed:
-		row.Outcome, row.Failed = "Failed", true
-		if item.Result != nil {
+	if item.State != cache.StatePending {
+		row.Outcome, row.Failed = stateLabel(item.State), item.State == cache.StateFailed
+		if row.Failed && item.Result != nil {
 			row.Outcome += ": " + *item.Result
 		}
-	}
-	if item.State != cache.StatePending {
 		row.Age, row.Summary = age(now.Sub(item.Updated)), recentSummary(row, args)
 	}
 	return row
@@ -732,7 +743,7 @@ func people(n int) string {
 func eventWhen(start, end string) string { return timeSpan(start, end, "Mon 2 Jan, 15:04") }
 
 // eventWhenLong is eventWhen with the year: "Wed 1 Apr 2026, 09:00–10:00".
-func eventWhenLong(start, end string) string { return timeSpan(start, end, "Mon 2 Jan 2006, 15:04") }
+func eventWhenLong(start, end string) string { return timeSpan(start, end, longTime) }
 
 func timeSpan(start, end, layout string) string {
 	s, err := time.Parse(time.RFC3339, start)

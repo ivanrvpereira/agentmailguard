@@ -39,7 +39,7 @@
     <div class="open">
       <dl class="f">
         <dt>Account</dt><dd>{{.Account}}</dd>
-        <dt>Score</dt><dd{{if .Score.Risk}} class="bad"{{end}}>{{if .Score.Fake}}<span class="fake">fake</span>{{end}}{{if .Score.Risk}}▲ {{end}}{{.Score.Value}} · {{.Score.Label}}{{with .Score.Code}} · {{.}}{{end}}</dd>
+        <dt>Score</dt>{{template "scorefield" .Score}}
         {{range .Read}}<dt>{{.Label}}</dt><dd{{if .Placeholder}} class="ph"{{end}}>{{.Value}}{{with .Source}} <span class="src">· {{.}}</span>{{end}}</dd>
         {{end}}
         {{template "openfields" .Fields}}
@@ -94,6 +94,8 @@
       <span class="text">{{if .Subject}}<span class="subj{{if .NoSubject}} ph{{end}}">{{.Subject}}</span>{{end}}{{with .Preview}}<span class="snip">{{.}}</span>{{end}}</span>{{end}}{{end}}
 
 {{define "score"}}<span class="score{{if .Risk}} bad{{end}}"{{with .Code}} title="{{.}}"{{end}}>{{if .Fake}}<span class="fake">fake</span>{{end}}{{if .Risk}}<span class="mk" aria-hidden="true">▲</span>{{end}}{{.Value}}<span class="vh"> · {{.Label}}</span></span>{{end}}
+
+{{define "scorefield"}}<dd{{if .Risk}} class="bad"{{end}}>{{if .Fake}}<span class="fake">fake</span>{{end}}{{if .Risk}}▲ {{end}}{{.Value}} · {{.Label}}{{with .Code}} · {{.}}{{end}}</dd>{{end}}
 
 {{define "openfields"}}{{range .}}<dt>{{.Label}}</dt><dd{{if not .Lines}} class="ph"{{end}}>{{range .Lines}}<span class="ln">{{.}}</span>{{else}}—{{end}}</dd>
         {{end}}{{end}}

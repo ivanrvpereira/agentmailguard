@@ -522,8 +522,8 @@ func TestConsoleListOpenRowShowsEveryRequestFieldAndTheBody(t *testing.T) {
 			t.Errorf("open row misses %q: %s", want, row)
 		}
 	}
-	if want := "<figcaption>Body, HTML source as the agent wrote it, not rendered</figcaption><pre>&lt;p&gt;Hi &amp;amp; bye&lt;/p&gt;</pre>"; !strings.Contains(rowOf(page, html), want) {
-		t.Errorf("open row misses %q: %s", want, rowOf(page, html))
+	if want := "<figcaption>Body, HTML source as the agent wrote it, not rendered</figcaption><pre>&lt;p&gt;Hi &amp;amp; bye&lt;/p&gt;</pre>"; !strings.Contains(rowOf(page, html), want) || strings.Contains(page, "<iframe") {
+		t.Errorf("open row misses %q or has a frame: %s", want, rowOf(page, html))
 	}
 	respond := pend(t, f.d.s, "calendar.respond", `{"id":"e","response":"decline","comment":"Travelling"}`)[0]
 	cancel := pend(t, f.d.s, "calendar.cancel", `{"id":"o","comment":"No sync"}`)[0]
