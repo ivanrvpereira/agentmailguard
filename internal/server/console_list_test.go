@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"regexp"
 	"slices"
 	"strconv"
@@ -808,5 +809,106 @@ func TestConsoleListShowsTheTimeChangeOfAMeetingUpdate(t *testing.T) {
 		if row := rowOf(page, id); !strings.Contains(row, want) {
 			t.Errorf("row misses %q: %s", want, row)
 		}
+	}
+}
+
+// refreshCookie is the cookie that keeps the auto-refresh choice of the console.
+const refreshCookie = "amg_console_refresh"
+
+// withRefreshCookie sends the auto-refresh cookie with the value v.
+func withRefreshCookie(v string) func(*http.Request) {
+	return func(r *http.Request) { r.AddCookie(&http.Cookie{Name: refreshCookie, Value: v}) }
+}
+
+// ?refresh= keeps a valid choice in a strict, HTTP-only cookie for the console's paths and answers with the list and
+// its filters, rebuilt and without the choice. Another value changes no cookie and is never repeated.
+func TestConsoleListKeepsTheAutoRefreshChoiceInACookie(t *testing.T) {
+	f := gmailConsole(t, "")
+	for query, want := range map[string]struct{ location, cookie string }{
+		"?refresh=5m":  {"/", "5m"},
+		"?refresh=10m": {"/", "10m"},
+		"?refresh=30m": {"/", "30m"},
+		"?refresh=1h":  {"/", "1h"},
+		"?refresh=off": {"/", "off"},
+		"?status=review&refresh=1h&account=gmail":          {"/?account=gmail&status=review", "1h"},
+		"?refresh=30m&select=messages&approved=2&review=1": {"/", "30m"},
+		"?refresh=30m&account=CANARY":                      {"/", "30m"},
+		"?refresh=2m":                                      {"/", ""},
+		"?refresh=10M":                                     {"/", ""},
+		"?refresh=":                                        {"/", ""},
+		"?refresh=10m&refresh=1h":                          {"/", ""},
+		"?refresh=%3Cscript%3ECANARY":                      {"/", ""},
+		"?account=gmail&refresh=CANARY":                    {"/?account=gmail", ""},
+	} {
+		w := f.get(t, "/"+query, nil)
+		cookies := w.Result().Cookies()
+		if w.Code != 303 || w.Header().Get("Location") != want.location || strings.Contains(w.Body.String()+w.Header().Get("Set-Cookie"), "CANARY") {
+			t.Errorf("%s: %d %q %s", query, w.Code, w.Header().Get("Location"), w.Body)
+		}
+		if want.cookie == "" {
+			if len(cookies) != 0 {
+				t.Errorf("%s: cookies=%v", query, cookies)
+			}
+			continue
+		}
+		if len(cookies) != 1 {
+			t.Errorf("%s: cookies=%v", query, cookies)
+			continue
+		}
+		c := cookies[0]
+		if c.Name != refreshCookie || c.Value != want.cookie || c.Path != "/" || !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.MaxAge < 30*24*3600 || c.Domain != "" {
+			t.Errorf("%s: cookie=%+v", query, c)
+		}
+	}
+}
+
+// The list reloads at the chosen interval, five minutes without a valid choice: the script reads the seconds, and
+// without the script a meta refresh does, which Off leaves out. The Auto-refresh menu marks the choice, and its links
+// keep the filter. The action page never reloads.
+func TestConsoleListRefreshesAtTheChosenInterval(t *testing.T) {
+	f := gmailConsole(t, draftApprove)
+	id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
+	for cookie, want := range map[string]struct {
+		seconds int
+		short   string
+		current string
+	}{
+		"":    {300, "5 min", `<a href="/?refresh=5m" aria-current="true">5 minutes</a>`},
+		"5m":  {300, "5 min", `<a href="/?refresh=5m" aria-current="true">5 minutes</a>`},
+		"10m": {600, "10 min", `<a href="/?refresh=10m" aria-current="true">10 minutes</a>`},
+		"30m": {1800, "30 min", `<a href="/?refresh=30m" aria-current="true">30 minutes</a>`},
+		"1h":  {3600, "1 hour", `<a href="/?refresh=1h" aria-current="true">1 hour</a>`},
+		"off": {0, "Off", `<a href="/?refresh=off" aria-current="true">Off</a>`},
+		"2m":  {300, "5 min", `<a href="/?refresh=5m" aria-current="true">5 minutes</a>`},
+		"10s": {300, "5 min", `<a href="/?refresh=5m" aria-current="true">5 minutes</a>`},
+	} {
+		page := f.get(t, "/", withRefreshCookie(cookie)).Body.String()
+		meta := `<noscript><meta http-equiv="refresh" content="` + strconv.Itoa(want.seconds) + `;url=/"></noscript>`
+		if !strings.Contains(page, `data-refresh-seconds="`+strconv.Itoa(want.seconds)+`"`) || strings.Contains(page, "http-equiv") != (want.seconds > 0) ||
+			want.seconds > 0 && !strings.Contains(page, meta) {
+			t.Errorf("cookie %q: interval missing: %s", cookie, page)
+		}
+		if !strings.Contains(page, `<summary>Auto-refresh <b>`+want.short+`</b></summary>`) || !strings.Contains(page, want.current) || strings.Count(page, `aria-current="true"`) != 3 {
+			t.Errorf("cookie %q: menu: %s", cookie, page)
+		}
+	}
+	// Without the script, the reload keeps the filter but neither the ticked table nor the batch notice.
+	for query, want := range map[string]string{
+		"?select=messages&approved=2":                           `<noscript><meta http-equiv="refresh" content="300;url=/"></noscript>`,
+		"?account=gmail&status=review&select=messages&denied=1": `<noscript><meta http-equiv="refresh" content="300;url=/?account=gmail&amp;status=review"></noscript>`,
+	} {
+		if page := f.get(t, "/"+query, nil).Body.String(); strings.Count(page, "http-equiv") != 1 || !strings.Contains(page, want) {
+			t.Errorf("%s: meta refresh is not %q: %s", query, want, page)
+		}
+	}
+	page := f.get(t, "/?account=gmail&status=review", nil).Body.String()
+	for _, want := range []string{`<a href="/?account=gmail&amp;refresh=10m&amp;status=review">10 minutes</a>`, `<a href="/?account=gmail&amp;refresh=off&amp;status=review">Off</a>`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("filtered menu misses %q: %s", want, page)
+		}
+	}
+	action := f.get(t, "/a/"+id, withRefreshCookie("10m")).Body.String()
+	if strings.Contains(action, "http-equiv") || strings.Contains(action, "data-refresh-seconds") || strings.Contains(action, "Auto-refresh") {
+		t.Errorf("the action page reloads: %s", action)
 	}
 }

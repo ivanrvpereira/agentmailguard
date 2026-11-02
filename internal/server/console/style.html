@@ -39,6 +39,22 @@ a:hover{text-decoration:underline}
 .brand .pg{color:var(--ink-2)}
 .top .sum{margin-left:auto;color:var(--ink-2)}
 .top .sum b{color:var(--red);font-weight:600}
+/* Auto-refresh menu: a <details> with links (?refresh=5m|10m|30m|1h|off). It works without the script; the server
+   renders the chosen interval and keeps it in a cookie. */
+.refresh{position:relative;font-size:.8125rem}
+.refresh summary{list-style:none;display:inline-flex;align-items:center;gap:.375rem;height:1.875rem;padding:0 .625rem;border:1px solid var(--line);border-radius:6px;color:var(--ink-2);cursor:pointer;white-space:nowrap}
+.refresh summary::-webkit-details-marker{display:none}
+.refresh summary:hover{color:var(--ink);border-color:var(--ink-3)}
+.refresh summary b{color:var(--ink);font-weight:500}
+.refresh summary::after{content:"";width:.375rem;height:.375rem;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:translateY(-2px) rotate(45deg);margin-left:.125rem}
+.refresh[open] summary{color:var(--ink);border-color:var(--ink-3)}
+.refresh .menu{position:absolute;right:0;top:calc(100% + .25rem);z-index:10;min-width:11rem;padding:.25rem;background:var(--bg);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgb(0 0 0/.12)}
+.refresh .menu p{margin:.375rem .625rem .25rem;color:var(--ink-3);font-size:.75rem}
+.refresh .menu a{display:flex;align-items:center;justify-content:space-between;height:2rem;padding:0 .625rem;border-radius:5px;color:var(--ink)}
+.refresh .menu a:hover{background:var(--hover);text-decoration:none}
+.refresh .menu a[aria-current]::after{content:"";width:.6rem;height:.3rem;border:solid var(--accent);border-width:0 0 1.5px 1.5px;transform:translateY(-2px) rotate(-45deg)}
+/* Controls of the script start hidden, and author CSS must not show them. */
+[hidden]{display:none!important}
 
 .pane{max-width:92rem;margin:0 auto;padding:0 1.5rem 4rem}
 /* List page grid: the filter line, the notice of a batch, then the bulk bar (sticky, only while a box is ticked),
@@ -107,6 +123,10 @@ ol{list-style:none;margin:0;padding:0}
 .colhead .all::before{content:"";width:1rem;height:1rem;border:1.5px solid var(--ink-3);border-radius:3px;box-sizing:border-box}
 .colhead .all:hover::before{border-color:var(--ink-2)}
 .colhead .all.on::before{content:"\2713";display:flex;align-items:center;justify-content:center;background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-size:.7rem;font-weight:700;line-height:1}
+/* With the script, a real checkbox replaces the link: checked, or indeterminate while some rows are ticked. */
+.colhead label.all{cursor:pointer}
+.colhead label.all::before{display:none}
+.colhead .all input{width:1rem;height:1rem;margin:0;accent-color:var(--accent);cursor:pointer}
 @media (hover:hover){.row:hover{background:var(--hover)}.recent .row:hover .text{text-decoration:underline}}
 .row:has(.sel:checked){background:var(--pick)}
 .waiting .row{box-shadow:inset 3px 0 0 var(--bar)}
@@ -240,6 +260,7 @@ a.line:hover{text-decoration:none}
 @media (max-width:48rem){
   .top{padding:1rem 1rem .5rem;gap:.25rem .75rem}
   .top .sum{margin-left:0;font-size:.875rem}
+  .refresh{margin-left:auto}
   .pane{padding:0 0 3rem}
   .actionpage{padding:0 1rem 3rem}
   .lead{height:auto;flex-direction:column;align-items:stretch;gap:.125rem;padding:.25rem 1rem .5rem}

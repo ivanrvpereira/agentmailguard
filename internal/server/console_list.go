@@ -195,14 +195,68 @@ func (q listQuery) shows(r listRow) bool {
 	return (q.key == "" || r.Account == q.key) && (q.show == "" || (q.show == showReview) == r.Review)
 }
 
+// refreshChoice is an interval of the Auto-refresh menu: Value is its ?refresh= and cookie value, Short its label in
+// the menu button, Long its label in the menu. Seconds zero is off.
+type refreshChoice struct {
+	Value, Short, Long string
+	Seconds            int
+}
+
+// refreshChoices are the Auto-refresh intervals in menu order; the first is the default. It is a variable only so
+// that tests can change its cost through export_test.go.
+var refreshChoices = []refreshChoice{
+	{"5m", "5 min", "5 minutes", 300},
+	{"10m", "10 min", "10 minutes", 600},
+	{"30m", "30 min", "30 minutes", 1800},
+	{"1h", "1 hour", "1 hour", 3600},
+	{"off", "Off", "Off", 0},
+}
+
+// refreshCookie keeps the Auto-refresh choice. The name is the console's own: cookies are not kept per port, so
+// another web page on the same host could otherwise set it.
+const refreshCookie = "amg_console_refresh"
+
+// requestRefresh is the choice of the refresh cookie of the request; a missing or unknown value is the default.
+func requestRefresh(r *http.Request) refreshChoice {
+	if c, err := r.Cookie(refreshCookie); err == nil {
+		if i := slices.IndexFunc(refreshChoices, func(ch refreshChoice) bool { return ch.Value == c.Value }); i >= 0 {
+			return refreshChoices[i]
+		}
+	}
+	return refreshChoices[0]
+}
+
+// chooseRefresh keeps a valid ?refresh= choice in the refresh cookie for a year, then redirects to the list with the
+// filter of the rest of the query, rebuilt, or to the unfiltered list when the rest is not valid. Any other choice
+// changes no cookie.
+func chooseRefresh(w http.ResponseWriter, r *http.Request, values url.Values, valid bool, cfg config.Config) {
+	if v := values["refresh"]; len(v) == 1 && slices.ContainsFunc(refreshChoices, func(ch refreshChoice) bool { return ch.Value == v[0] }) {
+		http.SetCookie(w, &http.Cookie{Name: refreshCookie, Value: v[0], Path: "/", MaxAge: 365 * 24 * 3600, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	}
+	values.Del("refresh")
+	var q listQuery
+	if valid {
+		q, _ = parseListQuery(values.Encode(), cfg)
+	}
+	http.Redirect(w, r, q.url(), http.StatusSeeOther)
+}
+
 type listPage struct {
 	// Waiting and Review count the waiting rows that the filter shows, and those that need review.
 	Waiting, Review int
+	// Refresh is the Auto-refresh choice; RefreshMenu links to every choice with the filter.
+	Refresh         refreshChoice
+	RefreshMenu     []menuLink
 	Accounts, Shows []filterLink
 	Groups          []groupView
 	// Notice is the outcome of a batch. Return is the list with the filter, where a decision from the list goes back
 	// to. ClearURL is set on a page that ticks a group: Clear is then a link to the page without the ticks.
 	Notice, Return, ClearURL string
+}
+
+type menuLink struct {
+	Label, URL string
+	Current    bool
 }
 
 type filterLink struct {
@@ -335,6 +389,11 @@ func (c *console) list(ctx context.Context, w http.ResponseWriter, r *http.Reque
 		plain(w, 503, ErrUnavailable.Error())
 		return
 	}
+	values, err := url.ParseQuery(r.URL.RawQuery)
+	if values.Has("refresh") {
+		chooseRefresh(w, r, values, err == nil, st.config)
+		return
+	}
 	// An invalid query shows the unfiltered page.
 	q, _ := parseListQuery(r.URL.RawQuery, st.config)
 	// Recents follow the Account filter; the waiting actions of every account give the filter counts.
@@ -358,7 +417,12 @@ func (c *console) list(ctx context.Context, w http.ResponseWriter, r *http.Reque
 			recents[row.Group] = append(recents[row.Group], row)
 		}
 	}
-	page := listPage{Notice: q.notice.text(), Return: q.url()}
+	page := listPage{Notice: q.notice.text(), Return: q.url(), Refresh: requestRefresh(r)}
+	for _, ch := range refreshChoices {
+		v := q.values()
+		v.Set("refresh", ch.Value)
+		page.RefreshMenu = append(page.RefreshMenu, menuLink{ch.Long, listURL(v), ch.Value == page.Refresh.Value})
+	}
 	if q.sel != "" {
 		page.ClearURL = q.url()
 	}

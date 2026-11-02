@@ -1,7 +1,19 @@
 {{define "list"}}{{template "head" "AgentMailGuard · Web console"}}
+{{/* The reload without the script keeps only the filter: no ticked table, no batch notice. */}}
+{{with .Refresh.Seconds}}<noscript><meta http-equiv="refresh" content="{{.}};url={{$.Return}}"></noscript>
+{{end}}</head>
+<body data-refresh-seconds="{{.Refresh.Seconds}}" data-waiting="{{.Waiting}}">
 <header class="top">
   {{template "brand"}}
   <span class="sum num">{{.Waiting}} waiting · {{if .Review}}<b>{{.Review}} need review</b>{{else}}0 need review{{end}}</span>
+  <details class="refresh">
+    <summary>Auto-refresh <b>{{.Refresh.Short}}</b></summary>
+    <nav class="menu" aria-label="Auto-refresh">
+      <p>Reload the list every</p>
+      {{range .RefreshMenu}}<a href="{{.URL}}"{{if .Current}} aria-current="true"{{end}}>{{.Label}}</a>
+      {{end}}
+    </nav>
+  </details>
 </header>
 
 <main class="pane listpage">
@@ -35,7 +47,7 @@
 <section class="tbl {{.Class}}" aria-labelledby="h-{{.Key}}" data-group="{{.Key}}">
 <div class="thead">
 <h2 id="h-{{.Key}}">{{.Title}} <span class="n num">{{len .Rows}}</span><span class="hint">{{.Hint}}</span></h2>
-{{if .Rows}}<div class="colhead"><a class="all{{if .Selected}} on{{end}}" href="{{.SelectURL}}" title="{{if .Selected}}Clear the selection in{{else}}Select all in{{end}} {{.Title}}"><span class="vh">{{if .Selected}}Clear the selection in{{else}}Select all in{{end}} {{.Title}}</span></a><div class="cells" aria-hidden="true">
+{{if .Rows}}<div class="colhead"><a class="all{{if .Selected}} on{{end}}" href="{{.SelectURL}}" title="{{if .Selected}}Clear the selection in{{else}}Select all in{{end}} {{.Title}}"><span class="vh">{{if .Selected}}Clear the selection in{{else}}Select all in{{end}} {{.Title}}</span></a><label class="all" hidden><input class="allbox" type="checkbox"><span class="vh">Select all in {{.Title}}</span></label><div class="cells" aria-hidden="true">
   {{template "columns" .Key}}
 </div></div>{{end}}
 </div>
@@ -97,6 +109,7 @@
   <span class="key risky">Red: needs review</span> · <span class="key none">Grey: not checked</span> · <span class="key ok">Green: checked</span>
   <br>In Mailbox operations, the colour and the score are the message's screening verdict. Recents keeps the last 10 handled actions of each table.
 </p>
+<p class="vh" id="selstatus" aria-live="polite"></p>
 <p class="selcount num" aria-hidden="true"></p>
 </main>
 </body></html>{{end}}

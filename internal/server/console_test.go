@@ -270,17 +270,26 @@ func TestConsoleAcceptsOnlyItsOwnHostNames(t *testing.T) {
 	}
 }
 
+// consoleCSP is the content security policy of every console response: only the console's own script, and no
+// Trusted Types policy, so that every HTML sink throws.
+const consoleCSP = "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; require-trusted-types-for 'script'; trusted-types 'none'"
+
 func TestConsoleResponsesCarryTheSecurityHeaders(t *testing.T) {
-	f := consoleDaemon(t, "", true)
-	for name, change := range map[string]func(*http.Request){
-		"page":           nil,
-		"no credentials": func(r *http.Request) { r.Header.Del("Authorization") },
-		"foreign host":   func(r *http.Request) { r.Host = "evil.example" },
-		"not found":      func(r *http.Request) { r.URL.Path = "/missing" },
+	f := consoleDaemon(t, draftApprove, true)
+	id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
+	for name, w := range map[string]*httptest.ResponseRecorder{
+		"page":             f.get(t, "/", nil),
+		"action page":      f.get(t, "/a/"+id, nil),
+		"script":           f.get(t, "/assets/console.js", nil),
+		"refresh redirect": f.get(t, "/?refresh=10m", nil),
+		"no credentials":   f.get(t, "/", func(r *http.Request) { r.Header.Del("Authorization") }),
+		"foreign host":     f.get(t, "/", func(r *http.Request) { r.Host = "evil.example" }),
+		"not found":        f.get(t, "/missing", nil),
+		"foreign origin":   f.decide(t, id, "deny", func(r *http.Request) { r.Header.Set("Origin", "http://evil.example") }),
+		"decision":         f.decide(t, id, "deny", nil),
 	} {
-		w := f.get(t, "/", change)
 		for header, want := range map[string]string{
-			"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+			"Content-Security-Policy": consoleCSP,
 			"X-Content-Type-Options":  "nosniff",
 			"Referrer-Policy":         "same-origin",
 			"Cache-Control":           "no-store",
@@ -294,17 +303,20 @@ func TestConsoleResponsesCarryTheSecurityHeaders(t *testing.T) {
 }
 
 // hrefs are the link targets of a page; consoleLink is a link to the console's own list page, with or without its
-// filters and a table to tick, or action page. tags are the tags of a page, and quoted the attribute values in a tag.
+// filters and an Auto-refresh choice or a table to tick, or action page. tags are the tags of a page, and quoted the attribute values in a tag.
 var (
 	hrefs       = regexp.MustCompile(`href="([^"]*)"`)
-	consoleLink = regexp.MustCompile(`^/(a/[0-9a-f]{32}|\?(account=[A-Za-z0-9_-]+&amp;)?(select=(messages|meetings|mailbox)&amp;)?(account=[A-Za-z0-9_-]+|select=(messages|meetings|mailbox)|status=(review|others)))?$`)
+	consoleLink = regexp.MustCompile(`^/(a/[0-9a-f]{32}|\?(account=[A-Za-z0-9_-]+&amp;)?(refresh=(5m|10m|30m|1h|off)&amp;)?(select=(messages|meetings|mailbox)&amp;)?(account=[A-Za-z0-9_-]+|refresh=(5m|10m|30m|1h|off)|select=(messages|meetings|mailbox)|status=(review|others)))?$`)
 	tags        = regexp.MustCompile(`<[^>]*>`)
 	quoted      = regexp.MustCompile(`"[^"]*"|'[^']*'`)
 	eventAttr   = regexp.MustCompile(`(?i)\son[a-z]+\s*=`)
 )
 
-// onlyConsoleLinks fails when a page links anywhere but the console's own pages, or has a script or an event
-// handler attribute.
+// consoleScriptTag is the one script tag of every console page.
+const consoleScriptTag = `<script type="module" src="/assets/console.js"></script>`
+
+// onlyConsoleLinks fails when a page links anywhere but the console's own pages, has a script but the one console
+// script, or has an event handler attribute.
 func onlyConsoleLinks(t *testing.T, page string) {
 	t.Helper()
 	for _, m := range hrefs.FindAllStringSubmatch(page, -1) {
@@ -312,7 +324,7 @@ func onlyConsoleLinks(t *testing.T, page string) {
 			t.Fatalf("foreign link %q in %s", m[1], page)
 		}
 	}
-	if strings.Contains(page, "<script") || strings.Contains(page, "<a href=\"http") {
+	if strings.Count(page, consoleScriptTag) != 1 || strings.Count(strings.ToLower(page), "<script") != 1 || strings.Contains(page, "<a href=\"http") {
 		t.Fatalf("active content in %s", page)
 	}
 	for _, tag := range tags.FindAllString(page, -1) {
@@ -487,7 +499,7 @@ func TestConsoleActionShowsAnHTMLBodyInASandboxedFrameAboveItsSource(t *testing.
 	if caption < 0 || frame < caption || pre < frame || decision < pre {
 		t.Fatalf("caption=%d frame=%d source=%d decision=%d: %s", caption, frame, pre, decision, page)
 	}
-	if strings.Contains(page, "<img") || strings.Contains(page, "<script") {
+	if strings.Contains(page, "<img") || strings.Contains(strings.Replace(page, consoleScriptTag, "", 1), "<script") {
 		t.Fatalf("body is markup outside the frame: %s", page)
 	}
 	plain := pend(t, f.d.s, "mail.send", `{"to":["a@example.test"],"subject":"s","body":"<p>Hi</p>"}`)[0]

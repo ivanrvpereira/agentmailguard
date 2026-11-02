@@ -55,9 +55,13 @@ func (s *Server) ConsoleAddress() string {
 	return s.listen
 }
 
+// consoleCSP allows only the console's own script and no Trusted Types policy, so that every HTML sink throws. The
+// Rendered preview frame inherits it and loads nothing.
+const consoleCSP = "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; require-trusted-types-for 'script'; trusted-types 'none'"
+
 func (c *console) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+	h.Set("Content-Security-Policy", consoleCSP)
 	h.Set("X-Content-Type-Options", "nosniff")
 	// same-origin, not no-referrer: under no-referrer a browser sends `Origin: null` on the console's own form posts, which
 	// sameOrigin must refuse (https://fetch.spec.whatwg.org/#origin-header). Other sites still get no referrer.
@@ -144,6 +148,15 @@ func (c *console) route(ctx context.Context, w http.ResponseWriter, r *http.Requ
 			return
 		}
 		c.list(ctx, w, r)
+		return
+	}
+	if r.URL.Path == "/assets/console.js" {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			plain(w, 405, "method refused")
+			return
+		}
+		write(w, 200, "text/javascript; charset=utf-8", consoleScript)
 		return
 	}
 	if r.URL.Path == "/batch" {
@@ -544,6 +557,12 @@ func write(w http.ResponseWriter, status int, contentType string, body []byte) {
 //
 //go:embed console/*.html
 var consoleTemplates embed.FS
+
+// consoleScript is the one script of the console pages, served at /assets/console.js. It only adds convenience: every
+// page works without it, and the server enforces every rule.
+//
+//go:embed console/console.js
+var consoleScript []byte
 
 // pages are the console templates. html/template escapes every value; stored text is never markup, and the
 // only links are the console's own pages.
