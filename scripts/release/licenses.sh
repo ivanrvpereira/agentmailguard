@@ -10,7 +10,8 @@ out="${2:?$usage}"
 cd "$(dirname "$0")/../.."
 allowed="Apache-2.0,BSD-2-Clause,BSD-3-Clause,ISC,MIT"
 self="github.com/ivanrvpereira/agentmailguard"
-tool="$(command -v go-licenses || echo "$(go env GOPATH)/bin/go-licenses")"
+gobin="$(go env GOBIN)"
+tool="$(command -v go-licenses || echo "${gobin:-$(go env GOPATH)/bin}/go-licenses")"
 test -x "$tool" || { echo "licenses.sh: go-licenses not found" >&2; exit 1; }
 
 export GOOS="$goos" CGO_ENABLED=1

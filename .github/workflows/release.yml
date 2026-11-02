@@ -111,7 +111,7 @@ jobs:
           name: archive-linux-${{ env.ARCH }}
           path: dist/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
   linux-arm64:
     name: Build linux/arm64
@@ -166,7 +166,7 @@ jobs:
           name: macos-unsigned
           path: handoff/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
   macos-sign:
     name: Sign and notarize macOS
@@ -281,7 +281,7 @@ jobs:
           name: archive-darwin
           path: dist/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
       - name: Delete keys
         if: always()
@@ -400,7 +400,7 @@ jobs:
           name: release-bundle
           path: bundle/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
   # The only job with write permissions and the tap key. It runs only the release scripts and pinned actions
   # on the sealed bundle: it builds nothing, runs no binaries, and runs no Homebrew.

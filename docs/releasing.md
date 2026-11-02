@@ -5,16 +5,23 @@ A version tag publishes a release. The [release workflow](../.github/workflows/r
 ## Publish a release
 
 1. Make sure that `main` has the commit to release and that CI on it passed. The workflow refuses a tag on a commit that is not on `main`.
-2. Choose the version by semantic versioning. A tag with a suffix, such as `v0.2.0-rc.1`, makes a prerelease: it gets a GitHub release, but the Homebrew formula keeps the last full release. Before a new minor or major version, push a prerelease first: it runs every step, signing and notarization included, and checks the tap key without changing the tap.
-3. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, add a new empty `## [Unreleased]` above it, and update the links at the end. The release notes are that section; the workflow refuses a full release without it. A prerelease without its own section uses the `Unreleased` section.
-4. Tag the commit and push the tag:
+2. Choose the version by semantic versioning. A tag with a suffix, such as `v0.2.0-rc.1`, makes a prerelease: it gets a GitHub release, but the Homebrew formula keeps the last full release.
+3. Before a new minor or major version, push a prerelease first, while the notes are still under `## [Unreleased]`: a prerelease without its own section takes its notes from there. It runs every step, signing and notarization included, and proves that the tap key can push with a dry run. A dry run does not evaluate the tap's branch rules; the tap's `main` blocks only force pushes and deletion, which a release push never does.
 
    ```sh
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag v0.2.0-rc.1
+   git push origin v0.2.0-rc.1
    ```
 
-5. Follow the run with `gh run watch` or `gh run list --workflow=release.yml`.
+4. After the prerelease passes, in `CHANGELOG.md` rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, add a new empty `## [Unreleased]` above it, update the links at the end, and merge that change to `main`. The release notes are that section; the workflow refuses a full release without it.
+5. Tag the new commit and push the tag:
+
+   ```sh
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+
+6. Follow the run with `gh run watch` or `gh run list --workflow=release.yml`.
 
 Releases are immutable: once published, the archives cannot change and the tag cannot move. A release with a mistake needs a new patch version.
 
@@ -22,7 +29,7 @@ Releases are immutable: once published, the archives cannot change and the tag c
 
 The build steps are scripts in [`scripts/release/`](../scripts/release/). The [release check](../.github/workflows/release-check.yml) runs the same scripts without secrets on every pull request that touches the release, so a broken build fails in review, not at tag time.
 
-1. Checks that the tag is a version, that its commit is on `main`, and that `CHANGELOG.md` has its notes (`scripts/release/changelog-notes.sh`). Then it runs `make` and `govulncheck` on Linux and on macOS. No release job uses the Go build cache.
+1. Checks that the tag is a version, that its commit is on `main`, and that `CHANGELOG.md` has its notes (`scripts/release/changelog-notes.sh`). Then it runs `make` and `govulncheck` on Linux and on macOS. No release job restores a Go cache that another run saved: `setup-go` runs with `cache: false`, so each run builds from a clean module and build cache.
 2. Builds static Linux binaries for amd64 and arm64, each in its own job. `amgd` links SQLite statically against musl, so the binaries need no C library on the target. A step runs them in an empty `busybox` container to prove it.
 3. Makes the macOS binaries for arm64 and amd64 in three jobs, so that no job both holds the signing keys and runs code from the build:
    - **Build macOS** builds them with a minimum macOS version (`macos_min` in `scripts/release/build-macos.sh`). It has no secrets.
