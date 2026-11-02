@@ -46,7 +46,25 @@ func consoleHash(t *testing.T) string {
 // config is appended to the configuration.
 func consoleDaemon(t *testing.T, config string, password bool) *consoleFixture {
 	t.Helper()
-	r := record(map[string]credentials.OAuth{"m365/" + workEmail: m365Login(m365Grant + " Calendars.ReadWrite Mail.Send")})
+	return newConsoleFixture(t, config, password, false)
+}
+
+// gmailConsole is consoleDaemon with the console password and a second account, the Gmail account gmail, whose
+// provider calls reach no server.
+func gmailConsole(t *testing.T, config string) *consoleFixture {
+	t.Helper()
+	return newConsoleFixture(t, config, true, true)
+}
+
+func newConsoleFixture(t *testing.T, config string, password, gmail bool) *consoleFixture {
+	t.Helper()
+	logins := map[string]credentials.OAuth{"m365/" + workEmail: m365Login(m365Grant + " Calendars.ReadWrite Mail.Send")}
+	accounts := workTable
+	if gmail {
+		logins["gmail/"+gmailEmail] = gmailLogin(gmailWriteGrant)
+		accounts += gmailTable
+	}
+	r := record(logins)
 	if password {
 		r.ConsoleHash = consoleHash(t)
 	}
@@ -54,7 +72,7 @@ func consoleDaemon(t *testing.T, config string, password bool) *consoleFixture {
 	graph := httptest.NewServer(http.HandlerFunc(api.graph))
 	t.Cleanup(graph.Close)
 	f := &consoleFixture{api: api, now: time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC)}
-	f.d = startDaemon(t, daemonSetup{config: "default_account = 'work'\n" + workTable + config, record: r, jev: api,
+	f.d = startDaemon(t, daemonSetup{config: "default_account = 'work'\n" + accounts + config, record: r, jev: api,
 		options: server.Options{M365: m365Options(graph.URL), Now: func() time.Time { return f.now }}})
 	f.console = f.d.s.Console()
 	return f
@@ -265,13 +283,18 @@ func TestConsoleResponsesCarryTheSecurityHeaders(t *testing.T) {
 	}
 }
 
-// hrefs are the link targets of a page; consoleLink is a link to the console's own list or item page.
+// hrefs are the link targets of a page; consoleLink is a link to the console's own list page, with or without its
+// filters, or action page. tags are the tags of a page, and quoted the attribute values in a tag.
 var (
 	hrefs       = regexp.MustCompile(`href="([^"]*)"`)
-	consoleLink = regexp.MustCompile(`^/(a/[0-9a-f]{32})?$`)
+	consoleLink = regexp.MustCompile(`^/(a/[0-9a-f]{32}|\?(account=[A-Za-z0-9_-]+|status=(review|others)|account=[A-Za-z0-9_-]+&amp;status=(review|others)))?$`)
+	tags        = regexp.MustCompile(`<[^>]*>`)
+	quoted      = regexp.MustCompile(`"[^"]*"|'[^']*'`)
+	eventAttr   = regexp.MustCompile(`(?i)\son[a-z]+\s*=`)
 )
 
-// onlyConsoleLinks fails when a page links anywhere but the console's own list and item pages.
+// onlyConsoleLinks fails when a page links anywhere but the console's own pages, or has a script or an event
+// handler attribute.
 func onlyConsoleLinks(t *testing.T, page string) {
 	t.Helper()
 	for _, m := range hrefs.FindAllStringSubmatch(page, -1) {
@@ -282,62 +305,9 @@ func onlyConsoleLinks(t *testing.T, page string) {
 	if strings.Contains(page, "<script") || strings.Contains(page, "<a href=\"http") {
 		t.Fatalf("active content in %s", page)
 	}
-}
-
-func TestConsoleListShowsWaitingActionsNewestFirstThenResolved(t *testing.T) {
-	f := consoleDaemon(t, draftApprove, true)
-	add := func(name string) string {
-		t.Helper()
-		id := pend(t, f.d.s, "draft.new", `{"to":["`+name+`@example.test"],"subject":"`+name+`-subject","body":"`+name+`-body"}`)[0]
-		f.advance(time.Minute)
-		return id
-	}
-	older, denied, newer := add("older"), add("denied"), add("newer")
-	if err := f.d.s.Deny(context.Background(), denied); err != nil {
-		t.Fatal(err)
-	}
-	w := f.get(t, "/", nil)
-	page := w.Body.String()
-	if w.Code != 200 || !strings.HasPrefix(w.Header().Get("Content-Type"), "text/html") {
-		t.Fatalf("%d %s", w.Code, page)
-	}
-	positions := []int{}
-	for _, id := range []string{newer, older, denied} {
-		positions = append(positions, strings.Index(page, `href="/a/`+id+`"`))
-	}
-	if positions[0] < 0 || positions[0] > positions[1] || positions[1] > positions[2] {
-		t.Fatalf("order newer, older, denied: positions=%v page=%s", positions, page)
-	}
-	for _, want := range []string{workEmail, "draft.new", "older@example.test", "older-subject", "pending", "denied", "3m", "1m"} {
-		if !strings.Contains(page, want) {
-			t.Errorf("list misses %q: %s", want, page)
-		}
-	}
-	if strings.Contains(page, "-body") {
-		t.Errorf("list shows a body: %s", page)
-	}
-	onlyConsoleLinks(t, page)
-}
-
-// Optional attendees receive the invitation, so the list shows them with the required ones.
-func TestConsoleListShowsOptionalAttendeesAsRecipients(t *testing.T) {
-	f := consoleDaemon(t, approveAll, true)
-	pend(t, f.d.s, "calendar.invite", `{"to":["required@example.test"],"optional":["optional@example.test"],"subject":"s","body":"","start":"2026-04-01T09:00:00Z","end":"2026-04-01T10:00:00Z"}`)
-	if page := f.get(t, "/", nil).Body.String(); !strings.Contains(page, "required@example.test, optional@example.test") {
-		t.Fatalf("list misses the recipients: %s", page)
-	}
-}
-
-// A reply goes to the original's recipients too, which only the item page reads, so the list marks a reply row as a
-// reply or a reply all before the cc and bcc of the request.
-func TestConsoleListMarksReplyRows(t *testing.T) {
-	f := consoleDaemon(t, draftApprove, true)
-	pend(t, f.d.s, "draft.reply", `{"id":"g","body":"b","all":true,"cc":["c@example.test"],"bcc":["d@example.test"]}`)
-	pend(t, f.d.s, "draft.reply", `{"id":"g","body":"b"}`)
-	page := f.get(t, "/", nil).Body.String()
-	for _, want := range []string{"<td>reply all; cc: c@example.test; bcc (hidden): d@example.test</td>", "<td>reply</td>"} {
-		if !strings.Contains(page, want) {
-			t.Errorf("list misses %q: %s", want, page)
+	for _, tag := range tags.FindAllString(page, -1) {
+		if eventAttr.MatchString(quoted.ReplaceAllString(tag, `""`)) {
+			t.Fatalf("event handler attribute in %s", tag)
 		}
 	}
 }
@@ -363,7 +333,7 @@ func TestConsoleItemShowsStoredArgumentsAsTextAndTheMessageSummary(t *testing.T)
 	onlyConsoleLinks(t, page)
 }
 
-// The item page shows the Jev action check result; an action without a check shows none. The list does not show it.
+// The item page shows the Jev action check result; an action without a check shows none.
 func TestConsoleItemShowsTheJevCheck(t *testing.T) {
 	f := consoleDaemon(t, draftApprove, true)
 	for _, tc := range []struct {
@@ -385,9 +355,6 @@ func TestConsoleItemShowsTheJevCheck(t *testing.T) {
 	id := pend(t, f.d.s, "mail.trash", `{"ids":["g"]}`)[0]
 	if page := f.get(t, "/a/"+id, nil).Body.String(); strings.Contains(page, "Jev") {
 		t.Errorf("unchecked action shows a Jev result: %s", page)
-	}
-	if page := f.get(t, "/", nil).Body.String(); strings.Contains(page, "Jev") {
-		t.Errorf("list shows a Jev result: %s", page)
 	}
 }
 

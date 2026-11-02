@@ -1,0 +1,97 @@
+{{define "list"}}{{template "head" "AgentMailGuard · Web console"}}
+<header class="top">
+  {{template "brand"}}
+  <span class="sum num">{{.Waiting}} waiting · {{if .Review}}<b>{{.Review}} need review</b>{{else}}0 need review{{end}}</span>
+</header>
+
+<main class="pane">
+<div class="lead">
+  <nav class="filters" aria-label="Filters">
+    <span class="grp"><span class="lbl">Account</span><span class="seg">
+      {{range .Accounts}}{{template "filter" .}}{{end}}
+    </span></span>
+    <span class="grp"><span class="lbl">Show</span><span class="seg">
+      {{range .Shows}}{{template "filter" .}}{{end}}
+    </span></span>
+  </nav>
+</div>
+
+<div class="waiting">
+{{if not .Groups}}<p class="empty">No actions wait for approval.</p>{{end}}
+{{range .Groups}}
+<section class="tbl {{.Class}}" aria-labelledby="h-{{.Key}}" data-group="{{.Key}}">
+<div class="thead">
+<h2 id="h-{{.Key}}">{{.Title}} <span class="n num">{{len .Rows}}</span><span class="hint">{{.Hint}}</span></h2>
+{{if .Rows}}<div class="colhead"><span></span><div class="cells" aria-hidden="true">
+  {{template "columns" .Key}}
+</div></div>{{end}}
+</div>
+{{if .Rows}}<ol>
+{{range .Rows}}<li class="row {{.Score.Bar}}">
+  <span class="pick"></span>
+  <details>
+    <summary>
+      <span class="meta"><span class="op">{{.Label}}</span><span class="acct" title="{{.Account}}">{{.Alias}}</span></span>
+      {{template "cells" .}}
+      {{template "score" .Score}}
+      <span class="age num">{{.Age}}</span>
+    </summary>
+    <div class="open">
+      <dl class="f">
+        <dt>Account</dt><dd>{{.Account}}</dd>
+        <dt>Score</dt><dd{{if .Score.Risk}} class="bad"{{end}}>{{if .Score.Fake}}<span class="fake">fake</span>{{end}}{{if .Score.Risk}}▲ {{end}}{{.Score.Value}} · {{.Score.Label}}{{with .Score.Code}} · {{.}}{{end}}</dd>
+        {{template "openfields" .Fields}}
+      </dl>
+      {{if .Draft}}<p class="sub">The draft fields that the check read when the agent asked to send the draft</p>
+      <dl class="f">{{template "openfields" .Draft}}</dl>{{end}}
+      {{if .Caption}}<figure class="body"><figcaption>{{.Caption}}</figcaption><pre>{{.Body}}</pre></figure>{{end}}
+      <p class="more"><a href="/a/{{.ID}}">Open the action page</a></p>
+    </div>
+  </details>
+</li>
+{{end}}</ol>{{end}}
+{{if .Recents}}<details class="recent">
+<summary>Recents <span class="n num">{{len .Recents}}</span></summary>
+<div class="colhead"><span></span><div class="cells" aria-hidden="true">
+  <span>Action</span><span>Account</span><span>Summary</span><span class="r">Score</span><span>Outcome</span><span class="r">When</span>
+</div></div>
+<ol>
+{{range .Recents}}<li class="row"><span class="pick"></span><a class="line" href="/a/{{.ID}}">
+  <span class="meta"><span class="op">{{.Label}}</span><span class="acct" title="{{.Account}}">{{.Alias}}</span></span>
+  <span class="text">{{.Summary}}</span>
+  {{template "score" .Score}}
+  <span class="st{{if .Failed}} failed{{end}}">{{.Outcome}}</span>
+  <span class="age num">{{.Age}}</span></a></li>
+{{end}}</ol>
+</details>{{end}}
+</section>
+{{end}}
+</div>
+
+<p class="foot">
+  <span class="key risky">Red: needs review</span> · <span class="key none">Grey: not checked</span> · <span class="key ok">Green: checked</span>
+  <br>In Mailbox operations, the colour and the score are the message's screening verdict. Recents keeps the last 10 handled actions of each table.
+</p>
+</main>
+</body></html>{{end}}
+
+{{define "filter"}}<a href="{{.URL}}"{{with .Title}} title="{{.}}"{{end}}{{if .Current}} aria-current="true"{{end}}>{{.Label}}<span class="c num">{{.Count}}</span></a>
+      {{end}}
+
+{{define "columns"}}{{if eq . "messages"}}<span>Action</span><span>Account</span><span>To</span><span>Message</span><span class="r">Score</span><span class="r">Age</span><span></span>
+{{- else if eq . "meetings"}}<span>Action</span><span>Account</span><span>Event</span><span>When</span><span>People</span><span>Change</span><span class="r">Score</span><span class="r">Age</span><span></span>
+{{- else}}<span>Change</span><span>Account</span><span>Message</span><span>Received</span><span class="r">Score</span><span class="r">Age</span><span></span>{{end}}{{end}}
+
+{{define "cells"}}{{if eq .Group "meetings"}}<span class="ev{{if .EventMissing}} ph{{end}}">{{.Event}}</span>
+      <span class="when num">{{.When}}</span>
+      <span class="ppl{{if .PeopleRole}} ph{{end}}">{{.People}}</span>
+      <span class="chg"><span class="k">{{.Change}}</span>{{with .ChangeDetail}}<span class="snip">{{.}}</span>{{end}}</span>
+{{- else if eq .Group "mailbox"}}<span class="text"><span class="from ph">Message not available</span></span>
+      <span class="recv num">—</span>
+{{- else}}<span class="to" title="{{.ToTitle}}">{{with .ToMarker}}<span class="ph">{{.}}</span>{{if $.To}}; {{end}}{{end}}{{.To}}</span>
+      <span class="text">{{if .Subject}}<span class="subj{{if .NoSubject}} ph{{end}}">{{.Subject}}</span>{{end}}{{with .Preview}}<span class="snip">{{.}}</span>{{end}}</span>{{end}}{{end}}
+
+{{define "score"}}<span class="score{{if .Risk}} bad{{end}}"{{with .Code}} title="{{.}}"{{end}}>{{if .Fake}}<span class="fake">fake</span>{{end}}{{if .Risk}}<span class="mk" aria-hidden="true">▲</span>{{end}}{{.Value}}<span class="vh"> · {{.Label}}</span></span>{{end}}
+
+{{define "openfields"}}{{range .}}<dt>{{.Label}}</dt><dd{{if not .Lines}} class="ph"{{end}}>{{range .Lines}}<span class="ln">{{.}}</span>{{else}}—{{end}}</dd>
+        {{end}}{{end}}

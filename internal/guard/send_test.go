@@ -287,7 +287,7 @@ func stateOf(t *testing.T, c *cache.Cache, id string) cache.PendingState {
 // waitingIDs gives the IDs of the actions in c that wait for approval.
 func waitingIDs(t *testing.T, c *cache.Cache) []string {
 	t.Helper()
-	items, err := c.ListPending(context.Background(), 0)
+	items, err := c.ListPending(context.Background(), 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}

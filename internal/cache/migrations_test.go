@@ -121,7 +121,7 @@ func TestVersionTwoCacheGainsTheWithdrawnState(t *testing.T) {
 		State: cache.StatePending, Jev: &model.ActionCheck{Flag: true, Score: &score}, Created: queued, Updated: queued}
 	done := cache.Pending{ID: "fedcba9876543210fedcba9876543210", Account: "work@example.test", Op: "mail.send", Args: []byte(`{"subject":"CANARY"}`),
 		State: cache.StateDone, Result: ptr(`{"ok":true}`), Created: queued.Add(-time.Hour), Updated: queued.Add(time.Hour)}
-	if listed, err := c.ListPending(ctx, 10); err != nil || !reflect.DeepEqual(listed, []cache.Pending{waiting, done}) {
+	if listed, err := c.ListPending(ctx, 10, ""); err != nil || !reflect.DeepEqual(listed, []cache.Pending{waiting, done}) {
 		t.Fatalf("stored actions after migration: %+v %v", listed, err)
 	}
 	if got, err := c.WithdrawDraftSends(ctx, "work@example.test", "d1", queued); err != nil || len(got) != 1 || got[0].State != cache.StateWithdrawn {

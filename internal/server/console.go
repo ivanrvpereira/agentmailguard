@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -143,7 +144,7 @@ func (c *console) route(ctx context.Context, w http.ResponseWriter, r *http.Requ
 			plain(w, 405, "method refused")
 			return
 		}
-		c.list(ctx, w)
+		c.list(ctx, w, r)
 		return
 	}
 	id, ok := strings.CutPrefix(r.URL.Path, "/a/")
@@ -212,55 +213,6 @@ func (c *console) decide(ctx context.Context, w http.ResponseWriter, r *http.Req
 		// Done, or a failed run whose state and code the item page shows.
 		http.Redirect(w, r, "/a/"+id, http.StatusSeeOther)
 	}
-}
-
-// resolvedListed is the number of handled actions that the list shows after the waiting ones.
-const resolvedListed = 50
-
-type listRow struct {
-	ID, Account, Op, Recipients, Subject, Age string
-	State                                     cache.PendingState
-}
-
-func (c *console) list(ctx context.Context, w http.ResponseWriter) {
-	items, err := c.s.cache.ListPending(ctx, resolvedListed)
-	if err != nil {
-		plain(w, 500, "approvals unavailable")
-		return
-	}
-	now := c.s.options.Now()
-	rows := make([]listRow, 0, len(items))
-	for _, item := range items {
-		args := storedFields(item.Args)
-		// A draft send names only its draft; its recipients and subject are the stored draft fields.
-		if item.Op == "draft.send" {
-			args = storedFields(item.Draft)
-		}
-		// Optional attendees receive the invitation too.
-		recipients := append(texts(args["to"]), texts(args["optional"])...)
-		if args["to"] == nil {
-			recipients = texts(args["add"])
-		}
-		// A reply goes to the original's recipients too, which only the item page reads.
-		if item.Op == "draft.reply" || item.Op == "mail.reply" {
-			recipients = []string{"reply"}
-			if all, _ := args["all"].(bool); all {
-				recipients = []string{"reply all"}
-			}
-		}
-		groups := []string{}
-		if len(recipients) > 0 {
-			groups = append(groups, strings.Join(recipients, ", "))
-		}
-		for _, g := range []struct{ key, label string }{{"cc", "cc: "}, {"bcc", "bcc (hidden): "}} {
-			if list := texts(args[g.key]); len(list) > 0 {
-				groups = append(groups, g.label+strings.Join(list, ", "))
-			}
-		}
-		subject, _ := args["subject"].(string)
-		rows = append(rows, listRow{ID: item.ID, Account: item.Account, Op: item.Op, Recipients: strings.Join(groups, "; "), Subject: subject, Age: age(now.Sub(item.Created)), State: item.State})
-	}
-	render(w, 200, "list", rows)
 }
 
 type field struct {
@@ -530,73 +482,11 @@ func write(w http.ResponseWriter, status int, contentType string, body []byte) {
 	_, _ = w.Write(body)
 }
 
+// consoleTemplates are the console pages, embedded in the binary.
+//
+//go:embed console/*.html
+var consoleTemplates embed.FS
+
 // pages are the console templates. html/template escapes every value; stored text is never markup, and the
 // only links are the console's own pages.
-var pages = template.Must(template.New("").Parse(`
-{{define "head"}}<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="format-detection" content="telephone=no,email=no,address=no,date=no">
-<title>agentmailguard approvals</title>
-<style>
-body{font-family:system-ui,-apple-system,sans-serif;margin:0;padding:1rem;background:#f6f6f4;color:#1d1d1b;line-height:1.4}
-main{margin:0 auto}
-h1{font-size:1.3rem;margin:0 0 1rem}
-h2{font-size:1.05rem;margin:1.5rem 0 .5rem}
-a{color:#0b57d0}
-table{border-collapse:collapse;width:100%;background:#fff}
-th,td{text-align:left;padding:.5rem;border-bottom:1px solid #ddd;vertical-align:top;overflow-wrap:anywhere}
-th{font-size:.8rem;text-transform:uppercase;color:#555}
-dl{display:grid;grid-template-columns:minmax(6rem,max-content) 1fr;gap:.4rem 1rem;background:#fff;padding:.75rem;margin:0}
-dt{font-weight:600;color:#444}
-dd{margin:0;min-width:0}
-pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-family:ui-monospace,Menlo,monospace;font-size:.9rem}
-.state{font-weight:600}
-.pending{color:#9a5b00}.done{color:#11722b}.failed,.denied{color:#a11}
-.notice{background:#fff3cd;padding:.75rem;border:1px solid #e0c060}
-form{display:flex;gap:1rem;margin-top:1.5rem}
-button{font-size:1.1rem;padding:.8rem 1.6rem;border-radius:.4rem;border:1px solid #888;cursor:pointer;flex:1}
-.approve{background:#11722b;color:#fff;border-color:#11722b}
-.deny{background:#fff;color:#a11;border-color:#a11}
-@media (max-width:40rem){.wide{display:none}dl{grid-template-columns:1fr}dt{margin-top:.4rem}}
-</style></head><body><main>{{end}}
-
-{{define "list"}}{{template "head"}}
-<h1>Approvals</h1>
-{{if .}}<table>
-<tr><th>Action</th><th class="wide">Account</th><th>Recipients</th><th>Subject</th><th>State</th><th class="wide">Age</th></tr>
-{{range .}}<tr><td><a href="/a/{{.ID}}">{{.Op}}</a></td><td class="wide">{{.Account}}</td><td>{{.Recipients}}</td><td>{{.Subject}}</td><td class="state {{.State}}">{{.State}}</td><td class="wide">{{.Age}}</td></tr>
-{{end}}</table>{{else}}<p>No actions wait for approval.</p>{{end}}
-</main></body></html>{{end}}
-
-{{define "item"}}{{template "head"}}
-<p><a href="/">All approvals</a></p>
-<h1>{{.Op}}</h1>
-{{if .Notice}}<p class="notice">{{.Notice}}</p>{{end}}
-<dl>
-<dt>State</dt><dd class="state {{.State}}">{{.State}}</dd>
-<dt>Account</dt><dd>{{.Account}}</dd>
-<dt>Created</dt><dd>{{.Created}}</dd>
-<dt>Updated</dt><dd>{{.Updated}}</dd>
-{{if .Code}}<dt>Error</dt><dd><pre>{{.Code}}</pre></dd>{{end}}
-{{if .Result}}<dt>Result</dt><dd><pre>{{.Result}}</pre></dd>{{end}}
-</dl>
-{{if .Jev}}<p>{{.Jev}}</p>{{end}}
-<h2>Request</h2>
-{{template "fields" .Args}}
-{{if .RefKind}}<h2>{{.RefKind}}</h2>
-{{if .RefMissing}}<p>{{.RefKind}} not available.</p>{{else}}{{template "fields" .Ref}}{{end}}{{end}}
-{{if .Reply}}<h2>Reply recipients</h2>
-{{if .RecipientsMissing}}<p>Reply recipients could not be read.</p>{{else}}<p>Worked out from the original message, with the cc and bcc of the request. Microsoft 365 picks its own list when it makes the reply.</p>
-{{template "fields" .Recipients}}{{end}}{{end}}
-{{if .DraftSend}}<h2>Draft</h2>
-{{if .Draft}}<p>The draft as the daemon read it for the Jev check when the agent asked to send it. The send sends the draft as it is at the provider when it runs.</p>
-{{template "fields" .Draft}}{{else}}<p>Draft fields not available.</p>{{end}}{{end}}
-{{if .Pending}}<form method="post" action="/a/{{.ID}}">
-<button class="approve" type="submit" name="decision" value="approve">Approve</button>
-<button class="deny" type="submit" name="decision" value="deny">Deny</button>
-</form>{{end}}
-</main></body></html>{{end}}
-
-{{define "fields"}}<dl>{{range .}}<dt>{{.Label}}</dt><dd>{{range .Lines}}<pre>{{.}}</pre>{{end}}</dd>{{end}}</dl>{{end}}
-`))
+var pages = template.Must(template.New("").ParseFS(consoleTemplates, "console/*.html"))

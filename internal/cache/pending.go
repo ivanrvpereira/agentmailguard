@@ -91,24 +91,27 @@ func (c *Cache) GetPending(ctx context.Context, id string) (Pending, error) {
 	return scanPending(c.db.QueryRowContext(ctx, "SELECT "+pendingColumns+" FROM pending WHERE id = ?", id))
 }
 
-// maxListedPending caps the waiting actions that ListPending returns.
+// maxListedPending caps the waiting actions, and apart from them the handled actions, that ListPending returns.
 const maxListedPending = 500
 
-// ListPending returns the waiting actions newest first, at most maxListedPending, then the resolvedLimit most
-// recently updated actions in any other state.
-func (c *Cache) ListPending(ctx context.Context, resolvedLimit int) ([]Pending, error) {
+// ListPending returns the waiting actions newest first, then for each operation its perOp most recently handled
+// actions (done, denied, failed, withdrawn) of the account, of every account when account is empty, newest first
+// across operations. Each part holds at most maxListedPending actions. A running action is in neither part. Any
+// grouping of operations finds its perOp most recently handled actions in the result.
+func (c *Cache) ListPending(ctx context.Context, perOp int, account string) ([]Pending, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	out := []Pending{}
 	for _, query := range []struct {
 		where string
-		limit int
+		args  []any
 	}{
-		{"state = 'pending' ORDER BY created DESC, rowid DESC", maxListedPending},
-		{"state <> 'pending' ORDER BY updated DESC, rowid DESC", resolvedLimit},
+		{"state = 'pending' ORDER BY created DESC, rowid DESC", nil},
+		{`rowid IN (SELECT rowid FROM (SELECT rowid, ROW_NUMBER() OVER (PARTITION BY op ORDER BY updated DESC, rowid DESC) AS n FROM pending
+			WHERE state IN ('done', 'denied', 'failed', 'withdrawn') AND (? = '' OR account = ?)) WHERE n <= ?) ORDER BY updated DESC, rowid DESC`, []any{account, account, perOp}},
 	} {
-		rows, err := c.db.QueryContext(ctx, "SELECT "+pendingColumns+" FROM pending WHERE "+query.where+" LIMIT ?", query.limit)
+		rows, err := c.db.QueryContext(ctx, "SELECT "+pendingColumns+" FROM pending WHERE "+query.where+" LIMIT ?", append(query.args, maxListedPending)...)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()

@@ -84,7 +84,13 @@ var approvalIDs = regexp.MustCompile(`"approval_id":"([0-9a-f]{32})"`)
 // pend makes a call of the default account that the policy holds and returns the approval ID of each held action.
 func pend(t *testing.T, s *server.Server, op, params string) []string {
 	t.Helper()
-	status, body := accountRPC(t, s, op, "", params)
+	return pendOn(t, s, op, "", params)
+}
+
+// pendOn is pend on the account with the alias.
+func pendOn(t *testing.T, s *server.Server, op, alias, params string) []string {
+	t.Helper()
+	status, body := accountRPC(t, s, op, alias, params)
 	matches := approvalIDs.FindAllStringSubmatch(body, -1)
 	if status != 200 || matches == nil {
 		t.Fatalf("%s: %d %s", op, status, body)

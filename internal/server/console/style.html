@@ -1,0 +1,214 @@
+{{define "style"}}<style>
+:root{
+  --bg:#ffffff; --ink:#1b1d20; --ink-2:#50555c; --ink-3:#686d74;
+  --line:#e6e5e0; --line-2:#f0efeb; --hover:#f6f6f3; --track:#f1f1ee;
+  --accent:#1f56c3; --on-accent:#fff;
+  /* Row bars: green = checked, grey = not checked, red = needs review. */
+  --green:#2f8a55; --grey:#878c93; --red:#bf3326;
+  --red-soft:color-mix(in srgb,var(--red) 6%,var(--bg));
+  --row:2.5rem;
+  /* Columns every table shares, so Action, Account and the right edge line up from table to table. */
+  --c-act:5.75rem; --c-acct:4.5rem; --c-score:6.25rem; --c-age:2.75rem; --c-slot:10.5rem;
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",system-ui,sans-serif;
+  --letter:ui-serif,"New York",Charter,"Iowan Old Style",Georgia,serif;
+  --mono:ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#17181a; --ink:#e8e8e6; --ink-2:#b4b6b9; --ink-3:#979a9f;
+  --line:#2c2e31; --line-2:#232427; --hover:#1e1f22; --track:#232427;
+  --accent:#7ea6ff; --on-accent:#0d1526;
+  --green:#4fb87a; --grey:#6c7076; --red:#ff7f70;
+}}
+*{box-sizing:border-box}
+html{background:var(--bg);color:var(--ink);font:14px/1.4 var(--sans);-webkit-text-size-adjust:100%;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
+body{margin:0}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.num{font-variant-numeric:tabular-nums}
+
+/* Header: brand on the left, waiting counts on the right. */
+.top{display:flex;align-items:center;flex-wrap:wrap;gap:.25rem 1.25rem;padding:1rem 1.5rem .5rem;max-width:92rem;margin:0 auto}
+.brand{display:flex;align-items:center;gap:.5rem;font-size:1rem;font-weight:400;letter-spacing:-.01em;margin:0;white-space:nowrap}
+.brand .mark{fill:none;stroke:var(--accent);stroke-width:1.4;stroke-linejoin:round;stroke-linecap:round;flex:none}
+.brand .wm{font-weight:600;color:var(--ink)}
+.brand .sep{color:var(--ink-3)}
+.brand .pg{color:var(--ink-2)}
+.top .sum{margin-left:auto;color:var(--ink-2)}
+.top .sum b{color:var(--red);font-weight:600}
+
+.pane{max-width:92rem;margin:0 auto;padding:0 1.5rem 4rem}
+
+/* Filters: segmented server-side links. */
+.lead{height:3rem;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:1.5rem;padding-left:.5rem;font-size:.8125rem}
+.filters{display:flex;gap:1.5rem}
+.lead .grp{display:flex;align-items:center;white-space:nowrap}
+.lead .lbl{color:var(--ink-3);margin-right:.5rem}
+.seg{display:inline-flex;align-items:center;gap:2px;height:1.875rem;padding:2px;border-radius:7px;background:var(--track)}
+.filters a{display:inline-flex;align-items:center;gap:.3rem;height:1.625rem;padding:0 .625rem;border-radius:5px;color:var(--ink-2);font-weight:500}
+.filters a:hover{text-decoration:none;color:var(--ink)}
+.filters a .c{color:var(--ink-3);font-weight:400}
+.filters a[aria-current]{background:var(--bg);color:var(--ink);box-shadow:0 0 0 1px var(--line),0 1px 2px rgb(0 0 0/.06)}
+.filters a[aria-current] .c{color:var(--ink-2)}
+
+/* Tables: one section per group, with its heading (name, count, what approving does), its column header and its
+   rows. --cols is the table's own grid; the shared columns keep the same widths. */
+.t-mail{--cols:var(--c-act) var(--c-acct) 20rem minmax(0,1fr) var(--c-score) var(--c-age) var(--c-slot)}
+.t-meet{--cols:var(--c-act) var(--c-acct) minmax(0,20rem) 10.25rem 5.5rem minmax(14rem,1fr) var(--c-score) var(--c-age) var(--c-slot)}
+.t-box{--cols:var(--c-act) var(--c-acct) minmax(0,1fr) 7.5rem var(--c-score) var(--c-age) var(--c-slot)}
+.recent{--cols:var(--c-act) var(--c-acct) minmax(0,1fr) var(--c-score) var(--c-slot) var(--c-age)}
+h2{font-size:.8125rem;font-weight:600;color:var(--ink);margin:1.75rem 0 .25rem;padding-left:.5rem;display:flex;align-items:baseline;gap:.4rem;min-width:0}
+.waiting .tbl:first-child h2{margin-top:1.25rem}
+h2 .n{color:var(--ink-3);font-weight:400}
+h2 .hint{color:var(--ink-3);font-weight:400;font-size:.75rem;margin-left:.5rem;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+ol{list-style:none;margin:0;padding:0}
+
+/* Rows and the column header share one grid: [pick] [the table's columns]. */
+.row,.colhead{position:relative;display:grid;grid-template-columns:2.25rem minmax(0,1fr)}
+.row{border-bottom:1px solid var(--line-2)}
+.cells,summary,a.line{display:grid;align-items:center;grid-template-columns:var(--cols);column-gap:.75rem;padding-right:.75rem}
+.colhead{border-bottom:1px solid var(--line);font-size:.75rem;color:var(--ink-3);height:1.75rem;align-items:center}
+.colhead .r{text-align:right}
+.cells>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+@media (hover:hover){.row:hover{background:var(--hover)}.recent .row:hover .text{text-decoration:underline}}
+.waiting .row{box-shadow:inset 3px 0 0 var(--bar)}
+.row.ok{--bar:var(--green)}
+.row.none{--bar:var(--grey)}
+.row.risky{--bar:var(--red)}
+.pick{height:var(--row)}
+
+summary{list-style:none;cursor:pointer;height:var(--row)}
+summary::-webkit-details-marker{display:none}
+summary:focus-visible,a.line:focus-visible{outline-offset:-2px}
+summary>span,a.line>span,.meta>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.meta{display:contents}
+.op{font-size:.8125rem;font-weight:500;color:var(--ink-2)}
+.acct{font-size:.8125rem;color:var(--ink-2)}
+.to{font-weight:500}
+.subj{font-weight:600}
+.snip{color:var(--ink-3)}
+.subj+.snip::before{content:" — ";color:var(--ink-3)}
+.chg .snip::before{content:" — ";color:var(--ink-3)}
+.ph{font-style:italic;font-weight:400;color:var(--ink-3)}
+.age{text-align:right;color:var(--ink-2);font-size:.8125rem}
+.score{text-align:right;font-size:.8125rem;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.score.bad{color:var(--red);font-weight:600}
+.mk{font-size:.7em;vertical-align:.1em;margin-right:.2em}
+.fake{font-size:.75rem;font-weight:400;color:var(--ink-3);border:1px solid var(--line);border-radius:3px;padding:0 .2rem;margin-right:.3rem}
+
+/* Meetings: Event · When · People · Change. */
+.ev{font-weight:600}
+.ev.ph{font-weight:400}
+.when,.ppl{font-size:.8125rem;color:var(--ink-2)}
+.chg .k{font-weight:500}
+
+/* Mailbox operations: Message · Received. */
+.from{font-weight:500}
+.recv{font-size:.8125rem;color:var(--ink-2)}
+
+/* Open row */
+.open{padding:.25rem 1rem 1.25rem 0;display:grid;grid-template-columns:minmax(0,46rem) minmax(0,1fr);column-gap:2rem;border-top:1px dashed var(--line)}
+.open>*{grid-column:1}
+.row:has(details[open]){background:var(--bg)}
+dl.f{display:grid;grid-template-columns:7rem minmax(0,1fr);gap:.2rem .75rem;margin:.75rem 0;font-size:.8125rem}
+dl.f dt{color:var(--ink-3);overflow-wrap:anywhere}
+dl.f dd{margin:0;overflow-wrap:anywhere}
+dl.f dd.bad{color:var(--red);font-weight:600}
+dl.f .ln{display:block;white-space:pre-wrap}
+.open .sub{font-size:.75rem;color:var(--ink-3);margin:.5rem 0 0}
+.body{margin:0;border-left:2px solid var(--line);padding:.1rem 0 .1rem 1rem}
+.body figcaption{font-size:.75rem;color:var(--ink-3);margin-bottom:.35rem}
+.body pre{margin:0;font-family:var(--letter);font-size:.96rem;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;max-height:18em;overflow:auto;color:var(--ink)}
+.more{font-size:.8125rem;margin-top:.9rem}
+
+/* Recents: a closed disclosure at the foot of each table with its last handled actions; quiet, no bar. */
+.recent{margin:0 0 .25rem}
+.waiting .recent .row{box-shadow:none}
+.recent>summary{display:flex;align-items:center;gap:.4rem;height:2.25rem;padding:0 .5rem;font-size:.8125rem;color:var(--ink-2);width:max-content}
+.recent>summary::before{content:"";width:.35rem;height:.35rem;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:rotate(-45deg);margin-right:.2rem;transition:transform .15s}
+.recent[open]>summary::before{transform:rotate(45deg)}
+.recent>summary:hover{color:var(--ink)}
+.recent>summary .n{color:var(--ink-3)}
+@media (prefers-reduced-motion:reduce){.recent>summary::before{transition:none}}
+.recent .row{color:var(--ink-3)}
+a.line{height:var(--row);color:inherit}
+a.line:hover{text-decoration:none}
+.recent .text{color:var(--ink-2)}
+.recent .op{color:var(--ink-3)}
+.recent .acct,.recent .score{color:var(--ink-3)}
+.recent .score.bad{color:var(--red)}
+.st{font-size:.8125rem;color:var(--ink-2);padding-left:.25rem}
+.st.failed{color:var(--red)}
+.recent .age{color:var(--ink-3)}
+
+.empty{color:var(--ink-2);padding:2rem .5rem}
+.foot{color:var(--ink-3);font-size:.75rem;margin-top:1.25rem;padding-left:.5rem;line-height:1.7}
+.foot .key{display:inline-flex;align-items:center;gap:.35rem;margin-right:.25rem;white-space:nowrap}
+.foot .key::before{content:"";width:3px;height:.9rem;background:var(--bar)}
+.foot .key.ok{--bar:var(--green)}.foot .key.none{--bar:var(--grey)}.foot .key.risky{--bar:var(--red)}
+
+/* Action page */
+.actionpage h1{font-size:1.1rem;margin:1rem 0}
+.actionpage h2{font-size:.9rem;margin:1.5rem 0 .5rem;padding:0}
+.actionpage dl{display:grid;grid-template-columns:minmax(6rem,max-content) minmax(0,1fr);gap:.4rem 1rem;margin:0;font-size:.875rem}
+.actionpage dt{color:var(--ink-3)}
+.actionpage dd{margin:0;min-width:0}
+.actionpage pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--mono);font-size:.85rem}
+.actionpage .state{font-weight:600}
+.actionpage .pending{color:var(--ink-2)}.actionpage .done{color:var(--green)}.actionpage .failed,.actionpage .denied{color:var(--red)}
+.actionpage .notice{background:var(--red-soft);padding:.75rem;border:1px solid var(--line);border-radius:6px}
+.actionpage form{display:flex;gap:.5rem;margin-top:1.5rem}
+.actionpage button{font:inherit;font-weight:500;height:2.5rem;padding:0 1.25rem;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--ink);cursor:pointer}
+.actionpage .approve{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+
+/* Phone: three or four lines per row; the column labels go. */
+@media (max-width:48rem){
+  .top{padding:1rem 1rem .5rem;gap:.25rem .75rem}
+  .top .sum{margin-left:0;font-size:.875rem}
+  .pane{padding:0 0 3rem}
+  .actionpage{padding:0 1rem 3rem}
+  .lead{height:auto;flex-direction:column;align-items:stretch;gap:.125rem;padding:.25rem 1rem .5rem}
+  .filters{flex-direction:column;gap:.375rem}
+  .lead .grp{flex-direction:column;align-items:flex-start;gap:.25rem;overflow-x:auto;scrollbar-width:none;max-width:100%}
+  .lead .lbl{flex:none;margin:0;font-size:.75rem}
+  .filters a{height:2rem;flex:none;padding:0 .5rem}
+  .seg{height:2.25rem}
+
+  .thead{border-bottom:1px solid var(--line);margin-top:1.5rem;min-height:2.5rem}
+  .waiting .tbl:first-child .thead{margin-top:.75rem}
+  .thead h2,.waiting .tbl:first-child h2{margin:0;padding:.5rem 1rem;flex-wrap:wrap;row-gap:0}
+  .thead h2 .hint{flex-basis:100%;margin-left:0;white-space:normal}
+  .colhead{display:none}
+  .recent>summary{padding:0 1rem;height:2.5rem}
+  .recent ol{border-top:1px solid var(--line)}
+
+  .row{grid-template-columns:1rem minmax(0,1fr)}
+  .pick{height:auto}
+  summary,a.line{height:auto;padding:.6rem 1rem .65rem 0;row-gap:.1rem;grid-template-columns:minmax(0,1fr) auto}
+  .t-mail summary{grid-template-areas:"to age" "text text" "op op"}
+  .t-meet summary{grid-template-areas:"ev age" "when ppl" "chg chg" "op op"}
+  .t-box summary{grid-template-areas:"text age" "op op"}
+  a.line{grid-template-areas:"text st" "op age"}
+  .to{grid-area:to}
+  .age{grid-area:age}
+  .ev{grid-area:ev}
+  .when{grid-area:when}
+  .ppl{grid-area:ppl;justify-self:end}
+  .t-box .recv{display:none}
+  .text{grid-area:text}
+  .text,.chg{white-space:normal!important;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+  .chg{grid-area:chg}
+  .recent .text{-webkit-line-clamp:1}
+  .meta{display:block;grid-area:op;min-width:0;overflow:hidden;white-space:nowrap}
+  .meta .acct{display:inline;font-size:.75rem}
+  .meta .acct::before{content:" · "}
+  .score{grid-area:op;justify-self:end;font-size:.75rem}
+  .score::before{content:"Score ";font-weight:400;color:var(--ink-3)}
+  .recent .score{display:none}
+  .st{grid-area:st;justify-self:end}
+  .open{grid-template-columns:minmax(0,1fr);padding:.25rem 1rem 1rem 0}
+  dl.f{grid-template-columns:5.5rem minmax(0,1fr)}
+  .foot{padding:0 1rem}
+}
+</style>{{end}}

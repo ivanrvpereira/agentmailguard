@@ -662,8 +662,19 @@ func (s *server) seedFlaggedDraft() string {
 	return "users-draft"
 }
 
+// sendWaits reports whether the console list has a waiting Send draft row. Waiting rows carry the class of their
+// colour bar; Recents rows do not.
+func sendWaits(list string) bool {
+	for _, row := range strings.Split(list, `<li class="row `)[1:] {
+		if row, _, _ = strings.Cut(row, "</li>"); strings.Contains(row, `<span class="op">Send draft</span>`) {
+			return true
+		}
+	}
+	return false
+}
+
 // assertWithdrawn checks that the waiting send approval is withdrawn: approvals status reports it, the console lists
-// it among the handled items and shows its state, and it can be neither approved nor denied. Its approval records
+// it under the Recents of its table with its outcome, and it can be neither approved nor denied. Its approval records
 // are created and then withdrawn, with IDs and fixed codes only.
 func (s *server) assertWithdrawn(approval string) {
 	s.t.Helper()
@@ -671,8 +682,9 @@ func (s *server) assertWithdrawn(approval string) {
 		s.t.Fatalf("approvals status %s: %s", approval, state)
 	}
 	_, list := s.consoleGet(consolePassword, "/")
-	at := strings.Index(list, `<a href="/a/`+approval+`">draft.send</a>`)
-	if at < 0 || !strings.Contains(list[at:at+strings.Index(list[at:], "</tr>")], `<td class="state withdrawn">withdrawn</td>`) {
+	_, row, _ := strings.Cut(list, `<a class="line" href="/a/`+approval+`">`)
+	row, _, _ = strings.Cut(row, "</li>")
+	if !strings.Contains(row, `<span class="op">Send draft</span>`) || !strings.Contains(row, `<span class="st">Withdrawn</span>`) {
 		s.t.Fatalf("console list misses the withdrawn send:\n%s", list)
 	}
 	_, item := s.consoleGet(consolePassword, "/a/"+approval)
@@ -745,7 +757,7 @@ func TestApprovedDraftUpdateReplacesTheWaitingSendAndTheNewOneWaits(t *testing.T
 	first := s.held("draft", "send", id)
 	update := s.held("draft", "update", id, "--body", "canary-body-clean: see you at noon")
 	s.assertWithdrawn(first.ApprovalID)
-	if _, list := s.consoleGet(consolePassword, "/"); strings.Count(list, `class="state pending"`) != 1 {
+	if _, list := s.consoleGet(consolePassword, "/"); !strings.Contains(list, `<span class="sum num">1 waiting ·`) {
 		t.Fatalf("a waiting update made a new send:\n%s", list)
 	}
 	old := s.held("draft", "send", id)
@@ -790,7 +802,7 @@ func TestDraftUpdateUnderASendDenyWithdrawsWithoutANewSend(t *testing.T) {
 		t.Fatalf("draft update: %s", out)
 	}
 	s.assertWithdrawn(old.ApprovalID)
-	if _, list := s.consoleGet(consolePassword, "/"); strings.Contains(list, `class="state pending"`) {
+	if _, list := s.consoleGet(consolePassword, "/"); sendWaits(list) {
 		t.Fatalf("a send waits after an update under deny:\n%s", list)
 	}
 }
@@ -812,7 +824,7 @@ func TestSecondDraftSendAndDraftDeleteWithdrawTheWaitingSend(t *testing.T) {
 	if got := s.column(`SELECT id FROM messages WHERE folder = 'sent'`); len(got) != 0 {
 		t.Fatalf("sent: %v", got)
 	}
-	if _, list := s.consoleGet(consolePassword, "/"); strings.Contains(list, `class="state pending"`) {
+	if _, list := s.consoleGet(consolePassword, "/"); sendWaits(list) {
 		t.Fatalf("a send waits after the draft delete:\n%s", list)
 	}
 }
@@ -838,7 +850,7 @@ func TestRefusedDraftSendStillWithdrawsTheWaitingSend(t *testing.T) {
 	}
 	s.refused("refused by policy: mail_send", "draft", "send", id)
 	s.assertWithdrawn(old.ApprovalID)
-	if _, list := s.consoleGet(consolePassword, "/"); strings.Contains(list, `class="state pending"`) {
+	if _, list := s.consoleGet(consolePassword, "/"); sendWaits(list) {
 		t.Fatalf("a send waits after refused sends:\n%s", list)
 	}
 	if got := s.column(`SELECT id FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{sentByApp}) {

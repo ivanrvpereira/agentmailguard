@@ -109,8 +109,12 @@ func (a *nativeAPI) graph(w http.ResponseWriter, r *http.Request) {
 			v = append(v, messageJSON(id, false, a.categories[id]))
 		}
 		response(w, map[string]any{"value": v})
-	case "/me/calendarView", "/me/events/e":
+	case "/me/calendarView", "/me/events/e", "/me/events/o":
+		// The event o is one that the account organizes.
 		e := map[string]any{"id": "e", "subject": "private-subject-event", "start": map[string]string{"dateTime": "2026-03-31T10:00:00", "timeZone": "UTC"}, "end": map[string]string{"dateTime": "2026-03-31T11:00:00", "timeZone": "UTC"}, "isOrganizer": false, "body": map[string]string{"contentType": "text", "content": "private-body-event"}, "categories": []string{}}
+		if r.URL.Path == "/me/events/o" {
+			e["id"], e["isOrganizer"] = "o", true
+		}
 		if r.URL.Path == "/me/calendarView" {
 			response(w, map[string]any{"value": []any{e}})
 		} else {

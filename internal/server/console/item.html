@@ -1,0 +1,32 @@
+{{define "item"}}{{template "head" "AgentMailGuard · Web console"}}
+<header class="top">{{template "brand"}}</header>
+<main class="pane actionpage">
+<p><a href="/">All approvals</a></p>
+<h1>{{.Op}}</h1>
+{{if .Notice}}<p class="notice">{{.Notice}}</p>{{end}}
+<dl>
+<dt>State</dt><dd class="state {{.State}}">{{.State}}</dd>
+<dt>Account</dt><dd>{{.Account}}</dd>
+<dt>Created</dt><dd>{{.Created}}</dd>
+<dt>Updated</dt><dd>{{.Updated}}</dd>
+{{if .Code}}<dt>Error</dt><dd><pre>{{.Code}}</pre></dd>{{end}}
+{{if .Result}}<dt>Result</dt><dd><pre>{{.Result}}</pre></dd>{{end}}
+</dl>
+{{if .Jev}}<p>{{.Jev}}</p>{{end}}
+<h2>Request</h2>
+{{template "fields" .Args}}
+{{if .RefKind}}<h2>{{.RefKind}}</h2>
+{{if .RefMissing}}<p>{{.RefKind}} not available.</p>{{else}}{{template "fields" .Ref}}{{end}}{{end}}
+{{if .Reply}}<h2>Reply recipients</h2>
+{{if .RecipientsMissing}}<p>Reply recipients could not be read.</p>{{else}}<p>Worked out from the original message, with the cc and bcc of the request. Microsoft 365 picks its own list when it makes the reply.</p>
+{{template "fields" .Recipients}}{{end}}{{end}}
+{{if .DraftSend}}<h2>Draft</h2>
+{{if .Draft}}<p>The draft as the daemon read it for the Jev check when the agent asked to send it. The send sends the draft as it is at the provider when it runs.</p>
+{{template "fields" .Draft}}{{else}}<p>Draft fields not available.</p>{{end}}{{end}}
+{{if .Pending}}<form method="post" action="/a/{{.ID}}">
+<button class="approve" type="submit" name="decision" value="approve">Approve</button>
+<button class="deny" type="submit" name="decision" value="deny">Deny</button>
+</form>{{end}}
+</main></body></html>{{end}}
+
+{{define "fields"}}<dl>{{range .}}<dt>{{.Label}}</dt><dd>{{range .Lines}}<pre>{{.}}</pre>{{end}}</dd>{{end}}</dl>{{end}}
