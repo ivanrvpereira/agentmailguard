@@ -50,7 +50,11 @@ jobs:
       - name: Format, vet, race tests, and build
         run: make
       - name: Check that go fix has nothing to change
-        run: 'out="$(go fix -diff ./... 2>&1)" && test -z "$out" || { printf "%s\n" "$out"; exit 1; }'
+        run: |
+          if ! out="$(go fix -diff ./... 2>&1)" || [ -n "$out" ]; then
+            printf '%s\n' "$out"
+            exit 1
+          fi
       - name: Install pinned staticcheck and govulncheck
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
