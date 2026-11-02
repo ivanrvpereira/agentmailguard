@@ -172,6 +172,8 @@ jobs:
     name: Sign and notarize macOS
     needs: macos-build
     runs-on: macos-15
+    # The signing and notary secrets are in the release environment, which only v* tags can use.
+    environment: release
     timeout-minutes: 45
     outputs:
       digest: ${{ steps.seal.outputs.digest }}
@@ -406,6 +408,8 @@ jobs:
     name: Publish release
     needs: formula
     runs-on: ubuntu-24.04
+    # TAP_DEPLOY_KEY is in the release environment, which only v* tags can use.
+    environment: release
     timeout-minutes: 40
     permissions:
       contents: write
