@@ -33,7 +33,7 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
 The end-to-end tests in `internal/e2e` build the binaries themselves, so Go can report them as `(cached)` after a code change. After a change to `cmd/`, `internal/daemon`, or `internal/cli`, run `go test -race -count=1 ./internal/e2e/`.
 
-CI runs on Linux only, so it never builds the macOS Keychain backend (`internal/credentials/keychain_darwin.go`). After you change it, run `make` on a Mac.
+CI runs `make` on Linux and on macOS, so it also builds and tests the macOS Keychain backend (`internal/credentials/keychain_darwin.go`).
 
 ## Tests
 

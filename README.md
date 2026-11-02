@@ -69,7 +69,7 @@ agentmailguard keeps the agent's view of the mailbox and the agent's power over 
 - **Drafts and sending:** new messages, replies, reply all, and forwards that keep the original's attachments, as drafts or sent at once; Cc, Bcc, and HTML bodies; update, delete, and send saved drafts.
 - **Calendar:** list, search, and read events; send invitations with Teams or Google Meet links; update, cancel, and respond; availability (free/busy) for Microsoft 365.
 - **Organizing:** rules in `rules.toml` move and categorize mail by meaning. A preview shows the plan before anything changes.
-- **Operations:** reload without a restart, a content-free audit log, headless login, a fake provider for tests, and signed release binaries.
+- **Operations:** reload without a restart, a content-free audit log, headless login, a fake provider for tests, and release archives with build provenance (macOS binaries signed and notarized).
 
 Each action does what a user of that provider's own app expects. Gmail and Microsoft 365 can differ, and the docs say where.
 

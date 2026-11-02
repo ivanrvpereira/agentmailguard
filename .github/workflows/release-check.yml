@@ -1,0 +1,202 @@
+name: Release check
+
+# A dry run of the release build, without secrets: it runs the same scripts as release.yml, so a change that
+# breaks a release fails here, in review, and not at tag time. Signing, notarization, publishing, and the tap
+# update run only in release.yml.
+
+on:
+  push:
+    branches: [main]
+    paths: &release-paths
+      - ".github/workflows/release.yml"
+      - ".github/workflows/release-check.yml"
+      - "scripts/release/**"
+      - "packaging/**"
+      - "cmd/**"
+      - "go.mod"
+      - "go.sum"
+  pull_request:
+    branches: [main]
+    paths: *release-paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GOTOOLCHAIN: local
+  TAG: v0.0.0-check
+  GO_LICENSES: github.com/google/go-licenses/v2@v2.0.1
+
+jobs:
+  linux:
+    name: Build linux/${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+      - name: Install the musl C toolchain and go-licenses
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+          go install "$GO_LICENSES"
+      - name: Build static binaries and run them without a C library
+        run: scripts/release/build-linux.sh "$TAG" out
+      - name: Write the third-party notices
+        run: scripts/release/licenses.sh linux licenses
+      - name: Package
+        run: scripts/release/package.sh "$TAG" linux "${{ matrix.arch }}" out dist licenses
+
+  # The same three-job hand-off as release.yml, without signing: build, then package from the sealed
+  # binaries, then check the sealed archives and run the binaries.
+  macos-build:
+    name: Build macOS
+    runs-on: macos-15
+    timeout-minutes: 20
+    outputs:
+      digest: ${{ steps.seal.outputs.digest }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+      - name: Build binaries
+        run: scripts/release/build-macos.sh "$TAG" out
+      - name: Write the third-party notices
+        run: |
+          go install "$GO_LICENSES"
+          scripts/release/licenses.sh darwin out/licenses
+      - name: Seal the unsigned binaries
+        id: seal
+        run: |
+          mkdir handoff
+          tar -cf handoff/unsigned.tar -C out .
+          echo "digest=$(scripts/release/digest.sh write handoff)" >> "$GITHUB_OUTPUT"
+      - name: Upload unsigned binaries
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-unsigned
+          path: handoff/
+          if-no-files-found: error
+          retention-days: 1
+
+  macos-package:
+    name: Package macOS (no signing)
+    needs: macos-build
+    runs-on: macos-15
+    timeout-minutes: 15
+    outputs:
+      digest: ${{ steps.seal.outputs.digest }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download unsigned binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-unsigned
+          path: handoff
+      - name: Check the unsigned binaries against the build job's digest
+        env:
+          DIGEST: ${{ needs.macos-build.outputs.digest }}
+        run: |
+          scripts/release/digest.sh verify handoff "$DIGEST"
+          mkdir out
+          tar -xf handoff/unsigned.tar -C out
+      - name: Package and seal the archives
+        id: seal
+        run: |
+          for arch in arm64 amd64; do
+            scripts/release/package.sh "$TAG" darwin "$arch" "out/$arch" dist out/licenses
+          done
+          echo "digest=$(scripts/release/digest.sh write dist)" >> "$GITHUB_OUTPUT"
+      - name: Upload archives
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: archive-darwin
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  macos-verify:
+    name: Verify macOS
+    needs: macos-package
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: archive-darwin
+          path: dist
+      - name: Check the archives against the package job's digest
+        env:
+          DIGEST: ${{ needs.macos-package.outputs.digest }}
+        run: scripts/release/digest.sh verify dist "$DIGEST"
+      - name: Run the binaries from the archives
+        run: |
+          for arch in arm64 amd64; do
+            mkdir -p "x/$arch"
+            tar -xzf "dist/agentmailguard_${TAG#v}_darwin_$arch.tar.gz" -C "x/$arch" --strip-components 1
+            test -f "x/$arch/THIRD_PARTY_LICENSES/README.txt"
+            test -f "x/$arch/THIRD_PARTY_LICENSES/go/LICENSE"
+          done
+          for b in amg amgd; do
+            test "$(x/arm64/$b --version)" = "$b version $TAG"
+            test "$(/usr/bin/arch -x86_64 x/amd64/$b --version)" = "$b version $TAG"
+          done
+
+  formula:
+    name: Check Homebrew formula
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Synthetic checksums: this checks the template and the scripts; release.yml uses the real archives.
+      - name: Render formula
+        run: |
+          version="${TAG#v}"
+          for target in darwin_arm64 darwin_amd64 linux_arm64 linux_amd64; do
+            printf '%064d  agentmailguard_%s_%s.tar.gz\n' 0 "$version" "$target"
+          done > "$RUNNER_TEMP/checksums.txt"
+          scripts/release/render-formula.sh "$version" "$RUNNER_TEMP/checksums.txt" > "$RUNNER_TEMP/agentmailguard.rb"
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@d482da0e602890d3160aade42e72c8556103bf04 # 2026.10.26.1
+      - name: Check formula
+        run: scripts/release/check-formula.sh "$RUNNER_TEMP/agentmailguard.rb"

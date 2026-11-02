@@ -22,6 +22,6 @@ The first public release.
 - Several accounts in one daemon, keyed by email, with browser, device-code, and headless login.
 - Credential storage in the macOS Keychain or a password-encrypted file, settings commands that reload the daemon, and a content-free audit log.
 - A fake provider and fake screening, which judges by keywords, for tests and demos.
-- `--version` on both programs, signed and notarized macOS binaries, static Linux binaries, and a Homebrew formula.
+- `--version` on both programs, signed and notarized macOS binaries, static Linux binaries, and a Homebrew formula. Each release archive has build provenance and the license notices of the code it contains.
 
 [Unreleased]: https://github.com/ivanrvpereira/agentmailguard/commits/main
