@@ -366,8 +366,8 @@ func TestConsoleActionShowsStoredArgumentsAsTextAndTheMessageSummary(t *testing.
 }
 
 // The action page shows the same Score as the list's open row: the value and its label, the fixed code of a failed
-// check after the label, and for a trash the screening verdict of its message from the cache. It never names the
-// screening service.
+// check after the label. A trash gets no action check, so its page has no Score, whatever the verdict of its message.
+// It never names the screening service.
 func TestConsoleActionShowsTheScore(t *testing.T) {
 	f := consoleDaemon(t, everyWriteWaits, true)
 	for _, tc := range []struct {
@@ -390,14 +390,19 @@ func TestConsoleActionShowsTheScore(t *testing.T) {
 	}
 	for _, tc := range []struct{ op, params, want string }{
 		{"draft.delete", `{"id":"draft-1"}`, `<dt>Score</dt><dd>— · Not checked</dd>`},
-		{"mail.trash", `{"ids":["r"]}`, `<dt>Score</dt><dd class="bad">▲ 0.90 · Red</dd>`},
-		{"mail.trash", `{"ids":["s"]}`, `<dt>Score</dt><dd class="bad">▲ sealed · Sealed</dd>`},
-		{"mail.trash", `{"ids":["gone"]}`, `<dt>Score</dt><dd>— · Unknown</dd>`},
+		{"mail.trash", `{"ids":["g"]}`, ""},
+		{"mail.trash", `{"ids":["r"]}`, ""},
+		{"mail.trash", `{"ids":["s"]}`, ""},
+		{"mail.trash", `{"ids":["gone"]}`, ""},
 	} {
 		id := pend(t, f.d.s, tc.op, tc.params)[0]
-		page := f.get(t, "/a/"+id, nil).Body.String()
-		if !strings.Contains(page, tc.want) {
-			t.Errorf("%s %s: action page misses %q: %s", tc.op, tc.params, tc.want, page)
+		w := f.get(t, "/a/"+id, nil)
+		page := w.Body.String()
+		if w.Code != 200 || !strings.Contains(page, "<dt>Account</dt>") {
+			t.Errorf("%s %s: no action page: %d %s", tc.op, tc.params, w.Code, page)
+		}
+		if tc.want == "" && (strings.Contains(page, "<dt>Score</dt>") || !strings.Contains(page, "<h1>Trash ")) || tc.want != "" && !strings.Contains(page, tc.want) {
+			t.Errorf("%s %s: action page Score is not %q: %s", tc.op, tc.params, tc.want, page)
 		}
 		if m := oldWord(page); m != "" {
 			t.Errorf("%s %s: action page shows %q: %s", tc.op, tc.params, m, page)

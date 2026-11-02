@@ -355,8 +355,6 @@ func (c *console) action(ctx context.Context, w http.ResponseWriter, id string, 
 	}
 	args := page.Row.args
 	page.RefKind, page.Ref, page.RefMissing = c.reference(ctx, item, args)
-	// After the reference read, which screens the message of a trash, so that its verdict is in the cache.
-	c.screenedScores(ctx, []*listRow{&page.Row})
 	if item.Op == "draft.reply" || item.Op == "mail.reply" {
 		page.Reply = true
 		page.Recipients, page.RecipientsMissing = c.replyRecipients(ctx, item, args)

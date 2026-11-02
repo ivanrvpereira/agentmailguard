@@ -52,19 +52,19 @@
 </div></div>{{end}}
 </div>
 {{if .Rows}}<ol>
-{{range .Rows}}<li class="row {{.Score.Bar}}">
+{{range .Rows}}<li class="row {{.Bar}}">
   <label class="pick"><input class="sel" type="checkbox" form="batch" name="id" value="{{.ID}}"{{if .Review}} data-review{{end}}{{if $selected}} checked{{end}}><span class="vh">Select {{template "name" .}}</span></label>
   <details>
     <summary>
       <span class="meta"><span class="op">{{.Label}}</span><span class="acct" title="{{.Account}}">{{.Alias}}</span></span>
       {{template "cells" .}}
-      {{template "score" .Score}}
+      {{with .Score}}{{template "score" .}}{{end}}
       <span class="age num">{{.Age}}</span>
     </summary>
     <div class="open">
       <dl class="f">
         <dt>Account</dt><dd>{{.Account}}</dd>
-        <dt>Score</dt>{{template "scorefield" .Score}}
+        {{with .Score}}<dt>Score</dt>{{template "scorefield" .}}{{end}}
         {{range .Read}}<dt>{{.Label}}</dt><dd{{if .Placeholder}} class="ph"{{end}}>{{.Value}}{{with .Source}} <span class="src">· {{.}}</span>{{end}}</dd>
         {{end}}
         {{template "openfields" .Fields}}
@@ -90,13 +90,13 @@
 {{if .Recents}}<details class="recent">
 <summary>Recents <span class="n num">{{len .Recents}}</span></summary>
 <div class="colhead"><span></span><div class="cells" aria-hidden="true">
-  <span>Action</span><span>Account</span><span>Summary</span><span class="r">Score</span><span>Outcome</span><span class="r">When</span>
+  <span>Action</span><span>Account</span><span>Summary</span>{{if .Scored}}<span class="r">Score</span>{{end}}<span>Outcome</span><span class="r">When</span>
 </div></div>
 <ol>
 {{range .Recents}}<li class="row"><span class="pick"></span><a class="line" href="/a/{{.ID}}">
   <span class="meta"><span class="op">{{.Label}}</span><span class="acct" title="{{.Account}}">{{.Alias}}</span></span>
   <span class="text">{{.Summary}}</span>
-  {{template "score" .Score}}
+  {{with .Score}}{{template "score" .}}{{end}}
   <span class="st{{if .Failed}} failed{{end}}">{{.Outcome}}</span>
   <span class="age num">{{.Age}}</span></a></li>
 {{end}}</ol>
@@ -107,7 +107,7 @@
 
 <p class="foot">
   <span class="key risky">Red: needs review</span> · <span class="key none">Grey: not checked</span> · <span class="key ok">Green: checked</span>
-  <br>In Mailbox operations, the colour and the score are the message's screening verdict. Recents keeps the last 10 handled actions of each table.
+  <br>Recents keeps the last 10 handled actions of each table.
 </p>
 <p class="vh" id="selstatus" aria-live="polite"></p>
 <p class="selcount num" aria-hidden="true"></p>
@@ -124,7 +124,7 @@
 
 {{define "columns"}}{{if eq . "messages"}}<span>Action</span><span>Account</span><span>To</span><span>Message</span><span class="r">Score</span><span class="r">Age</span><span></span>
 {{- else if eq . "meetings"}}<span>Action</span><span>Account</span><span>Event</span><span>When</span><span>People</span><span>Change</span><span class="r">Score</span><span class="r">Age</span><span></span>
-{{- else}}<span>Change</span><span>Account</span><span>Message</span><span>Received</span><span class="r">Score</span><span class="r">Age</span><span></span>{{end}}{{end}}
+{{- else}}<span>Change</span><span>Account</span><span>Message</span><span>Received</span><span class="r">Age</span><span></span>{{end}}{{end}}
 
 {{define "cells"}}{{if eq .Group "meetings"}}<span class="ev{{if .EventPlaceholder}} ph{{end}}">{{.Event}}</span>
       <span class="when num">{{.When}}</span>

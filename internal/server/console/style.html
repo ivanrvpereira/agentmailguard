@@ -4,9 +4,8 @@
   --line:#e6e5e0; --line-2:#f0efeb; --hover:#f6f6f3; --track:#f1f1ee;
   --accent:#1f56c3; --on-accent:#fff;
   --pick:color-mix(in srgb,var(--accent) 9%,var(--bg));
-  /* Row bars: green = checked, grey = not checked, red = needs review. Mailbox operations add yellow for the
-     yellow screening verdict. */
-  --green:#2f8a55; --grey:#878c93; --red:#bf3326; --yellow:#d6a100;
+  /* Row bars: green = checked, grey = not checked, red = needs review. Mailbox operations rows are always grey. */
+  --green:#2f8a55; --grey:#878c93; --red:#bf3326;
   --red-soft:color-mix(in srgb,var(--red) 6%,var(--bg));
   --row:2.5rem;
   /* Columns every table shares, so Action, Account and the right edge line up from table to table. */
@@ -19,7 +18,7 @@
   --bg:#17181a; --ink:#e8e8e6; --ink-2:#b4b6b9; --ink-3:#979a9f;
   --line:#2c2e31; --line-2:#232427; --hover:#1e1f22; --track:#232427;
   --accent:#7ea6ff; --on-accent:#0d1526;
-  --green:#4fb87a; --grey:#6c7076; --red:#ff7f70; --yellow:#e0b43a;
+  --green:#4fb87a; --grey:#6c7076; --red:#ff7f70;
 }}
 *{box-sizing:border-box}
 html{background:var(--bg);color:var(--ink);font:14px/1.4 var(--sans);-webkit-text-size-adjust:100%;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
@@ -102,8 +101,10 @@ a:hover{text-decoration:underline}
    rows. --cols is the table's own grid; the shared columns keep the same widths. */
 .t-mail{--cols:var(--c-act) var(--c-acct) 20rem minmax(0,1fr) var(--c-score) var(--c-age) var(--c-slot)}
 .t-meet{--cols:var(--c-act) var(--c-acct) minmax(0,20rem) 10.25rem 5.5rem minmax(14rem,1fr) var(--c-score) var(--c-age) var(--c-slot)}
-.t-box{--cols:var(--c-act) var(--c-acct) minmax(0,1fr) 7.5rem var(--c-score) var(--c-age) var(--c-slot)}
+/* Mailbox operations have no Score column, waiting or under Recents. */
+.t-box{--cols:var(--c-act) var(--c-acct) minmax(0,1fr) 7.5rem var(--c-age) var(--c-slot)}
 .recent{--cols:var(--c-act) var(--c-acct) minmax(0,1fr) var(--c-score) var(--c-slot) var(--c-age)}
+.t-box .recent{--cols:var(--c-act) var(--c-acct) minmax(0,1fr) var(--c-slot) var(--c-age)}
 h2{font-size:.8125rem;font-weight:600;color:var(--ink);margin:1.75rem 0 .25rem;padding-left:.5rem;display:flex;align-items:baseline;gap:.4rem;min-width:0}
 .waiting .tbl:first-child h2{margin-top:1.25rem}
 h2 .n{color:var(--ink-3);font-weight:400}
@@ -133,7 +134,6 @@ ol{list-style:none;margin:0;padding:0}
 .row.ok{--bar:var(--green)}
 .row.none{--bar:var(--grey)}
 .row.risky{--bar:var(--red)}
-.row.warn{--bar:var(--yellow)}
 .pick{display:flex;align-items:center;justify-content:center;height:var(--row)}
 label.pick{cursor:pointer}
 .pick input{width:1rem;height:1rem;margin:0;accent-color:var(--accent);cursor:pointer}
@@ -163,7 +163,7 @@ summary>span,a.line>span,.meta>span{min-width:0;overflow:hidden;white-space:nowr
 .when,.ppl{font-size:.8125rem;color:var(--ink-2)}
 .chg .k{font-weight:500}
 
-/* Mailbox operations: Message (sender · subject) · Received, from the guarded read; Score from the cache. */
+/* Mailbox operations: Message (sender · subject) · Received, from the guarded read. */
 .from{font-weight:500}
 .text .from+.subj::before,.text .from+.ph::before{content:" · ";font-weight:400;font-style:normal;color:var(--ink-3)}
 .text .from+.subj{font-weight:400;color:var(--ink)}

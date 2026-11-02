@@ -20,8 +20,12 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/views"
 )
 
-// listGroup is one table of the list page. Key names it in URLs and in the data-group attribute.
-type listGroup struct{ Key, Title, Hint, Class string }
+// listGroup is one table of the list page. Key names it in URLs and in the data-group attribute. Scored is true when
+// its actions get an action check, so that its rows show a Score.
+type listGroup struct {
+	Key, Title, Hint, Class string
+	Scored                  bool
+}
 
 const (
 	groupMessages = "messages"
@@ -31,9 +35,16 @@ const (
 
 // listGroups are the list tables in page order.
 var listGroups = []listGroup{
-	{groupMessages, "Messages", "Sends go out when approved. Drafts are only saved or deleted.", "t-mail"},
-	{groupMeetings, "Meetings", "Approving notifies the attendees or the organizer.", "t-meet"},
-	{groupMailbox, "Mailbox operations", "Changes to existing messages. Score is the message's screening score. Trash is a move, never a permanent delete.", "t-box"},
+	{groupMessages, "Messages", "Sends go out when approved. Drafts are only saved or deleted.", "t-mail", true},
+	{groupMeetings, "Meetings", "Approving notifies the attendees or the organizer.", "t-meet", true},
+	{groupMailbox, "Mailbox operations", "Changes to existing messages. Trash is a move, never a permanent delete. No score, and the Show filter does not apply.", "t-box", false},
+}
+
+// scored reports whether the list group with the key shows a Score. An unknown group shows it, so that a risk found
+// by the check is never hidden.
+func scored(group string) bool {
+	i := slices.IndexFunc(listGroups, func(g listGroup) bool { return g.Key == group })
+	return i < 0 || listGroups[i].Scored
 }
 
 // listedOps maps each API operation that can wait for approval to its list group and its action label. The list
@@ -190,9 +201,19 @@ func listURL(v url.Values) string {
 	return "/?" + v.Encode()
 }
 
-// shows reports whether a waiting row passes the filter.
-func (q listQuery) shows(r listRow) bool {
+// matches reports whether a waiting row matches the filter, which the filter links count. A Mailbox operations row
+// never needs review, so it matches Others, never Needs review.
+func (q listQuery) matches(r listRow) bool {
 	return (q.key == "" || r.Account == q.key) && (q.show == "" || (q.show == showReview) == r.Review)
+}
+
+// shows reports whether the page shows a waiting row: the Show filter does not apply to Mailbox operations, which
+// have no status.
+func (q listQuery) shows(r listRow) bool {
+	if r.Group == groupMailbox {
+		q.show = ""
+	}
+	return q.matches(r)
 }
 
 // refreshChoice is an interval of the Auto-refresh menu: Value is its ?refresh= and cookie value, Short its label in
@@ -276,7 +297,8 @@ type groupView struct {
 // listRow is one pending action in a list table. Every text in it can come from the agent or from mail.
 type listRow struct {
 	ID, Group, Label, Alias, Account, Age string
-	Score                                 scoreCell
+	// Score is nil in a group that shows no Score.
+	Score *scoreCell
 	// Review is true when the action needs review: a Messages or Meetings action whose check found a risk or failed.
 	Review bool
 	// Messages: the reply marker, the recipients shortened and in full, the subject, and a one-line preview of the body.
@@ -313,8 +335,15 @@ type readField struct {
 	Placeholder          bool
 }
 
-// scoreCell is the Score of a row. Bar is the row colour: ok (green), warn (yellow, a yellow screening verdict),
-// risky (red), or none (grey).
+// Bar is the row colour: the Bar of the Score, or none (grey) without a Score.
+func (r listRow) Bar() string {
+	if r.Score == nil {
+		return "none"
+	}
+	return r.Score.Bar
+}
+
+// scoreCell is the Score of a row. Bar is the row colour: ok (green), risky (red), or none (grey).
 type scoreCell struct {
 	Value, Label, Bar string
 	// Code is the fixed error code of a failed check.
@@ -323,35 +352,6 @@ type scoreCell struct {
 }
 
 var notChecked = scoreCell{Value: "—", Label: "Not checked", Bar: "none"}
-
-// unscreened is the Score of a Mailbox operations row whose message has no screening verdict in the cache.
-var unscreened = scoreCell{Value: "—", Label: "Unknown", Bar: "none"}
-
-// verdictScore is the Score of a Mailbox operations row: the message's screening verdict from the cache. Red,
-// sealed, and error verdicts are red; a verdict that is none of the five is unknown, grey.
-func verdictScore(row cache.Row) scoreCell {
-	value := "—"
-	if row.Score != nil && *row.Score >= 0 && *row.Score <= 1 {
-		value = scoreText(*row.Score)
-	}
-	switch row.Verdict {
-	case model.Green:
-		return scoreCell{Value: value, Label: "Green", Bar: "ok"}
-	case model.Yellow:
-		return scoreCell{Value: value, Label: "Yellow", Bar: "warn"}
-	case model.Red:
-		return scoreCell{Value: value, Label: "Red", Bar: "risky", Risk: true}
-	case model.Sealed:
-		return scoreCell{Value: "sealed", Label: "Sealed", Bar: "risky", Risk: true}
-	case model.Error:
-		s := scoreCell{Value: "error", Label: "Error", Bar: "risky", Risk: true}
-		if row.Error != nil {
-			s.Code = *row.Error
-		}
-		return s
-	}
-	return unscreened
-}
 
 // checkScore is the Score of an action check. Only a valid score below the threshold without a flag is green; a check
 // with a missing score or invalid data is a failed check, red.
@@ -429,7 +429,7 @@ func (c *console) list(ctx context.Context, w http.ResponseWriter, r *http.Reque
 	count := func(f listQuery) int {
 		n := 0
 		for _, row := range waiting {
-			if f.shows(row) {
+			if f.matches(row) {
 				n++
 			}
 		}
@@ -468,18 +468,14 @@ func (c *console) list(ctx context.Context, w http.ResponseWriter, r *http.Reque
 			page.Groups = append(page.Groups, view)
 		}
 	}
-	var shown, handled []*listRow
+	var shown []*listRow
 	for g := range page.Groups {
 		for i := range page.Groups[g].Rows {
 			shown = append(shown, &page.Groups[g].Rows[i])
 		}
-		for i := range page.Groups[g].Recents {
-			handled = append(handled, &page.Groups[g].Recents[i])
-		}
 	}
-	// Only waiting rows read live; Recents get the cached verdict only.
+	// Only waiting rows read live.
 	c.readLive(ctx, shown, now)
-	c.screenedScores(ctx, append(shown, handled...))
 	render(w, 200, "list", page)
 }
 
@@ -545,28 +541,6 @@ func (c *console) readLive(ctx context.Context, rows []*listRow, now time.Time) 
 			if r.Group == groupMailbox {
 				messageRead(r, v, now)
 			}
-		}
-	}
-}
-
-// screenedScores gives each Mailbox operations row the screening verdict of its message from the cache, without a
-// provider call. A row whose message has no cached verdict, or whose cache read fails, stays unknown.
-func (c *console) screenedScores(ctx context.Context, rows []*listRow) {
-	ids := map[string][]string{}
-	for _, r := range rows {
-		if r.Group == groupMailbox && r.ref != "" {
-			ids[r.Account] = append(ids[r.Account], r.ref)
-		}
-	}
-	verdicts := map[string]map[string]cache.Row{}
-	for account, list := range ids {
-		if found, err := c.s.cache.Get(ctx, account, list); err == nil {
-			verdicts[account] = found
-		}
-	}
-	for _, r := range rows {
-		if row, ok := verdicts[r.Account][r.ref]; ok && r.Group == groupMailbox {
-			r.Score = verdictScore(row)
 		}
 	}
 }
@@ -646,7 +620,7 @@ func accountAliases(cfg config.Config) map[string]string {
 }
 
 // needsReview reports whether a pending action needs review: a Messages or Meetings action whose check found a risk
-// or failed. Mailbox operations never need review.
+// or failed. Mailbox operations, which show no Score, never need review.
 func needsReview(item cache.Pending) bool {
 	return listedOps[item.Op].group != groupMailbox && checkScore(item.Jev).Risk
 }
@@ -659,10 +633,10 @@ func listedRow(item cache.Pending, aliases map[string]string, now time.Time) lis
 	if !ok {
 		alias = item.Account
 	}
-	row := listRow{ID: item.ID, Group: op.group, Label: op.label, Alias: alias, Account: item.Account, Age: age(now.Sub(item.Created)), Score: checkScore(item.Jev)}
-	// Mailbox operations carry no action check; their score is the message's screening verdict from the cache.
-	if op.group == groupMailbox {
-		row.Score = unscreened
+	row := listRow{ID: item.ID, Group: op.group, Label: op.label, Alias: alias, Account: item.Account, Age: age(now.Sub(item.Created))}
+	if scored(op.group) {
+		score := checkScore(item.Jev)
+		row.Score = &score
 	}
 	row.Review = needsReview(item)
 	args := storedFields(item.Args)

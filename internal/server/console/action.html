@@ -11,7 +11,7 @@
 <dt>Account</dt><dd>{{.Row.Alias}}{{if ne .Row.Alias .Row.Account}} · {{.Row.Account}}{{end}}</dd>
 <dt>Created</dt><dd>{{.Created}}</dd>
 <dt>Updated</dt><dd>{{.Updated}}</dd>
-<dt>Score</dt>{{template "scorefield" .Row.Score}}
+{{with .Row.Score}}<dt>Score</dt>{{template "scorefield" .}}{{end}}
 {{if .Code}}<dt>Error</dt><dd class="bad">{{.Code}}</dd>{{end}}
 {{if .Result}}<dt>Result</dt><dd class="mono">{{.Result}}</dd>{{end}}
 </dl>

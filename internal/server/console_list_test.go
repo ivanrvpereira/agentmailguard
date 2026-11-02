@@ -243,8 +243,8 @@ func oldWord(page string) string {
 }
 
 // The Score is the action check: green with the value when checked, red with ▲ and Needs review for a risk or a
-// failed check (its fixed code in the title), grey — when not checked. A Mailbox operations row of a message without a
-// screening verdict is grey. The open row shows the value with its label.
+// failed check (its fixed code in the title), grey — when not checked. A Mailbox operations row is grey without a
+// score. The open row shows the value with its label.
 func TestConsoleListShowsTheScoreOfTheActionCheck(t *testing.T) {
 	f := consoleDaemon(t, everyWriteWaits, true)
 	f.setScore(0.06)
@@ -267,7 +267,7 @@ func TestConsoleListShowsTheScoreOfTheActionCheck(t *testing.T) {
 		below:     {`<li class="row ok">`, `<span class="score">0.49<span class="vh"> · Checked</span></span>`, `<dd>0.49 · Checked</dd>`},
 		high:      {`<li class="row risky">`, `<dd class="bad">▲ 0.99 · Needs review</dd>`},
 		unchecked: {`<li class="row none">`, `<span class="score">—<span class="vh"> · Not checked</span></span>`, `<dd>— · Not checked</dd>`},
-		trash:     {`<li class="row none">`, `<span class="score">—<span class="vh"> · Unknown</span></span>`},
+		trash:     {`<li class="row none">`},
 	} {
 		row := rowOf(page, id)
 		for _, want := range wants {
@@ -276,11 +276,14 @@ func TestConsoleListShowsTheScoreOfTheActionCheck(t *testing.T) {
 			}
 		}
 	}
+	if row := rowOf(page, trash); strings.Contains(row, `class="score`) || strings.Contains(row, "<dt>Score</dt>") {
+		t.Errorf("trash row shows a score: %s", row)
+	}
 	if !strings.Contains(page, `<span class="sum num">7 waiting · <b>3 need review</b></span>`) {
 		t.Errorf("header misses the counts: %s", page)
 	}
-	if want := "Red: needs review · Grey: not checked · Green: checked"; !strings.Contains(pageText(page), want) {
-		t.Errorf("legend misses %q: %s", want, pageText(page))
+	if want := "Red: needs review · Grey: not checked · Green: checked Recents keeps the last 10 handled actions of each table."; !strings.Contains(pageText(page), want) || strings.Contains(page, "screening verdict") {
+		t.Errorf("footer is not %q: %s", want, pageText(page))
 	}
 	if m := oldWord(page); m != "" {
 		t.Errorf("page shows %q: %s", m, page)
@@ -324,9 +327,11 @@ func filterCounts(page string) []string {
 	return out
 }
 
-// The Account (accounts in alias order) and Show filters combine; each option counts the waiting actions that it would show, under the other
-// filter. The header counts the waiting actions shown, and Needs review only Messages and Meetings. Recents follow
-// the Account filter, not the Show filter. A table with nothing to show is hidden.
+// The Account (accounts in alias order) and Show filters combine; each option counts the waiting actions that match
+// it, under the other filter. The Show filter does not apply to Mailbox operations, which the Account filter still
+// narrows: they never need review, so they count under All and Others only, yet every Show choice shows them. The
+// header counts the waiting actions shown, and Needs review only Messages and Meetings. Recents follow the Account
+// filter, not the Show filter. A table with nothing to show is hidden.
 func TestConsoleListFiltersByAccountAndReview(t *testing.T) {
 	f := gmailConsole(t, everyWriteWaits)
 	draft := func(alias string, score float64) string {
@@ -351,9 +356,12 @@ func TestConsoleListFiltersByAccountAndReview(t *testing.T) {
 		{"?account=gmail", "2 waiting · <b>1 need review</b>",
 			[]string{"All 5 /", "*gmail 2 /?account=gmail", "work 3 /?account=work", "*All 2 /?account=gmail", "Needs review 1 /?account=gmail&amp;status=review", "Others 1 /?account=gmail&amp;status=others"},
 			[]string{gmailClear, gmailRisk, gmailDenied}, []string{workRisk, workClear, trash}},
-		{"?status=review", "2 waiting · <b>2 need review</b>",
+		{"?status=review", "3 waiting · <b>2 need review</b>",
 			[]string{"*All 2 /?status=review", "gmail 1 /?account=gmail&amp;status=review", "work 1 /?account=work&amp;status=review", "All 5 /", "*Needs review 2 /?status=review", "Others 3 /?status=others"},
-			[]string{workRisk, gmailRisk, gmailDenied}, []string{workClear, gmailClear, trash}},
+			[]string{workRisk, gmailRisk, gmailDenied, trash}, []string{workClear, gmailClear}},
+		{"?account=gmail&status=review", "1 waiting · <b>1 need review</b>",
+			[]string{"All 2 /?status=review", "*gmail 1 /?account=gmail&amp;status=review", "work 1 /?account=work&amp;status=review", "All 2 /?account=gmail", "*Needs review 1 /?account=gmail&amp;status=review", "Others 1 /?account=gmail&amp;status=others"},
+			[]string{gmailRisk, gmailDenied}, []string{workRisk, workClear, gmailClear, trash}},
 		{"?account=work&status=others", "2 waiting · 0 need review",
 			[]string{"All 3 /?status=others", "gmail 1 /?account=gmail&amp;status=others", "*work 2 /?account=work&amp;status=others", "All 3 /?account=work", "Needs review 1 /?account=work&amp;status=review", "*Others 2 /?account=work&amp;status=others"},
 			[]string{workClear, trash}, []string{workRisk, gmailClear, gmailRisk, gmailDenied}},
@@ -673,8 +681,20 @@ func TestConsoleListReadsOnlyMeetingAndMailboxRowsLive(t *testing.T) {
 	}
 }
 
+// sectionOf is the list table of the group, from its <section to </section>, or empty.
+func sectionOf(page, group string) string {
+	start := strings.Index(page, `data-group="`+group+`"`)
+	if start < 0 {
+		return ""
+	}
+	start = strings.LastIndex(page[:start], "<section")
+	section, _, _ := strings.Cut(page[start:], "</section>")
+	return section
+}
+
 // A red, sealed, or unscreened message shows only what its guarded view shows: the sender address at most, and
-// "Subject hidden (sealed)". The Score is the message's screening verdict from the cache, and none needs review.
+// "Subject hidden (sealed)". A trash gets no action check, so a Mailbox operations row has no score and a grey bar
+// whatever the verdict of its message, in the row, the open row, the column header, and Recents. None needs review.
 func TestConsoleListHidesTheSubjectOfRedAndSealedMessages(t *testing.T) {
 	f := consoleDaemon(t, everyWriteWaits, true)
 	ids := map[string]string{}
@@ -684,33 +704,46 @@ func TestConsoleListHidesTheSubjectOfRedAndSealedMessages(t *testing.T) {
 	page := f.get(t, "/", nil).Body.String()
 	hidden := `<span class="text"><span class="from">sender@example.test</span><span class="ph">Subject hidden (sealed)</span></span>`
 	for m, wants := range map[string][]string{
-		"g":    {`<li class="row ok">`, `<span class="subj">private-subject-g</span>`, `<span class="score">0.10<span class="vh"> · Green</span></span>`, `<dd>0.10 · Green</dd>`},
-		"y":    {`<li class="row warn">`, `<span class="score">0.35<span class="vh"> · Yellow</span></span>`, `<dd>0.35 · Yellow</dd>`},
-		"r":    {`<li class="row risky">`, hidden, `<dd class="bad">▲ 0.90 · Red</dd>`, `<dt>Subject</dt><dd class="ph">Subject hidden (sealed)</dd>`, `<dt>Sender</dt><dd>sender@example.test</dd>`},
-		"s":    {`<li class="row risky">`, hidden, `<span class="score bad"><span class="mk" aria-hidden="true">▲</span>sealed<span class="vh"> · Sealed</span></span>`, `<dd class="bad">▲ sealed · Sealed</dd>`},
-		"down": {`<li class="row risky">`, `<span class="text"><span class="ph">Subject hidden (sealed)</span></span>`, `<dd class="bad">▲ error · Error · `},
+		"g":    {`<span class="subj">private-subject-g</span>`},
+		"y":    {`<span class="subj">private-subject-y</span>`},
+		"r":    {hidden, `<dt>Subject</dt><dd class="ph">Subject hidden (sealed)</dd>`, `<dt>Sender</dt><dd>sender@example.test</dd>`},
+		"s":    {hidden},
+		"down": {`<span class="text"><span class="ph">Subject hidden (sealed)</span></span>`},
 	} {
 		row := rowOf(page, ids[m])
-		for _, want := range wants {
+		for _, want := range append(wants, `<li class="row none">`) {
 			if !strings.Contains(row, want) {
 				t.Errorf("%s: row misses %q: %s", m, want, row)
 			}
+		}
+		if strings.Contains(row, `class="score`) || strings.Contains(row, "<dt>Score</dt>") {
+			t.Errorf("%s: row shows a score: %s", m, row)
 		}
 		if m != "g" && m != "y" && (strings.Contains(row, "private-") || strings.Contains(row, "subj")) {
 			t.Errorf("%s: row shows hidden text: %s", m, row)
 		}
 	}
+	if want := `<span>Change</span><span>Account</span><span>Message</span><span>Received</span><span class="r">Age</span><span></span>`; !strings.Contains(sectionOf(page, "mailbox"), want) {
+		t.Errorf("Mailbox operations header is not %q: %s", want, sectionOf(page, "mailbox"))
+	}
+	if want := `<span class="hint">Changes to existing messages. Trash is a move, never a permanent delete. No score, and the Show filter does not apply.</span>`; !strings.Contains(page, want) {
+		t.Errorf("page misses the hint %q", want)
+	}
 	if !strings.Contains(page, `<span class="sum num">5 waiting · 0 need review</span>`) {
 		t.Errorf("Mailbox operations rows need review: %s", page)
 	}
-	// A handled trash keeps the cached verdict of its message under Recents, without a read.
+	// A handled trash has no score under Recents either, and its row reads nothing.
 	if err := f.d.s.Deny(context.Background(), ids["r"]); err != nil {
 		t.Fatal(err)
 	}
 	f.liveReads(true)
 	page = f.get(t, "/", nil).Body.String()
-	if row := rowOf(page, ids["r"]); !strings.Contains(row, `<span class="score bad"><span class="mk" aria-hidden="true">▲</span>0.90<span class="vh"> · Red</span></span>`) || !strings.Contains(row, ">Denied<") {
-		t.Errorf("Recents row misses the cached verdict: %s", row)
+	if row := rowOf(page, ids["r"]); strings.Contains(row, `class="score`) || !strings.Contains(row, ">Denied<") {
+		t.Errorf("Recents row shows a score or misses the outcome: %s", row)
+	}
+	_, recents, _ := strings.Cut(sectionOf(page, "mailbox"), `<details class="recent">`)
+	if want := `<span>Action</span><span>Account</span><span>Summary</span><span>Outcome</span><span class="r">When</span>`; !strings.Contains(recents, want) {
+		t.Errorf("Mailbox operations Recents header is not %q: %s", want, recents)
 	}
 	if reads := f.liveReads(false); reads["message r"] != 0 {
 		t.Errorf("Recents row read its message: %v", reads)
@@ -718,8 +751,7 @@ func TestConsoleListHidesTheSubjectOfRedAndSealedMessages(t *testing.T) {
 }
 
 // A read that fails or does not finish by the page deadline leaves its row "not available", and the page still
-// renders in time. The Score of a trash comes from the cache, so it shows even when the live read fails; a message
-// that was never screened is grey.
+// renders in time. A trash row stays grey without a score, whether or not its message was screened.
 func TestConsoleListShowsRowsWhoseReadFailsOrIsLate(t *testing.T) {
 	f := consoleDaemon(t, everyWriteWaits, true)
 	if status, body := accountRPC(t, f.d.s, "mail.get", "", `{"id":"y"}`); status != 200 {
@@ -739,8 +771,8 @@ func TestConsoleListShowsRowsWhoseReadFailsOrIsLate(t *testing.T) {
 	}
 	page := w.Body.String()
 	for id, wants := range map[string][]string{
-		cached: {`<li class="row warn">`, `<span class="text"><span class="from ph">Message not available</span></span>`, `<span class="recv num">—</span>`, `<span class="score">0.35<span class="vh"> · Yellow</span></span>`},
-		gone:   {`<li class="row none">`, `<span class="from ph">Message not available</span>`, `<span class="score">—<span class="vh"> · Unknown</span></span>`},
+		cached: {`<li class="row none">`, `<span class="text"><span class="from ph">Message not available</span></span>`, `<span class="recv num">—</span>`},
+		gone:   {`<li class="row none">`, `<span class="from ph">Message not available</span>`},
 		slow:   {`<span class="ev ph">Event not available</span>`, `<span class="k">Start → Tue 31 Mar, 11:00</span>`},
 	} {
 		row := rowOf(page, id)
@@ -748,6 +780,11 @@ func TestConsoleListShowsRowsWhoseReadFailsOrIsLate(t *testing.T) {
 			if !strings.Contains(row, want) {
 				t.Errorf("row misses %q: %s", want, row)
 			}
+		}
+	}
+	for _, id := range []string{cached, gone} {
+		if row := rowOf(page, id); strings.Contains(row, `class="score`) {
+			t.Errorf("trash row shows a score: %s", row)
 		}
 	}
 	if w.Code != 200 || !strings.Contains(page, `<span class="sum num">3 waiting · 0 need review</span>`) {

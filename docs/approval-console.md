@@ -24,7 +24,7 @@ The columns of each table:
 
 - Messages: Action, Account, To, Message, Score, and Age. To lists the recipients, then `cc:` and `bcc (hidden):` lists. A long address is shortened in the middle of its local part, and the domain stays whole, for example `accounts…@vendor-billing.example.com`. The tooltip shows every address in full. Message shows the subject and a grey one-line preview of the body, at most 200 characters. The preview of an HTML body is its text without the markup.
 - Meetings: Action, Account, Event, When, People, Change, Score, and Age. Change shows what the action changes, for example `Decline` with the comment, or `Start` with `10:00 → 11:00`.
-- Mailbox operations: Change, Account, Message (the sender and the subject), Received, Score, and Age.
+- Mailbox operations: Change, Account, Message (the sender and the subject), Received, and Age.
 
 The Account column shows the account alias.
 The tooltip and the open row show the account email.
@@ -46,8 +46,8 @@ Received shows `Today 15:04` for a message of today, otherwise the day, for exam
 
 ### Score
 
-Each row has a coloured bar and a Score.
-For Messages and Meetings, the Score is the result of the [action check](write-policy.md#jev-action-check):
+Each row has a coloured bar.
+Messages and Meetings rows also have a Score, the result of the [action check](write-policy.md#jev-action-check):
 
 | Bar | Score | Label | Meaning |
 | --- | --- | --- | --- |
@@ -56,11 +56,8 @@ For Messages and Meetings, the Score is the result of the [action check](write-p
 | Red | `▲ error` | Needs review | The check failed. |
 | Grey | `—` | Not checked | No check ran. |
 
-For Mailbox operations, the Score is the screening verdict and score of the message from the cache.
-The list makes no provider call for it.
-A green verdict is green, a yellow verdict is yellow, and a red verdict is red with `▲`.
-A sealed verdict shows `▲ sealed`, and an error verdict `▲ error`, both red.
-A message without a cached verdict is grey with `—` and the label `Unknown`.
+`mail.trash` never gets an action check, so Mailbox operations rows have no Score and always a grey bar.
+The list, Recents, the open row, and the action page show no Score for them.
 A Mailbox operations row never needs review.
 
 A score has two decimals and is cut, never rounded, so that a score below the flag threshold never shows as the threshold.
@@ -70,16 +67,18 @@ The open row and the action page show the value and its label, for example `▲ 
 A failed check has a fixed error code, for example `TimeoutError`.
 The list shows it in the tooltip, and the open row and the action page show it after the label.
 The footer explains the colours: `Red: needs review · Grey: not checked · Green: checked`.
-In Mailbox operations, the colour and the score are the message's screening verdict.
 
 ### Filters
 
-The filter line has two filters, and each option shows the number of pending actions that it shows:
+The filter line has two filters, and each option shows the number of pending actions that match it:
 
 - Account: `All`, or one alias (`?account=ALIAS`).
 - Show: `All`, `Needs review` (`?status=review`), or `Others` (`?status=others`).
 
 The two filters combine, and the counts of each filter follow the other filter.
+The Show filter does not apply to Mailbox operations: under every Show choice, the page shows all their pending actions of the chosen account.
+They never need review, so they count under `All` and `Others`, never under `Needs review`.
+The header counts the rows that the page shows, so under `Needs review` it includes the Mailbox operations rows, and `M need review` counts only the rows that need review.
 If the query has an unknown key, a repeated key, or an unknown value, the page shows the unfiltered list.
 It never shows an error page.
 
@@ -87,13 +86,13 @@ It never shows an error page.
 
 Each table ends with a closed **Recents** list of its last 10 handled actions: `Done`, `Denied`, `Failed`, or `Withdrawn`.
 Recents follows the Account filter, not the Show filter.
-A Recents row shows the action, the account, a summary, the Score, the outcome (a failed action with its error code), and when it was handled.
+A Recents row shows the action, the account, a summary, the Score (not in Mailbox operations), the outcome (a failed action with its error code), and when it was handled.
 Each row links to its action page.
 
 ### Open rows
 
 Click a row to open it in place.
-The open row shows the account email, the Score with its label, the fields of the live read, and every stored request field as plain text, with `To`, `Cc`, and `Bcc (hidden recipients)` first.
+The open row shows the account email, the Score with its label (not in Mailbox operations), the fields of the live read, and every stored request field as plain text, with `To`, `Cc`, and `Bcc (hidden recipients)` first.
 For a draft send, it also shows the draft fields that the action check read.
 The body, the invitation text, or the comment shows in full as plain text, under a fixed caption, for example `Body, plain text as the agent wrote it`.
 An HTML body shows only as source text, with the caption `Body, HTML source as the agent wrote it, not rendered`.
@@ -139,7 +138,7 @@ Without the script, the page reloads at the same interval through a `<noscript>`
 
 ## Action page
 
-The action page `/a/ID` shows one action: its label and operation, the state, the account, the times, the Score with its label, and every stored request field as plain text under **Request**.
+The action page `/a/ID` shows one action: its label and operation, the state, the account, the times, the Score with its label (not for `mail.trash`), and every stored request field as plain text under **Request**.
 `Bcc (hidden recipients)` lists people who get the message, but the other recipients do not see them.
 A `done` action shows its result, and a `failed` action its error code.
 
