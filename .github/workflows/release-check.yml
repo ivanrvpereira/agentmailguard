@@ -61,10 +61,14 @@ jobs:
       - name: Package
         run: scripts/release/package.sh "$TAG" linux "${{ matrix.arch }}" out dist
 
-  macos:
+  # The same three-job hand-off as release.yml, without signing: build, then package from the sealed
+  # binaries, then check the sealed archives and run the binaries.
+  macos-build:
     name: Build macOS
     runs-on: macos-15
     timeout-minutes: 20
+    outputs:
+      digest: ${{ steps.seal.outputs.digest }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -77,16 +81,87 @@ jobs:
           check-latest: true
       - name: Build binaries
         run: scripts/release/build-macos.sh "$TAG" out
-      - name: Run the binaries
+      - name: Seal the unsigned binaries
+        id: seal
         run: |
-          for b in amg amgd; do
-            test "$(out/arm64/$b --version)" = "$b version $TAG"
-            test "$(/usr/bin/arch -x86_64 out/amd64/$b --version)" = "$b version $TAG"
-          done
-      - name: Package
+          mkdir handoff
+          tar -cf handoff/unsigned.tar -C out .
+          echo "digest=$(scripts/release/digest.sh write handoff)" >> "$GITHUB_OUTPUT"
+      - name: Upload unsigned binaries
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-unsigned
+          path: handoff/
+          if-no-files-found: error
+          retention-days: 1
+
+  macos-package:
+    name: Package macOS (no signing)
+    needs: macos-build
+    runs-on: macos-15
+    timeout-minutes: 15
+    outputs:
+      digest: ${{ steps.seal.outputs.digest }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download unsigned binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-unsigned
+          path: handoff
+      - name: Check the unsigned binaries against the build job's digest
+        env:
+          DIGEST: ${{ needs.macos-build.outputs.digest }}
+        run: |
+          scripts/release/digest.sh verify handoff "$DIGEST"
+          mkdir out
+          tar -xf handoff/unsigned.tar -C out
+      - name: Package and seal the archives
+        id: seal
         run: |
           for arch in arm64 amd64; do
             scripts/release/package.sh "$TAG" darwin "$arch" "out/$arch" dist
+          done
+          echo "digest=$(scripts/release/digest.sh write dist)" >> "$GITHUB_OUTPUT"
+      - name: Upload archives
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: archive-darwin
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  macos-verify:
+    name: Verify macOS
+    needs: macos-package
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: archive-darwin
+          path: dist
+      - name: Check the archives against the package job's digest
+        env:
+          DIGEST: ${{ needs.macos-package.outputs.digest }}
+        run: scripts/release/digest.sh verify dist "$DIGEST"
+      - name: Run the binaries from the archives
+        run: |
+          for arch in arm64 amd64; do
+            mkdir -p "x/$arch"
+            tar -xzf "dist/agentmailguard_${TAG#v}_darwin_$arch.tar.gz" -C "x/$arch" --strip-components 1
+          done
+          for b in amg amgd; do
+            test "$(x/arm64/$b --version)" = "$b version $TAG"
+            test "$(/usr/bin/arch -x86_64 x/amd64/$b --version)" = "$b version $TAG"
           done
 
   formula:

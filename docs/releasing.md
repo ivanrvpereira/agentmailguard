@@ -21,7 +21,12 @@ The build steps are scripts in [`scripts/release/`](../scripts/release/). The [r
 
 1. Checks that the tag is a version, then runs `make` on Linux and on macOS.
 2. Builds static Linux binaries for amd64 and arm64, each on its own runner. `amgd` links SQLite statically against musl, so the binaries need no C library on the target. A step runs them in an empty `busybox` container to prove it.
-3. Builds the macOS binaries for arm64 and amd64 on one macOS runner, with a minimum macOS version (`macos_min` in `scripts/release/build-macos.sh`). It signs them with the Developer ID identity and fixed identifiers (`SIGN_ID_PREFIX`), notarizes them, checks the notarization, and runs them.
+3. Makes the macOS binaries for arm64 and amd64 in three jobs, so that no job both holds the signing keys and runs code from the build:
+   - **Build macOS** builds them with a minimum macOS version (`macos_min` in `scripts/release/build-macos.sh`). It has no secrets.
+   - **Sign and notarize macOS** signs them with the Developer ID identity and fixed identifiers (`SIGN_ID_PREFIX`), deletes the signing keychain, notarizes them, and packs them. It never builds and never runs the binaries. Only `codesign` may use the signing key.
+   - **Verify macOS** checks the signatures and the notarization, and runs the binaries. It has no secrets.
+
+   Each job seals what it hands on with `scripts/release/digest.sh` and passes the digest to the next job as a job output. The next job, and the release job, stop if a file does not match, so a file swapped between jobs is never signed or published.
 4. Packs each platform as `agentmailguard_VERSION_OS_ARCH.tar.gz` with `amg`, `amgd`, `LICENSE`, `README.md`, `CHANGELOG.md`, `SECURITY.md`, the `docs` folder, and the agent skill in `skills` (`scripts/release/package.sh`). It writes `checksums.txt` and a [build provenance attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations).
 5. Fills in [the formula template](../packaging/homebrew/agentmailguard.rb) and checks it with `brew style` and `brew audit --strict` in a temporary tap (`scripts/release/check-formula.sh`).
 6. Creates the GitHub release with the archives and `checksums.txt`.

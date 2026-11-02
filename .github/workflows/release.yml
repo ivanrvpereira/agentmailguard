@@ -85,11 +85,18 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
-  macos:
-    name: Build, sign, and notarize macOS
+  # The macOS release is three jobs, so that no job both holds the signing keys and runs code from the build:
+  # macos-build builds with no secrets; macos-sign gets the keys but never builds and never runs the binaries;
+  # macos-verify runs the signed binaries with no secrets. Each job seals what it hands on with
+  # scripts/release/digest.sh and passes the digest as a job output, so a swapped file is never signed or
+  # published.
+  macos-build:
+    name: Build macOS
     needs: check
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 20
+    outputs:
+      digest: ${{ steps.seal.outputs.digest }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,8 +107,50 @@ jobs:
         with:
           go-version: stable
           check-latest: true
+      - name: Build binaries
+        run: scripts/release/build-macos.sh "$GITHUB_REF_NAME" out
+      # A tar keeps the file modes, which an artifact does not.
+      - name: Seal the unsigned binaries
+        id: seal
+        run: |
+          mkdir handoff
+          tar -cf handoff/unsigned.tar -C out .
+          echo "digest=$(scripts/release/digest.sh write handoff)" >> "$GITHUB_OUTPUT"
+      - name: Upload unsigned binaries
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-unsigned
+          path: handoff/
+          if-no-files-found: error
 
-      # Import the Developer ID identity into a temporary keychain that the last step deletes.
+  macos-sign:
+    name: Sign and notarize macOS
+    needs: macos-build
+    runs-on: macos-15
+    timeout-minutes: 45
+    outputs:
+      digest: ${{ steps.seal.outputs.digest }}
+    steps:
+      # The checkout gives the release scripts and the documents that go into the archives. This job runs no
+      # Go toolchain, no build, and none of the binaries.
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download unsigned binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-unsigned
+          path: handoff
+      - name: Check the unsigned binaries against the build job's digest
+        env:
+          DIGEST: ${{ needs.macos-build.outputs.digest }}
+        run: |
+          scripts/release/digest.sh verify handoff "$DIGEST"
+          mkdir out
+          tar -xf handoff/unsigned.tar -C out
+
+      # Import the Developer ID identity into a temporary keychain. Only codesign may use the key (-T).
       - name: Import signing identity
         env:
           DEVELOPER_ID_CERT_P12: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
@@ -117,9 +166,9 @@ jobs:
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$RUNNER_TEMP/signing.p12" -P "$DEVELOPER_ID_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/signing.p12" -P "$DEVELOPER_ID_CERT_PASSWORD" -T /usr/bin/codesign -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
           rm -f "$RUNNER_TEMP/signing.p12"
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
           IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | sed -n 's/.*"\(Developer ID Application[^"]*\)".*/\1/p' | head -1)"
           if [ -z "$IDENTITY" ]; then
@@ -127,9 +176,6 @@ jobs:
             exit 1
           fi
           echo "IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
-
-      - name: Build binaries
-        run: scripts/release/build-macos.sh "$GITHUB_REF_NAME" out
 
       # Go names every binary a.out. A fixed identifier keeps the Keychain access of amgd across upgrades.
       - name: Sign binaries
@@ -144,6 +190,11 @@ jobs:
               printf '%s\n' "$info" | grep -q '^Timestamp='
             done
           done
+
+      # The certificate is no longer needed: remove it before anything else runs.
+      - name: Delete signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" 2>/dev/null || true
 
       # The notary service takes a zip of the signed binaries. A bare binary cannot hold a stapled ticket, so
       # Gatekeeper looks the ticket up online at the first run of a downloaded copy.
@@ -161,53 +212,81 @@ jobs:
           auth=(--key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_API_KEY_ID" --issuer "$NOTARY_API_ISSUER_ID")
           ditto -c -k --keepParent out "$RUNNER_TEMP/notarize.zip"
           xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" "${auth[@]}" --wait --output-format json | tee "$RUNNER_TEMP/notary.json"
+          rm -f "$RUNNER_TEMP/notarize.zip"
           id="$(jq -r .id "$RUNNER_TEMP/notary.json")"
           xcrun notarytool log "$id" "${auth[@]}" "$RUNNER_TEMP/notary-log.json"
+          rm -f "$RUNNER_TEMP/notary.p8"
           cat "$RUNNER_TEMP/notary-log.json"
           test "$(jq -r .status "$RUNNER_TEMP/notary.json")" = "Accepted"
           test "$(jq '.issues // [] | length' "$RUNNER_TEMP/notary-log.json")" = 0 \
             || { echo "The notary log reports issues" >&2; exit 1; }
 
-      # Ask Apple's service, as Gatekeeper does, whether each binary is notarized. The ticket can take a
-      # moment to become visible after the submission is accepted.
-      - name: Check notarization and run the binaries
-        run: |
-          for arch in arm64 amd64; do
-            for b in amg amgd; do
-              ok=
-              for _ in $(seq 1 10); do
-                if codesign -vvvv -R="notarized" --check-notarization "out/$arch/$b"; then ok=1; break; fi
-                sleep 15
-              done
-              test -n "$ok" || { echo "out/$arch/$b is not notarized" >&2; exit 1; }
-            done
-          done
-          for b in amg amgd; do
-            test "$(out/arm64/$b --version)" = "$b version $GITHUB_REF_NAME"
-            test "$(/usr/bin/arch -x86_64 out/amd64/$b --version)" = "$b version $GITHUB_REF_NAME"
-          done
-
-      - name: Package
+      - name: Package and seal the archives
+        id: seal
         run: |
           for arch in arm64 amd64; do
             scripts/release/package.sh "$GITHUB_REF_NAME" darwin "$arch" "out/$arch" dist
           done
+          echo "digest=$(scripts/release/digest.sh write dist)" >> "$GITHUB_OUTPUT"
       - name: Upload archives
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: archive-darwin
-          path: dist/*.tar.gz
+          path: dist/
           if-no-files-found: error
 
-      - name: Delete signing keychain and keys
+      - name: Delete keys
         if: always()
         run: |
-          rm -f "$RUNNER_TEMP/notary.p8"
+          rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/signing.p12"
           security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" 2>/dev/null || true
+
+  macos-verify:
+    name: Verify macOS
+    needs: macos-sign
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: archive-darwin
+          path: dist
+      - name: Check the archives against the sign job's digest
+        env:
+          DIGEST: ${{ needs.macos-sign.outputs.digest }}
+        run: scripts/release/digest.sh verify dist "$DIGEST"
+      # Ask Apple's service, as Gatekeeper does, whether each binary is notarized. The ticket can take a
+      # moment to become visible after the submission is accepted. Then run the binaries from the archives.
+      - name: Check signature and notarization, and run the binaries
+        run: |
+          for arch in arm64 amd64; do
+            mkdir -p "x/$arch"
+            tar -xzf "dist/agentmailguard_${GITHUB_REF_NAME#v}_darwin_$arch.tar.gz" -C "x/$arch" --strip-components 1
+            for b in amg amgd; do
+              info="$(codesign -dvvv "x/$arch/$b" 2>&1)"
+              printf '%s\n' "$info" | grep -qx "Identifier=$SIGN_ID_PREFIX.$b"
+              printf '%s\n' "$info" | grep -q '^Authority=Developer ID Application: '
+              ok=
+              for _ in $(seq 1 10); do
+                if codesign -vvvv -R="notarized" --check-notarization "x/$arch/$b"; then ok=1; break; fi
+                sleep 15
+              done
+              test -n "$ok" || { echo "x/$arch/$b is not notarized" >&2; exit 1; }
+            done
+          done
+          for b in amg amgd; do
+            test "$(x/arm64/$b --version)" = "$b version $GITHUB_REF_NAME"
+            test "$(/usr/bin/arch -x86_64 x/amd64/$b --version)" = "$b version $GITHUB_REF_NAME"
+          done
 
   release:
     name: Publish release
-    needs: [linux, macos]
+    needs: [linux, macos-sign, macos-verify]
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:
@@ -219,12 +298,24 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Download archives
+      - name: Download Linux archives
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: archive-*
+          pattern: archive-linux-*
           path: dist
           merge-multiple: true
+      - name: Download macOS archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: archive-darwin
+          path: darwin
+      # Publish only the macOS archives that the sign job sealed and the verify job checked.
+      - name: Check the macOS archives against the sign job's digest
+        env:
+          DIGEST: ${{ needs.macos-sign.outputs.digest }}
+        run: |
+          scripts/release/digest.sh verify darwin "$DIGEST"
+          mv darwin/*.tar.gz dist/
       - name: Write checksums
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
