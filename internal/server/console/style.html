@@ -3,8 +3,9 @@
   --bg:#ffffff; --ink:#1b1d20; --ink-2:#50555c; --ink-3:#686d74;
   --line:#e6e5e0; --line-2:#f0efeb; --hover:#f6f6f3; --track:#f1f1ee;
   --accent:#1f56c3; --on-accent:#fff;
-  /* Row bars: green = checked, grey = not checked, red = needs review. */
-  --green:#2f8a55; --grey:#878c93; --red:#bf3326;
+  /* Row bars: green = checked, grey = not checked, red = needs review. Mailbox operations add yellow for the
+     yellow screening verdict. */
+  --green:#2f8a55; --grey:#878c93; --red:#bf3326; --yellow:#d6a100;
   --red-soft:color-mix(in srgb,var(--red) 6%,var(--bg));
   --row:2.5rem;
   /* Columns every table shares, so Action, Account and the right edge line up from table to table. */
@@ -17,7 +18,7 @@
   --bg:#17181a; --ink:#e8e8e6; --ink-2:#b4b6b9; --ink-3:#979a9f;
   --line:#2c2e31; --line-2:#232427; --hover:#1e1f22; --track:#232427;
   --accent:#7ea6ff; --on-accent:#0d1526;
-  --green:#4fb87a; --grey:#6c7076; --red:#ff7f70;
+  --green:#4fb87a; --grey:#6c7076; --red:#ff7f70; --yellow:#e0b43a;
 }}
 *{box-sizing:border-box}
 html{background:var(--bg);color:var(--ink);font:14px/1.4 var(--sans);-webkit-text-size-adjust:100%;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
@@ -76,6 +77,7 @@ ol{list-style:none;margin:0;padding:0}
 .row.ok{--bar:var(--green)}
 .row.none{--bar:var(--grey)}
 .row.risky{--bar:var(--red)}
+.row.warn{--bar:var(--yellow)}
 .pick{height:var(--row)}
 
 summary{list-style:none;cursor:pointer;height:var(--row)}
@@ -103,8 +105,10 @@ summary>span,a.line>span,.meta>span{min-width:0;overflow:hidden;white-space:nowr
 .when,.ppl{font-size:.8125rem;color:var(--ink-2)}
 .chg .k{font-weight:500}
 
-/* Mailbox operations: Message · Received. */
+/* Mailbox operations: Message (sender · subject) · Received, from the guarded read; Score from the cache. */
 .from{font-weight:500}
+.text .from+.subj::before,.text .from+.ph::before{content:" · ";font-weight:400;font-style:normal;color:var(--ink-3)}
+.text .from+.subj{font-weight:400;color:var(--ink)}
 .recv{font-size:.8125rem;color:var(--ink-2)}
 
 /* Open row */
@@ -115,6 +119,7 @@ dl.f{display:grid;grid-template-columns:7rem minmax(0,1fr);gap:.2rem .75rem;marg
 dl.f dt{color:var(--ink-3);overflow-wrap:anywhere}
 dl.f dd{margin:0;overflow-wrap:anywhere}
 dl.f dd.bad{color:var(--red);font-weight:600}
+dl.f dd .src{color:var(--ink-3);font-style:normal}
 dl.f .ln{display:block;white-space:pre-wrap}
 .open .sub{font-size:.75rem;color:var(--ink-3);margin:.5rem 0 0}
 .body{margin:0;border-left:2px solid var(--line);padding:.1rem 0 .1rem 1rem}

@@ -40,6 +40,8 @@
       <dl class="f">
         <dt>Account</dt><dd>{{.Account}}</dd>
         <dt>Score</dt><dd{{if .Score.Risk}} class="bad"{{end}}>{{if .Score.Fake}}<span class="fake">fake</span>{{end}}{{if .Score.Risk}}▲ {{end}}{{.Score.Value}} · {{.Score.Label}}{{with .Score.Code}} · {{.}}{{end}}</dd>
+        {{range .Read}}<dt>{{.Label}}</dt><dd{{if .Placeholder}} class="ph"{{end}}>{{.Value}}{{with .Source}} <span class="src">· {{.}}</span>{{end}}</dd>
+        {{end}}
         {{template "openfields" .Fields}}
       </dl>
       {{if .Draft}}<p class="sub">The draft fields that the check read when the agent asked to send the draft</p>
@@ -82,12 +84,12 @@
 {{- else if eq . "meetings"}}<span>Action</span><span>Account</span><span>Event</span><span>When</span><span>People</span><span>Change</span><span class="r">Score</span><span class="r">Age</span><span></span>
 {{- else}}<span>Change</span><span>Account</span><span>Message</span><span>Received</span><span class="r">Score</span><span class="r">Age</span><span></span>{{end}}{{end}}
 
-{{define "cells"}}{{if eq .Group "meetings"}}<span class="ev{{if .EventMissing}} ph{{end}}">{{.Event}}</span>
+{{define "cells"}}{{if eq .Group "meetings"}}<span class="ev{{if .EventPlaceholder}} ph{{end}}">{{.Event}}</span>
       <span class="when num">{{.When}}</span>
       <span class="ppl{{if .PeopleRole}} ph{{end}}">{{.People}}</span>
       <span class="chg"><span class="k">{{.Change}}</span>{{with .ChangeDetail}}<span class="snip">{{.}}</span>{{end}}</span>
-{{- else if eq .Group "mailbox"}}<span class="text"><span class="from ph">Message not available</span></span>
-      <span class="recv num">—</span>
+{{- else if eq .Group "mailbox"}}<span class="text">{{if .MessageMissing}}<span class="from ph">Message not available</span>{{else}}{{with .Sender}}<span class="from">{{.}}</span>{{end}}{{if .SubjectHidden}}<span class="ph">Subject hidden (sealed)</span>{{else}}<span class="subj{{if .NoSubject}} ph{{end}}">{{.Subject}}</span>{{end}}{{end}}</span>
+      <span class="recv num">{{.Received}}</span>
 {{- else}}<span class="to" title="{{.ToTitle}}">{{with .ToMarker}}<span class="ph">{{.}}</span>{{if $.To}}; {{end}}{{end}}{{.To}}</span>
       <span class="text">{{if .Subject}}<span class="subj{{if .NoSubject}} ph{{end}}">{{.Subject}}</span>{{end}}{{with .Preview}}<span class="snip">{{.}}</span>{{end}}</span>{{end}}{{end}}
 

@@ -9,12 +9,14 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/cache"
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/views"
 )
 
 // listGroup is one table of the list page. Key names it in URLs and in the data-group attribute.
@@ -143,19 +145,37 @@ type listRow struct {
 	// Messages: the reply marker, the recipients shortened and in full, the subject, and a one-line preview of the body.
 	ToMarker, To, ToTitle, Subject, Preview string
 	NoSubject                               bool
-	// Meetings. EventMissing is true when the event is only an ID; PeopleRole when People names a role, not a count.
-	Event, When, People, Change, ChangeDetail string
-	EventMissing, PeopleRole                  bool
+	// Meetings. EventMissing is true when the event is only an ID; EventPlaceholder when Event is a placeholder, not
+	// the subject; PeopleRole when People names a role, not a count.
+	Event, When, People, Change, ChangeDetail  string
+	EventMissing, EventPlaceholder, PeopleRole bool
+	// Mailbox operations: the sender and subject of the message from its guarded view, the subject in Subject;
+	// SubjectHidden when the view has no subject.
+	Sender, Received              string
+	MessageMissing, SubjectHidden bool
+	// ref is the event or message that the list reads live, empty when the row needs no read; args are the stored
+	// request arguments.
+	ref  string
+	args map[string]any
 	// Recents: a summary from the stored fields, and the outcome, failed or not.
 	Summary, Outcome string
 	Failed           bool
-	// The open row: every request field, the draft fields of a draft send, and the body or meeting text under its
-	// caption.
+	// The open row: the fields of the live read, every request field, the draft fields of a draft send, and the body
+	// or meeting text under its caption.
+	Read          []readField
 	Fields, Draft []field
 	Body, Caption string
 }
 
-// scoreCell is the Score of a row. Bar is the row colour: ok (green), risky (red), or none (grey).
+// readField is an open-row field from the live read of the event or message. Placeholder marks a Value that stands
+// in for hidden text; Source names where the value was read.
+type readField struct {
+	Label, Value, Source string
+	Placeholder          bool
+}
+
+// scoreCell is the Score of a row. Bar is the row colour: ok (green), warn (yellow, a yellow screening verdict),
+// risky (red), or none (grey).
 type scoreCell struct {
 	Value, Label, Bar string
 	// Code is the fixed error code of a failed check.
@@ -164,6 +184,35 @@ type scoreCell struct {
 }
 
 var notChecked = scoreCell{Value: "—", Label: "Not checked", Bar: "none"}
+
+// unscreened is the Score of a Mailbox operations row whose message has no screening verdict in the cache.
+var unscreened = scoreCell{Value: "—", Label: "Unknown", Bar: "none"}
+
+// verdictScore is the Score of a Mailbox operations row: the message's screening verdict from the cache. Red,
+// sealed, and error verdicts are red; a verdict that is none of the five is unknown, grey.
+func verdictScore(row cache.Row) scoreCell {
+	value := "—"
+	if row.Score != nil && *row.Score >= 0 && *row.Score <= 1 {
+		value = scoreText(*row.Score)
+	}
+	switch row.Verdict {
+	case model.Green:
+		return scoreCell{Value: value, Label: "Green", Bar: "ok"}
+	case model.Yellow:
+		return scoreCell{Value: value, Label: "Yellow", Bar: "warn"}
+	case model.Red:
+		return scoreCell{Value: value, Label: "Red", Bar: "risky", Risk: true}
+	case model.Sealed:
+		return scoreCell{Value: "sealed", Label: "Sealed", Bar: "risky", Risk: true}
+	case model.Error:
+		s := scoreCell{Value: "error", Label: "Error", Bar: "risky", Risk: true}
+		if row.Error != nil {
+			s.Code = *row.Error
+		}
+		return s
+	}
+	return unscreened
+}
 
 // checkScore is the Score of an action check. Only a valid score below the threshold without a flag is green; a check
 // with a missing score or invalid data is a failed check, red.
@@ -264,7 +313,161 @@ func (c *console) list(ctx context.Context, w http.ResponseWriter, r *http.Reque
 			page.Groups = append(page.Groups, view)
 		}
 	}
+	var shown, handled []*listRow
+	for g := range page.Groups {
+		for i := range page.Groups[g].Rows {
+			shown = append(shown, &page.Groups[g].Rows[i])
+		}
+		for i := range page.Groups[g].Recents {
+			handled = append(handled, &page.Groups[g].Recents[i])
+		}
+	}
+	// Only waiting rows read live; Recents get the cached verdict only.
+	c.readLive(ctx, shown, now)
+	c.screenedScores(ctx, append(shown, handled...))
 	render(w, 200, "list", page)
+}
+
+// Live reads of one list page. The page reads the events and messages of at most listReadsPerPage rows, in page
+// order, and at most listReadsPerAccount of one account at a time. Every read shares one deadline, listReadDeadline:
+// a read that fails or is late leaves its row not available, and the page renders once every read has returned.
+// A read waits for its account slot only until the deadline.
+const (
+	listReadsPerPage    = 50
+	listReadsPerAccount = 4
+)
+
+// listReadDeadline is a variable only so that tests can change its cost through export_test.go.
+var listReadDeadline = 3 * time.Second
+
+// readLive fills the rows that name an event or message from its guarded view: Meetings rows of an update, cancel,
+// or response, and Mailbox operations rows. A row whose read fails stays not available.
+func (c *console) readLive(ctx context.Context, rows []*listRow, now time.Time) {
+	var reads []*listRow
+	slots := map[string]chan struct{}{}
+	for _, r := range rows {
+		if r.ref != "" && len(reads) < listReadsPerPage {
+			reads = append(reads, r)
+			if slots[r.Account] == nil {
+				slots[r.Account] = make(chan struct{}, listReadsPerAccount)
+			}
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, listReadDeadline)
+	defer cancel()
+	// Each worker writes only its own result.
+	results := make([]any, len(reads))
+	var wg sync.WaitGroup
+	for i, r := range reads {
+		wg.Go(func() {
+			// A panic in a read leaves the row not available instead of ending the daemon.
+			defer func() { _ = recover() }()
+			slot := slots[r.Account]
+			select {
+			case slot <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-slot }()
+			op := "mail.get"
+			if r.Group == groupMeetings {
+				op = "calendar.get"
+			}
+			result, err := c.guardedRead(ctx, op, r.Account, r.ref)
+			if err == nil && ctx.Err() == nil {
+				results[i] = result
+			}
+		})
+	}
+	wg.Wait()
+	for i, r := range reads {
+		switch v := results[i].(type) {
+		case views.CalendarView:
+			if r.Group == groupMeetings {
+				eventRead(r, v)
+			}
+		case views.MailView:
+			if r.Group == groupMailbox {
+				messageRead(r, v, now)
+			}
+		}
+	}
+}
+
+// screenedScores gives each Mailbox operations row the screening verdict of its message from the cache, without a
+// provider call. A row whose message has no cached verdict, or whose cache read fails, stays unknown.
+func (c *console) screenedScores(ctx context.Context, rows []*listRow) {
+	ids := map[string][]string{}
+	for _, r := range rows {
+		if r.Group == groupMailbox && r.ref != "" {
+			ids[r.Account] = append(ids[r.Account], r.ref)
+		}
+	}
+	verdicts := map[string]map[string]cache.Row{}
+	for account, list := range ids {
+		if found, err := c.s.cache.Get(ctx, account, list); err == nil {
+			verdicts[account] = found
+		}
+	}
+	for _, r := range rows {
+		if row, ok := verdicts[r.Account][r.ref]; ok && r.Group == groupMailbox {
+			r.Score = verdictScore(row)
+		}
+	}
+}
+
+// eventRead fills a Meetings row from the guarded view of its event. A view without a subject, at a verdict that
+// hides it, shows a placeholder.
+func eventRead(r *listRow, v views.CalendarView) {
+	r.EventMissing, r.EventPlaceholder = false, false
+	r.Event = "Subject hidden"
+	switch {
+	case v.Subject == nil:
+		r.EventPlaceholder = true
+	case *v.Subject == "":
+		r.Event, r.EventPlaceholder = "No subject", true
+	default:
+		r.Event = *v.Subject
+	}
+	r.When = eventWhen(v.Start, v.End)
+	if !r.PeopleRole && v.Attendees != nil {
+		r.People = people(len(*v.Attendees))
+	}
+	if r.Label == listedOps["calendar.update"].label {
+		r.Change, r.ChangeDetail = updateChange(r.args, &v)
+	}
+	r.Read = []readField{{Label: "Event", Value: r.Event, Source: "from the calendar", Placeholder: r.EventPlaceholder}, {Label: "When", Value: eventWhenLong(v.Start, v.End)}}
+	if v.Organizer.Address != "" {
+		r.Read = append(r.Read, readField{Label: "Organizer", Value: addressText(v.Organizer)})
+	}
+}
+
+// messageRead fills a Mailbox operations row from the guarded view of its message. The subject shows only when the
+// view gives one; a red or sealed view never does.
+func messageRead(r *listRow, v views.MailView, now time.Time) {
+	r.MessageMissing = false
+	r.SubjectHidden = v.Subject == nil || v.Verdict == model.Red || v.Verdict == model.Sealed
+	if v.Sender != nil {
+		r.Sender = v.Sender.Address
+		r.Read = append(r.Read, readField{Label: "Sender", Value: addressText(*v.Sender)})
+	}
+	subject := readField{Label: "Subject", Value: "Subject hidden (sealed)", Placeholder: true}
+	if !r.SubjectHidden {
+		r.Subject, r.NoSubject = *v.Subject, *v.Subject == ""
+		subject.Value, subject.Placeholder = r.Subject, r.NoSubject
+		if r.NoSubject {
+			r.Subject, subject.Value = "No subject", "No subject"
+		}
+	}
+	r.Read = append(r.Read, subject)
+	if at, err := time.Parse(time.RFC3339, v.ReceivedAt); err == nil {
+		at = at.In(now.Location())
+		r.Received = at.Format("Mon 2 Jan")
+		if at.Format(time.DateOnly) == now.Format(time.DateOnly) {
+			r.Received = at.Format("Today 15:04")
+		}
+		r.Read = append(r.Read, readField{Label: "Received", Value: at.Format("Mon 2 Jan 2006, 15:04")})
+	}
 }
 
 // listedRow builds the row of a pending action of a listed operation from its stored fields only.
@@ -275,13 +478,13 @@ func listedRow(item cache.Pending, aliases map[string]string, now time.Time) lis
 		alias = item.Account
 	}
 	row := listRow{ID: item.ID, Group: op.group, Label: op.label, Alias: alias, Account: item.Account, Age: age(now.Sub(item.Created)), Score: checkScore(item.Jev)}
-	// Mailbox operations carry no action check; their score is the message's screening verdict, which the list
-	// does not read yet.
+	// Mailbox operations carry no action check; their score is the message's screening verdict from the cache.
 	if op.group == groupMailbox {
-		row.Score = notChecked
+		row.Score = unscreened
 	}
 	row.Review = op.group != groupMailbox && row.Score.Risk
 	args := storedFields(item.Args)
+	row.args = args
 	fields := args
 	// A draft send names only its draft; what it sends is the stored draft fields.
 	if item.Op == "draft.send" {
@@ -310,6 +513,12 @@ func listedRow(item cache.Pending, aliases map[string]string, now time.Time) lis
 		messageCells(&row, item.Op, fields)
 	case groupMeetings:
 		meetingCells(&row, item.Op, args)
+	case groupMailbox:
+		// A waiting trash holds one message.
+		row.MessageMissing, row.Received = true, "—"
+		if ids := texts(args["ids"]); len(ids) > 0 {
+			row.ref = ids[0]
+		}
 	}
 	switch item.State {
 	case cache.StateDone:
@@ -439,34 +648,7 @@ func meetingCells(row *listRow, op string, args map[string]any) {
 		row.People = people(len(texts(args["to"])) + len(texts(args["optional"])))
 	case "calendar.update":
 		row.EventMissing = true
-		var changes, details []string
-		for _, key := range []string{"start", "end"} {
-			if _, ok := args[key]; ok {
-				changes = append(changes, strings.ToUpper(key[:1])+key[1:]+" → "+shortTime(str(key)))
-			}
-		}
-		if _, ok := args["duration"]; ok {
-			changes = append(changes, "Duration → "+str("duration"))
-		}
-		if n := len(texts(args["add"])); n > 0 {
-			changes = append(changes, "+"+people(n))
-		}
-		if n := len(texts(args["remove"])); n > 0 {
-			changes = append(changes, "−"+people(n))
-		}
-		for _, key := range []string{"subject", "location"} {
-			if _, ok := args[key]; ok {
-				changes = append(changes, strings.ToUpper(key[:1])+key[1:])
-				details = append(details, str(key))
-			}
-		}
-		if _, ok := args["body"]; ok {
-			changes = append(changes, "Text")
-		}
-		if args["online"] == true {
-			changes = append(changes, "Online meeting")
-		}
-		row.Change, row.ChangeDetail = strings.Join(changes, ", "), strings.Join(details, " · ")
+		row.Change, row.ChangeDetail = updateChange(args, nil)
 	case "calendar.cancel":
 		row.EventMissing, row.Change, row.ChangeDetail = true, "Cancel event", str("comment")
 	case "calendar.respond":
@@ -474,8 +656,68 @@ func meetingCells(row *listRow, op string, args map[string]any) {
 		row.Change = map[string]string{"accept": "Accept", "tentative": "Tentative", "decline": "Decline"}[str("response")]
 	}
 	if row.EventMissing {
-		row.Event = "Event not available"
+		row.Event, row.EventPlaceholder = "Event not available", true
+		row.ref = str("id")
 	}
+}
+
+// updateChange is the Change of a meeting update and its detail. With the event's current view, a new start or end
+// shows as a change from the current time; without it, as the new time only.
+func updateChange(args map[string]any, current *views.CalendarView) (string, string) {
+	str := func(key string) string { s, _ := args[key].(string); return s }
+	var changes, details []string
+	for _, key := range []string{"start", "end"} {
+		if _, ok := args[key]; !ok {
+			continue
+		}
+		label := strings.ToUpper(key[:1]) + key[1:]
+		old := ""
+		if current != nil {
+			old = map[string]string{"start": current.Start, "end": current.End}[key]
+		}
+		if from, ok := timeChange(old, str(key)); ok {
+			changes, details = append(changes, label), append(details, from)
+		} else {
+			changes = append(changes, label+" → "+shortTime(str(key)))
+		}
+	}
+	if _, ok := args["duration"]; ok {
+		changes = append(changes, "Duration → "+str("duration"))
+	}
+	if n := len(texts(args["add"])); n > 0 {
+		changes = append(changes, "+"+people(n))
+	}
+	if n := len(texts(args["remove"])); n > 0 {
+		changes = append(changes, "−"+people(n))
+	}
+	for _, key := range []string{"subject", "location"} {
+		if _, ok := args[key]; ok {
+			changes = append(changes, strings.ToUpper(key[:1])+key[1:])
+			details = append(details, str(key))
+		}
+	}
+	if _, ok := args["body"]; ok {
+		changes = append(changes, "Text")
+	}
+	if args["online"] == true {
+		changes = append(changes, "Online meeting")
+	}
+	return strings.Join(changes, ", "), strings.Join(details, " · ")
+}
+
+// timeChange is a change from the time old to the time to, both RFC 3339, in the offset of to: "10:00 → 11:00" on
+// one day, with the dates otherwise. ok is false when a time is not RFC 3339.
+func timeChange(old, to string) (string, bool) {
+	o, err := time.Parse(time.RFC3339, old)
+	n, err2 := time.Parse(time.RFC3339, to)
+	if err != nil || err2 != nil {
+		return "", false
+	}
+	o = o.In(n.Location())
+	if o.Format(time.DateOnly) == n.Format(time.DateOnly) {
+		return o.Format("15:04") + " → " + n.Format("15:04"), true
+	}
+	return o.Format("Mon 2 Jan, 15:04") + " → " + n.Format("Mon 2 Jan, 15:04"), true
 }
 
 func people(n int) string {
@@ -485,18 +727,23 @@ func people(n int) string {
 	return strconv.Itoa(n) + " people"
 }
 
-// eventWhen is a stored start and end as "Wed 1 Apr, 09:00–10:00", in the offset that the agent gave, or — when a
-// time is not RFC 3339.
-func eventWhen(start, end string) string {
+// eventWhen is a start and end as "Wed 1 Apr, 09:00–10:00", in the offset that the agent or the provider gave, or —
+// when a time is not RFC 3339.
+func eventWhen(start, end string) string { return timeSpan(start, end, "Mon 2 Jan, 15:04") }
+
+// eventWhenLong is eventWhen with the year: "Wed 1 Apr 2026, 09:00–10:00".
+func eventWhenLong(start, end string) string { return timeSpan(start, end, "Mon 2 Jan 2006, 15:04") }
+
+func timeSpan(start, end, layout string) string {
 	s, err := time.Parse(time.RFC3339, start)
 	e, err2 := time.Parse(time.RFC3339, end)
 	if err != nil || err2 != nil {
 		return "—"
 	}
 	if s.Format(time.DateOnly) == e.Format(time.DateOnly) {
-		return s.Format("Mon 2 Jan, 15:04") + "–" + e.Format("15:04")
+		return s.Format(layout) + "–" + e.Format("15:04")
 	}
-	return s.Format("Mon 2 Jan, 15:04") + " – " + e.Format("Mon 2 Jan, 15:04")
+	return s.Format(layout) + " – " + e.Format(layout)
 }
 
 // shortTime is a stored time as "Wed 1 Apr, 09:00", or the stored text when it is not RFC 3339.

@@ -346,11 +346,7 @@ func (c *console) reference(ctx context.Context, item cache.Pending, args map[st
 	}
 	ctx, cancel := context.WithTimeout(ctx, referenceTimeout)
 	defer cancel()
-	params, err := json.Marshal(idParam{ref})
-	if err != nil {
-		return kind, nil, true
-	}
-	result, err := c.s.runOn(ctx, op, item.Account, params)
+	result, err := c.guardedRead(ctx, op, item.Account, ref)
 	if err != nil {
 		return kind, nil, true
 	}
@@ -378,6 +374,16 @@ func (c *console) reference(ctx context.Context, item cache.Pending, args map[st
 		return kind, nil, true
 	}
 	return kind, out, false
+}
+
+// guardedRead reads the message or event id of the account through the guarded read path of op, mail.get or
+// calendar.get, as the agent would. The result is the view of its verdict.
+func (c *console) guardedRead(ctx context.Context, op, account, id string) (any, error) {
+	params, err := json.Marshal(idParam{id})
+	if err != nil {
+		return nil, err
+	}
+	return c.s.runOn(ctx, op, account, params)
 }
 
 // jevText describes the Jev action check of an item, or is empty when no check ran. A check that the fake

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -200,8 +201,8 @@ func TestConsoleListPreviewsTheTextOfAnHTMLBody(t *testing.T) {
 	}
 }
 
-// A Meetings row shows the event, when, the people, and the change from the stored request. An event that is only
-// an ID is not available yet.
+// A Meetings row shows the event, when, the people, and the change: an invitation from the stored request, the
+// others from the request and the live read of the event.
 func TestConsoleListShowsMeetingRows(t *testing.T) {
 	f := consoleDaemon(t, everyWriteWaits, true)
 	invite := pend(t, f.d.s, "calendar.invite", `{"to":["required@example.test"],"optional":["optional@example.test"],"subject":"Budget sync","body":"Agenda","location":"Room 2","start":"2026-04-01T09:00:00Z","end":"2026-04-01T10:00:00Z"}`)[0]
@@ -212,10 +213,10 @@ func TestConsoleListShowsMeetingRows(t *testing.T) {
 	page := f.get(t, "/", nil).Body.String()
 	for id, wants := range map[string][]string{
 		invite:  {`<span class="ev">Budget sync</span>`, `<span class="when num">Wed 1 Apr, 09:00–10:00</span>`, `<span class="ppl">2 people</span>`, `<span class="k">New event</span><span class="snip">Room 2</span>`},
-		respond: {`<span class="ev ph">Event not available</span>`, `<span class="ppl ph">Organizer</span>`, `<span class="k">Decline</span><span class="snip">Travelling</span>`},
-		cancel:  {`<span class="ev ph">Event not available</span>`, `<span class="k">Cancel event</span><span class="snip">No sync this week</span>`},
-		update:  {`<span class="k">Start → Wed 1 Apr, 11:00, &#43;1 person</span>`},
-		trash:   {`<span class="op">Trash</span>`, `<span class="from ph">Message not available</span>`, `<span class="recv num">—</span>`},
+		respond: {`<span class="ev">private-subject-event</span>`, `<span class="ppl ph">Organizer</span>`, `<span class="k">Decline</span><span class="snip">Travelling</span>`},
+		cancel:  {`<span class="ev">private-subject-event</span>`, `<span class="ppl">0 people</span>`, `<span class="k">Cancel event</span><span class="snip">No sync this week</span>`},
+		update:  {`<span class="k">Start, &#43;1 person</span><span class="snip">Tue 31 Mar, 10:00 → Wed 1 Apr, 11:00</span>`},
+		trash:   {`<span class="op">Trash</span>`, `<span class="from">sender@example.test</span>`, `<span class="recv num">Mon 30 Mar</span>`},
 	} {
 		row := rowOf(page, id)
 		for _, want := range wants {
@@ -235,8 +236,8 @@ func pageText(page string) string {
 var neverOnPage = regexp.MustCompile(`(?i)jev|flagged`)
 
 // The Score is the action check: green with the value when checked, red with ▲ and Needs review for a risk or a
-// failed check (its fixed code in the title), grey — when not checked. Mailbox operations are grey in this step.
-// The open row shows the value with its label.
+// failed check (its fixed code in the title), grey — when not checked. A Mailbox operations row of a message without a
+// screening verdict is grey. The open row shows the value with its label.
 func TestConsoleListShowsTheScoreOfTheActionCheck(t *testing.T) {
 	f := consoleDaemon(t, everyWriteWaits, true)
 	f.setScore(0.06)
@@ -250,7 +251,7 @@ func TestConsoleListShowsTheScoreOfTheActionCheck(t *testing.T) {
 	f.setScore(2)
 	failed := pend(t, f.d.s, "mail.send", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
 	unchecked := pend(t, f.d.s, "draft.delete", `{"id":"draft-1"}`)[0]
-	trash := pend(t, f.d.s, "mail.trash", `{"ids":["g"]}`)[0]
+	trash := pend(t, f.d.s, "mail.trash", `{"ids":["gone"]}`)[0]
 	page := f.get(t, "/", nil).Body.String()
 	for id, wants := range map[string][]string{
 		checked:   {`<li class="row ok">`, `<span class="score">0.06<span class="vh"> · Checked</span></span>`, `<dd>0.06 · Checked</dd>`},
@@ -259,7 +260,7 @@ func TestConsoleListShowsTheScoreOfTheActionCheck(t *testing.T) {
 		below:     {`<li class="row ok">`, `<span class="score">0.49<span class="vh"> · Checked</span></span>`, `<dd>0.49 · Checked</dd>`},
 		high:      {`<li class="row risky">`, `<dd class="bad">▲ 0.99 · Needs review</dd>`},
 		unchecked: {`<li class="row none">`, `<span class="score">—<span class="vh"> · Not checked</span></span>`, `<dd>— · Not checked</dd>`},
-		trash:     {`<li class="row none">`, `<span class="score">—<span class="vh"> · Not checked</span></span>`},
+		trash:     {`<li class="row none">`, `<span class="score">—<span class="vh"> · Unknown</span></span>`},
 	} {
 		row := rowOf(page, id)
 		for _, want := range wants {
@@ -581,4 +582,217 @@ func TestConsoleListShowsHostileAgentTextAsLiteralText(t *testing.T) {
 		}
 	}
 	onlyConsoleLinks(t, page)
+}
+
+// liveReads are the messages and events that the fake Graph API served by ID since the last reset, with the number
+// of requests of each.
+func (f *consoleFixture) liveReads(reset bool) map[string]int {
+	f.api.mu.Lock()
+	defer f.api.mu.Unlock()
+	out := map[string]int{}
+	for path, n := range f.api.gets {
+		if id, ok := strings.CutPrefix(path, "/me/messages/"); ok {
+			out["message "+id] += n
+		} else if id, ok := strings.CutPrefix(path, "/me/events/"); ok {
+			out["event "+id] += n
+		}
+	}
+	if reset {
+		f.api.gets = map[string]int{}
+	}
+	return out
+}
+
+// hang makes the fake Graph API answer the requests of path only when the client gives up.
+func (f *consoleFixture) hang(path string) {
+	f.api.mu.Lock()
+	f.api.hang[path] = true
+	f.api.mu.Unlock()
+}
+
+// The list reads the event of a meeting update, cancel, or response and the message of a trash live, through the
+// guarded read; Messages rows and invitations never read. The rows show the details, never a body.
+func TestConsoleListReadsOnlyMeetingAndMailboxRowsLive(t *testing.T) {
+	f := consoleDaemon(t, everyWriteWaits, true)
+	for _, w := range waitingOps {
+		if w.group == "messages" || w.op == "calendar.invite" {
+			pend(t, f.d.s, w.op, w.params)
+		}
+	}
+	f.liveReads(true)
+	if page := f.get(t, "/", nil).Body.String(); !strings.Contains(page, `data-group="messages"`) {
+		t.Fatalf("no Messages table: %s", page)
+	}
+	if reads := f.liveReads(true); len(reads) != 0 {
+		t.Fatalf("Messages rows and an invitation read %v", reads)
+	}
+	update := pend(t, f.d.s, "calendar.update", `{"id":"o","subject":"s"}`)[0]
+	cancel := pend(t, f.d.s, "calendar.cancel", `{"id":"o","comment":"c"}`)[0]
+	respond := pend(t, f.d.s, "calendar.respond", `{"id":"e","response":"decline","comment":"c"}`)[0]
+	trash := pend(t, f.d.s, "mail.trash", `{"ids":["y"]}`)[0]
+	f.liveReads(true)
+	page := f.get(t, "/", nil).Body.String()
+	reads := f.liveReads(false)
+	if len(reads) != 3 || reads["event o"] == 0 || reads["event e"] == 0 || reads["message y"] == 0 {
+		t.Fatalf("live reads %v; want the events o and e and the message y", reads)
+	}
+	for id, wants := range map[string][]string{
+		update:  {`<span class="ev">private-subject-event</span>`, `<span class="when num">Tue 31 Mar, 10:00–11:00</span>`, `<span class="ppl">0 people</span>`},
+		cancel:  {`<span class="ev">private-subject-event</span>`, `<span class="k">Cancel event</span><span class="snip">c</span>`},
+		respond: {`<span class="ev">private-subject-event</span>`, `<span class="ppl ph">Organizer</span>`, `<dt>Event</dt><dd>private-subject-event <span class="src">· from the calendar</span></dd>`, `<dt>When</dt><dd>Tue 31 Mar 2026, 10:00–11:00</dd>`},
+		trash: {`<span class="text"><span class="from">sender@example.test</span><span class="subj">private-subject-y</span></span>`, `<span class="recv num">Mon 30 Mar</span>`,
+			`<dt>Sender</dt><dd>private-name &lt;sender@example.test&gt;</dd>`, `<dt>Subject</dt><dd>private-subject-y</dd>`, `<dt>Received</dt><dd>Mon 30 Mar 2026, 10:00</dd>`},
+	} {
+		row := rowOf(page, id)
+		for _, want := range wants {
+			if !strings.Contains(row, want) {
+				t.Errorf("row misses %q: %s", want, row)
+			}
+		}
+	}
+	if strings.Contains(page, "private-body-y") || strings.Contains(page, "private-body-event") || strings.Contains(page, "not available") {
+		t.Errorf("page shows a body or a missing read: %s", page)
+	}
+	if text, _ := auditOf(t, f.d.home); strings.Contains(text, "private-") || strings.Contains(text, "sender@") {
+		t.Errorf("audit holds read details: %s", text)
+	}
+}
+
+// A red, sealed, or unscreened message shows only what its guarded view shows: the sender address at most, and
+// "Subject hidden (sealed)". The Score is the message's screening verdict from the cache, and none needs review.
+func TestConsoleListHidesTheSubjectOfRedAndSealedMessages(t *testing.T) {
+	f := consoleDaemon(t, everyWriteWaits, true)
+	ids := map[string]string{}
+	for _, m := range []string{"g", "y", "r", "s", "down"} {
+		ids[m] = pend(t, f.d.s, "mail.trash", `{"ids":["`+m+`"]}`)[0]
+	}
+	page := f.get(t, "/", nil).Body.String()
+	hidden := `<span class="text"><span class="from">sender@example.test</span><span class="ph">Subject hidden (sealed)</span></span>`
+	for m, wants := range map[string][]string{
+		"g":    {`<li class="row ok">`, `<span class="subj">private-subject-g</span>`, `<span class="score">0.10<span class="vh"> · Green</span></span>`, `<dd>0.10 · Green</dd>`},
+		"y":    {`<li class="row warn">`, `<span class="score">0.35<span class="vh"> · Yellow</span></span>`, `<dd>0.35 · Yellow</dd>`},
+		"r":    {`<li class="row risky">`, hidden, `<dd class="bad">▲ 0.90 · Red</dd>`, `<dt>Subject</dt><dd class="ph">Subject hidden (sealed)</dd>`, `<dt>Sender</dt><dd>sender@example.test</dd>`},
+		"s":    {`<li class="row risky">`, hidden, `<span class="score bad"><span class="mk" aria-hidden="true">▲</span>sealed<span class="vh"> · Sealed</span></span>`, `<dd class="bad">▲ sealed · Sealed</dd>`},
+		"down": {`<li class="row risky">`, `<span class="text"><span class="ph">Subject hidden (sealed)</span></span>`, `<dd class="bad">▲ error · Error · `},
+	} {
+		row := rowOf(page, ids[m])
+		for _, want := range wants {
+			if !strings.Contains(row, want) {
+				t.Errorf("%s: row misses %q: %s", m, want, row)
+			}
+		}
+		if m != "g" && m != "y" && (strings.Contains(row, "private-") || strings.Contains(row, "subj")) {
+			t.Errorf("%s: row shows hidden text: %s", m, row)
+		}
+	}
+	if !strings.Contains(page, `<span class="sum num">5 waiting · 0 need review</span>`) {
+		t.Errorf("Mailbox operations rows need review: %s", page)
+	}
+	// A handled trash keeps the cached verdict of its message under Recents, without a read.
+	if err := f.d.s.Deny(context.Background(), ids["r"]); err != nil {
+		t.Fatal(err)
+	}
+	f.liveReads(true)
+	page = f.get(t, "/", nil).Body.String()
+	if row := rowOf(page, ids["r"]); !strings.Contains(row, `<span class="score bad"><span class="mk" aria-hidden="true">▲</span>0.90<span class="vh"> · Red</span></span>`) || !strings.Contains(row, ">Denied<") {
+		t.Errorf("Recents row misses the cached verdict: %s", row)
+	}
+	if reads := f.liveReads(false); reads["message r"] != 0 {
+		t.Errorf("Recents row read its message: %v", reads)
+	}
+}
+
+// A read that fails or does not finish by the page deadline leaves its row "not available", and the page still
+// renders in time. The Score of a trash comes from the cache, so it shows even when the live read fails; a message
+// that was never screened is grey.
+func TestConsoleListShowsRowsWhoseReadFailsOrIsLate(t *testing.T) {
+	f := consoleDaemon(t, everyWriteWaits, true)
+	if status, body := accountRPC(t, f.d.s, "mail.get", "", `{"id":"y"}`); status != 200 {
+		t.Fatalf("agent read: %d %s", status, body)
+	}
+	cached := pend(t, f.d.s, "mail.trash", `{"ids":["y"]}`)[0]
+	gone := pend(t, f.d.s, "mail.trash", `{"ids":["gone"]}`)[0]
+	slow := pend(t, f.d.s, "calendar.update", `{"id":"o","start":"2026-03-31T11:00:00Z"}`)[0]
+	f.hang("/me/messages/y")
+	f.hang("/me/events/o")
+	deadline := 300 * time.Millisecond
+	t.Cleanup(server.SetListReadDeadline(deadline))
+	start := time.Now()
+	w := f.get(t, "/", nil)
+	if elapsed := time.Since(start); elapsed > deadline+time.Second {
+		t.Fatalf("page took %v", elapsed)
+	}
+	page := w.Body.String()
+	for id, wants := range map[string][]string{
+		cached: {`<li class="row warn">`, `<span class="text"><span class="from ph">Message not available</span></span>`, `<span class="recv num">—</span>`, `<span class="score">0.35<span class="vh"> · Yellow</span></span>`},
+		gone:   {`<li class="row none">`, `<span class="from ph">Message not available</span>`, `<span class="score">—<span class="vh"> · Unknown</span></span>`},
+		slow:   {`<span class="ev ph">Event not available</span>`, `<span class="k">Start → Tue 31 Mar, 11:00</span>`},
+	} {
+		row := rowOf(page, id)
+		for _, want := range wants {
+			if !strings.Contains(row, want) {
+				t.Errorf("row misses %q: %s", want, row)
+			}
+		}
+	}
+	if w.Code != 200 || !strings.Contains(page, `<span class="sum num">3 waiting · 0 need review</span>`) {
+		t.Fatalf("%d %s", w.Code, page)
+	}
+}
+
+// A page reads at most 50 events and messages, those of the rows it shows first; the other rows are not available.
+// The deadline is long, so that every one of the 50 first screenings finishes.
+func TestConsoleListReadsAtMostFiftyRows(t *testing.T) {
+	t.Cleanup(server.SetListReadDeadline(time.Minute))
+	f := consoleDaemon(t, everyWriteWaits, true)
+	var ids []string
+	for i := range 52 {
+		ids = append(ids, pend(t, f.d.s, "mail.trash", `{"ids":["m`+strconv.Itoa(i)+`"]}`)[0])
+		f.advance(time.Second)
+	}
+	f.liveReads(true)
+	page := f.get(t, "/", nil).Body.String()
+	if reads := f.liveReads(false); len(reads) != 50 || reads["message m0"] != 0 || reads["message m1"] != 0 || reads["message m51"] == 0 {
+		t.Fatalf("%d reads; want the 50 newest: %v", len(reads), reads)
+	}
+	for i, id := range ids {
+		if missing := strings.Contains(rowOf(page, id), "Message not available"); missing != (i < 2) {
+			t.Errorf("m%d: not available=%v", i, missing)
+		}
+	}
+}
+
+// At most 4 reads of one account run at a time. The deadline is long, so that every slowed read finishes.
+func TestConsoleListReadsFourMessagesOfAnAccountAtATime(t *testing.T) {
+	t.Cleanup(server.SetListReadDeadline(time.Minute))
+	f := consoleDaemon(t, everyWriteWaits, true)
+	for i := range 12 {
+		pend(t, f.d.s, "mail.trash", `{"ids":["m`+strconv.Itoa(i)+`"]}`)
+	}
+	f.api.mu.Lock()
+	f.api.screenDelay, f.api.maxScreening = 50*time.Millisecond, 0
+	f.api.mu.Unlock()
+	page := f.get(t, "/", nil).Body.String()
+	f.api.mu.Lock()
+	most := f.api.maxScreening
+	f.api.mu.Unlock()
+	if most > 4 || most == 0 || strings.Contains(page, "not available") {
+		t.Fatalf("%d reads at a time: %s", most, page)
+	}
+}
+
+// A meeting update shows its time change from the event's current time to the new one.
+func TestConsoleListShowsTheTimeChangeOfAMeetingUpdate(t *testing.T) {
+	f := consoleDaemon(t, everyWriteWaits, true)
+	sameDay := pend(t, f.d.s, "calendar.update", `{"id":"o","start":"2026-03-31T11:00:00Z","end":"2026-03-31T12:00:00Z","location":"Room 2"}`)[0]
+	otherDay := pend(t, f.d.s, "calendar.update", `{"id":"o","start":"2026-04-01T12:00:00+02:00"}`)[0]
+	page := f.get(t, "/", nil).Body.String()
+	for id, want := range map[string]string{
+		sameDay:  `<span class="k">Start, End, Location</span><span class="snip">10:00 → 11:00 · 11:00 → 12:00 · Room 2</span>`,
+		otherDay: `<span class="k">Start</span><span class="snip">Tue 31 Mar, 12:00 → Wed 1 Apr, 12:00</span>`,
+	} {
+		if row := rowOf(page, id); !strings.Contains(row, want) {
+			t.Errorf("row misses %q: %s", want, row)
+		}
+	}
 }
