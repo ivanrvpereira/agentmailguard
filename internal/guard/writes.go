@@ -2,6 +2,7 @@ package guard
 
 import (
 	"context"
+	"maps"
 	"slices"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/audit"
@@ -166,9 +167,7 @@ func (g *Guard) mutationCall(ctx context.Context, op audit.Operation, ids []stri
 		if err != nil {
 			return nil, err
 		}
-		for id, r := range policyHeld {
-			held[id] = r
-		}
+		maps.Copy(held, policyHeld)
 		allowed = policyAllowed
 	}
 	return g.audited(ctx, op, ids, held, allowed, opts, func(ids []string) ([]model.MutationResult, error) {
