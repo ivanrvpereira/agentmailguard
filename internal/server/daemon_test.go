@@ -80,12 +80,23 @@ func record(logins map[string]credentials.OAuth) *credentials.Record {
 }
 
 // fakeBackend is the credential backend of the tests: one record in memory, as the Keychain item or the file holds
-// it. readErr fails every read, writeErr every write, and panics makes every read panic.
+// it. readErr fails every read, writeErr every write, and panics makes every read panic. While hold is open, every
+// write waits for it to close, also past its context, as a write that waits for a Keychain prompt does.
 type fakeBackend struct {
 	mu                sync.Mutex
 	data              []byte // the record as JSON; nil: no record
 	readErr, writeErr error
 	panics            bool
+	hold              chan struct{}
+}
+
+// holdWrites makes every write wait until the returned release runs.
+func (b *fakeBackend) holdWrites() (release func()) {
+	hold := make(chan struct{})
+	b.mu.Lock()
+	b.hold = hold
+	b.mu.Unlock()
+	return sync.OnceFunc(func() { close(hold) })
 }
 
 func (b *fakeBackend) Read(context.Context) (credentials.Record, error) {
@@ -105,6 +116,12 @@ func (b *fakeBackend) Read(context.Context) (credentials.Record, error) {
 	return r, err
 }
 func (b *fakeBackend) Write(_ context.Context, r credentials.Record) error {
+	b.mu.Lock()
+	hold := b.hold
+	b.mu.Unlock()
+	if hold != nil {
+		<-hold
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.writeErr != nil {

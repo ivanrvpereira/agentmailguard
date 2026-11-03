@@ -1,10 +1,23 @@
 # Verification and limits
 
 Tests run offline: real loopback HTTP, temporary homes, the fake provider, fake Graph, Gmail, and Jev endpoints, and a fake Keychain `Platform`.
-No test needs real mailbox data, a browser, OpenRouter, or Keychain access. CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs `make`, `go fix -diff`, `staticcheck`, `govulncheck`, and a Gitleaks scan of the whole history on Linux, and `make` on macOS, which builds and tests the macOS-only Keychain backend (`internal/credentials/keychain_darwin.go`).
+No test needs real mailbox data, OpenRouter, or Keychain access.
+Only the optional console browser tests need a browser.
+CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs `make`, `go fix -diff`, `staticcheck`, `govulncheck`, and a Gitleaks scan of the whole history on Linux, and `make` on macOS, which builds and tests the macOS-only Keychain backend (`internal/credentials/keychain_darwin.go`).
 
 The end-to-end tests in `internal/e2e` build the real `amg` and `amgd` binaries and run `amgd serve` as its own process, on a temporary home with a fake account, the fake screening engine, and the file credential backend. The other `amgd` commands and `amg` run as separate processes, and the tests approve and deny pending actions through the approval console over HTTP.
 After each test, the daemon log, `audit.jsonl`, and every column of `cache.db` except the `args` and `draft` columns of `pending` must contain no seeded name, subject, body, or address.
+
+The approval console tests in `internal/server` drive the console handler over HTTP, on a real daemon with a fake Graph endpoint and a fake Jev endpoint.
+They check the pages, redirects, headers, cookies, audit records, and the writes that reach the fake provider.
+The console browser tests (`TestBrowserConsole...` in `internal/server/console_browser_test.go`) run the same handler in headless Chrome through chromedp.
+They run only with `AMG_BROWSER_TESTS=1`, and they skip when no Chrome or Chromium is installed, so `make` skips them.
+CI runs them in a separate job on `ubuntu-24.04`, which fails if Chrome is missing.
+They cover the console script: Auto-refresh pauses while a box is ticked or a row, Recents, or the menu is open, and reloads after the idle time with the filters only.
+They also cover the header checkbox (checked and partly checked), Approve that waits for `I reviewed it`, and the waiting count in the tab title.
+They check that the Rendered preview runs no script of the body, loads nothing remote, and that a click on a link or a submit button in it goes nowhere, that an HTML write from a script fails, and that no page logs another policy violation.
+They check at phone, tablet, and desktop widths that the rows keep room for the event and the subject, that Recents rows keep their Score, and that the page does not scroll sideways.
+Only a manual check in a browser covers the rest of the console layout, dark mode, and the pages with the script off.
 
 Not verified against real providers or services:
 

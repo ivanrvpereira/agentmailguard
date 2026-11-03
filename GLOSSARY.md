@@ -147,6 +147,10 @@ _Avoid_: content check, outbound screening
 A write action that the policy or the action check holds until a person approves or denies it. It keeps the name after the decision, with its state: pending, running, done, denied, withdrawn, or failed.
 _Avoid_: pending item, item, approval request, queued action
 
+**Needs review**:
+The state of a pending action that the action check marked as a risk, or whose action check failed. Only a person who confirms that they reviewed it can approve it.
+_Avoid_: flagged, flagged action ("flag" is the mail follow-up flag)
+
 **Approval console**:
 The password-protected web page where a person approves or denies pending actions. It is the only place that can do so.
 _Avoid_: dashboard, admin UI

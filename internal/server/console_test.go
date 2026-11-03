@@ -2,10 +2,14 @@ package server_test
 
 import (
 	"context"
+	"encoding/json"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -46,7 +50,25 @@ func consoleHash(t *testing.T) string {
 // config is appended to the configuration.
 func consoleDaemon(t *testing.T, config string, password bool) *consoleFixture {
 	t.Helper()
-	r := record(map[string]credentials.OAuth{"m365/" + workEmail: m365Login(m365Grant + " Calendars.ReadWrite Mail.Send")})
+	return newConsoleFixture(t, config, password, false)
+}
+
+// gmailConsole is consoleDaemon with the console password and a second account, the Gmail account gmail, whose
+// provider calls reach no server.
+func gmailConsole(t *testing.T, config string) *consoleFixture {
+	t.Helper()
+	return newConsoleFixture(t, config, true, true)
+}
+
+func newConsoleFixture(t *testing.T, config string, password, gmail bool) *consoleFixture {
+	t.Helper()
+	logins := map[string]credentials.OAuth{"m365/" + workEmail: m365Login(m365Grant + " Calendars.ReadWrite Mail.Send")}
+	accounts := workTable
+	if gmail {
+		logins["gmail/"+gmailEmail] = gmailLogin(gmailWriteGrant)
+		accounts += gmailTable
+	}
+	r := record(logins)
 	if password {
 		r.ConsoleHash = consoleHash(t)
 	}
@@ -54,7 +76,7 @@ func consoleDaemon(t *testing.T, config string, password bool) *consoleFixture {
 	graph := httptest.NewServer(http.HandlerFunc(api.graph))
 	t.Cleanup(graph.Close)
 	f := &consoleFixture{api: api, now: time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC)}
-	f.d = startDaemon(t, daemonSetup{config: "default_account = 'work'\n" + workTable + config, record: r, jev: api,
+	f.d = startDaemon(t, daemonSetup{config: "default_account = 'work'\n" + accounts + config, record: r, jev: api,
 		options: server.Options{M365: m365Options(graph.URL), Now: func() time.Time { return f.now }}})
 	f.console = f.d.s.Console()
 	return f
@@ -66,10 +88,16 @@ func (f *consoleFixture) get(t *testing.T, path string, change func(*http.Reques
 	return f.send(t, httptest.NewRequest(http.MethodGet, path, nil), change)
 }
 
-// decide posts a decision form for the item as a signed-in browser on the console address.
+// decide posts a decision form for the action as a signed-in browser on the console address.
 func (f *consoleFixture) decide(t *testing.T, id, decision string, change func(*http.Request)) *httptest.ResponseRecorder {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodPost, "/a/"+id, strings.NewReader("decision="+decision))
+	return f.post(t, "/a/"+id, "decision="+decision, change)
+}
+
+// post posts the form body to path as a signed-in browser on the console address.
+func (f *consoleFixture) post(t *testing.T, path, body string, change func(*http.Request)) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.Header.Set("Origin", "http://"+consoleHost)
 	return f.send(t, r, change)
@@ -242,17 +270,26 @@ func TestConsoleAcceptsOnlyItsOwnHostNames(t *testing.T) {
 	}
 }
 
+// consoleCSP is the content security policy of every console response: only the console's own script, and no
+// Trusted Types policy, so that every HTML sink throws.
+const consoleCSP = "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; require-trusted-types-for 'script'; trusted-types 'none'"
+
 func TestConsoleResponsesCarryTheSecurityHeaders(t *testing.T) {
-	f := consoleDaemon(t, "", true)
-	for name, change := range map[string]func(*http.Request){
-		"page":           nil,
-		"no credentials": func(r *http.Request) { r.Header.Del("Authorization") },
-		"foreign host":   func(r *http.Request) { r.Host = "evil.example" },
-		"not found":      func(r *http.Request) { r.URL.Path = "/missing" },
+	f := consoleDaemon(t, draftApprove, true)
+	id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
+	for name, w := range map[string]*httptest.ResponseRecorder{
+		"page":             f.get(t, "/", nil),
+		"action page":      f.get(t, "/a/"+id, nil),
+		"script":           f.get(t, "/assets/console.js", nil),
+		"refresh redirect": f.get(t, "/?refresh=10m", nil),
+		"no credentials":   f.get(t, "/", func(r *http.Request) { r.Header.Del("Authorization") }),
+		"foreign host":     f.get(t, "/", func(r *http.Request) { r.Host = "evil.example" }),
+		"not found":        f.get(t, "/missing", nil),
+		"foreign origin":   f.decide(t, id, "deny", func(r *http.Request) { r.Header.Set("Origin", "http://evil.example") }),
+		"decision":         f.decide(t, id, "deny", nil),
 	} {
-		w := f.get(t, "/", change)
 		for header, want := range map[string]string{
-			"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+			"Content-Security-Policy": consoleCSP,
 			"X-Content-Type-Options":  "nosniff",
 			"Referrer-Policy":         "same-origin",
 			"Cache-Control":           "no-store",
@@ -265,13 +302,21 @@ func TestConsoleResponsesCarryTheSecurityHeaders(t *testing.T) {
 	}
 }
 
-// hrefs are the link targets of a page; consoleLink is a link to the console's own list or item page.
+// hrefs are the link targets of a page; consoleLink is a link to the console's own list page, with or without its
+// filters and an Auto-refresh choice or a table to tick, or action page. tags are the tags of a page, and quoted the attribute values in a tag.
 var (
 	hrefs       = regexp.MustCompile(`href="([^"]*)"`)
-	consoleLink = regexp.MustCompile(`^/(a/[0-9a-f]{32})?$`)
+	consoleLink = regexp.MustCompile(`^/(a/[0-9a-f]{32}|\?(account=[A-Za-z0-9_-]+&amp;)?(refresh=(5m|10m|30m|1h|off)&amp;)?(select=(messages|meetings|mailbox)&amp;)?(account=[A-Za-z0-9_-]+|refresh=(5m|10m|30m|1h|off)|select=(messages|meetings|mailbox)|status=(review|others)))?$`)
+	tags        = regexp.MustCompile(`<[^>]*>`)
+	quoted      = regexp.MustCompile(`"[^"]*"|'[^']*'`)
+	eventAttr   = regexp.MustCompile(`(?i)\son[a-z]+\s*=`)
 )
 
-// onlyConsoleLinks fails when a page links anywhere but the console's own list and item pages.
+// consoleScriptTag is the one script tag of every console page.
+const consoleScriptTag = `<script type="module" src="/assets/console.js"></script>`
+
+// onlyConsoleLinks fails when a page links anywhere but the console's own pages, has a script but the one console
+// script, or has an event handler attribute.
 func onlyConsoleLinks(t *testing.T, page string) {
 	t.Helper()
 	for _, m := range hrefs.FindAllStringSubmatch(page, -1) {
@@ -279,72 +324,19 @@ func onlyConsoleLinks(t *testing.T, page string) {
 			t.Fatalf("foreign link %q in %s", m[1], page)
 		}
 	}
-	if strings.Contains(page, "<script") || strings.Contains(page, "<a href=\"http") {
+	if strings.Count(page, consoleScriptTag) != 1 || strings.Count(strings.ToLower(page), "<script") != 1 || strings.Contains(page, "<a href=\"http") {
 		t.Fatalf("active content in %s", page)
 	}
-}
-
-func TestConsoleListShowsWaitingActionsNewestFirstThenResolved(t *testing.T) {
-	f := consoleDaemon(t, draftApprove, true)
-	add := func(name string) string {
-		t.Helper()
-		id := pend(t, f.d.s, "draft.new", `{"to":["`+name+`@example.test"],"subject":"`+name+`-subject","body":"`+name+`-body"}`)[0]
-		f.advance(time.Minute)
-		return id
-	}
-	older, denied, newer := add("older"), add("denied"), add("newer")
-	if err := f.d.s.Deny(context.Background(), denied); err != nil {
-		t.Fatal(err)
-	}
-	w := f.get(t, "/", nil)
-	page := w.Body.String()
-	if w.Code != 200 || !strings.HasPrefix(w.Header().Get("Content-Type"), "text/html") {
-		t.Fatalf("%d %s", w.Code, page)
-	}
-	positions := []int{}
-	for _, id := range []string{newer, older, denied} {
-		positions = append(positions, strings.Index(page, `href="/a/`+id+`"`))
-	}
-	if positions[0] < 0 || positions[0] > positions[1] || positions[1] > positions[2] {
-		t.Fatalf("order newer, older, denied: positions=%v page=%s", positions, page)
-	}
-	for _, want := range []string{workEmail, "draft.new", "older@example.test", "older-subject", "pending", "denied", "3m", "1m"} {
-		if !strings.Contains(page, want) {
-			t.Errorf("list misses %q: %s", want, page)
-		}
-	}
-	if strings.Contains(page, "-body") {
-		t.Errorf("list shows a body: %s", page)
-	}
-	onlyConsoleLinks(t, page)
-}
-
-// Optional attendees receive the invitation, so the list shows them with the required ones.
-func TestConsoleListShowsOptionalAttendeesAsRecipients(t *testing.T) {
-	f := consoleDaemon(t, approveAll, true)
-	pend(t, f.d.s, "calendar.invite", `{"to":["required@example.test"],"optional":["optional@example.test"],"subject":"s","body":"","start":"2026-04-01T09:00:00Z","end":"2026-04-01T10:00:00Z"}`)
-	if page := f.get(t, "/", nil).Body.String(); !strings.Contains(page, "required@example.test, optional@example.test") {
-		t.Fatalf("list misses the recipients: %s", page)
-	}
-}
-
-// A reply goes to the original's recipients too, which only the item page reads, so the list marks a reply row as a
-// reply or a reply all before the cc and bcc of the request.
-func TestConsoleListMarksReplyRows(t *testing.T) {
-	f := consoleDaemon(t, draftApprove, true)
-	pend(t, f.d.s, "draft.reply", `{"id":"g","body":"b","all":true,"cc":["c@example.test"],"bcc":["d@example.test"]}`)
-	pend(t, f.d.s, "draft.reply", `{"id":"g","body":"b"}`)
-	page := f.get(t, "/", nil).Body.String()
-	for _, want := range []string{"<td>reply all; cc: c@example.test; bcc (hidden): d@example.test</td>", "<td>reply</td>"} {
-		if !strings.Contains(page, want) {
-			t.Errorf("list misses %q: %s", want, page)
+	for _, tag := range tags.FindAllString(page, -1) {
+		if eventAttr.MatchString(quoted.ReplaceAllString(tag, `""`)) {
+			t.Fatalf("event handler attribute in %s", tag)
 		}
 	}
 }
 
-// The item page shows the stored arguments as text and the referenced message through the guarded read,
-// without its body.
-func TestConsoleItemShowsStoredArgumentsAsTextAndTheMessageSummary(t *testing.T) {
+// The action page shows the action label and operation, the account alias and key, the stored arguments as text,
+// and the referenced message through the guarded read, without its body.
+func TestConsoleActionShowsStoredArgumentsAsTextAndTheMessageSummary(t *testing.T) {
 	f := consoleDaemon(t, draftApprove, true)
 	id := pend(t, f.d.s, "draft.reply", `{"id":"g","body":"<script>alert(1)</script> see https://evil.example/x"}`)[0]
 	w := f.get(t, "/a/"+id, nil)
@@ -352,42 +344,69 @@ func TestConsoleItemShowsStoredArgumentsAsTextAndTheMessageSummary(t *testing.T)
 	if w.Code != 200 {
 		t.Fatalf("%d %s", w.Code, page)
 	}
-	for _, want := range []string{workEmail, "draft.reply", "pending", "&lt;script&gt;alert(1)&lt;/script&gt; see https://evil.example/x", "private-subject-g", "sender@example.test", "green", "2026-03-30", `name="decision" value="approve"`, `name="decision" value="deny"`} {
+	for _, want := range []string{
+		`<h1>Draft reply <span class="opname">draft.reply</span></h1>`,
+		`<dt>State</dt><dd class="state pending">Pending</dd>`,
+		"<dt>Account</dt><dd>work · " + workEmail + "</dd>",
+		"<dt>Created</dt><dd>Tue 31 Mar 2026, 12:00</dd>",
+		`<dt>ID</dt><dd><span class="ln">g</span></dd>`,
+		"<figcaption>Body, plain text as the agent wrote it</figcaption><pre>&lt;script&gt;alert(1)&lt;/script&gt; see https://evil.example/x</pre>",
+		"private-subject-g", "sender@example.test", "green", `<dt>Received</dt><dd><span class="ln">Mon 30 Mar 2026, 10:00</span></dd>`,
+		`<p class="back"><a href="/">All approvals</a></p>`,
+		`name="decision" value="approve"`, `name="decision" value="deny"`,
+	} {
 		if !strings.Contains(page, want) {
-			t.Errorf("item page misses %q", want)
+			t.Errorf("action page misses %q: %s", want, page)
 		}
 	}
-	if strings.Contains(page, "private-body-g") || strings.Contains(page, "example.test/report") {
-		t.Errorf("item page shows the message body: %s", page)
+	if strings.Contains(page, "private-body-g") || strings.Contains(page, "example.test/report") || strings.Contains(page, "<iframe") {
+		t.Errorf("action page shows the message body or a frame: %s", page)
 	}
 	onlyConsoleLinks(t, page)
 }
 
-// The item page shows the Jev action check result; an action without a check shows none. The list does not show it.
-func TestConsoleItemShowsTheJevCheck(t *testing.T) {
-	f := consoleDaemon(t, draftApprove, true)
+// The action page shows the same Score as the list's open row: the value and its label, the fixed code of a failed
+// check after the label. A trash gets no action check, so its page has no Score, whatever the verdict of its message.
+// It never names the screening service.
+func TestConsoleActionShowsTheScore(t *testing.T) {
+	f := consoleDaemon(t, everyWriteWaits, true)
 	for _, tc := range []struct {
 		score float64
 		want  string
 	}{
-		{0.62, "Jev: flagged (score 0.62)"},
-		{0.08, "Jev: not flagged (score 0.08)"},
-		{2, "Jev: check failed (ValidationError)"},
+		{0.62, `<dt>Score</dt><dd class="bad">▲ 0.62 · Needs review</dd>`},
+		{0.08, `<dt>Score</dt><dd>0.08 · Checked</dd>`},
+		{2, `<dt>Score</dt><dd class="bad">▲ error · Needs review · ValidationError</dd>`},
 	} {
-		f.api.mu.Lock()
-		f.api.actionScore = tc.score
-		f.api.mu.Unlock()
+		f.setScore(tc.score)
 		id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
-		if page := f.get(t, "/a/"+id, nil).Body.String(); !strings.Contains(page, tc.want) {
-			t.Errorf("item page misses %q: %s", tc.want, page)
+		page := f.get(t, "/a/"+id, nil).Body.String()
+		if !strings.Contains(page, tc.want) {
+			t.Errorf("action page misses %q: %s", tc.want, page)
+		}
+		if m := oldWord(page); m != "" {
+			t.Errorf("action page shows %q: %s", m, page)
 		}
 	}
-	id := pend(t, f.d.s, "mail.trash", `{"ids":["g"]}`)[0]
-	if page := f.get(t, "/a/"+id, nil).Body.String(); strings.Contains(page, "Jev") {
-		t.Errorf("unchecked action shows a Jev result: %s", page)
-	}
-	if page := f.get(t, "/", nil).Body.String(); strings.Contains(page, "Jev") {
-		t.Errorf("list shows a Jev result: %s", page)
+	for _, tc := range []struct{ op, params, want string }{
+		{"draft.delete", `{"id":"draft-1"}`, `<dt>Score</dt><dd>— · Not checked</dd>`},
+		{"mail.trash", `{"ids":["g"]}`, ""},
+		{"mail.trash", `{"ids":["r"]}`, ""},
+		{"mail.trash", `{"ids":["s"]}`, ""},
+		{"mail.trash", `{"ids":["gone"]}`, ""},
+	} {
+		id := pend(t, f.d.s, tc.op, tc.params)[0]
+		w := f.get(t, "/a/"+id, nil)
+		page := w.Body.String()
+		if w.Code != 200 || !strings.Contains(page, "<dt>Account</dt>") {
+			t.Errorf("%s %s: no action page: %d %s", tc.op, tc.params, w.Code, page)
+		}
+		if tc.want == "" && (strings.Contains(page, "<dt>Score</dt>") || !strings.Contains(page, "<h1>Trash ")) || tc.want != "" && !strings.Contains(page, tc.want) {
+			t.Errorf("%s %s: action page Score is not %q: %s", tc.op, tc.params, tc.want, page)
+		}
+		if m := oldWord(page); m != "" {
+			t.Errorf("%s %s: action page shows %q: %s", tc.op, tc.params, m, page)
+		}
 	}
 }
 
@@ -403,24 +422,26 @@ func fakeConsole(t *testing.T, home, config string) *consoleFixture {
 
 const draftApproveOnly = "[policy]\nmail_draft='approve'\n"
 
-// A check made by the fake engine is labeled as a keyword check, never as a Jev check.
-func TestConsoleItemLabelsTheFakeCheck(t *testing.T) {
+// A check made by the fake engine carries the fake tag before the value, and the page never names the screening
+// service.
+func TestConsoleActionTagsTheFakeCheck(t *testing.T) {
 	f := fakeConsole(t, fakeHome(t), fakeScreen+draftApproveOnly)
 	for body, want := range map[string]string{
-		"See you at noon":        "Fake check (keywords only): not flagged (score 0.05)",
-		"Your new password is x": "Fake check (keywords only): flagged (score 0.90)",
-		"SCREENFAIL":             "Fake check (keywords only): check failed (TypeSafeAPIError 503)",
+		"See you at noon":        `<dt>Score</dt><dd><span class="fake">fake</span>0.05 · Checked</dd>`,
+		"Your new password is x": `<dt>Score</dt><dd class="bad"><span class="fake">fake</span>▲ 0.90 · Needs review</dd>`,
+		"SCREENFAIL":             `<dt>Score</dt><dd class="bad"><span class="fake">fake</span>▲ error · Needs review · TypeSafeAPIError 503</dd>`,
 	} {
 		id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"`+body+`"}`)[0]
-		if page := f.get(t, "/a/"+id, nil).Body.String(); !strings.Contains(page, want) || strings.Contains(page, "Jev") {
-			t.Errorf("%q: item page misses %q or names Jev: %s", body, want, page)
+		page := f.get(t, "/a/"+id, nil).Body.String()
+		if !strings.Contains(page, want) || oldWord(page) != "" || strings.Contains(page, "keywords") {
+			t.Errorf("%q: action page misses %q or names the engine: %s", body, want, page)
 		}
 	}
 }
 
-// The label follows the engine that made the check, not the engine of the running server: an item checked by
-// the fake engine keeps its label after a restart with Jev screening.
-func TestConsoleItemKeepsTheFakeLabelAfterARestartWithJev(t *testing.T) {
+// The tag follows the engine that made the check, not the engine of the running server: an action checked by the
+// fake engine keeps its tag after a restart with Jev screening.
+func TestConsoleActionKeepsTheFakeTagAfterARestartWithJev(t *testing.T) {
 	home := fakeHome(t)
 	before := fakeConsole(t, home, fakeScreen+draftApproveOnly)
 	id := pend(t, before.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"See you at noon"}`)[0]
@@ -429,8 +450,115 @@ func TestConsoleItemKeepsTheFakeLabelAfterARestartWithJev(t *testing.T) {
 	}
 	after := fakeConsole(t, home, draftApproveOnly)
 	page := after.get(t, "/a/"+id, nil).Body.String()
-	if want := "Fake check (keywords only): not flagged (score 0.05)"; !strings.Contains(page, want) || strings.Contains(page, "Jev") {
-		t.Fatalf("item page misses %q or names Jev: %s", want, page)
+	if want := `<dt>Score</dt><dd><span class="fake">fake</span>0.05 · Checked</dd>`; !strings.Contains(page, want) || oldWord(page) != "" {
+		t.Fatalf("action page misses %q or names the engine: %s", want, page)
+	}
+}
+
+// iframes are the frame tags of a page; frameTag is a frame whose attribute values hold no quote or angle bracket,
+// so that no value can end its attribute or the tag, and frameAttr one of its attributes.
+var (
+	iframes   = regexp.MustCompile(`<iframe[^>]*>`)
+	frameTag  = regexp.MustCompile(`^<iframe( [a-z]+="[^"<>]*")*>$`)
+	frameAttr = regexp.MustCompile(` ([a-z]+)="([^"<>]*)"`)
+)
+
+// renderedCaption is the fixed caption of the Rendered preview.
+const renderedCaption = "<figcaption>Rendered preview: links, images, and forms are off. Hidden text shows only in the source.</figcaption>"
+
+// renderedFrame is the attributes of the one frame of an action page, or fails.
+func renderedFrame(t *testing.T, page string) map[string]string {
+	t.Helper()
+	frames := iframes.FindAllString(page, -1)
+	if len(frames) != 1 || !frameTag.MatchString(frames[0]) {
+		t.Fatalf("frames=%q", frames)
+	}
+	attrs := map[string]string{}
+	for _, m := range frameAttr.FindAllStringSubmatch(frames[0], -1) {
+		attrs[m[1]] = m[2]
+	}
+	return attrs
+}
+
+// An HTML body shows as a Rendered preview above its escaped source: one frame with an empty sandbox, no referrer,
+// a title, and the body as an escaped srcdoc that hostile text cannot leave, under the fixed caption. Approve and
+// Deny come after the source. A plain-text body gets no frame.
+func TestConsoleActionShowsAnHTMLBodyInASandboxedFrameAboveItsSource(t *testing.T) {
+	f := consoleDaemon(t, everyWriteWaits, true)
+	body := `<p class="x">Hi &amp; bye</p>" onload="alert(1)" x='<script>alert(1)</script><img src=x onerror=alert(1)>`
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := pend(t, f.d.s, "mail.send", `{"to":["a@example.test"],"subject":"s","html":true,"body":`+string(b)+`}`)[0]
+	page := f.get(t, "/a/"+id, nil).Body.String()
+	attrs := renderedFrame(t, page)
+	if attrs["sandbox"] != "" || attrs["referrerpolicy"] != "no-referrer" || attrs["title"] == "" || html.UnescapeString(attrs["srcdoc"]) != body {
+		t.Fatalf("frame=%q", attrs)
+	}
+	if _, ok := attrs["sandbox"]; !ok {
+		t.Fatalf("frame has no sandbox: %q", attrs)
+	}
+	source := "<figcaption>Body, HTML source as the agent wrote it</figcaption><pre>&lt;p class=&#34;x&#34;&gt;Hi &amp;amp; bye&lt;/p&gt;&#34; onload=&#34;alert(1)&#34; x=&#39;&lt;script&gt;"
+	caption, frame, pre, decision := strings.Index(page, renderedCaption), strings.Index(page, "<iframe"), strings.Index(page, source), strings.Index(page, `name="decision"`)
+	if caption < 0 || frame < caption || pre < frame || decision < pre {
+		t.Fatalf("caption=%d frame=%d source=%d decision=%d: %s", caption, frame, pre, decision, page)
+	}
+	if strings.Contains(page, "<img") || strings.Contains(strings.Replace(page, consoleScriptTag, "", 1), "<script") {
+		t.Fatalf("body is markup outside the frame: %s", page)
+	}
+	plain := pend(t, f.d.s, "mail.send", `{"to":["a@example.test"],"subject":"s","body":"<p>Hi</p>"}`)[0]
+	page = f.get(t, "/a/"+plain, nil).Body.String()
+	if strings.Contains(page, "<iframe") || strings.Contains(page, "Rendered preview") || !strings.Contains(page, "<pre>&lt;p&gt;Hi&lt;/p&gt;</pre>") {
+		t.Fatalf("plain-text body: %s", page)
+	}
+}
+
+// A draft send whose stored draft is HTML shows the draft body in the Rendered preview too.
+func TestConsoleActionShowsTheRenderedPreviewOfAnHTMLDraftSend(t *testing.T) {
+	f := fakeConsole(t, fakeHome(t), fakeScreen+"[policy]\nmail_draft='allow'\nmail_send='approve'\n")
+	body := "<p>See you at <b>noon</b></p>"
+	status, made := accountRPC(t, f.d.s, "draft.new", "", `{"to":["a@example.test"],"subject":"s","html":true,"body":"`+body+`"}`)
+	var draft struct{ ID string }
+	if status != 200 || json.Unmarshal([]byte(made), &draft) != nil || draft.ID == "" {
+		t.Fatalf("draft: %d %s", status, made)
+	}
+	id := pend(t, f.d.s, "draft.send", `{"id":"`+draft.ID+`"}`)[0]
+	page := f.get(t, "/a/"+id, nil).Body.String()
+	if attrs := renderedFrame(t, page); html.UnescapeString(attrs["srcdoc"]) != body || !strings.Contains(page, renderedCaption) {
+		t.Fatalf("frame=%q page=%s", attrs, page)
+	}
+	for _, want := range []string{"<figcaption>Body, HTML source as the agent wrote it</figcaption><pre>&lt;p&gt;See you at &lt;b&gt;noon&lt;/b&gt;&lt;/p&gt;</pre>",
+		"The draft as the daemon read it for the action check when the agent asked to send it."} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page misses %q: %s", want, page)
+		}
+	}
+}
+
+// Agent text renders as literal text everywhere on the action page: request fields, the body and its frame, the
+// meeting comment, and the stored draft fields. The page has no script, no event handler attribute, and links only to
+// the console.
+func TestConsoleActionShowsHostileAgentTextAsLiteralText(t *testing.T) {
+	f := consoleDaemon(t, everyWriteWaits, true)
+	h, err := json.Marshal(hostile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	escaped := `&lt;img src=x onerror=alert(1)&gt; {{7*7}} ${7*7}`
+	for _, tc := range []struct{ op, params string }{
+		{"mail.send", `{"to":[` + string(h) + `],"cc":[` + string(h) + `],"subject":` + string(h) + `,"body":` + string(h) + `}`},
+		{"draft.new", `{"to":["a@example.test"],"subject":` + string(h) + `,"html":true,"body":` + string(h) + `}`},
+		{"calendar.invite", `{"to":[` + string(h) + `],"subject":` + string(h) + `,"body":` + string(h) + `,"location":` + string(h) + `,"start":"2026-04-01T09:00:00Z","end":"2026-04-01T10:00:00Z"}`},
+		{"calendar.respond", `{"id":"e","response":"decline","comment":` + string(h) + `}`},
+		{"mail.reply", `{"id":"g","cc":[` + string(h) + `],"bcc":[` + string(h) + `],"body":` + string(h) + `}`},
+	} {
+		id := pend(t, f.d.s, tc.op, tc.params)[0]
+		page := f.get(t, "/a/"+id, nil).Body.String()
+		if strings.Contains(page, "<img") || !strings.Contains(page, escaped) {
+			t.Errorf("%s: hostile text is markup or missing: %s", tc.op, page)
+		}
+		onlyConsoleLinks(t, page)
 	}
 }
 
@@ -451,22 +579,22 @@ func TestFakeCheckMarkStaysOutOfAgentResponsesAndTheAudit(t *testing.T) {
 	}
 }
 
-func TestConsoleItemShowsTheReferencedEvent(t *testing.T) {
+func TestConsoleActionShowsTheReferencedEvent(t *testing.T) {
 	f := consoleDaemon(t, draftApprove, true)
 	id := pend(t, f.d.s, "calendar.respond", `{"id":"e","response":"tentative","comment":"CANARY comment"}`)[0]
 	page := f.get(t, "/a/"+id, nil).Body.String()
-	for _, want := range []string{"calendar.respond", "tentative", "CANARY comment", "private-subject-event", "2026-03-31T10:00:00", "2026-03-31T11:00:00"} {
+	for _, want := range []string{"calendar.respond", "tentative", "CANARY comment", "private-subject-event", `<dt>Start</dt><dd><span class="ln">Tue 31 Mar 2026, 10:00</span></dd>`, `<dt>End</dt><dd><span class="ln">Tue 31 Mar 2026, 11:00</span></dd>`} {
 		if !strings.Contains(page, want) {
-			t.Errorf("item page misses %q: %s", want, page)
+			t.Errorf("action page misses %q: %s", want, page)
 		}
 	}
 	if strings.Contains(page, "private-body-event") {
-		t.Errorf("item page shows the event body: %s", page)
+		t.Errorf("action page shows the event body: %s", page)
 	}
 }
 
 // A referenced message that cannot be read does not block the decision.
-func TestConsoleItemStillOffersTheDecisionWhenTheMessageIsUnavailable(t *testing.T) {
+func TestConsoleActionStillOffersTheDecisionWhenTheMessageIsUnavailable(t *testing.T) {
 	f := consoleDaemon(t, draftApprove, true)
 	id := pend(t, f.d.s, "mail.trash", `{"ids":["gone"]}`)[0]
 	page := f.get(t, "/a/"+id, nil).Body.String()
@@ -510,7 +638,7 @@ func TestConsoleApproveRunsTheActionOnceAndShowsDone(t *testing.T) {
 		t.Fatalf("approve: %d %q writes=%d", w.Code, w.Header().Get("Location"), f.writes())
 	}
 	page := f.get(t, "/a/"+id, nil).Body.String()
-	if !strings.Contains(page, `>done<`) || !strings.Contains(page, "draft-1") || strings.Contains(page, `value="approve"`) {
+	if !strings.Contains(page, `<dd class="state done">Done</dd>`) || !strings.Contains(page, "draft-1") || strings.Contains(page, `value="approve"`) {
 		t.Fatalf("page after approve=%s", page)
 	}
 	w = f.decide(t, id, "approve", nil)
@@ -529,11 +657,116 @@ func TestConsoleDenyRunsNothing(t *testing.T) {
 		t.Fatalf("deny: %d", w.Code)
 	}
 	page := f.get(t, "/a/"+id, nil).Body.String()
-	if !strings.Contains(page, `>denied<`) || strings.Contains(page, `value="approve"`) || f.writes() != 0 {
+	if !strings.Contains(page, `<dd class="state denied">Denied</dd>`) || strings.Contains(page, `value="approve"`) || f.writes() != 0 {
 		t.Fatalf("writes=%d page=%s", f.writes(), page)
 	}
 	if w := f.decide(t, id, "approve", nil); w.Code != 409 || f.writes() != 0 {
 		t.Fatalf("approve after deny: %d writes=%d", w.Code, f.writes())
+	}
+}
+
+// approvalStates are the states of the approval records of the action in the audit log, in order.
+func (f *consoleFixture) approvalStates(t *testing.T, id string) []string {
+	t.Helper()
+	_, records := auditOf(t, f.d.home)
+	out := []string{}
+	for _, r := range records {
+		if r["event"] == "approval" && r["approval_id"] == id {
+			out = append(out, r["state"].(string))
+		}
+	}
+	return out
+}
+
+// Approving an action that needs review takes the confirm field of the "I reviewed it" box: without it the console
+// refuses and nothing runs or is recorded; with it the action runs once. Deny never needs it, nor does a Mailbox
+// operation, even of a red message.
+func TestConsoleApproveOfAnActionThatNeedsReviewNeedsTheConfirm(t *testing.T) {
+	f := consoleDaemon(t, everyWriteWaits, true)
+	f.setScore(.62)
+	risk := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
+	denied := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
+	f.setScore(2)
+	failed := pend(t, f.d.s, "calendar.respond", `{"id":"e","response":"decline","comment":"c"}`)[0]
+	f.setScore(.1)
+	trash := pend(t, f.d.s, "mail.trash", `{"ids":["r"]}`)[0]
+	for _, id := range []string{risk, failed} {
+		for body, want := range map[string]string{
+			"decision=approve":                                       "review required",
+			"decision=approve&confirm=yes":                           "invalid request",
+			"decision=approve&confirm=":                              "invalid request",
+			"decision=approve&confirm=flagged&confirm=flagged":       "invalid request",
+			"decision=approve&return=%2F&return=%2F&confirm=flagged": "invalid request",
+		} {
+			if w := f.post(t, "/a/"+id, body, nil); w.Code != 400 || strings.TrimSpace(w.Body.String()) != want {
+				t.Errorf("%q: %d %s; want 400 %s", body, w.Code, w.Body, want)
+			}
+		}
+		assertState(t, f.d.s, id, `{"state":"pending"}`)
+		if got := f.approvalStates(t, id); !slices.Equal(got, []string{"created"}) || f.writes() != 0 {
+			t.Fatalf("refused approve: records=%q writes=%d", got, f.writes())
+		}
+	}
+	if w := f.post(t, "/a/"+risk, "decision=approve&confirm=flagged", nil); w.Code != 303 || w.Header().Get("Location") != "/a/"+risk || f.writes() != 1 {
+		t.Fatalf("confirmed approve: %d %q writes=%d", w.Code, w.Header().Get("Location"), f.writes())
+	}
+	if w := f.post(t, "/a/"+risk, "decision=approve&confirm=flagged", nil); w.Code != 409 || f.writes() != 1 {
+		t.Fatalf("second confirmed approve: %d writes=%d", w.Code, f.writes())
+	}
+	if got := f.approvalStates(t, risk); !slices.Equal(got, []string{"created", "approved", "done"}) {
+		t.Fatalf("records=%q", got)
+	}
+	if w := f.decide(t, denied, "deny", nil); w.Code != 303 || f.writes() != 1 {
+		t.Fatalf("deny: %d writes=%d", w.Code, f.writes())
+	}
+	assertState(t, f.d.s, denied, `{"state":"denied"}`)
+	if w := f.decide(t, trash, "approve", nil); w.Code != 303 || f.writes() != 2 {
+		t.Fatalf("trash of a red message: %d writes=%d %s", w.Code, f.writes(), w.Body)
+	}
+}
+
+// hostileReturns are return fields that are not a list page of the console with valid filters, or are too long.
+var hostileReturns = []string{
+	"//evil.example", `/\evil.example`, "http://evil.example", "https://evil.example/?account=work", "/?x=1&select=messages",
+	"/a/0123456789abcdef0123456789abcdef", "%2F%2Fevil", "/%2F%2Fevil", "/?account=<script>", "/?account=work\r\nLocation: http://evil.example",
+	"/?account=work\x00", "/?account=work&account=work", "/?account=work//evil", "/?account=work" + strings.Repeat("&", 600), "", " /", "?account=work",
+}
+
+// A decision from the list returns to the list with its filters, rebuilt from the validated filters so that nothing
+// else of the field reaches the redirect, select included. Any other return field is ignored: the decision returns
+// to the action page, and the response never repeats the field.
+func TestConsoleDecisionReturnsToTheListWithItsFilters(t *testing.T) {
+	f := consoleDaemon(t, draftApprove, true)
+	decide := func(ret string) *httptest.ResponseRecorder {
+		t.Helper()
+		id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
+		w := f.post(t, "/a/"+id, "decision=deny&return="+url.QueryEscape(ret), nil)
+		if w.Code != 303 || strings.Contains(w.Body.String(), "evil") {
+			t.Fatalf("return %q: %d %s", ret, w.Code, w.Body)
+		}
+		assertState(t, f.d.s, id, `{"state":"denied"}`)
+		if loc := w.Header().Get("Location"); loc == "/a/"+id {
+			w.Header().Set("Location", "action page")
+		}
+		return w
+	}
+	for ret, want := range map[string]string{
+		"/":                                    "/",
+		"/?":                                   "/",
+		"/?account=work":                       "/?account=work",
+		"/?status=others&account=work":         "/?account=work&status=others",
+		"/?account=work&select=messages":       "/?account=work",
+		"/?status=review&approved=3&handled=1": "/?status=review",
+		"/?account=work" + strings.Repeat("&", 400): "/?account=work",
+	} {
+		if got := decide(ret).Header().Get("Location"); got != want {
+			t.Errorf("return %q: Location %q; want %q", ret, got, want)
+		}
+	}
+	for _, ret := range hostileReturns {
+		if got := decide(ret).Header().Get("Location"); got != "action page" {
+			t.Errorf("return %q: Location %q; want the action page", ret, got)
+		}
 	}
 }
 
@@ -545,7 +778,7 @@ func TestConsoleShowsTheCodeOfAFailedRun(t *testing.T) {
 		t.Fatalf("approve: %d %s", w.Code, w.Body)
 	}
 	page := f.get(t, "/a/"+id, nil).Body.String()
-	if !strings.Contains(page, `>failed<`) || !strings.Contains(page, "Graph error 404") || strings.Contains(page, "private-provider-canary") {
+	if !strings.Contains(page, `<dd class="state failed">Failed</dd>`) || !strings.Contains(page, `<dt>Error</dt><dd class="bad">Graph error 404</dd>`) || strings.Contains(page, "private-provider-canary") {
 		t.Fatalf("page=%s", page)
 	}
 }

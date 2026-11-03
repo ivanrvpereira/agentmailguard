@@ -1,0 +1,11 @@
+{{/* head opens the page up to the end of its head, which each page closes. */}}
+{{define "head"}}<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="format-detection" content="telephone=no,email=no,address=no,date=no">
+<meta name="color-scheme" content="light dark">
+<title>{{.}}</title>
+<script type="module" src="/assets/console.js"></script>
+{{template "style"}}{{end}}
+
+{{define "brand"}}<h1 class="brand"><svg class="mark" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8 1.6 2.6 3.6v3.9c0 3.3 2.2 5.9 5.4 6.9 3.2-1 5.4-3.6 5.4-6.9V3.6z"/><path d="M5.2 6.6 8 8.6l2.8-2"/></svg><span class="wm">AgentMailGuard</span><span class="sep" aria-hidden="true">·</span><span class="pg">Web console</span></h1>{{end}}

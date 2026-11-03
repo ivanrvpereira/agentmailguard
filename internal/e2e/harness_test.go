@@ -534,7 +534,13 @@ func (s *server) state(approvalID string) string {
 // returns the HTTP status.
 func (s *server) decide(approvalID, decision string) int {
 	s.t.Helper()
-	r, err := http.NewRequest("POST", "http://"+s.console+"/a/"+approvalID, strings.NewReader(url.Values{"decision": {decision}}.Encode()))
+	return s.decideForm(approvalID, url.Values{"decision": {decision}})
+}
+
+// decideForm posts the decision form of a pending action in the approval console and returns the HTTP status.
+func (s *server) decideForm(approvalID string, form url.Values) int {
+	s.t.Helper()
+	r, err := http.NewRequest("POST", "http://"+s.console+"/a/"+approvalID, strings.NewReader(form.Encode()))
 	if err != nil {
 		s.t.Fatal(err)
 	}
@@ -554,6 +560,15 @@ func (s *server) decide(approvalID, decision string) int {
 func (s *server) approve(approvalID string) {
 	s.t.Helper()
 	if code := s.decide(approvalID, "approve"); code != http.StatusSeeOther {
+		s.t.Fatalf("approve %s: HTTP %d", approvalID, code)
+	}
+}
+
+// approveReviewed approves a pending action that needs review with the "I reviewed it" box ticked, and fails the
+// test unless the console accepted the decision.
+func (s *server) approveReviewed(approvalID string) {
+	s.t.Helper()
+	if code := s.decideForm(approvalID, url.Values{"decision": {"approve"}, "confirm": {"flagged"}}); code != http.StatusSeeOther {
 		s.t.Fatalf("approve %s: HTTP %d", approvalID, code)
 	}
 }

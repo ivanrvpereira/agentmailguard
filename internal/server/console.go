@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,7 +20,6 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/cache"
-	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"github.com/ivanrvpereira/agentmailguard/internal/views"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -55,9 +55,13 @@ func (s *Server) ConsoleAddress() string {
 	return s.listen
 }
 
+// consoleCSP allows only the console's own script and no Trusted Types policy, so that every HTML sink throws. The
+// Rendered preview frame inherits it and loads nothing.
+const consoleCSP = "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; require-trusted-types-for 'script'; trusted-types 'none'"
+
 func (c *console) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+	h.Set("Content-Security-Policy", consoleCSP)
 	h.Set("X-Content-Type-Options", "nosniff")
 	// same-origin, not no-referrer: under no-referrer a browser sends `Origin: null` on the console's own form posts, which
 	// sameOrigin must refuse (https://fetch.spec.whatwg.org/#origin-header). Other sites still get no referrer.
@@ -143,7 +147,25 @@ func (c *console) route(ctx context.Context, w http.ResponseWriter, r *http.Requ
 			plain(w, 405, "method refused")
 			return
 		}
-		c.list(ctx, w)
+		c.list(ctx, w, r)
+		return
+	}
+	if r.URL.Path == "/assets/console.js" {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			plain(w, 405, "method refused")
+			return
+		}
+		write(w, 200, "text/javascript; charset=utf-8", consoleScript)
+		return
+	}
+	if r.URL.Path == "/batch" {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			plain(w, 405, "method refused")
+			return
+		}
+		c.batch(ctx, w, r)
 		return
 	}
 	id, ok := strings.CutPrefix(r.URL.Path, "/a/")
@@ -153,7 +175,7 @@ func (c *console) route(ctx context.Context, w http.ResponseWriter, r *http.Requ
 	}
 	switch r.Method {
 	case http.MethodGet:
-		c.item(ctx, w, id, 200, "")
+		c.action(ctx, w, id, 200, "")
 	case http.MethodPost:
 		c.decide(ctx, w, r, id)
 	default:
@@ -172,20 +194,37 @@ func sameOrigin(r *http.Request) bool {
 // maxDecisionBytes bounds the decision form body.
 const maxDecisionBytes = 4 << 10
 
-// decide approves or denies the item from a form with the one field decision, then shows the item again.
-func (c *console) decide(ctx context.Context, w http.ResponseWriter, r *http.Request, id string) {
+// readForm reads a urlencoded form body of at most limit bytes whose fields are all in allowed. ok is false for any
+// other content type, a larger body, a malformed body, or another field.
+func readForm(w http.ResponseWriter, r *http.Request, limit int64, allowed ...string) (url.Values, bool) {
 	typ, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || typ != "application/x-www-form-urlencoded" || len(params) > 1 || (len(params) == 1 && !strings.EqualFold(params["charset"], "utf-8")) {
-		plain(w, 400, "invalid request")
-		return
+		return nil, false
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxDecisionBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
-		plain(w, 400, "invalid request")
-		return
+		return nil, false
 	}
 	form, err := url.ParseQuery(string(body))
-	if err != nil || len(form) != 1 || len(form["decision"]) != 1 {
+	if err != nil {
+		return nil, false
+	}
+	for key := range form {
+		if !slices.Contains(allowed, key) {
+			return nil, false
+		}
+	}
+	return form, true
+}
+
+// confirmReviewed is the only value of the confirm field: the owner ticked "I reviewed it".
+const confirmReviewed = "flagged"
+
+// decide approves or denies the action from a form with one decision, an optional confirm, and an optional return,
+// then shows the action page again. An approve of an action that needs review runs only with the confirm.
+func (c *console) decide(ctx context.Context, w http.ResponseWriter, r *http.Request, id string) {
+	form, ok := readForm(w, r, maxDecisionBytes, "decision", "confirm", "return")
+	if !ok || len(form["decision"]) != 1 || len(form["confirm"]) > 1 || len(form["return"]) > 1 || (form.Has("confirm") && form.Get("confirm") != confirmReviewed) {
 		plain(w, 400, "invalid request")
 		return
 	}
@@ -199,68 +238,43 @@ func (c *console) decide(ctx context.Context, w http.ResponseWriter, r *http.Req
 		plain(w, 400, "invalid request")
 		return
 	}
+	if form.Get("decision") == "approve" && !form.Has("confirm") {
+		item, err := c.s.cache.GetPending(ctx, id)
+		if err != nil && !errors.Is(err, cache.ErrPendingNotFound) {
+			plain(w, 500, "approvals unavailable")
+			return
+		}
+		if err == nil && item.State == cache.StatePending && needsReview(item) {
+			plain(w, 400, "review required")
+			return
+		}
+	}
 	// A run that started finishes even when the browser goes away; Close still cancels it.
-	err = run(context.WithoutCancel(ctx), id)
+	err := run(context.WithoutCancel(ctx), id)
 	switch {
 	case errors.Is(err, ErrApprovalNotFound):
 		plain(w, 404, "not found")
 	case errors.Is(err, ErrAlreadyHandled):
-		c.item(ctx, w, id, 409, "This action was already handled. Nothing ran again.")
+		c.action(ctx, w, id, 409, "This action was already handled. Nothing ran again.")
 	case errors.Is(err, ErrUnavailable):
 		plain(w, 503, err.Error())
 	default:
-		// Done, or a failed run whose state and code the item page shows.
-		http.Redirect(w, r, "/a/"+id, http.StatusSeeOther)
+		// Done, or a failed run whose state and code the action page shows, or the list that the form came from.
+		back := "/a/" + id
+		if q, ok := c.formReturn(form); ok {
+			back = q.url()
+		}
+		http.Redirect(w, r, back, http.StatusSeeOther)
 	}
 }
 
-// resolvedListed is the number of handled actions that the list shows after the waiting ones.
-const resolvedListed = 50
-
-type listRow struct {
-	ID, Account, Op, Recipients, Subject, Age string
-	State                                     cache.PendingState
-}
-
-func (c *console) list(ctx context.Context, w http.ResponseWriter) {
-	items, err := c.s.cache.ListPending(ctx, resolvedListed)
-	if err != nil {
-		plain(w, 500, "approvals unavailable")
-		return
+// formReturn is the list filter of the form's return field; ok is false without a valid one.
+func (c *console) formReturn(form url.Values) (listQuery, bool) {
+	st := c.s.current.Load()
+	if st == nil || !form.Has("return") {
+		return listQuery{}, false
 	}
-	now := c.s.options.Now()
-	rows := make([]listRow, 0, len(items))
-	for _, item := range items {
-		args := storedFields(item.Args)
-		// A draft send names only its draft; its recipients and subject are the stored draft fields.
-		if item.Op == "draft.send" {
-			args = storedFields(item.Draft)
-		}
-		// Optional attendees receive the invitation too.
-		recipients := append(texts(args["to"]), texts(args["optional"])...)
-		if args["to"] == nil {
-			recipients = texts(args["add"])
-		}
-		// A reply goes to the original's recipients too, which only the item page reads.
-		if item.Op == "draft.reply" || item.Op == "mail.reply" {
-			recipients = []string{"reply"}
-			if all, _ := args["all"].(bool); all {
-				recipients = []string{"reply all"}
-			}
-		}
-		groups := []string{}
-		if len(recipients) > 0 {
-			groups = append(groups, strings.Join(recipients, ", "))
-		}
-		for _, g := range []struct{ key, label string }{{"cc", "cc: "}, {"bcc", "bcc (hidden): "}} {
-			if list := texts(args[g.key]); len(list) > 0 {
-				groups = append(groups, g.label+strings.Join(list, ", "))
-			}
-		}
-		subject, _ := args["subject"].(string)
-		rows = append(rows, listRow{ID: item.ID, Account: item.Account, Op: item.Op, Recipients: strings.Join(groups, "; "), Subject: subject, Age: age(now.Sub(item.Created)), State: item.State})
-	}
-	render(w, 200, "list", rows)
+	return returnQuery(form.Get("return"), st.config)
 }
 
 type field struct {
@@ -268,11 +282,12 @@ type field struct {
 	Lines []string
 }
 
-type itemPage struct {
-	// Jev is the result of the Jev action check, empty when no check ran.
-	ID, Account, Op, Created, Updated, Result, Code, Notice, Jev string
-	State                                                        cache.PendingState
-	Args                                                         []field
+// actionPage is the action page of a stored action. Row is the action as the list's open row shows it: the label,
+// alias, Score, request fields, draft fields, and the body under its caption.
+type actionPage struct {
+	Row                                                        listRow
+	ID, Op, StateLabel, Created, Updated, Result, Code, Notice string
+	State                                                      cache.PendingState
 	// Ref is the referenced message or event, RefKind names it, RefMissing is true when the read failed.
 	RefKind    string
 	Ref        []field
@@ -281,16 +296,31 @@ type itemPage struct {
 	Reply             bool
 	Recipients        []field
 	RecipientsMissing bool
-	// DraftSend is true for a draft send. Draft is the stored draft fields that Jev checked, empty when none are stored.
+	// DraftSend is true for a draft send, whose stored draft fields are in Row.Draft.
 	DraftSend bool
-	Draft     []field
 	Pending   bool
+}
+
+// longTime is a full date and time, as in "Tue 31 Mar 2026, 12:00".
+const longTime = "Mon 2 Jan 2006, 15:04"
+
+// longTimeText is the RFC 3339 time v as longTime: in loc, or in the offset of v when loc is nil. A v that is not
+// RFC 3339 stays as it is.
+func longTimeText(v string, loc *time.Location) string {
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return v
+	}
+	if loc != nil {
+		t = t.In(loc)
+	}
+	return t.Format(longTime)
 }
 
 // referenceTimeout bounds the guarded read of the referenced message or event.
 const referenceTimeout = 30 * time.Second
 
-func (c *console) item(ctx context.Context, w http.ResponseWriter, id string, status int, notice string) {
+func (c *console) action(ctx context.Context, w http.ResponseWriter, id string, status int, notice string) {
 	item, err := c.s.cache.GetPending(ctx, id)
 	if err != nil {
 		if errors.Is(err, cache.ErrPendingNotFound) {
@@ -300,8 +330,21 @@ func (c *console) item(ctx context.Context, w http.ResponseWriter, id string, st
 		}
 		return
 	}
-	page := itemPage{ID: item.ID, Account: item.Account, Op: item.Op, State: item.State, Notice: notice, Pending: item.State == cache.StatePending,
-		Created: item.Created.Format(time.RFC3339), Updated: item.Updated.Format(time.RFC3339)}
+	var aliases map[string]string
+	if st := c.s.current.Load(); st != nil {
+		aliases = accountAliases(st.config)
+	}
+	now := c.s.options.Now()
+	page := actionPage{Row: listedRow(item, aliases, now), ID: item.ID, Op: item.Op, State: item.State, Notice: notice, Pending: item.State == cache.StatePending,
+		Created: item.Created.In(now.Location()).Format(longTime), Updated: item.Updated.In(now.Location()).Format(longTime)}
+	if page.Row.Label == "" {
+		page.Row.Label = item.Op
+	}
+	page.StateLabel = stateLabel(item.State)
+	// The Rendered preview shows the HTML above its source, so the source caption does not say "not rendered".
+	if page.Row.BodyHTML {
+		page.Row.Caption = strings.TrimSuffix(page.Row.Caption, notRendered)
+	}
 	if item.Result != nil {
 		switch item.State {
 		case cache.StateDone:
@@ -310,18 +353,14 @@ func (c *console) item(ctx context.Context, w http.ResponseWriter, id string, st
 			page.Code = *item.Result
 		}
 	}
-	page.Jev = jevText(item.Jev)
-	args := storedFields(item.Args)
-	page.Args = requestFields(args)
+	args := page.Row.args
 	page.RefKind, page.Ref, page.RefMissing = c.reference(ctx, item, args)
 	if item.Op == "draft.reply" || item.Op == "mail.reply" {
 		page.Reply = true
 		page.Recipients, page.RecipientsMissing = c.replyRecipients(ctx, item, args)
 	}
-	if item.Op == "draft.send" {
-		page.DraftSend, page.Draft = true, requestFields(storedFields(item.Draft))
-	}
-	render(w, status, "item", page)
+	page.DraftSend = item.Op == "draft.send"
+	render(w, status, "action", page)
 }
 
 // replyRecipients works out who a reply goes to: the To and CC that the guard reads from the original message, with
@@ -340,16 +379,13 @@ func (c *console) replyRecipients(ctx context.Context, item cache.Pending, args 
 		return nil, true
 	}
 	r = r.With(texts(args["cc"]), texts(args["bcc"]))
-	return []field{{"to", r.To}, {"cc", r.CC}, {"bcc (hidden recipients)", r.BCC}}, false
+	return openFields([]field{{"to", r.To}, {"cc", r.CC}, {"bcc (hidden recipients)", r.BCC}}), false
 }
 
 // requestFields shows each stored argument under its name: the recipients to, cc, and bcc first, bcc marked as
-// hidden recipients, and an HTML body marked as source text, which the page escapes and never renders.
+// hidden recipients.
 func requestFields(args map[string]any) []field {
 	labels := map[string]string{"bcc": "bcc (hidden recipients)"}
-	if args["html"] == true {
-		labels["body"] = "body (HTML source, not rendered)"
-	}
 	recipients := []string{"to", "cc", "bcc"}
 	keys := []string{}
 	for _, key := range recipients {
@@ -394,11 +430,7 @@ func (c *console) reference(ctx context.Context, item cache.Pending, args map[st
 	}
 	ctx, cancel := context.WithTimeout(ctx, referenceTimeout)
 	defer cancel()
-	params, err := json.Marshal(idParam{ref})
-	if err != nil {
-		return kind, nil, true
-	}
-	result, err := c.s.runOn(ctx, op, item.Account, params)
+	result, err := c.guardedRead(ctx, op, item.Account, ref)
 	if err != nil {
 		return kind, nil, true
 	}
@@ -415,12 +447,12 @@ func (c *console) reference(ctx context.Context, item cache.Pending, args map[st
 			add("Sender", new(addressText(*v.Sender)))
 		}
 		add("Subject", v.Subject)
-		add("Received", new(v.ReceivedAt))
+		add("Received", new(longTimeText(v.ReceivedAt, c.s.options.Now().Location())))
 	case views.CalendarView:
 		add("Verdict", new(string(v.Verdict)))
 		add("Subject", v.Subject)
-		add("Start", new(v.Start))
-		add("End", new(v.End))
+		add("Start", new(longTimeText(v.Start, nil)))
+		add("End", new(longTimeText(v.End, nil)))
 		add("Organizer", new(addressText(v.Organizer)))
 	default:
 		return kind, nil, true
@@ -428,25 +460,14 @@ func (c *console) reference(ctx context.Context, item cache.Pending, args map[st
 	return kind, out, false
 }
 
-// jevText describes the Jev action check of an item, or is empty when no check ran. A check that the fake
-// engine made says so, so that nobody takes a keyword match for a Jev check.
-func jevText(c *model.ActionCheck) string {
-	if c == nil {
-		return ""
+// guardedRead reads the message or event id of the account through the guarded read path of op, mail.get or
+// calendar.get, as the agent would. The result is the view of its verdict.
+func (c *console) guardedRead(ctx context.Context, op, account, id string) (any, error) {
+	params, err := json.Marshal(idParam{id})
+	if err != nil {
+		return nil, err
 	}
-	engine := "Jev: "
-	if c.Fake {
-		engine = "Fake check (keywords only): "
-	}
-	switch {
-	case c.Error != nil:
-		return engine + "check failed (" + *c.Error + ")"
-	case c.Score == nil:
-		return engine + "check failed"
-	case c.Flag:
-		return engine + fmt.Sprintf("flagged (score %.2f)", *c.Score)
-	}
-	return engine + fmt.Sprintf("not flagged (score %.2f)", *c.Score)
+	return c.s.runOn(ctx, op, account, params)
 }
 
 func addressText(a views.Address) string {
@@ -530,73 +551,17 @@ func write(w http.ResponseWriter, status int, contentType string, body []byte) {
 	_, _ = w.Write(body)
 }
 
+// consoleTemplates are the console pages, embedded in the binary.
+//
+//go:embed console/*.html
+var consoleTemplates embed.FS
+
+// consoleScript is the one script of the console pages, served at /assets/console.js. It only adds convenience: every
+// page works without it, and the server enforces every rule.
+//
+//go:embed console/console.js
+var consoleScript []byte
+
 // pages are the console templates. html/template escapes every value; stored text is never markup, and the
 // only links are the console's own pages.
-var pages = template.Must(template.New("").Parse(`
-{{define "head"}}<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="format-detection" content="telephone=no,email=no,address=no,date=no">
-<title>agentmailguard approvals</title>
-<style>
-body{font-family:system-ui,-apple-system,sans-serif;margin:0;padding:1rem;background:#f6f6f4;color:#1d1d1b;line-height:1.4}
-main{margin:0 auto}
-h1{font-size:1.3rem;margin:0 0 1rem}
-h2{font-size:1.05rem;margin:1.5rem 0 .5rem}
-a{color:#0b57d0}
-table{border-collapse:collapse;width:100%;background:#fff}
-th,td{text-align:left;padding:.5rem;border-bottom:1px solid #ddd;vertical-align:top;overflow-wrap:anywhere}
-th{font-size:.8rem;text-transform:uppercase;color:#555}
-dl{display:grid;grid-template-columns:minmax(6rem,max-content) 1fr;gap:.4rem 1rem;background:#fff;padding:.75rem;margin:0}
-dt{font-weight:600;color:#444}
-dd{margin:0;min-width:0}
-pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-family:ui-monospace,Menlo,monospace;font-size:.9rem}
-.state{font-weight:600}
-.pending{color:#9a5b00}.done{color:#11722b}.failed,.denied{color:#a11}
-.notice{background:#fff3cd;padding:.75rem;border:1px solid #e0c060}
-form{display:flex;gap:1rem;margin-top:1.5rem}
-button{font-size:1.1rem;padding:.8rem 1.6rem;border-radius:.4rem;border:1px solid #888;cursor:pointer;flex:1}
-.approve{background:#11722b;color:#fff;border-color:#11722b}
-.deny{background:#fff;color:#a11;border-color:#a11}
-@media (max-width:40rem){.wide{display:none}dl{grid-template-columns:1fr}dt{margin-top:.4rem}}
-</style></head><body><main>{{end}}
-
-{{define "list"}}{{template "head"}}
-<h1>Approvals</h1>
-{{if .}}<table>
-<tr><th>Action</th><th class="wide">Account</th><th>Recipients</th><th>Subject</th><th>State</th><th class="wide">Age</th></tr>
-{{range .}}<tr><td><a href="/a/{{.ID}}">{{.Op}}</a></td><td class="wide">{{.Account}}</td><td>{{.Recipients}}</td><td>{{.Subject}}</td><td class="state {{.State}}">{{.State}}</td><td class="wide">{{.Age}}</td></tr>
-{{end}}</table>{{else}}<p>No actions wait for approval.</p>{{end}}
-</main></body></html>{{end}}
-
-{{define "item"}}{{template "head"}}
-<p><a href="/">All approvals</a></p>
-<h1>{{.Op}}</h1>
-{{if .Notice}}<p class="notice">{{.Notice}}</p>{{end}}
-<dl>
-<dt>State</dt><dd class="state {{.State}}">{{.State}}</dd>
-<dt>Account</dt><dd>{{.Account}}</dd>
-<dt>Created</dt><dd>{{.Created}}</dd>
-<dt>Updated</dt><dd>{{.Updated}}</dd>
-{{if .Code}}<dt>Error</dt><dd><pre>{{.Code}}</pre></dd>{{end}}
-{{if .Result}}<dt>Result</dt><dd><pre>{{.Result}}</pre></dd>{{end}}
-</dl>
-{{if .Jev}}<p>{{.Jev}}</p>{{end}}
-<h2>Request</h2>
-{{template "fields" .Args}}
-{{if .RefKind}}<h2>{{.RefKind}}</h2>
-{{if .RefMissing}}<p>{{.RefKind}} not available.</p>{{else}}{{template "fields" .Ref}}{{end}}{{end}}
-{{if .Reply}}<h2>Reply recipients</h2>
-{{if .RecipientsMissing}}<p>Reply recipients could not be read.</p>{{else}}<p>Worked out from the original message, with the cc and bcc of the request. Microsoft 365 picks its own list when it makes the reply.</p>
-{{template "fields" .Recipients}}{{end}}{{end}}
-{{if .DraftSend}}<h2>Draft</h2>
-{{if .Draft}}<p>The draft as the daemon read it for the Jev check when the agent asked to send it. The send sends the draft as it is at the provider when it runs.</p>
-{{template "fields" .Draft}}{{else}}<p>Draft fields not available.</p>{{end}}{{end}}
-{{if .Pending}}<form method="post" action="/a/{{.ID}}">
-<button class="approve" type="submit" name="decision" value="approve">Approve</button>
-<button class="deny" type="submit" name="decision" value="deny">Deny</button>
-</form>{{end}}
-</main></body></html>{{end}}
-
-{{define "fields"}}<dl>{{range .}}<dt>{{.Label}}</dt><dd>{{range .Lines}}<pre>{{.}}</pre>{{end}}</dd>{{end}}</dl>{{end}}
-`))
+var pages = template.Must(template.New("").ParseFS(consoleTemplates, "console/*.html"))

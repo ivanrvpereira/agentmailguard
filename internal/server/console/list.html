@@ -1,0 +1,143 @@
+{{define "list"}}{{template "head" "AgentMailGuard · Web console"}}
+{{/* The reload without the script keeps only the filter: no ticked table, no batch notice. */}}
+{{with .Refresh.Seconds}}<noscript><meta http-equiv="refresh" content="{{.}};url={{$.Return}}"></noscript>
+{{end}}</head>
+<body data-refresh-seconds="{{.Refresh.Seconds}}" data-waiting="{{.Waiting}}">
+<header class="top">
+  {{template "brand"}}
+  <span class="sum num">{{.Waiting}} waiting · {{if .Review}}<b>{{.Review}} need review</b>{{else}}0 need review{{end}}</span>
+  <details class="refresh">
+    <summary>Auto-refresh <b>{{.Refresh.Short}}</b></summary>
+    <nav class="menu" aria-label="Auto-refresh">
+      <p>Reload the list every</p>
+      {{range .RefreshMenu}}<a href="{{.URL}}"{{if .Current}} aria-current="true"{{end}}>{{.Label}}</a>
+      {{end}}
+    </nav>
+  </details>
+</header>
+
+<main class="pane listpage">
+<div class="lead">
+  <nav class="filters" aria-label="Filters">
+    <span class="grp"><span class="lbl">Account</span><span class="seg">
+      {{range .Accounts}}{{template "filter" .}}{{end}}
+    </span></span>
+    <span class="grp"><span class="lbl">Show</span><span class="seg">
+      {{range .Shows}}{{template "filter" .}}{{end}}
+    </span></span>
+  </nav>
+</div>
+{{with .Notice}}<p class="notice" role="status">{{.}}</p>{{end}}
+
+<div class="bar">
+  <form id="batch" method="post" action="/batch" aria-label="Selected actions">
+    <input type="hidden" name="return" value="{{.Return}}">
+    <span class="live">
+      <button class="btn go" type="submit" name="decision" value="approve">Approve selected</button>
+      <button class="btn go off" type="button" disabled title="Every selected action needs review. Approve each from its row.">Approve selected</button>
+      <button class="btn" type="submit" name="decision" value="deny">Deny selected</button>
+      {{with .ClearURL}}<a class="btn quiet" href="{{.}}">Clear</a>{{else}}<button class="btn quiet" type="reset">Clear</button>{{end}}
+    </span>
+  </form>
+</div>
+
+<div class="waiting">
+{{if not .Groups}}<p class="empty">No actions wait for approval.</p>{{end}}
+{{range .Groups}}{{$selected := .Selected}}
+<section class="tbl {{.Class}}" aria-labelledby="h-{{.Key}}" data-group="{{.Key}}">
+<div class="thead">
+<h2 id="h-{{.Key}}">{{.Title}} <span class="n num">{{len .Rows}}</span><span class="hint">{{.Hint}}</span></h2>
+{{if .Rows}}<div class="colhead"><a class="all{{if .Selected}} on{{end}}" href="{{.SelectURL}}" title="{{if .Selected}}Clear the selection in{{else}}Select all in{{end}} {{.Title}}"><span class="vh">{{if .Selected}}Clear the selection in{{else}}Select all in{{end}} {{.Title}}</span></a><label class="all" hidden><input class="allbox" type="checkbox"><span class="vh">Select all in {{.Title}}</span></label><div class="cells" aria-hidden="true">
+  {{template "columns" .Key}}
+</div></div>{{end}}
+</div>
+{{if .Rows}}<ol>
+{{range .Rows}}<li class="row {{.Bar}}">
+  <label class="pick"><input class="sel" type="checkbox" form="batch" name="id" value="{{.ID}}"{{if .Review}} data-review{{end}}{{if $selected}} checked{{end}}><span class="vh">Select {{template "name" .}}</span></label>
+  <details>
+    <summary>
+      <span class="meta"><span class="op">{{.Label}}</span><span class="acct" title="{{.Account}}">{{.Alias}}</span></span>
+      {{template "cells" .}}
+      {{with .Score}}{{template "score" .}}{{end}}
+      <span class="age num">{{.Age}}</span>
+    </summary>
+    <div class="open">
+      <dl class="f">
+        <dt>Account</dt><dd>{{.Account}}</dd>
+        {{with .Score}}<dt>Score</dt>{{template "scorefield" .}}{{end}}
+        {{range .Read}}<dt>{{.Label}}</dt><dd{{if .Placeholder}} class="ph"{{end}}>{{.Value}}{{with .Source}} <span class="src">· {{.}}</span>{{end}}</dd>
+        {{end}}
+        {{template "openfields" .Fields}}
+      </dl>
+      {{if .Draft}}<p class="sub">The draft fields that the check read when the agent asked to send the draft</p>
+      <dl class="f">{{template "openfields" .Draft}}</dl>{{end}}
+      {{if .Caption}}<figure class="body"><figcaption>{{.Caption}}</figcaption><pre>{{.Body}}</pre></figure>{{end}}
+      {{if .Review}}<form class="ack" method="post" action="/a/{{.ID}}">
+        <input type="hidden" name="return" value="{{$.Return}}">
+        {{template "reviewed"}}
+        <button class="btn go" type="submit" name="decision" value="approve">Approve<span class="vh">: {{template "name" .}}</span></button>
+      </form>{{end}}
+      <p class="more"><a href="/a/{{.ID}}">Open the action page</a></p>
+    </div>
+  </details>
+  <form class="acts" method="post" action="/a/{{.ID}}">
+    <input type="hidden" name="return" value="{{$.Return}}">
+    {{if .Review}}<a class="btn" href="/a/{{.ID}}">Review<span class="vh">: {{template "name" .}}</span></a>{{else}}<button class="btn go" type="submit" name="decision" value="approve">Approve<span class="vh">: {{template "name" .}}</span></button>{{end}}
+    <button class="btn" type="submit" name="decision" value="deny">Deny<span class="vh">: {{template "name" .}}</span></button>
+  </form>
+</li>
+{{end}}</ol>{{end}}
+{{if .Recents}}<details class="recent">
+<summary>Recents <span class="n num">{{len .Recents}}</span></summary>
+<div class="colhead"><span></span><div class="cells" aria-hidden="true">
+  <span>Action</span><span>Account</span><span>Summary</span>{{if .Scored}}<span class="r">Score</span>{{end}}<span>Outcome</span><span class="r">When</span>
+</div></div>
+<ol>
+{{range .Recents}}<li class="row"><span class="pick"></span><a class="line" href="/a/{{.ID}}">
+  <span class="meta"><span class="op">{{.Label}}</span><span class="acct" title="{{.Account}}">{{.Alias}}</span></span>
+  <span class="text">{{.Summary}}</span>
+  {{with .Score}}{{template "score" .}}{{end}}
+  <span class="st{{if .Failed}} failed{{end}}">{{.Outcome}}</span>
+  <span class="age num">{{.Age}}</span></a></li>
+{{end}}</ol>
+</details>{{end}}
+</section>
+{{end}}
+</div>
+
+<p class="foot">
+  <span class="key risky">Red: needs review</span> · <span class="key none">Grey: not checked</span> · <span class="key ok">Green: checked</span>
+  <br>Recents keeps the last 10 handled actions of each table.
+</p>
+<p class="vh" id="selstatus" aria-live="polite"></p>
+<p class="selcount num" aria-hidden="true"></p>
+</main>
+</body></html>{{end}}
+
+{{define "name"}}{{.Label}}{{with .Subject}}: {{.}}{{end}}{{with .Event}}: {{.}}{{end}}{{end}}
+
+{{define "reviewed"}}<p>This action needs review. Read every field and the body before you approve it.</p>
+        <label><input type="checkbox" name="confirm" value="flagged" required> I reviewed it</label>{{end}}
+
+{{define "filter"}}<a href="{{.URL}}"{{with .Title}} title="{{.}}"{{end}}{{if .Current}} aria-current="true"{{end}}>{{.Label}}<span class="c num">{{.Count}}</span></a>
+      {{end}}
+
+{{define "columns"}}{{if eq . "messages"}}<span>Action</span><span>Account</span><span>To</span><span>Message</span><span class="r">Score</span><span class="r">Age</span><span></span>
+{{- else if eq . "meetings"}}<span>Action</span><span>Account</span><span>Event</span><span>When</span><span>People</span><span>Change</span><span class="r">Score</span><span class="r">Age</span><span></span>
+{{- else}}<span>Change</span><span>Account</span><span>Message</span><span>Received</span><span class="r">Age</span><span></span>{{end}}{{end}}
+
+{{define "cells"}}{{if eq .Group "meetings"}}<span class="ev{{if .EventPlaceholder}} ph{{end}}">{{.Event}}</span>
+      <span class="when num">{{.When}}</span>
+      <span class="ppl{{if .PeopleRole}} ph{{end}}">{{.People}}</span>
+      <span class="chg"><span class="k">{{.Change}}</span>{{with .ChangeDetail}}<span class="snip">{{.}}</span>{{end}}</span>
+{{- else if eq .Group "mailbox"}}<span class="text">{{if .MessageMissing}}<span class="from ph">Message not available</span>{{else}}{{with .Sender}}<span class="from">{{.}}</span>{{end}}{{if .SubjectHidden}}<span class="ph">Subject hidden (sealed)</span>{{else}}<span class="subj{{if .NoSubject}} ph{{end}}">{{.Subject}}</span>{{end}}{{end}}</span>
+      <span class="recv num">{{.Received}}</span>
+{{- else}}<span class="to" title="{{.ToTitle}}">{{with .ToMarker}}<span class="ph">{{.}}</span>{{if $.To}}; {{end}}{{end}}{{.To}}</span>
+      <span class="text">{{if .Subject}}<span class="subj{{if .NoSubject}} ph{{end}}">{{.Subject}}</span>{{end}}{{with .Preview}}<span class="snip">{{.}}</span>{{end}}</span>{{end}}{{end}}
+
+{{define "score"}}<span class="score{{if .Risk}} bad{{end}}"{{with .Code}} title="{{.}}"{{end}}>{{if .Fake}}<span class="fake">fake</span>{{end}}{{if .Risk}}<span class="mk" aria-hidden="true">▲</span>{{end}}{{.Value}}<span class="vh"> · {{.Label}}</span></span>{{end}}
+
+{{define "scorefield"}}<dd{{if .Risk}} class="bad"{{end}}>{{if .Fake}}<span class="fake">fake</span>{{end}}{{if .Risk}}▲ {{end}}{{.Value}} · {{.Label}}{{with .Code}} · {{.}}{{end}}</dd>{{end}}
+
+{{define "openfields"}}{{range .}}<dt>{{.Label}}</dt><dd{{if not .Lines}} class="ph"{{end}}>{{range .Lines}}<span class="ln">{{.}}</span>{{else}}—{{end}}</dd>
+        {{end}}{{end}}

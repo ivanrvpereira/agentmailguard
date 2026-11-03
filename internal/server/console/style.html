@@ -1,0 +1,333 @@
+{{define "style"}}<style>
+:root{
+  --bg:#ffffff; --ink:#1b1d20; --ink-2:#50555c; --ink-3:#686d74;
+  --line:#e6e5e0; --line-2:#f0efeb; --hover:#f6f6f3; --track:#f1f1ee;
+  --accent:#1f56c3; --on-accent:#fff;
+  --pick:color-mix(in srgb,var(--accent) 9%,var(--bg));
+  /* Row bars: green = checked, grey = not checked, red = needs review. Mailbox operations rows are always grey. */
+  --green:#2f8a55; --grey:#878c93; --red:#bf3326;
+  --red-soft:color-mix(in srgb,var(--red) 6%,var(--bg));
+  --row:2.5rem;
+  /* Columns every table shares, so Action, Account and the right edge line up from table to table. */
+  --c-act:5.75rem; --c-acct:4.5rem; --c-score:6.25rem; --c-age:2.75rem; --c-slot:10.5rem;
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",system-ui,sans-serif;
+  --letter:ui-serif,"New York",Charter,"Iowan Old Style",Georgia,serif;
+  --mono:ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#17181a; --ink:#e8e8e6; --ink-2:#b4b6b9; --ink-3:#979a9f;
+  --line:#2c2e31; --line-2:#232427; --hover:#1e1f22; --track:#232427;
+  --accent:#7ea6ff; --on-accent:#0d1526;
+  --green:#4fb87a; --grey:#6c7076; --red:#ff7f70;
+}}
+*{box-sizing:border-box}
+html{background:var(--bg);color:var(--ink);font:14px/1.4 var(--sans);-webkit-text-size-adjust:100%;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
+body{margin:0}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.num{font-variant-numeric:tabular-nums}
+
+/* Header: brand on the left, waiting counts on the right. */
+.top{display:flex;align-items:center;flex-wrap:wrap;gap:.25rem 1.25rem;padding:1rem 1.5rem .5rem;max-width:92rem;margin:0 auto}
+.brand{display:flex;align-items:center;gap:.5rem;font-size:1rem;font-weight:400;letter-spacing:-.01em;margin:0;white-space:nowrap}
+.brand .mark{fill:none;stroke:var(--accent);stroke-width:1.4;stroke-linejoin:round;stroke-linecap:round;flex:none}
+.brand .wm{font-weight:600;color:var(--ink)}
+.brand .sep{color:var(--ink-3)}
+.brand .pg{color:var(--ink-2)}
+.top .sum{margin-left:auto;color:var(--ink-2)}
+.top .sum b{color:var(--red);font-weight:600}
+/* Auto-refresh menu: a <details> with links (?refresh=5m|10m|30m|1h|off). It works without the script; the server
+   renders the chosen interval and keeps it in a cookie. */
+.refresh{position:relative;font-size:.8125rem}
+.refresh summary{list-style:none;display:inline-flex;align-items:center;gap:.375rem;height:1.875rem;padding:0 .625rem;border:1px solid var(--line);border-radius:6px;color:var(--ink-2);cursor:pointer;white-space:nowrap}
+.refresh summary::-webkit-details-marker{display:none}
+.refresh summary:hover{color:var(--ink);border-color:var(--ink-3)}
+.refresh summary b{color:var(--ink);font-weight:500}
+.refresh summary::after{content:"";width:.375rem;height:.375rem;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:translateY(-2px) rotate(45deg);margin-left:.125rem}
+.refresh[open] summary{color:var(--ink);border-color:var(--ink-3)}
+.refresh .menu{position:absolute;right:0;top:calc(100% + .25rem);z-index:10;min-width:11rem;padding:.25rem;background:var(--bg);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgb(0 0 0/.12)}
+.refresh .menu p{margin:.375rem .625rem .25rem;color:var(--ink-3);font-size:.75rem}
+.refresh .menu a{display:flex;align-items:center;justify-content:space-between;height:2rem;padding:0 .625rem;border-radius:5px;color:var(--ink)}
+.refresh .menu a:hover{background:var(--hover);text-decoration:none}
+.refresh .menu a[aria-current]::after{content:"";width:.6rem;height:.3rem;border:solid var(--accent);border-width:0 0 1.5px 1.5px;transform:translateY(-2px) rotate(-45deg)}
+/* Controls of the script start hidden, and author CSS must not show them. */
+[hidden]{display:none!important}
+
+.pane{max-width:92rem;margin:0 auto;padding:0 1.5rem 4rem}
+/* List page grid: the filter line, the notice of a batch, then the bulk bar (sticky, only while a box is ticked),
+   the tables and the footer. The selection count is the last element, so that CSS counters have counted the ticked
+   rows of every table; the grid places it into the bar. */
+.listpage{display:grid;grid-template-columns:minmax(0,1fr);counter-reset:sel review}
+.listpage .lead{grid-row:1}
+.listpage .notice{grid-row:2}
+.bar,.selcount{grid-row:3;grid-column:1;position:sticky;top:0}
+.listpage .waiting{grid-row:4}
+.listpage .foot{grid-row:5}
+.notice{margin:.75rem 0 0;padding:.6rem .75rem;border:1px solid var(--line);border-radius:6px;font-size:.8125rem;background:color-mix(in srgb,var(--accent) 5%,var(--bg))}
+
+/* Filters: segmented server-side links. */
+.lead{height:3rem;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:1.5rem;padding-left:.5rem;font-size:.8125rem}
+.filters{display:flex;gap:1.5rem}
+.lead .grp{display:flex;align-items:center;white-space:nowrap}
+.lead .lbl{color:var(--ink-3);margin-right:.5rem}
+.seg{display:inline-flex;align-items:center;gap:2px;height:1.875rem;padding:2px;border-radius:7px;background:var(--track)}
+.filters a{display:inline-flex;align-items:center;gap:.3rem;height:1.625rem;padding:0 .625rem;border-radius:5px;color:var(--ink-2);font-weight:500}
+.filters a:hover{text-decoration:none;color:var(--ink)}
+.filters a .c{color:var(--ink-3);font-weight:400}
+.filters a[aria-current]{background:var(--bg);color:var(--ink);box-shadow:0 0 0 1px var(--line),0 1px 2px rgb(0 0 0/.06)}
+.filters a[aria-current] .c{color:var(--ink-2)}
+
+/* Bulk bar: its own sticky line under the filters, shown only while a box is ticked in any table. */
+.bar{z-index:3;display:none;min-height:3rem;align-items:center;background:color-mix(in srgb,var(--accent) 5%,var(--bg));border-bottom:1px solid color-mix(in srgb,var(--accent) 30%,var(--line))}
+.bar form{display:flex;justify-content:flex-end;width:100%;padding:.5rem .5rem .5rem 0}
+.bar .live{display:flex;justify-content:flex-end;gap:.5rem;align-items:center}
+.listpage:has(.sel:checked) .bar{display:flex}
+/* Batch approve skips the rows that need review. When every ticked row needs review, the real button is gone, so
+   that it cannot be pressed or focused, and a disabled stand-in takes its place. */
+.bar .btn.off{display:none}
+.listpage:not(:has(.sel:not([data-review]):checked)) .bar .btn.go:not(.off){display:none}
+.listpage:not(:has(.sel:not([data-review]):checked)) .bar .btn.off{display:inline-flex}
+.selcount{margin:0;z-index:4;align-self:start;justify-self:start;padding-left:.75rem;display:none;height:3rem;align-items:center;pointer-events:none;color:var(--ink-2);font-size:.8125rem;white-space:nowrap}
+.listpage:has(.sel:checked) .selcount{display:flex}
+.sel:checked{counter-increment:sel}
+.sel[data-review]:checked{counter-increment:sel review}
+.listpage:has(.sel:checked) .selcount::before{content:counter(sel) " selected";color:var(--ink);font-weight:600}
+.listpage:has(.sel[data-review]:checked) .selcount::after{content:"\00a0· " counter(review) " need review: Approve skips them";color:var(--red)}
+.listpage:has(.sel:checked):not(:has(.sel:not([data-review]):checked)) .selcount::after{content:"\00a0· All need review: approve each from its row"}
+
+/* Tables: one section per group, with its heading (name, count, what approving does), its column header and its
+   rows. --cols is the table's own grid; the shared columns keep the same widths. */
+.t-mail{--cols:var(--c-act) var(--c-acct) 20rem minmax(0,1fr) var(--c-score) var(--c-age) var(--c-slot)}
+.t-meet{--cols:var(--c-act) var(--c-acct) minmax(0,20rem) 10.25rem 5.5rem minmax(14rem,1fr) var(--c-score) var(--c-age) var(--c-slot)}
+/* Mailbox operations have no Score column, waiting or under Recents. */
+.t-box{--cols:var(--c-act) var(--c-acct) minmax(0,1fr) 7.5rem var(--c-age) var(--c-slot)}
+.recent{--cols:var(--c-act) var(--c-acct) minmax(0,1fr) var(--c-score) var(--c-slot) var(--c-age)}
+.t-box .recent{--cols:var(--c-act) var(--c-acct) minmax(0,1fr) var(--c-slot) var(--c-age)}
+h2{font-size:.8125rem;font-weight:600;color:var(--ink);margin:1.75rem 0 .25rem;padding-left:.5rem;display:flex;align-items:baseline;gap:.4rem;min-width:0}
+.waiting .tbl:first-child h2{margin-top:1.25rem}
+h2 .n{color:var(--ink-3);font-weight:400}
+h2 .hint{color:var(--ink-3);font-weight:400;font-size:.75rem;margin-left:.5rem;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+ol{list-style:none;margin:0;padding:0}
+
+/* Rows and the column header share one grid: [pick] [the table's columns]. */
+.row,.colhead{position:relative;display:grid;grid-template-columns:2.25rem minmax(0,1fr)}
+.row{border-bottom:1px solid var(--line-2)}
+.cells,summary,a.line{display:grid;align-items:center;grid-template-columns:var(--cols);column-gap:.75rem;padding-right:.75rem}
+.colhead{border-bottom:1px solid var(--line);font-size:.75rem;color:var(--ink-3);height:1.75rem;align-items:center}
+.colhead .r{text-align:right}
+.cells>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+/* Select all in a table: a link drawn as the header checkbox. The page it opens ticks the rows of the table, keeps
+   the filters, and draws this box ticked with a link back. */
+.colhead .all{display:flex;align-items:center;justify-content:center;align-self:stretch}
+.colhead .all::before{content:"";width:1rem;height:1rem;border:1.5px solid var(--ink-3);border-radius:3px;box-sizing:border-box}
+.colhead .all:hover::before{border-color:var(--ink-2)}
+.colhead .all.on::before{content:"\2713";display:flex;align-items:center;justify-content:center;background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-size:.7rem;font-weight:700;line-height:1}
+/* With the script, a real checkbox replaces the link: checked, or indeterminate while some rows are ticked. */
+.colhead label.all{cursor:pointer}
+.colhead label.all::before{display:none}
+.colhead .all input{width:1rem;height:1rem;margin:0;accent-color:var(--accent);cursor:pointer}
+@media (hover:hover){.row:hover{background:var(--hover)}.recent .row:hover .text{text-decoration:underline}}
+.row:has(.sel:checked){background:var(--pick)}
+.waiting .row{box-shadow:inset 3px 0 0 var(--bar)}
+.row.ok{--bar:var(--green)}
+.row.none{--bar:var(--grey)}
+.row.risky{--bar:var(--red)}
+.pick{display:flex;align-items:center;justify-content:center;height:var(--row)}
+label.pick{cursor:pointer}
+.pick input{width:1rem;height:1rem;margin:0;accent-color:var(--accent);cursor:pointer}
+
+summary{list-style:none;cursor:pointer;height:var(--row)}
+summary::-webkit-details-marker{display:none}
+summary:focus-visible,a.line:focus-visible{outline-offset:-2px}
+summary>span,a.line>span,.meta>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.meta{display:contents}
+.op{font-size:.8125rem;font-weight:500;color:var(--ink-2)}
+.acct{font-size:.8125rem;color:var(--ink-2)}
+.to{font-weight:500}
+.subj{font-weight:600}
+.snip{color:var(--ink-3)}
+.subj+.snip::before{content:" — ";color:var(--ink-3)}
+.chg .snip::before{content:" — ";color:var(--ink-3)}
+.ph{font-style:italic;font-weight:400;color:var(--ink-3)}
+.age{text-align:right;color:var(--ink-2);font-size:.8125rem}
+.score{text-align:right;font-size:.8125rem;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.score.bad{color:var(--red);font-weight:600}
+.mk{font-size:.7em;vertical-align:.1em;margin-right:.2em}
+.fake{font-size:.75rem;font-weight:400;color:var(--ink-3);border:1px solid var(--line);border-radius:3px;padding:0 .2rem;margin-right:.3rem}
+
+/* Meetings: Event · When · People · Change. */
+.ev{font-weight:600}
+.ev.ph{font-weight:400}
+.when,.ppl{font-size:.8125rem;color:var(--ink-2)}
+.chg .k{font-weight:500}
+
+/* Mailbox operations: Message (sender · subject) · Received, from the guarded read. */
+.from{font-weight:500}
+.text .from+.subj::before,.text .from+.ph::before{content:" · ";font-weight:400;font-style:normal;color:var(--ink-3)}
+.text .from+.subj{font-weight:400;color:var(--ink)}
+.recv{font-size:.8125rem;color:var(--ink-2)}
+
+/* Row actions: in the last column, shown on hover, keyboard focus, an open row, and always on touch screens. */
+.acts{position:absolute;top:0;right:.75rem;height:var(--row);display:flex;align-items:center;gap:.25rem;opacity:0;pointer-events:none;z-index:1}
+.row:is(:hover,:focus-within) .acts,.row:has(details[open]) .acts{opacity:1;pointer-events:auto}
+@media (hover:none){.acts{opacity:1;pointer-events:auto}}
+
+/* Open row */
+.open{padding:.25rem 1rem 1.25rem 0;display:grid;grid-template-columns:minmax(0,46rem) minmax(0,1fr);column-gap:2rem;border-top:1px dashed var(--line)}
+.open>*{grid-column:1}
+.row:has(details[open]){background:var(--bg)}
+dl.f{display:grid;grid-template-columns:7rem minmax(0,1fr);gap:.2rem .75rem;margin:.75rem 0;font-size:.8125rem}
+dl.f dt{color:var(--ink-3);overflow-wrap:anywhere}
+dl.f dd{margin:0;overflow-wrap:anywhere}
+dl.f dd.bad{color:var(--red);font-weight:600}
+dl.f dd .src{color:var(--ink-3);font-style:normal}
+dl.f .ln{display:block;white-space:pre-wrap}
+.open .sub{font-size:.75rem;color:var(--ink-3);margin:.5rem 0 0}
+.body{margin:0;border-left:2px solid var(--line);padding:.1rem 0 .1rem 1rem}
+.body figcaption{font-size:.75rem;color:var(--ink-3);margin-bottom:.35rem}
+.body pre{margin:0;font-family:var(--letter);font-size:.96rem;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;max-height:18em;overflow:auto;color:var(--ink)}
+.more{font-size:.8125rem;margin-top:.9rem}
+
+/* Approve of an action that needs review: the browser submits the form only with the box ticked. */
+.ack{margin-top:1rem;padding:.75rem .9rem;border:1px solid color-mix(in srgb,var(--red) 35%,var(--line));border-radius:8px;background:var(--red-soft);display:flex;flex-wrap:wrap;align-items:center;gap:.6rem 1rem}
+.ack p{margin:0;flex-basis:100%;color:var(--red);font-weight:600;font-size:.8125rem}
+.ack label{display:flex;gap:.5rem;align-items:center;cursor:pointer;font-size:.875rem}
+.ack input{width:1rem;height:1rem;margin:0;accent-color:var(--red)}
+.ack:not(:has(input:checked)) .btn.go{background:transparent;color:var(--ink-3);border-color:var(--line)}
+
+/* Recents: a closed disclosure at the foot of each table with its last handled actions; quiet, no bar. */
+.recent{margin:0 0 .25rem}
+.waiting .recent .row{box-shadow:none}
+.recent>summary{display:flex;align-items:center;gap:.4rem;height:2.25rem;padding:0 .5rem;font-size:.8125rem;color:var(--ink-2);width:max-content}
+.recent>summary::before{content:"";width:.35rem;height:.35rem;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:rotate(-45deg);margin-right:.2rem;transition:transform .15s}
+.recent[open]>summary::before{transform:rotate(45deg)}
+.recent>summary:hover{color:var(--ink)}
+.recent>summary .n{color:var(--ink-3)}
+@media (prefers-reduced-motion:reduce){.recent>summary::before{transition:none}}
+.recent .row{color:var(--ink-3)}
+a.line{height:var(--row);color:inherit}
+a.line:hover{text-decoration:none}
+.recent .text{color:var(--ink-2)}
+.recent .op{color:var(--ink-3)}
+.recent .acct,.recent .score{color:var(--ink-3)}
+.recent .score.bad{color:var(--red)}
+.st{font-size:.8125rem;color:var(--ink-2);padding-left:.25rem}
+.st.failed{color:var(--red)}
+.recent .age{color:var(--ink-3)}
+
+.empty{color:var(--ink-2);padding:2rem .5rem}
+.foot{color:var(--ink-3);font-size:.75rem;margin-top:1.25rem;padding-left:.5rem;line-height:1.7}
+.foot .key{display:inline-flex;align-items:center;gap:.35rem;margin-right:.25rem;white-space:nowrap}
+.foot .key::before{content:"";width:3px;height:.9rem;background:var(--bar)}
+.foot .key.ok{--bar:var(--green)}.foot .key.none{--bar:var(--grey)}.foot .key.risky{--bar:var(--red)}
+
+/* Buttons */
+.btn{font:inherit;font-size:.8125rem;font-weight:500;line-height:1;height:1.875rem;padding:0 .75rem;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--ink);cursor:pointer;display:inline-flex;align-items:center;white-space:nowrap}
+.btn:hover{border-color:var(--ink-3);text-decoration:none}
+.btn.go{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.go:hover{background:color-mix(in srgb,var(--accent) 88%,#000)}
+.btn.off,.btn.off:hover{background:transparent;border-color:var(--line);color:var(--ink-3);cursor:not-allowed}
+.btn.quiet{border-color:transparent;background:transparent;color:var(--ink-2)}
+.btn.quiet:hover{border-color:var(--line)}
+.acts .btn:not(.go){border-color:color-mix(in srgb,var(--ink) 28%,var(--bg));font-weight:600}
+.acts .btn:not(.go):hover{border-color:var(--ink-2)}
+
+/* Action page: the parts of the open row on a page of their own, in one column. The Rendered preview is a sandboxed
+   frame above the escaped source; Approve and Deny come after the source, away from the frame. */
+.actionpage>*{max-width:52rem}
+.actionpage .back{font-size:.8125rem;margin:.75rem 0 0}
+.actionpage h1{font-size:1.125rem;font-weight:600;letter-spacing:-.01em;margin:.75rem 0 .25rem;display:flex;flex-wrap:wrap;align-items:baseline;gap:.25rem .6rem}
+.actionpage h1 .opname{font-family:var(--mono);font-size:.75rem;font-weight:400;color:var(--ink-3)}
+.actionpage h2{margin:1.5rem 0 0;padding:0}
+.actionpage dl.f{grid-template-columns:9rem minmax(0,1fr);font-size:.875rem;margin:.5rem 0}
+.actionpage .state{font-weight:600}
+.actionpage .state.pending{color:var(--ink-2)}.actionpage .state.done{color:var(--green)}.actionpage .state.failed,.actionpage .state.denied{color:var(--red)}
+.actionpage dd.mono{font-family:var(--mono);font-size:.8125rem}
+.actionpage p.ph{font-size:.875rem;margin:.5rem 0}
+.actionpage .sub{font-size:.75rem;color:var(--ink-3);margin:.5rem 0 0}
+.actionpage .notice{background:var(--red-soft);padding:.75rem;border:1px solid var(--line);border-radius:6px}
+.actionpage .body{margin-top:1.5rem}
+.actionpage .body pre{max-height:none}
+.rendered iframe{display:block;width:100%;height:24rem;border:1px solid var(--line);border-radius:6px;background:#fff}
+.actionpage .decide{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin-top:1.5rem;padding-top:1.25rem;border-top:1px solid var(--line)}
+.actionpage .decide.ack{padding:.9rem 1rem;border:1px solid color-mix(in srgb,var(--red) 35%,var(--line))}
+.actionpage .decide.ack label{margin-right:.5rem}
+.actionpage .decide .btn{height:2.5rem;padding:0 1.25rem;font-size:.875rem}
+
+/* Below the desktop width, where the Meetings columns stop fitting (phones and tablets): three or four lines per
+   row; the column labels go. */
+@media (max-width:72rem){
+  .top{padding:1rem 1rem .5rem;gap:.25rem .75rem}
+  .top .sum{margin-left:0;font-size:.875rem}
+  .refresh{margin-left:auto}
+  .pane{padding:0 0 3rem}
+  .actionpage{padding:0 1rem 3rem}
+  .lead{height:auto;flex-direction:column;align-items:stretch;gap:.125rem;padding:.25rem 1rem .5rem}
+  .filters{flex-direction:column;gap:.375rem}
+  .lead .grp{flex-direction:column;align-items:flex-start;gap:.25rem;overflow-x:auto;scrollbar-width:none;max-width:100%}
+  .lead .lbl{flex:none;margin:0;font-size:.75rem}
+  .filters a{height:2rem;flex:none;padding:0 .5rem}
+  .seg{height:2.25rem}
+  .notice{margin:.75rem 1rem 0}
+  .bar{min-height:0}
+  .bar form{justify-content:flex-start;padding:.5rem .75rem 2.1rem}
+  .selcount{align-self:end;height:2rem;padding:0 .75rem;line-height:1.25;white-space:normal}
+  .listpage:has(.sel:checked) .selcount{display:block}
+  .listpage:has(.sel[data-review]:checked) .selcount::after{content:"\00a0· " counter(review) " need review, Approve skips them"}
+  .listpage:has(.sel:checked):not(:has(.sel:not([data-review]):checked)) .selcount::after{content:"\00a0· All need review"}
+
+  /* Table heading: [select all] Name count, the hint on its own line. */
+  .thead{border-bottom:1px solid var(--line);margin-top:1.5rem;min-height:2.5rem}
+  .thead:has(.all){display:grid;grid-template-columns:2.5rem minmax(0,1fr);align-items:center}
+  .waiting .tbl:first-child .thead{margin-top:.75rem}
+  .thead h2,.waiting .tbl:first-child h2{margin:0;padding:.5rem 1rem;flex-wrap:wrap;row-gap:0}
+  .thead:has(.all) h2{grid-column:2;grid-row:1;padding-left:0}
+  .thead h2 .hint{flex-basis:100%;margin-left:0;white-space:normal}
+  .colhead{display:none}
+  .thead .colhead{display:contents}
+  .thead .colhead .all{grid-column:1;grid-row:1}
+  .thead .colhead .cells{display:none}
+  .recent>summary{padding:0 1rem;height:2.5rem}
+  .recent ol{border-top:1px solid var(--line)}
+
+  .row{grid-template-columns:1rem minmax(0,1fr)}
+  .tbl>ol>.row{grid-template-columns:2.5rem minmax(0,1fr)}
+  .pick{height:auto}
+  label.pick{align-items:flex-start;padding-top:.8rem}
+  summary,a.line{height:auto;padding:.6rem 1rem .65rem 0;row-gap:.1rem;grid-template-columns:minmax(0,1fr) auto}
+  .t-mail summary{grid-template-areas:"to age" "text text" "op op"}
+  .t-meet summary{grid-template-areas:"ev age" "when ppl" "chg chg" "op op"}
+  .t-box summary{grid-template-areas:"text age" "op op"}
+  /* Recents: the Score has its own place beside the action and account. */
+  a.line{grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:"text text st" "op score age"}
+  .to{grid-area:to}
+  .age{grid-area:age}
+  .ev{grid-area:ev}
+  .when{grid-area:when}
+  .ppl{grid-area:ppl;justify-self:end}
+  .t-box .recv{display:none}
+  .text{grid-area:text}
+  .text,.chg{white-space:normal!important;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+  .chg{grid-area:chg}
+  .recent .text{-webkit-line-clamp:1}
+  .meta{display:block;grid-area:op;min-width:0;overflow:hidden;white-space:nowrap}
+  .meta .acct{display:inline;font-size:.75rem}
+  .meta .acct::before{content:" · "}
+  .score{grid-area:op;justify-self:end;font-size:.75rem}
+  .score::before{content:"Score ";font-weight:400;color:var(--ink-3)}
+  .recent .score{grid-area:score}
+  .st{grid-area:st;justify-self:end}
+  /* Row actions go under the open row; Review is the open row itself. */
+  .acts{position:static;grid-column:2;opacity:1;pointer-events:auto;height:auto;padding:0 1rem 1rem 0;display:none}
+  .row:has(details[open]) .acts{display:flex}
+  .acts a.btn{display:none}
+  .acts .btn,.ack .btn{height:2.5rem;padding:0 1.1rem;font-size:.875rem}
+  .open{grid-template-columns:minmax(0,1fr);padding:.25rem 1rem 1rem 0}
+  dl.f{grid-template-columns:5.5rem minmax(0,1fr)}
+  .actionpage dl.f{grid-template-columns:6.5rem minmax(0,1fr)}
+  .rendered iframe{height:20rem}
+  .foot{padding:0 1rem}
+}
+</style>{{end}}

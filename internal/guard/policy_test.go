@@ -251,7 +251,7 @@ func TestReplyAndForwardOfARedOrSealedSourceAreAlwaysRefused(t *testing.T) {
 					if !reflect.DeepEqual(records, want) || len(auditRecords(t, path)) != 0 {
 						t.Fatalf("records=%v\nwant   %v", allAuditRecords(t, path), want)
 					}
-					if items, err := c.ListPending(ctx, 10); err != nil || len(items) != 0 {
+					if items, err := c.ListPending(ctx, 10, ""); err != nil || len(items) != 0 {
 						t.Fatalf("pending items=%+v %v", items, err)
 					}
 				})
@@ -724,7 +724,7 @@ func TestDraftUpdateRefusesAMessageThatIsNotADraftBeforeAnyWrite(t *testing.T) {
 			if tc.w.draftReads != tc.reads || len(tc.w.calls) != 0 || len(s.checked()) != 0 {
 				t.Fatalf("reads=%d writes=%v checks=%v", tc.w.draftReads, tc.w.calls, s.checked())
 			}
-			if items, err := c.ListPending(ctx, 10); err != nil || len(items) != 0 {
+			if items, err := c.ListPending(ctx, 10, ""); err != nil || len(items) != 0 {
 				t.Fatalf("pending=%v %v", items, err)
 			}
 			if got := allAuditRecords(t, path); len(got) != 0 {
@@ -784,7 +784,7 @@ func TestDraftDeleteAndSendRefuseAMessageThatIsNotADraftBeforeAnyWrite(t *testin
 				if tc.w.draftReads != 1 || len(tc.w.calls) != 0 || len(s.checked()) != 0 {
 					t.Fatalf("reads=%d writes=%v checks=%v", tc.w.draftReads, tc.w.calls, s.checked())
 				}
-				if items, err := c.ListPending(ctx, 10); err != nil || len(items) != 0 {
+				if items, err := c.ListPending(ctx, 10, ""); err != nil || len(items) != 0 {
 					t.Fatalf("pending=%v %v", items, err)
 				}
 				if got := allAuditRecords(t, path); len(got) != 0 {

@@ -83,7 +83,7 @@ func TestPendingActionKeepsItsJevCheck(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(got.Jev, check) {
 			t.Fatalf("jev=%+v want %+v: %v", got.Jev, check, err)
 		}
-		listed, err := c.ListPending(ctx, 0)
+		listed, err := c.ListPending(ctx, 0, "")
 		if err != nil || !reflect.DeepEqual(listed[0].Jev, check) {
 			t.Fatalf("listed=%+v want %+v: %v", listed, check, err)
 		}
@@ -116,7 +116,7 @@ func TestPendingDraftSendKeepsTheCheckedDraftFields(t *testing.T) {
 		if got, err := read.GetPending(ctx, other); err != nil || got.Draft != nil {
 			t.Fatalf("send without draft fields=%+v %v", got, err)
 		}
-		listed, err := read.ListPending(ctx, 0)
+		listed, err := read.ListPending(ctx, 0, "")
 		if err != nil || len(listed) != 2 || string(listed[1].Draft) != string(draft) {
 			t.Fatalf("listed=%+v %v", listed, err)
 		}
@@ -387,31 +387,53 @@ func TestCacheClearKeepsPendingActions(t *testing.T) {
 	}
 }
 
-// The list shows every waiting action newest first, then the most recently updated other actions.
-func TestListPendingShowsWaitingActionsFirstThenRecentlyResolved(t *testing.T) {
+// The list shows every waiting action newest first, then for each operation its most recently handled actions
+// (done, denied, failed, withdrawn), newest first across operations. A running action is neither. An account limits
+// the handled actions to that account, never the waiting ones.
+func TestListPendingShowsWaitingActionsFirstThenRecentlyHandledPerOperation(t *testing.T) {
 	c, _ := open(t)
-	add := func(at time.Time) string {
+	addOn := func(account, op string, at time.Time) string {
 		t.Helper()
-		id, err := c.AddPending(ctx, "work", "mail.trash", json.RawMessage(`{"ids":["m1"]}`), nil, nil, at)
+		id, err := c.AddPending(ctx, account, op, json.RawMessage(`{"ids":["m1"]}`), nil, nil, at)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return id
 	}
-	oldWaiting := add(queued)
-	deniedFirst := add(queued.Add(time.Minute))
-	newWaiting := add(queued.Add(2 * time.Minute))
-	deniedLast := add(queued.Add(3 * time.Minute))
-	deniedMiddle := add(queued.Add(4 * time.Minute))
-	sameTime := add(queued.Add(2 * time.Minute))
+	add := func(op string, at time.Time) string { t.Helper(); return addOn("work", op, at) }
+	oldWaiting := add("mail.trash", queued)
+	deniedFirst := add("mail.trash", queued.Add(time.Minute))
+	newWaiting := add("mail.trash", queued.Add(2*time.Minute))
+	deniedLast := add("mail.trash", queued.Add(3*time.Minute))
+	deniedMiddle := add("mail.trash", queued.Add(4*time.Minute))
+	sameTime := add("mail.trash", queued.Add(2*time.Minute))
+	failedSend := add("mail.send", queued)
+	doneSend := add("mail.send", queued)
+	running := add("mail.send", queued)
+	homeWaiting := addOn("home", "mail.trash", queued.Add(-time.Minute))
+	homeDenied := addOn("home", "mail.trash", queued)
+	if _, err := c.DenyPending(ctx, homeDenied, queued.Add(40*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
 	for i, id := range []string{deniedFirst, deniedMiddle, deniedLast} {
 		if _, err := c.DenyPending(ctx, id, queued.Add(time.Duration(10+i)*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	list := func(limit int) []string {
+	for i, id := range []string{failedSend, doneSend, running} {
+		if _, err := c.ClaimPending(ctx, id, queued.Add(time.Duration(20+i)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.FinishPending(ctx, failedSend, cache.StateFailed, "TimeoutError", queued.Add(30*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.FinishPending(ctx, doneSend, cache.StateDone, `{"ok":true}`, queued.Add(5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	list := func(perOp int, account string) []string {
 		t.Helper()
-		items, err := c.ListPending(ctx, limit)
+		items, err := c.ListPending(ctx, perOp, account)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -421,14 +443,20 @@ func TestListPendingShowsWaitingActionsFirstThenRecentlyResolved(t *testing.T) {
 		}
 		return ids
 	}
-	want := []string{sameTime, newWaiting, oldWaiting, deniedLast, deniedMiddle, deniedFirst}
-	if got := list(50); !reflect.DeepEqual(got, want) {
+	waiting := []string{sameTime, newWaiting, oldWaiting, homeWaiting}
+	if got, want := list(50, ""), append(waiting, homeDenied, failedSend, deniedLast, deniedMiddle, deniedFirst, doneSend); !reflect.DeepEqual(got, want) {
 		t.Fatalf("list=%v; want %v", got, want)
 	}
-	if got := list(2); !reflect.DeepEqual(got, want[:5]) {
-		t.Fatalf("limited list=%v; want %v", got, want[:5])
+	if got, want := list(1, ""), append(waiting, homeDenied, failedSend); !reflect.DeepEqual(got, want) {
+		t.Fatalf("one per operation=%v; want %v", got, want)
 	}
-	items, err := c.ListPending(ctx, 1)
+	if got, want := list(1, "work"), append(waiting, failedSend, deniedLast); !reflect.DeepEqual(got, want) {
+		t.Fatalf("one per operation of work=%v; want %v", got, want)
+	}
+	if got := list(0, ""); !reflect.DeepEqual(got, waiting) {
+		t.Fatalf("waiting only=%v; want %v", got, waiting)
+	}
+	items, err := c.ListPending(ctx, 1, "")
 	if err != nil || items[0].Account != "work" || items[0].Op != "mail.trash" || string(items[0].Args) != `{"ids":["m1"]}` || items[0].State != cache.StatePending {
 		t.Fatalf("item=%+v error=%v", items, err)
 	}
@@ -453,7 +481,7 @@ func TestCancelledPendingIOReturnsCancellation(t *testing.T) {
 		func() error { _, err := c.DenyPending(cancelled, id, queued); return err },
 		func() error { _, err := c.WithdrawDraftSends(cancelled, "work", "d1", queued); return err },
 		func() error { return c.FinishPending(cancelled, id, cache.StateDone, "x", queued) },
-		func() error { _, err := c.ListPending(cancelled, 50); return err },
+		func() error { _, err := c.ListPending(cancelled, 50, ""); return err },
 	} {
 		if err := operation(); !errors.Is(err, context.Canceled) {
 			t.Errorf("expected cancellation, got %v", err)

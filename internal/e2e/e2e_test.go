@@ -142,9 +142,12 @@ func TestScreeningFlagMakesAnAllowedWriteWaitForApproval(t *testing.T) {
 	if got := s.column(`SELECT subject FROM messages WHERE folder = 'drafts'`); len(got) != 0 {
 		t.Fatalf("flagged draft ran: %v", got)
 	}
-	// The user decides: an approved run is not checked again.
-	s.approve(flagged.ApprovalID)
-	s.approve(draft.ApprovalID)
+	// The user decides after confirming the review: an approved run is not checked again.
+	if code := s.decide(flagged.ApprovalID, "approve"); code != http.StatusBadRequest || s.state(flagged.ApprovalID) != "pending" {
+		t.Fatalf("approve without the review: HTTP %d", code)
+	}
+	s.approveReviewed(flagged.ApprovalID)
+	s.approveReviewed(draft.ApprovalID)
 	if got := sent(); !reflect.DeepEqual(got, []string{"canary-subject-flagged", "canary-subject-plain"}) {
 		t.Fatalf("approved flagged send: %v", got)
 	}
@@ -231,10 +234,10 @@ func TestApprovalPageShowsToCcAndMarkedBcc(t *testing.T) {
 		t.Fatalf("list misses the recipients:\n%s", list)
 	}
 	_, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID)
-	for _, want := range []string{"<dt>to</dt><dd><pre>ana@example.test</pre></dd>", "<dt>cc</dt><dd><pre>cy@example.test</pre></dd>", "<dt>bcc (hidden recipients)</dt><dd><pre>ed@example.test</pre></dd>",
-		"<dt>body (HTML source, not rendered)</dt><dd><pre>&lt;b&gt;canary-body-console&lt;/b&gt;</pre></dd>"} {
+	for _, want := range []string{`<dt>To</dt><dd><span class="ln">ana@example.test</span></dd>`, `<dt>Cc</dt><dd><span class="ln">cy@example.test</span></dd>`, `<dt>Bcc (hidden recipients)</dt><dd><span class="ln">ed@example.test</span></dd>`,
+		"<figcaption>Body, HTML source as the agent wrote it</figcaption><pre>&lt;b&gt;canary-body-console&lt;/b&gt;</pre>"} {
 		if !strings.Contains(item, want) {
-			t.Errorf("item page misses %q:\n%s", want, item)
+			t.Errorf("action page misses %q:\n%s", want, item)
 		}
 	}
 	s.approve(p.ApprovalID)
@@ -315,10 +318,10 @@ func TestApprovalPageShowsTheReplyRecipients(t *testing.T) {
 	s.seedTeam()
 	p := s.held("mail", "reply", "team", "--all", "--cc", "di@example.test", "--bcc", "ed@example.test", "--body", "canary-body-reply-held")
 	_, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID)
-	for _, want := range []string{"<h2>Reply recipients</h2>", "<dt>to</dt><dd><pre>ana@example.test</pre></dd>",
-		"<dt>cc</dt><dd><pre>bob@example.test</pre><pre>cy@example.test</pre><pre>di@example.test</pre></dd>", "<dt>bcc (hidden recipients)</dt><dd><pre>ed@example.test</pre></dd>"} {
+	for _, want := range []string{"<h2>Reply recipients</h2>", `<dt>To</dt><dd><span class="ln">ana@example.test</span></dd>`,
+		`<dt>Cc</dt><dd><span class="ln">bob@example.test</span><span class="ln">cy@example.test</span><span class="ln">di@example.test</span></dd>`, `<dt>Bcc (hidden recipients)</dt><dd><span class="ln">ed@example.test</span></dd>`} {
 		if !strings.Contains(item, want) {
-			t.Errorf("item page misses %q:\n%s", want, item)
+			t.Errorf("action page misses %q:\n%s", want, item)
 		}
 	}
 	s.approve(p.ApprovalID)
@@ -337,8 +340,8 @@ func TestApprovalPageShowsTheReplyRecipients(t *testing.T) {
 	// When the original can no longer be read, the page says so instead of showing no recipients.
 	gone := s.held("mail", "reply", "team", "--body", "canary-body-reply-gone")
 	s.exec(`UPDATE messages SET account = 'someone-else' WHERE id = 'team'`)
-	if _, item := s.consoleGet(consolePassword, "/a/"+gone.ApprovalID); !strings.Contains(item, "<p>Reply recipients could not be read.</p>") || strings.Contains(item, "<dt>to</dt><dd><pre>ana@example.test") {
-		t.Fatalf("item page of an unreadable original:\n%s", item)
+	if _, item := s.consoleGet(consolePassword, "/a/"+gone.ApprovalID); !strings.Contains(item, `<p class="ph">Reply recipients could not be read.</p>`) || strings.Contains(item, "ana@example.test") {
+		t.Fatalf("action page of an unreadable original:\n%s", item)
 	}
 }
 
@@ -399,9 +402,9 @@ func TestApprovalPageShowsTheForwardRecipients(t *testing.T) {
 		t.Fatalf("list misses the recipients:\n%s", list)
 	}
 	_, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID)
-	for _, want := range []string{"<dt>to</dt><dd><pre>ana@example.test</pre></dd>", "<dt>cc</dt><dd><pre>cy@example.test</pre></dd>", "<dt>bcc (hidden recipients)</dt><dd><pre>ed@example.test</pre></dd>"} {
+	for _, want := range []string{`<dt>To</dt><dd><span class="ln">ana@example.test</span></dd>`, `<dt>Cc</dt><dd><span class="ln">cy@example.test</span></dd>`, `<dt>Bcc (hidden recipients)</dt><dd><span class="ln">ed@example.test</span></dd>`} {
 		if !strings.Contains(item, want) {
-			t.Errorf("item page misses %q:\n%s", want, item)
+			t.Errorf("action page misses %q:\n%s", want, item)
 		}
 	}
 	s.approve(p.ApprovalID)
@@ -518,13 +521,13 @@ func TestApprovedDraftUpdateAppliesOnlyTheGivenFields(t *testing.T) {
 		t.Fatalf("pending update ran: %v", got)
 	}
 	_, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID)
-	for _, want := range []string{"<dt>cc</dt><dd></dd>", "<dt>subject</dt><dd><pre>canary-subject-new</pre></dd>"} {
+	for _, want := range []string{`<dt>Cc</dt><dd class="ph">—</dd>`, `<dt>Subject</dt><dd><span class="ln">canary-subject-new</span></dd>`} {
 		if !strings.Contains(item, want) {
-			t.Errorf("item page misses %q:\n%s", want, item)
+			t.Errorf("action page misses %q:\n%s", want, item)
 		}
 	}
-	if strings.Contains(item, "<dt>to</dt>") || strings.Contains(item, "<dt>body</dt>") {
-		t.Errorf("item page shows a field that was not given:\n%s", item)
+	if strings.Contains(item, "<dt>To</dt>") || strings.Contains(item, "<figcaption>Body") {
+		t.Errorf("action page shows a field that was not given:\n%s", item)
 	}
 	s.approve(p.ApprovalID)
 	if got := s.column(`SELECT to_addresses || ' ' || cc_addresses || ' ' || subject || ' ' || body FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got, []string{`["ana@example.test"] [] canary-subject-new canary-body-old`}) {
@@ -611,11 +614,11 @@ func TestApprovedDraftSendShowsTheCheckedDraftAndSendsItOnce(t *testing.T) {
 		t.Fatalf("list misses the draft fields:\n%s", list)
 	}
 	_, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID)
-	for _, want := range []string{"<dt>id</dt><dd><pre>" + id + "</pre></dd>", "<h2>Draft</h2>", "<dt>to</dt><dd><pre>ana@example.test</pre></dd>", "<dt>cc</dt><dd><pre>cy@example.test</pre></dd>",
-		"<dt>bcc (hidden recipients)</dt><dd><pre>ed@example.test</pre></dd>", "<dt>subject</dt><dd><pre>canary-subject-checked</pre></dd>",
-		"<dt>body (HTML source, not rendered)</dt><dd><pre>&lt;b&gt;canary-body-checked&lt;/b&gt;</pre></dd>"} {
+	for _, want := range []string{`<dt>ID</dt><dd><span class="ln">` + id + `</span></dd>`, "<h2>Draft</h2>", `<dt>To</dt><dd><span class="ln">ana@example.test</span></dd>`, `<dt>Cc</dt><dd><span class="ln">cy@example.test</span></dd>`,
+		`<dt>Bcc (hidden recipients)</dt><dd><span class="ln">ed@example.test</span></dd>`, `<dt>Subject</dt><dd><span class="ln">canary-subject-checked</span></dd>`,
+		"<figcaption>Body, HTML source as the agent wrote it</figcaption><pre>&lt;b&gt;canary-body-checked&lt;/b&gt;</pre>"} {
 		if !strings.Contains(item, want) {
-			t.Errorf("item page misses %q:\n%s", want, item)
+			t.Errorf("action page misses %q:\n%s", want, item)
 		}
 	}
 	// The user changes the draft in the app, which the daemon does not watch.
@@ -643,8 +646,8 @@ func TestApprovedDraftSendShowsTheCheckedDraftAndSendsItOnce(t *testing.T) {
 	if got := s.column(`SELECT id FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, sent) {
 		t.Fatalf("approved send of a deleted draft sent %v", got)
 	}
-	if _, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID); !strings.Contains(item, "<dt>Error</dt><dd><pre>MailboxError</pre></dd>") {
-		t.Fatalf("failed item page:\n%s", item)
+	if _, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID); !strings.Contains(item, `<dt>Error</dt><dd class="bad">MailboxError</dd>`) {
+		t.Fatalf("failed action page:\n%s", item)
 	}
 }
 
@@ -662,8 +665,19 @@ func (s *server) seedFlaggedDraft() string {
 	return "users-draft"
 }
 
+// sendWaits reports whether the console list has a waiting Send draft row. Waiting rows carry the class of their
+// colour bar; Recents rows do not.
+func sendWaits(list string) bool {
+	for _, row := range strings.Split(list, `<li class="row `)[1:] {
+		if row, _, _ = strings.Cut(row, "</li>"); strings.Contains(row, `<span class="op">Send draft</span>`) {
+			return true
+		}
+	}
+	return false
+}
+
 // assertWithdrawn checks that the waiting send approval is withdrawn: approvals status reports it, the console lists
-// it among the handled items and shows its state, and it can be neither approved nor denied. Its approval records
+// it under the Recents of its table with its outcome, and it can be neither approved nor denied. Its approval records
 // are created and then withdrawn, with IDs and fixed codes only.
 func (s *server) assertWithdrawn(approval string) {
 	s.t.Helper()
@@ -671,13 +685,14 @@ func (s *server) assertWithdrawn(approval string) {
 		s.t.Fatalf("approvals status %s: %s", approval, state)
 	}
 	_, list := s.consoleGet(consolePassword, "/")
-	at := strings.Index(list, `<a href="/a/`+approval+`">draft.send</a>`)
-	if at < 0 || !strings.Contains(list[at:at+strings.Index(list[at:], "</tr>")], `<td class="state withdrawn">withdrawn</td>`) {
+	_, row, _ := strings.Cut(list, `<a class="line" href="/a/`+approval+`">`)
+	row, _, _ = strings.Cut(row, "</li>")
+	if !strings.Contains(row, `<span class="op">Send draft</span>`) || !strings.Contains(row, `<span class="st">Withdrawn</span>`) {
 		s.t.Fatalf("console list misses the withdrawn send:\n%s", list)
 	}
 	_, item := s.consoleGet(consolePassword, "/a/"+approval)
-	if !strings.Contains(item, `<dt>State</dt><dd class="state withdrawn">withdrawn</dd>`) || strings.Contains(item, "<form") {
-		s.t.Fatalf("item page of the withdrawn send:\n%s", item)
+	if !strings.Contains(item, `<dt>State</dt><dd class="state withdrawn">Withdrawn</dd>`) || strings.Contains(item, "<form") {
+		s.t.Fatalf("action page of the withdrawn send:\n%s", item)
 	}
 	for _, decision := range []string{"approve", "deny"} {
 		if code := s.decide(approval, decision); code != http.StatusConflict {
@@ -720,7 +735,7 @@ func TestDraftUpdateWithdrawsTheWaitingSendAndHoldsANewOne(t *testing.T) {
 	if got := s.column(`SELECT folder FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got, []string{"drafts"}) {
 		t.Fatalf("a draft update sent mail: %v", got)
 	}
-	if _, item := s.consoleGet(consolePassword, "/a/"+updated.SendApprovalID); !strings.Contains(item, "<dt>body</dt><dd><pre>canary-body-clean: see you at noon</pre></dd>") || !strings.Contains(item, "Fake check (keywords only): not flagged") {
+	if _, item := s.consoleGet(consolePassword, "/a/"+updated.SendApprovalID); !strings.Contains(item, "<figcaption>Body, plain text as the agent wrote it</figcaption><pre>canary-body-clean: see you at noon</pre>") || !strings.Contains(item, `<dt>Score</dt><dd><span class="fake">fake</span>0.05 · Checked</dd>`) {
 		t.Fatalf("new send page:\n%s", item)
 	}
 	policy := s.auditEvents("policy")
@@ -745,7 +760,7 @@ func TestApprovedDraftUpdateReplacesTheWaitingSendAndTheNewOneWaits(t *testing.T
 	first := s.held("draft", "send", id)
 	update := s.held("draft", "update", id, "--body", "canary-body-clean: see you at noon")
 	s.assertWithdrawn(first.ApprovalID)
-	if _, list := s.consoleGet(consolePassword, "/"); strings.Count(list, `class="state pending"`) != 1 {
+	if _, list := s.consoleGet(consolePassword, "/"); !strings.Contains(list, `<span class="sum num">1 waiting ·`) {
 		t.Fatalf("a waiting update made a new send:\n%s", list)
 	}
 	old := s.held("draft", "send", id)
@@ -762,7 +777,7 @@ func TestApprovedDraftUpdateReplacesTheWaitingSendAndTheNewOneWaits(t *testing.T
 		t.Fatalf("new send after an approved update: %s", state)
 	}
 	// The new send has its own decision and Jev check: the approval of the update does not cover it.
-	if _, item := s.consoleGet(consolePassword, "/a/"+status.Result.SendApprovalID); !strings.Contains(item, "Fake check (keywords only): not flagged") {
+	if _, item := s.consoleGet(consolePassword, "/a/"+status.Result.SendApprovalID); !strings.Contains(item, `<dt>Score</dt><dd><span class="fake">fake</span>0.05 · Checked</dd>`) {
 		t.Fatalf("new send page has no new check:\n%s", item)
 	}
 	policy := s.auditEvents("policy")
@@ -790,7 +805,7 @@ func TestDraftUpdateUnderASendDenyWithdrawsWithoutANewSend(t *testing.T) {
 		t.Fatalf("draft update: %s", out)
 	}
 	s.assertWithdrawn(old.ApprovalID)
-	if _, list := s.consoleGet(consolePassword, "/"); strings.Contains(list, `class="state pending"`) {
+	if _, list := s.consoleGet(consolePassword, "/"); sendWaits(list) {
 		t.Fatalf("a send waits after an update under deny:\n%s", list)
 	}
 }
@@ -812,7 +827,7 @@ func TestSecondDraftSendAndDraftDeleteWithdrawTheWaitingSend(t *testing.T) {
 	if got := s.column(`SELECT id FROM messages WHERE folder = 'sent'`); len(got) != 0 {
 		t.Fatalf("sent: %v", got)
 	}
-	if _, list := s.consoleGet(consolePassword, "/"); strings.Contains(list, `class="state pending"`) {
+	if _, list := s.consoleGet(consolePassword, "/"); sendWaits(list) {
 		t.Fatalf("a send waits after the draft delete:\n%s", list)
 	}
 }
@@ -838,7 +853,7 @@ func TestRefusedDraftSendStillWithdrawsTheWaitingSend(t *testing.T) {
 	}
 	s.refused("refused by policy: mail_send", "draft", "send", id)
 	s.assertWithdrawn(old.ApprovalID)
-	if _, list := s.consoleGet(consolePassword, "/"); strings.Contains(list, `class="state pending"`) {
+	if _, list := s.consoleGet(consolePassword, "/"); sendWaits(list) {
 		t.Fatalf("a send waits after refused sends:\n%s", list)
 	}
 	if got := s.column(`SELECT id FROM messages WHERE folder = 'sent'`); !reflect.DeepEqual(got, []string{sentByApp}) {
@@ -1047,8 +1062,8 @@ func TestApprovalPageShowsAnHTMLMeetingBodyAsSource(t *testing.T) {
 	p := s.held("calendar", "invite", "--to", "ana@example.test", "--subject", "canary-subject-html-console", "--body", "<i>canary-body-console</i>", "--html",
 		"--start", "2030-01-02 09:00", "--duration", "30m", "--no-online")
 	_, item := s.consoleGet(consolePassword, "/a/"+p.ApprovalID)
-	if want := "<dt>body (HTML source, not rendered)</dt><dd><pre>&lt;i&gt;canary-body-console&lt;/i&gt;</pre></dd>"; !strings.Contains(item, want) {
-		t.Fatalf("item page misses %q:\n%s", want, item)
+	if want := "<figcaption>Invitation text, HTML source as the agent wrote it</figcaption><pre>&lt;i&gt;canary-body-console&lt;/i&gt;</pre>"; !strings.Contains(item, want) {
+		t.Fatalf("action page misses %q:\n%s", want, item)
 	}
 	s.approve(p.ApprovalID)
 	if got := s.column(`SELECT content_type || ' ' || body FROM events WHERE subject = 'canary-subject-html-console'`); !reflect.DeepEqual(got, []string{"html <i>canary-body-console</i>"}) {

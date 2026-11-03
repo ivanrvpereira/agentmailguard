@@ -36,10 +36,17 @@ type nativeAPI struct {
 	actionScore float64
 	// actionChecks records the request body of each Jev action check.
 	actionChecks []map[string]any
+	// gets counts the Graph GET requests of each path. hang holds the Graph paths whose requests answer only when the
+	// client gives up.
+	gets map[string]int
+	hang map[string]bool
+	// screenDelay slows each Jev screening; screening and maxScreening count the screenings in flight.
+	screenDelay             time.Duration
+	screening, maxScreening int
 }
 
 func newNativeAPI() *nativeAPI {
-	return &nativeAPI{bodyReads: map[string]int{}, jevCalls: map[string]int{}, categories: map[string][]string{}, actionScore: .1}
+	return &nativeAPI{bodyReads: map[string]int{}, jevCalls: map[string]int{}, categories: map[string][]string{}, actionScore: .1, gets: map[string]int{}, hang: map[string]bool{}}
 }
 
 // checks returns the recorded Jev action check requests.
@@ -61,6 +68,21 @@ func messageJSON(id string, body bool, cats []string) map[string]any {
 	return m
 }
 func (a *nativeAPI) graph(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	hang := a.hang[r.URL.Path]
+	if r.Method == "GET" {
+		a.gets[r.URL.Path]++
+	}
+	a.mu.Unlock()
+	if hang {
+		<-r.Context().Done()
+		return
+	}
+	if r.URL.Path == "/token" {
+		// A token refresh gets a new access token for an hour.
+		response(w, map[string]any{"access_token": statusJWT(m365Grant + " Calendars.ReadWrite Mail.Send"), "refresh_token": "private-refresh-canary", "expires_in": 3600})
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if r.Method != "GET" {
@@ -109,8 +131,12 @@ func (a *nativeAPI) graph(w http.ResponseWriter, r *http.Request) {
 			v = append(v, messageJSON(id, false, a.categories[id]))
 		}
 		response(w, map[string]any{"value": v})
-	case "/me/calendarView", "/me/events/e":
+	case "/me/calendarView", "/me/events/e", "/me/events/o":
+		// The event o is one that the account organizes.
 		e := map[string]any{"id": "e", "subject": "private-subject-event", "start": map[string]string{"dateTime": "2026-03-31T10:00:00", "timeZone": "UTC"}, "end": map[string]string{"dateTime": "2026-03-31T11:00:00", "timeZone": "UTC"}, "isOrganizer": false, "body": map[string]string{"contentType": "text", "content": "private-body-event"}, "categories": []string{}}
+		if r.URL.Path == "/me/events/o" {
+			e["id"], e["isOrganizer"] = "o", true
+		}
 		if r.URL.Path == "/me/calendarView" {
 			response(w, map[string]any{"value": []any{e}})
 		} else {
@@ -160,6 +186,13 @@ func (a *nativeAPI) jev(w http.ResponseWriter, r *http.Request) {
 	subject, _ := req.State["subject"].(string)
 	id := strings.TrimPrefix(subject, "private-subject-")
 	a.mu.Lock()
+	a.screening++
+	a.maxScreening = max(a.maxScreening, a.screening)
+	delay := a.screenDelay
+	a.mu.Unlock()
+	time.Sleep(delay)
+	a.mu.Lock()
+	a.screening--
 	a.jevCalls[id]++
 	if _, ok := req.Questions["injection"]; ok {
 		a.jevCalls["security:"+id]++

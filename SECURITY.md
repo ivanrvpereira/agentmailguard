@@ -48,6 +48,22 @@ The approval console is a second listener (default `localhost:8788`). It always 
 Until a console password is set, it refuses every request with HTTP 503.
 It requires the console username and password on every request and has no built-in TLS.
 Never forward its port through a tunnel that the agent can use.
+Every console response has this content security policy: `default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; require-trusted-types-for 'script'; trusted-types 'none'`.
+The only script is the console's own file `/assets/console.js`.
+It is embedded in the binary and served only after the Host check and the sign-in.
+Trusted Types without a policy make every HTML write from a script fail.
+The pages work without the script.
+The server enforces every rule, such as the `I reviewed it` confirmation before the approve of an action that needs review.
+Every console POST, also a batch on `/batch`, needs the console's own `Origin`, a form content type, and a small body.
+The return path after a decision is rebuilt from a validated list filter, so the console is never an open redirect.
+The Auto-refresh cookie `amg_console_refresh` is `HttpOnly` and `SameSite=Strict` and holds only the interval.
+The Rendered preview of an HTML body is an iframe with an empty `sandbox` attribute.
+It inherits the page's policy, so it runs no scripts and loads nothing remote.
+The escaped source stays visible below it.
+The live reads of the list use the same guarded read path as the agent, which screens a message that has no verdict yet.
+The list never shows a body, and a red or sealed message shows no subject.
+A batch decides each pending action one by one, through the same approval path as a single decision.
+A batch approve skips the actions that need review.
 
 ## Mail and agent boundary
 
