@@ -113,7 +113,7 @@ The server refuses an approve of an action that needs review without that box wi
 
 Each pending row has a checkbox, and each table has a header checkbox that selects every row of the table.
 Without the script, the header checkbox is a link (`?select=messages`, `?select=meetings`, or `?select=mailbox`) that shows the page with the rows of the table ticked.
-While any box is ticked, a bulk bar shows at the bottom of the window, over the page, so that no row moves when you tick a box.
+While any box is ticked, a bulk bar shows at the bottom of the window, over the page, so that no row moves when you tick or clear a box.
 It shows `N selected`, `M need review: Approve skips them` when the selection has rows that need review, and the buttons **Approve selected**, **Deny selected**, and **Clear**.
 If every selected row needs review, Approve selected is off, and the bar shows `All need review: approve each from its row`.
 

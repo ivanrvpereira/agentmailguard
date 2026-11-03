@@ -472,27 +472,42 @@ func TestBrowserConsoleRowsKeepTheirTextAtEveryWidth(t *testing.T) {
 	}
 }
 
-// Ticking a box moves no row: the bulk bar floats at the bottom of the window with the selection count in it, and the
-// page gets room below its last row, so that the last row still scrolls above the bar.
+// Ticking or clearing a box moves no row on the screen, at the top of the list or scrolled to its bottom: the bulk bar
+// floats at the bottom of the window with the selection count in it, and the page keeps room below its last row, so
+// that the last row still scrolls above the bar and clearing the selection does not shorten the page.
 func TestBrowserConsoleBulkBarMovesNoRow(t *testing.T) {
 	f, b := browserConsole(t, everyWriteWaits, nil)
 	for range 12 {
 		pend(t, f.d.s, "mail.send", `{"to":["a@example.test"],"subject":"s","body":"b"}`)
 	}
-	tops := `Array.from(document.querySelectorAll("li.row"), (r) => r.getBoundingClientRect().top + scrollY).join(" ")`
+	// The rows' places on the screen, and the scroll position.
+	onScreen := `[scrollY, ...Array.from(document.querySelectorAll("li.row"), (r) => r.getBoundingClientRect().top)].join(" ")`
 	for _, width := range []int64{390, 1000, 1440} {
 		b.do(t, chromedp.EmulateViewport(width, 900))
-		b.open(t, "/?refresh=off")
-		before := eval[string](t, b, tops)
-		eval[chromedp.Void](t, b, `document.querySelector("input.sel").click()`)
-		after := eval[string](t, b, tops)
-		got := eval[[]float64](t, b, `(() => {
-			scrollTo(0, document.documentElement.scrollHeight);
-			const bar = document.querySelector(".bar").getBoundingClientRect(), count = document.querySelector(".selcount").getBoundingClientRect(), rows = document.querySelectorAll(".waiting li.row");
-			return [innerHeight - bar.bottom, rows[rows.length - 1].getBoundingClientRect().bottom - bar.top, count.top >= bar.top && count.bottom <= bar.bottom && count.height > 0 ? 1 : 0];
-		})()`)
-		if before != after || got[0] != 0 || got[1] > 0 || got[2] != 1 {
-			t.Errorf("%dpx: row tops %q, then %q; bar %.0fpx above the bottom, last row %.0fpx under the bar, count in the bar %v", width, before, after, got[0], got[1], got[2] == 1)
+		for _, c := range []struct{ where, scroll, box string }{
+			{"top", "scrollTo(0, 0)", `document.querySelector("input.sel")`},
+			{"bottom", "scrollTo(0, document.documentElement.scrollHeight)", `Array.from(document.querySelectorAll("input.sel")).at(-1)`},
+		} {
+			b.open(t, "/?refresh=off")
+			eval[chromedp.Void](t, b, c.scroll)
+			before := eval[string](t, b, onScreen)
+			eval[chromedp.Void](t, b, c.box+".click()")
+			ticked := eval[string](t, b, onScreen)
+			got := eval[[]float64](t, b, `(() => {
+				const bar = document.querySelector(".bar").getBoundingClientRect(), count = document.querySelector(".selcount").getBoundingClientRect(), rows = document.querySelectorAll(".waiting li.row");
+				scrollTo(0, document.documentElement.scrollHeight);
+				const last = rows[rows.length - 1].getBoundingClientRect().bottom - document.querySelector(".bar").getBoundingClientRect().top;
+				return [innerHeight - bar.bottom, last, count.top >= bar.top && count.bottom <= bar.bottom && count.height > 0 ? 1 : 0];
+			})()`)
+			eval[chromedp.Void](t, b, c.scroll)
+			ticked2 := eval[string](t, b, onScreen)
+			eval[chromedp.Void](t, b, c.box+".click()")
+			cleared := eval[string](t, b, onScreen)
+			// Ticking moves no row; scrolled as far as the ticked page goes, clearing moves no row either.
+			if before != ticked || ticked2 != cleared || got[0] != 0 || got[1] > 0 || got[2] != 1 {
+				t.Errorf("%dpx, %s: rows %q, ticked %q; ticked and scrolled %q, cleared %q; bar %.0fpx above the bottom, last row %.0fpx under the bar, count in the bar %v",
+					width, c.where, before, ticked, ticked2, cleared, got[0], got[1], got[2] == 1)
+			}
 		}
 	}
 }

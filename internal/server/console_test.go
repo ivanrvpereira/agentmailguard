@@ -371,14 +371,16 @@ func TestConsoleActionShowsStoredArgumentsAsTextAndTheMessageSummary(t *testing.
 	onlyConsoleLinks(t, page)
 }
 
-// The action page heading names what the action is about: the subject of the request, else the subject of the
-// message or event that the guarded read shows. A red message shows no subject, so its heading has none.
+// The action page heading names what the action is about: the subject of the request, also the new subject of a
+// meeting update, else the subject of the message or event that the guarded read shows. A red message shows no
+// subject, so its heading has none.
 func TestConsoleActionHeadingNamesTheSubject(t *testing.T) {
 	f := consoleDaemon(t, everyWriteWaits, true)
 	for _, tc := range []struct{ op, params, want string }{
 		{"mail.send", `{"to":["a@example.test"],"subject":"Plan","body":"b"}`, `<h1>Send <span class="what">Plan</span> <span class="opname">mail.send</span></h1>`},
 		{"draft.new", `{"to":["a@example.test"],"subject":"","body":"b"}`, `<h1>New draft <span class="opname">draft.new</span></h1>`},
 		{"calendar.cancel", `{"id":"o","comment":"c"}`, `<h1>Cancel <span class="what">private-subject-event</span> <span class="opname">calendar.cancel</span></h1>`},
+		{"calendar.update", `{"id":"o","subject":"New title"}`, `<h1>Update <span class="what">New title</span> <span class="opname">calendar.update</span></h1>`},
 		{"mail.trash", `{"ids":["r"]}`, `<h1>Trash <span class="opname">mail.trash</span></h1>`},
 	} {
 		id := pend(t, f.d.s, tc.op, tc.params)[0]

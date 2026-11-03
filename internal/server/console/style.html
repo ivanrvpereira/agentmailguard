@@ -79,13 +79,14 @@ a:hover{text-decoration:underline}
 .filters a[aria-current] .c{color:var(--ink-2)}
 
 /* Bulk bar: shown only while a box is ticked in any table, at the bottom of the window over the page, so that no row
-   moves under the pointer. The page gets room below its last row for it. */
+   moves under the pointer. The page always keeps room below its last row for it: room that came and went with the
+   selection would change the page height, and clearing the last box near the bottom would scroll the rows. */
 .bar,.selcount{position:fixed;left:0;right:0;bottom:0}
 .bar{z-index:3;display:none;min-height:3rem;align-items:center;background:color-mix(in srgb,var(--accent) 5%,var(--bg));border-top:1px solid color-mix(in srgb,var(--accent) 30%,var(--line));box-shadow:0 -4px 16px rgb(0 0 0/.06)}
 .bar form{display:flex;justify-content:flex-end;width:100%;max-width:92rem;margin:0 auto;padding:.5rem 2rem .5rem 1.5rem}
 .bar .live{display:flex;justify-content:flex-end;gap:.5rem;align-items:center}
 .listpage:has(.sel:checked) .bar{display:flex}
-.listpage:has(.sel:checked){padding-bottom:8rem}
+.pane.listpage{padding-bottom:8rem}
 /* Batch approve skips the rows that need review. When every ticked row needs review, the real button is gone, so
    that it cannot be pressed or focused, and a disabled stand-in takes its place. */
 .bar .btn.off{display:none}

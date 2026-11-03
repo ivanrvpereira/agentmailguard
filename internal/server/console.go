@@ -302,9 +302,12 @@ type actionPage struct {
 	Pending   bool
 }
 
-// Heading is what the action is about: the subject of the request, else the subject of the message or event that the
-// guarded read shows, or empty. A placeholder is never the heading.
+// Heading is what the action is about: the subject of the request, which is the new subject of a meeting update, else
+// the subject of the message or event that the guarded read shows, or empty. A placeholder is never the heading.
 func (p actionPage) Heading() string {
+	if subject, _ := p.Row.args["subject"].(string); subject != "" {
+		return subject
+	}
 	switch {
 	case p.Row.Subject != "" && !p.Row.NoSubject && !p.Row.SubjectHidden:
 		return p.Row.Subject
