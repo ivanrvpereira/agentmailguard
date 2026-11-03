@@ -108,7 +108,7 @@ func (g *Guard) Thread(ctx context.Context, thread string) ([]views.MailSummary,
 	if !threadValid(messages, thread) {
 		return nil, GuardError("ValueError")
 	}
-	messages, err = g.openMessages(ctx, messages)
+	messages, closed, err := g.openMessages(ctx, messages)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,7 @@ func (g *Guard) Thread(ctx context.Context, thread string) ([]views.MailSummary,
 	if err != nil {
 		return nil, err
 	}
-	return g.summaries(ctx, messages, categories)
+	return g.summaries(ctx, messages, closed, categories)
 }
 func (g *Guard) Folders(ctx context.Context) ([]model.Folder, error) {
 	if err := ctx.Err(); err != nil {

@@ -167,10 +167,17 @@ _Avoid_: invite email, calendar update
 A move of a message into the provider's trash, never a permanent deletion.
 _Avoid_: delete, remove
 
+**Spam**:
+A move of a message into the provider's spam folder (junk in Microsoft 365) under the `mail_spam` policy key.
+_Avoid_: junk (except for the Microsoft 365 folder), report
+
 ### Organization
 
 **Closed folder**:
 The provider's trash or spam/junk folder, and every folder below either one. Agents neither read nor change mail there.
+
+**Bin**:
+Which closed folder tree a folder belongs to: trash or spam (`model.Bin`). A folder outside both has no bin.
 
 **Rule**:
 A named instruction in `rules.toml` for one account that files matching mail into a folder or a category.

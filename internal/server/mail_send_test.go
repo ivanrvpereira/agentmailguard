@@ -265,7 +265,7 @@ func TestDraftUpdateResultHasOnlyTheGivenFieldsCleaned(t *testing.T) {
 		}
 		paths = append(paths, r.Method+" "+r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"id":"d1","conversationId":"conv","isDraft":true,"subject":"CANARY old","toRecipients":[{"emailAddress":{"address":"old@example.test"}}],"ccRecipients":[],"bccRecipients":[],"body":{"contentType":"text","content":"CANARY"}}`)
+		io.WriteString(w, `{"id":"d1","parentFolderId":"drafts","conversationId":"conv","isDraft":true,"subject":"CANARY old","toRecipients":[{"emailAddress":{"address":"old@example.test"}}],"ccRecipients":[],"bccRecipients":[],"body":{"contentType":"text","content":"CANARY"}}`)
 	}), newNativeAPI())
 	status, body := accountRPC(t, d.s, "draft.update", "work", `{"id":"d1","to":["a@example.test\u0007"],"cc":[],"subject":"CANARY\u200b see https://evil.example.test/x"}`)
 	if want := `{"id":"d1","thread_id":"conv","ok":true,"to":["a@example.test"],"cc":[],"subject":"CANARY see [link removed]"}`; status != 200 || body != want {

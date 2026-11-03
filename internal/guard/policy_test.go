@@ -32,10 +32,10 @@ var defaultPolicy = config.Policy{
 // allowAll allows every write. A reply or forward still looks up its source, which must not be sealed.
 var allowAll = config.Policy{
 	Base: config.Decisions{
-		MailTrash: config.Allow, MailDraft: config.Allow, MailSend: config.Allow,
+		MailTrash: config.Allow, MailSpam: config.Allow, MailDraft: config.Allow, MailSend: config.Allow,
 		CalendarInvite: config.Allow, CalendarUpdate: config.Allow, CalendarCancel: config.Allow, CalendarRespond: config.Allow,
 	},
-	Sealed: config.SealedDecisions{MailTrash: config.Allow},
+	Sealed: config.SealedDecisions{MailTrash: config.Allow, MailSpam: config.Allow},
 }
 
 // policyGuard builds a guard over mail b and calendar cal with the given policy.

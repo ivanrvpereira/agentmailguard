@@ -67,6 +67,8 @@ func (g *Guard) openFolder(ctx context.Context, folder string) error {
 	return nil
 }
 
+// messageClosed refuses a message in a closed folder. Folders is the message's full location (model.Mailbox), so a
+// message in no folder is open. Check again each copy that replaces a checked message: it may have moved.
 func messageClosed(m model.Message, closed map[string]model.Bin) error {
 	for _, folder := range m.Folders {
 		switch closed[folder] {
@@ -91,10 +93,11 @@ func (g *Guard) openMessage(ctx context.Context, id string) error {
 	return messageClosed(messages[id], closed)
 }
 
-func (g *Guard) openMessages(ctx context.Context, messages []model.Message) ([]model.Message, error) {
+// openMessages keeps the messages outside closed folders and gives the closed folders it checked them against.
+func (g *Guard) openMessages(ctx context.Context, messages []model.Message) ([]model.Message, map[string]model.Bin, error) {
 	closed, err := g.closedFolders(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return slices.DeleteFunc(slices.Clone(messages), func(m model.Message) bool { return messageClosed(m, closed) != nil }), nil
+	return slices.DeleteFunc(slices.Clone(messages), func(m model.Message) bool { return messageClosed(m, closed) != nil }), closed, nil
 }

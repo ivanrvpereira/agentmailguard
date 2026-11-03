@@ -159,7 +159,7 @@ func greenMessage(t *testing.T, id string) string {
 }
 
 // draftJSON is the Graph JSON of the draft d1, which a draft update reads before it writes.
-const draftJSON = `{"id":"d1","isDraft":true,"toRecipients":[],"ccRecipients":[],"bccRecipients":[],"subject":"CANARY draft","body":{"contentType":"text","content":"CANARY body"}}`
+const draftJSON = `{"id":"d1","parentFolderId":"drafts","isDraft":true,"toRecipients":[],"ccRecipients":[],"bccRecipients":[],"subject":"CANARY draft","body":{"contentType":"text","content":"CANARY body"}}`
 
 // The same call under an allow policy gives the expected provider writes and result: one write, and for a reply or
 // forward draft the createReply or createForward and its PATCH. A stored draft result keeps only the draft IDs (stored).

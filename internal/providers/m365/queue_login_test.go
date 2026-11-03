@@ -57,7 +57,7 @@ func TestQueuedLoginKeepsItsIdentityAndDoesNotDeadlockRefresh(t *testing.T) {
 					if r.Header.Get("Authorization") != "Bearer "+fresh {
 						t.Error("queued read used expired identity")
 					}
-					jsonResponse(w, map[string]string{"id": "queued"})
+					jsonResponse(w, map[string]string{"id": "queued", "parentFolderId": "inbox-id"})
 				default:
 					started <- struct{}{}
 					select {
@@ -65,7 +65,7 @@ func TestQueuedLoginKeepsItsIdentityAndDoesNotDeadlockRefresh(t *testing.T) {
 					case <-r.Context().Done():
 						return
 					}
-					jsonResponse(w, map[string]string{"id": "blocked"})
+					jsonResponse(w, map[string]string{"id": "blocked", "parentFolderId": "inbox-id"})
 				}
 			}))
 			defer server.Close()

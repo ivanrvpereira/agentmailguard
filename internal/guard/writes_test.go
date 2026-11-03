@@ -29,6 +29,7 @@ type writer struct {
 	draftErr         error               // the ReadDraft error
 	draft            *model.DraftResult  // the DraftNew result; nil gives ID d1
 	recipientsErr    error               // the ReplyRecipients error; nil gives the recipients of replyRecipients
+	recipientReads   int                 // the ReplyRecipients calls
 	chosen           map[string][]string // the ThreadMessagesIn IDs by "thread/folder"; a missing key gives none
 	chooseErr        error               // the ThreadMessagesIn error
 	choices          []string            // the "thread/folder" of each ThreadMessagesIn call, in order
@@ -132,6 +133,7 @@ func replyRecipients(all bool) model.Recipients {
 	return r
 }
 func (w *writer) ReplyRecipients(_ context.Context, _ string, all bool) (model.Recipients, error) {
+	w.recipientReads++
 	if w.recipientsErr != nil {
 		return model.Recipients{}, w.recipientsErr
 	}

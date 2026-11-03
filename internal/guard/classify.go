@@ -23,6 +23,11 @@ func (g *Guard) Classify(ctx context.Context, ids []string, r rules.Rules) ([]Cl
 	if asked == nil {
 		return []Classified{}, nil
 	}
+	// A scanned message may have moved to a closed folder since the scan; one lookup serves every message.
+	closed, err := g.closedFolders(ctx)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := g.cached(ctx, ids)
 	if err != nil {
 		return nil, safeErr(ctx, err)
@@ -34,7 +39,7 @@ func (g *Guard) Classify(ctx context.Context, ids []string, r rules.Rules) ([]Cl
 		if saved, ok := rows[id]; ok {
 			row = &saved
 		}
-		out[i] = g.classifyOne(ctx, id, row, asked)
+		out[i] = g.classifyOne(ctx, id, row, asked, closed)
 		return nil
 	})
 	if err != nil {
@@ -42,7 +47,10 @@ func (g *Guard) Classify(ctx context.Context, ids []string, r rules.Rules) ([]Cl
 	}
 	return out, nil
 }
-func (g *Guard) classifyOne(ctx context.Context, id string, row *cache.Row, asked *model.OrganizationQuestions) Classified {
+
+// classifyOne refuses a fetched message in a closed folder with the code "closed", before screening and without its
+// cached row. A message with nothing to ask is not fetched; a write on it still gets the closed check of mutationCall.
+func (g *Guard) classifyOne(ctx context.Context, id string, row *cache.Row, asked *model.OrganizationQuestions, closed map[string]model.Bin) Classified {
 	result := Classified{ID: id, Row: row}
 	security := row == nil || row.Verdict == model.Error
 	organize := row == nil || row.Organization == nil
@@ -55,6 +63,9 @@ func (g *Guard) classifyOne(ctx context.Context, id string, row *cache.Row, aske
 		return result
 	}
 	m := fetched[id]
+	if messageClosed(m, closed) != nil {
+		return Classified{ID: id, Error: new("closed")}
+	}
 	if m.IsDraft {
 		result.Error = new("draft")
 		return result

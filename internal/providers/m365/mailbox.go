@@ -67,10 +67,10 @@ func content(d object) (*string, *model.ContentType) {
 }
 
 // message reads BCC only of a draft or of a message from the account's address, which is one that the account sent,
-// as ReplyRecipients tells them apart.
+// as ReplyRecipients tells them apart. Every Graph message has a parentFolderId, its location: one without it fails.
 func (b *mailbox) message(d object, body bool) (model.Message, error) {
-	m := model.Message{ID: text(d, "id"), ThreadID: text(d, "conversationId"), Subject: text(d, "subject"), IsDraft: boolean(d, "isDraft"), IsRead: boolean(d, "isRead"), Flag: model.NoFlag, Categories: stringsAt(d, "categories"), Attachments: names(d), To: addresses(d, "toRecipients"), CC: addresses(d, "ccRecipients"), BCC: []model.Address{}, ReceivedAt: model.UnknownReceived, Folders: []string{}}
-	if m.ID == "" {
+	m := model.Message{ID: text(d, "id"), ThreadID: text(d, "conversationId"), Subject: text(d, "subject"), IsDraft: boolean(d, "isDraft"), IsRead: boolean(d, "isRead"), Flag: model.NoFlag, Categories: stringsAt(d, "categories"), Attachments: names(d), To: addresses(d, "toRecipients"), CC: addresses(d, "ccRecipients"), BCC: []model.Address{}, ReceivedAt: model.UnknownReceived, Folders: []string{text(d, "parentFolderId")}}
+	if m.ID == "" || m.Folders[0] == "" {
 		return m, invalidMetadata
 	}
 	if m.IsDraft || strings.EqualFold(address(obj(d, "from")).Address, b.c.account.Email) {
@@ -87,9 +87,6 @@ func (b *mailbox) message(d object, body bool) (model.Message, error) {
 			return m, invalidMetadata
 		}
 		m.ReceivedAt = stamp
-	}
-	if f := text(d, "parentFolderId"); f != "" {
-		m.Folders = []string{f}
 	}
 	switch text(obj(d, "flag"), "flagStatus") {
 	case "flagged":
@@ -364,11 +361,12 @@ func (b *mailbox) ClosedFolders(ctx context.Context) (map[string]model.Bin, erro
 					return nil, invalidPage
 				}
 				out[id] = root.bin
-				var children int
-				if json.Unmarshal(d["childFolderCount"], &children) != nil || children < 0 {
+				// JSON null decodes without an error; read as 0, it would end the walk early. A missing count fails to decode.
+				var children *int
+				if json.Unmarshal(d["childFolderCount"], &children) != nil || children == nil || *children < 0 {
 					return nil, invalidMetadata
 				}
-				if children > 0 {
+				if *children > 0 {
 					pending = append(pending, id)
 				}
 			}

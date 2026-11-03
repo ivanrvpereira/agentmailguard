@@ -207,6 +207,27 @@ func TestClosedFoldersIncludeBinDescendants(t *testing.T) {
 	}
 }
 
+// A parent cycle cannot hold the walk: it fails instead of looping or leaving its folders open.
+func TestClosedFoldersFailOnAParentCycle(t *testing.T) {
+	m, home := mailbox(t)
+	if _, err := m.Folders(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	seed(t, home, `INSERT INTO folders (account, id, name, parent) VALUES ('demo@fake.test', 'a', 'A', 'b'), ('demo@fake.test', 'b', 'B', 'a')`)
+	if got, err := m.ClosedFolders(context.Background()); err == nil || got != nil {
+		t.Fatalf("folders=%+v err=%v", got, err)
+	}
+}
+
+// A fake message is always in one folder: one without a folder fails the read (model.Mailbox).
+func TestMessageWithoutAFolderFails(t *testing.T) {
+	m, home := mailbox(t)
+	seed(t, home, `INSERT INTO messages (account, id, folder, sender_address, subject, received_at) VALUES ('demo@fake.test', 'nowhere', '', 'ana@example.test', 'S', '2026-03-05T09:00:00Z')`)
+	if got, err := m.Get(context.Background(), []string{"nowhere"}, false); err == nil {
+		t.Fatalf("get=%+v", got)
+	}
+}
+
 func folderOf(t *testing.T, m model.Mailbox, id string) model.Message {
 	t.Helper()
 	got, err := m.Get(context.Background(), []string{id}, false)

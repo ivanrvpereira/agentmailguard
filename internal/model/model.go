@@ -333,7 +333,7 @@ type InboxScan struct {
 	Failures []ScanFailure
 }
 
-// Bin identifies why a folder is closed; the empty value is not a bin.
+// Bin names the closed folder tree that a folder belongs to (trash or spam/junk); the empty value is not a bin.
 type Bin string
 
 const (
@@ -343,6 +343,8 @@ const (
 
 // Mailbox deliberately has no permanent-delete operation. Its send operations reach real recipients at once.
 // List/Search/Thread may return bodies already available even when body is false.
+// Get/List/Search/Thread give each message's full location in Message.Folders; an adapter that cannot read it fails.
+// An empty Folders means only that the provider has the message in no folder (Gmail mail without labels).
 // ScanInbox reads all pages before returning, metadata only, excluding drafts,
 // with since <= received_at < until (nil until means no upper bound).
 type Mailbox interface {

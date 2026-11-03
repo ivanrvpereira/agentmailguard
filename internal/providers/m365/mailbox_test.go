@@ -91,13 +91,13 @@ func TestReadCollectionsSearchAndCurrentNestedFolders(t *testing.T) {
 			if q.Get("$top") != "10" || q.Has("$skip") || q.Get("$orderby") != "receivedDateTime desc" || strings.Contains(q.Get("$select"), "body") {
 				t.Errorf("bad list query %v", q)
 			}
-			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "listed", "body": map[string]string{"content": "unrequested"}}}})
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "listed", "parentFolderId": "inbox-id", "body": map[string]string{"content": "unrequested"}}}})
 		case "/v1.0/me/messages":
 			q := r.URL.Query()
 			if q.Get("$search") != `"from:bob subject:\"hello world\" received>=2026-09-20 received<=2026-09-22 back\\slash"` || !strings.Contains(q.Get("$select"), "internetMessageHeaders") {
 				t.Errorf("bad search %s", q.Get("$search"))
 			}
-			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "searched", "receivedDateTime": "2026-09-21T00:00:00Z"}}})
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "searched", "parentFolderId": "inbox-id", "receivedDateTime": "2026-09-21T00:00:00Z"}}})
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
@@ -181,6 +181,74 @@ func TestClosedFoldersFailWhenLookupFails(t *testing.T) {
 		})
 	}
 }
+
+// The closed-folder walk fails on any lookup it cannot finish: a failed root or childFolders page, a child count that
+// is missing, null, or not a whole number, and a folder ID seen twice (a cycle).
+func TestClosedFoldersFailOnAnIncompleteWalk(t *testing.T) {
+	for name, tc := range map[string]struct {
+		junk     bool
+		children string
+	}{
+		"junk lookup fails":     {junk: false, children: `{"value":[]}`},
+		"childFolders fails":    {junk: true},
+		"count missing":         {junk: true, children: `{"value":[{"id":"old"}]}`},
+		"count null":            {junk: true, children: `{"value":[{"id":"old","childFolderCount":null}]}`},
+		"count string":          {junk: true, children: `{"value":[{"id":"old","childFolderCount":"1"}]}`},
+		"count fraction":        {junk: true, children: `{"value":[{"id":"old","childFolderCount":1.5}]}`},
+		"count negative":        {junk: true, children: `{"value":[{"id":"old","childFolderCount":-1}]}`},
+		"cycle to the root":     {junk: true, children: `{"value":[{"id":"del","childFolderCount":1}]}`},
+		"repeated child folder": {junk: true, children: `{"value":[{"id":"old","childFolderCount":0},{"id":"old","childFolderCount":0}]}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.URL.Path == "/v1.0/me/mailFolders/deleteditems":
+					jsonResponse(w, map[string]any{"id": "del"})
+				case r.URL.Path == "/v1.0/me/mailFolders/junkemail" && tc.junk:
+					jsonResponse(w, map[string]any{"id": "junk"})
+				case r.URL.Path == "/v1.0/me/mailFolders/del/childFolders" && tc.children != "":
+					_, _ = w.Write([]byte(tc.children))
+				case strings.HasSuffix(r.URL.Path, "/childFolders") && tc.children != "":
+					jsonResponse(w, map[string]any{"value": []any{}})
+				default:
+					w.WriteHeader(500)
+				}
+			})
+			if folders, err := c.Mailbox().ClosedFolders(context.Background()); err == nil || folders != nil {
+				t.Fatalf("folders = %+v, %v; want failure", folders, err)
+			}
+		})
+	}
+}
+
+// Every Graph message has a parentFolderId, its location, which the closed-folder check needs: a message without one
+// fails the read.
+func TestMessageWithoutAParentFolderFails(t *testing.T) {
+	for name, folder := range map[string]any{"missing": nil, "null": json.RawMessage("null"), "empty": "", "not a string": 7} {
+		t.Run(name, func(t *testing.T) {
+			c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+				m := map[string]any{"id": "m"}
+				if folder != nil {
+					m["parentFolderId"] = folder
+				}
+				if r.URL.Path == "/v1.0/me/messages/m" {
+					jsonResponse(w, m)
+				} else {
+					jsonResponse(w, map[string]any{"value": []any{m}})
+				}
+			})
+			b := c.Mailbox()
+			if got, err := b.Get(context.Background(), []string{"m"}, false); err != model.MailboxError("Graph error InvalidMetadata") {
+				t.Fatalf("get = %+v, %v", got, err)
+			}
+			if got, err := b.List(context.Background(), "inbox", model.PageRequest{}, false); err != model.MailboxError("Graph error InvalidMetadata") {
+				t.Fatalf("list = %+v, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestMalformedBodyIsNeverPresentedAsFetchedEmpty(t *testing.T) {
 	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, map[string]any{"id": "m", "body": map[string]any{"content": 17, "contentType": "text"}})
@@ -195,7 +263,7 @@ func TestGetPreservesBodyAbsenceAndEscapesIDs(t *testing.T) {
 		if r.Method != "GET" || r.URL.EscapedPath() != "/v1.0/me/messages/a%2Fb%3Fc%23d%20%25" {
 			t.Errorf("unsafe request %s %s", r.Method, r.URL.EscapedPath())
 		}
-		jsonResponse(w, map[string]any{"id": "immutable", "sender": map[string]any{"emailAddress": map[string]string{"address": "fallback@example.test"}}, "isDraft": true, "body": map[string]string{"content": "", "contentType": "text"}, "internetMessageHeaders": []map[string]string{{"name": "Authentication-Results-Original", "value": "spf=pass"}, {"name": "Authentication-Results", "value": "spf=pass; spf=fail; dkim=none; compauth=fail reason=001"}}})
+		jsonResponse(w, map[string]any{"id": "immutable", "parentFolderId": "inbox-id", "sender": map[string]any{"emailAddress": map[string]string{"address": "fallback@example.test"}}, "isDraft": true, "body": map[string]string{"content": "", "contentType": "text"}, "internetMessageHeaders": []map[string]string{{"name": "Authentication-Results-Original", "value": "spf=pass"}, {"name": "Authentication-Results", "value": "spf=pass; spf=fail; dkim=none; compauth=fail reason=001"}}})
 	})
 	meta, err := c.Mailbox().Get(context.Background(), []string{"a/b?c#d %"}, false)
 	if err != nil {
@@ -218,7 +286,7 @@ func TestListSearchAndGetSelectAndCarryTheConversationID(t *testing.T) {
 		if !slices.Contains(strings.Split(r.URL.Query().Get("$select"), ","), "conversationId") {
 			t.Errorf("%s selects %q", r.URL.Path, r.URL.Query().Get("$select"))
 		}
-		m := map[string]any{"id": "m", "conversationId": "conversation-" + path.Base(r.URL.Path)}
+		m := map[string]any{"id": "m", "parentFolderId": "inbox-id", "conversationId": "conversation-" + path.Base(r.URL.Path)}
 		if r.URL.Path == "/v1.0/me/messages/m" {
 			jsonResponse(w, m)
 			return
@@ -276,11 +344,11 @@ func TestSearchWidensReceivedDaysAndKeepsExactTimes(t *testing.T) {
 		next := r.URL.Query()
 		next.Set("$skiptoken", "opaque-token")
 		jsonResponse(w, map[string]any{"value": []any{
-			map[string]any{"id": "at-before", "receivedDateTime": "2026-03-09T07:00:00Z"},
-			map[string]any{"id": "last-second", "receivedDateTime": "2026-03-09T06:59:59Z"},
-			map[string]any{"id": "at-after", "receivedDateTime": "2026-03-07T07:00:00Z"},
-			map[string]any{"id": "day-before", "receivedDateTime": "2026-03-07T06:59:59Z"},
-			map[string]any{"id": "no-time"},
+			map[string]any{"id": "at-before", "parentFolderId": "inbox-id", "receivedDateTime": "2026-03-09T07:00:00Z"},
+			map[string]any{"id": "last-second", "parentFolderId": "inbox-id", "receivedDateTime": "2026-03-09T06:59:59Z"},
+			map[string]any{"id": "at-after", "parentFolderId": "inbox-id", "receivedDateTime": "2026-03-07T07:00:00Z"},
+			map[string]any{"id": "day-before", "parentFolderId": "inbox-id", "receivedDateTime": "2026-03-07T06:59:59Z"},
+			map[string]any{"id": "no-time", "parentFolderId": "inbox-id"},
 		}, "@odata.nextLink": nextLink(r, next)})
 	})
 	zone := time.FixedZone("UTC-7", -7*60*60)
@@ -458,7 +526,7 @@ func TestListAndSearchReadOneGraphPageAndReturnTheNextLink(t *testing.T) {
 		requests = append(requests, r.URL.Path+"?"+r.URL.RawQuery)
 		next := r.URL.Query()
 		if next.Has("$skip") || next.Has("$skiptoken") {
-			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "second"}}})
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "second", "parentFolderId": "inbox-id"}}})
 			return
 		}
 		if next.Has("$search") {
@@ -467,7 +535,7 @@ func TestListAndSearchReadOneGraphPageAndReturnTheNextLink(t *testing.T) {
 			next.Set("$top", "10")
 			next.Set("$skip", "10")
 		}
-		jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "first"}}, "@odata.nextLink": nextLink(r, next)})
+		jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "first", "parentFolderId": "inbox-id"}}, "@odata.nextLink": nextLink(r, next)})
 	})
 	b := c.Mailbox()
 	first, err := b.List(t.Context(), "inbox", model.PageRequest{}, false)
@@ -585,7 +653,7 @@ func TestListAndSearchRefuseAGraphPageLargerThanAsked(t *testing.T) {
 	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
 		value := []any{}
 		for i := range items {
-			value = append(value, map[string]any{"id": "m" + strconv.Itoa(i)})
+			value = append(value, map[string]any{"id": "m" + strconv.Itoa(i), "parentFolderId": "inbox-id"})
 		}
 		jsonResponse(w, map[string]any{"value": value})
 	})
@@ -621,11 +689,11 @@ func TestListFollowsANextLinkInODataKeyForm(t *testing.T) {
 		requests = append(requests, r.URL.EscapedPath())
 		next := r.URL.Query()
 		if next.Has("$skip") {
-			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "second"}}})
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "second", "parentFolderId": "inbox-id"}}})
 			return
 		}
 		next.Set("$skip", "1")
-		jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "first"}}, "@odata.nextLink": nextLink(r, next)})
+		jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "first", "parentFolderId": "inbox-id"}}, "@odata.nextLink": nextLink(r, next)})
 	})
 	b := c.Mailbox()
 	first, err := b.List(t.Context(), "inbox", model.PageRequest{Size: 1}, false)

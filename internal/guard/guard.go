@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"sync"
 	"time"
 
@@ -291,7 +292,9 @@ queue:
 	return nil
 }
 
-func (g *Guard) summaries(ctx context.Context, messages []model.Message, categories []string) ([]views.MailSummary, error) {
+// summaries screens messages, which openMessages kept against closed. A message whose body refetch shows it in a
+// closed folder is left out.
+func (g *Guard) summaries(ctx context.Context, messages []model.Message, closed map[string]model.Bin, categories []string) ([]views.MailSummary, error) {
 	ids := []string{}
 	seen := map[string]bool{}
 	for _, m := range messages {
@@ -322,6 +325,10 @@ func (g *Guard) summaries(ctx context.Context, messages []model.Message, categor
 		if err != nil {
 			return nil, err
 		}
+		messages = slices.DeleteFunc(slices.Clone(messages), func(m model.Message) bool {
+			full, ok := fetched[m.ID]
+			return ok && messageClosed(full, closed) != nil
+		})
 	}
 	out := make([]views.MailSummary, len(messages))
 	err = parallelItems(ctx, len(messages), func(i int) error {
@@ -369,7 +376,7 @@ func (g *Guard) mailPage(ctx context.Context, found model.MessagePage) (views.Ma
 	if !model.ValidPage(found.Next) {
 		return views.MailPage{}, GuardError("ValueError")
 	}
-	messages, err := g.openMessages(ctx, found.Messages)
+	messages, closed, err := g.openMessages(ctx, found.Messages)
 	if err != nil {
 		return views.MailPage{}, err
 	}
@@ -377,7 +384,7 @@ func (g *Guard) mailPage(ctx context.Context, found model.MessagePage) (views.Ma
 	if err != nil {
 		return views.MailPage{}, err
 	}
-	out, err := g.summaries(ctx, messages, categories)
+	out, err := g.summaries(ctx, messages, closed, categories)
 	if err != nil {
 		return views.MailPage{}, err
 	}
@@ -415,6 +422,10 @@ func (g *Guard) read(ctx context.Context, id string) (model.Message, cache.Row, 
 		}
 		m = fetched[id]
 		m.IsDraft = m.IsDraft || draft
+		// The message may have moved between the two reads.
+		if err := messageClosed(m, closed); err != nil {
+			return model.Message{}, cache.Row{}, nil, err
+		}
 	}
 	var green *cache.Row
 	if ok && row.Verdict == model.Green && !fresh {

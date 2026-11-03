@@ -34,12 +34,22 @@ type mailbox struct {
 	listedBodies bool
 	next         string              // the next-page marker that List and Search return
 	pages        []model.PageRequest // the page requests that List and Search got
+	// closed gives the ClosedFolders result; nil gives del and trash as trash, and spam.
+	closed  func() (map[string]model.Bin, error)
+	lookups int               // the ClosedFolders calls
+	moved   map[string]string // the folder that a Get with a body shows a message in: it moved after the first read
 }
 
 // summaries drops the next-page marker of a page.
 func summaries(p views.MailPage, err error) ([]views.MailSummary, error) { return p.Messages, err }
 
 func (b *mailbox) ClosedFolders(context.Context) (map[string]model.Bin, error) {
+	b.mu.Lock()
+	b.lookups++
+	b.mu.Unlock()
+	if b.closed != nil {
+		return b.closed()
+	}
 	return map[string]model.Bin{"del": model.Trash, "trash": model.Trash, "spam": model.Spam}, nil
 }
 func (b *mailbox) ResolveFolder(_ context.Context, folder string) (string, error) {
@@ -73,6 +83,8 @@ func (b *mailbox) Get(_ context.Context, ids []string, body bool) ([]model.Messa
 				if !body {
 					m.Body = nil
 					m.Auth = nil
+				} else if folder, ok := b.moved[id]; ok {
+					m.Folders = []string{folder}
 				}
 				out = append(out, m)
 			}

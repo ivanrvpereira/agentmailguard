@@ -47,6 +47,36 @@ func TestFakeAccountReadsScreenedMailAndSendsIntoSent(t *testing.T) {
 	}
 }
 
+// Each conversation operation with thread and in runs its own action on the conversation's messages in that folder.
+func TestConversationOperationsRunTheirOwnAction(t *testing.T) {
+	for _, tc := range []struct{ op, params, record, folder string }{
+		{"mail.archive", ``, "archive", "archive"},
+		{"mail.trash", ``, "trash", "trash"},
+		{"mail.spam", ``, "spam", "spam"},
+		{"mail.move", `"folder":"sent",`, "move", "sent"},
+		{"mail.read", ``, "read", "projects"},
+	} {
+		t.Run(tc.op, func(t *testing.T) {
+			home := fakeHome(t)
+			fakeSQL(t, home, `INSERT INTO folders (account, id, name) VALUES (?1, 'projects', 'Projects')`)
+			fakeSQL(t, home, `INSERT INTO messages (account, id, folder, sender_address, subject, received_at, thread_id) VALUES
+				(?1, 'filed', 'projects', 'sender@example.test', 'private-subject-filed', '2026-10-06T08:00:00Z', 't1'),
+				(?1, 'kept', 'inbox', 'sender@example.test', 'private-subject-kept', '2026-10-06T07:00:00Z', 't1')`)
+			d := fakeDaemon(t, home, "")
+			if status, body := accountRPC(t, d.s, tc.op, "demo", `{`+tc.params+`"thread":"t1","in":"projects"}`); status != 200 || body != `[{"id":"filed","ok":true,"error":null}]` {
+				t.Fatalf("%d %s", status, body)
+			}
+			var filed, kept string
+			if err := fakeDB(t, home).QueryRow(`SELECT (SELECT folder FROM messages WHERE id = 'filed'), (SELECT folder FROM messages WHERE id = 'kept')`).Scan(&filed, &kept); err != nil || filed != tc.folder || kept != "inbox" {
+				t.Fatalf("filed=%s kept=%s err=%v", filed, kept, err)
+			}
+			if _, records := auditOf(t, home); records[len(records)-1]["operation"] != tc.record || records[len(records)-1]["thread"] != "t1" {
+				t.Fatalf("records=%v", records)
+			}
+		})
+	}
+}
+
 func TestFakeAccountSendIsRefusedByTheDefaultPolicy(t *testing.T) {
 	d := fakeDaemon(t, fakeHome(t), "")
 	if status, body := accountRPC(t, d.s, "mail.send", "demo", `{"to":["ana@example.test"],"subject":"Hello","body":"hi"}`); status != 500 || body != `{"error":"refused by policy: mail_send"}` {
