@@ -64,8 +64,8 @@ func normalize(ids []string, results []model.MutationResult, organizer bool) []m
 	return out
 }
 
-// audited runs call for the IDs that the policy did not hold and writes one record with a result for every ID.
-// held has the results of the IDs that the policy kept from the provider. allowed lists the distinct IDs with
+// audited runs call for the IDs that checks and policy did not hold and writes one record with a result for every ID.
+// held has the results of the IDs kept from the provider. allowed lists the distinct IDs with
 // an allow decision; their policy records are written with the operation record. A manual call without held
 // IDs is not audited when call fails; otherwise a failure becomes the result of each sent ID.
 func (g *Guard) audited(ctx context.Context, op audit.Operation, ids []string, held map[string]model.MutationResult, allowed []string, opts audit.Options, call func([]string) ([]model.MutationResult, error)) ([]model.MutationResult, error) {
@@ -116,7 +116,7 @@ func publicErr(ctx context.Context, err error) error {
 	if ctx.Err() == nil {
 		switch err {
 		case GuardError("move refused: the destination must be a folder ID from `folders`"),
-			GuardError("move refused: use mail.trash"),
+			MoveTrash, MoveSpam, FolderTrash, FolderSpam, MessageTrash, MessageSpam,
 			GuardError("flag state must be one of flagged, complete, none"),
 			GuardError("categorize needs at least one category to add or remove"),
 			GuardError("categorize refused: not in the category list"):
@@ -131,20 +131,48 @@ func (g *Guard) mutationCall(ctx context.Context, op audit.Operation, ids []stri
 	if err := checkIDs(ids); err != nil {
 		return nil, err
 	}
-	var held map[string]model.MutationResult
+	// Validate audit options even when every source is held back below.
+	call, err := g.writer(ctx, op, from, opts)
+	if err != nil {
+		return g.audited(ctx, op, ids, nil, nil, opts, func([]string) ([]model.MutationResult, error) { return nil, err })
+	}
+	closed, err := g.closedFolders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	checks := make([]error, len(ids))
+	if err := parallelItems(ctx, len(ids), func(i int) error {
+		messages, err := g.fetch(ctx, []string{ids[i]}, false)
+		if err == nil {
+			err = messageClosed(messages[ids[i]], closed)
+		}
+		checks[i] = err
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	held := map[string]model.MutationResult{}
+	open := []string{}
+	for i, id := range ids {
+		if checks[i] != nil {
+			held[id] = model.MutationResult{ID: id, Error: new(publicErr(ctx, checks[i]).Error())}
+		} else {
+			open = append(open, id)
+		}
+	}
 	var allowed []string
-	if op == audit.Trash {
-		var err error
-		if held, allowed, err = g.trashPolicy(ctx, ids, opts.Rule); err != nil {
+	if op == audit.Trash && len(open) > 0 {
+		policyHeld, policyAllowed, err := g.trashPolicy(ctx, open, opts.Rule)
+		if err != nil {
 			return nil, err
 		}
+		for id, r := range policyHeld {
+			held[id] = r
+		}
+		allowed = policyAllowed
 	}
 	return g.audited(ctx, op, ids, held, allowed, opts, func(ids []string) ([]model.MutationResult, error) {
 		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		call, err := g.writer(ctx, op, from, opts)
-		if err != nil {
 			return nil, err
 		}
 		if opts.Rule == nil {
@@ -164,6 +192,16 @@ func (g *Guard) writer(ctx context.Context, op audit.Operation, from string, opt
 	case audit.Trash:
 		call = func(ids []string) ([]model.MutationResult, error) { return g.mailbox.Trash(ctx, ids) }
 	case audit.Move:
+		bin, err := g.folderBin(ctx, *opts.Folder)
+		if err != nil {
+			return nil, err
+		}
+		switch bin {
+		case model.Trash:
+			return nil, MoveTrash
+		case model.Spam:
+			return nil, MoveSpam
+		}
 		folders, err := g.mailbox.Folders(ctx)
 		if err != nil {
 			return nil, err
@@ -171,10 +209,6 @@ func (g *Guard) writer(ctx context.Context, op audit.Operation, from string, opt
 		i := slices.IndexFunc(folders, func(f model.Folder) bool { return f.ID == *opts.Folder })
 		if i < 0 {
 			return nil, GuardError("move refused: the destination must be a folder ID from `folders`")
-		}
-		// A move into deleted items would bypass the trash operation.
-		if folders[i].Trash {
-			return nil, GuardError("move refused: use mail.trash")
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -281,6 +315,9 @@ func (g *Guard) conversation(ctx context.Context, op audit.Operation, thread, in
 		return nil, err
 	}
 	defer g.release()
+	if err := g.openFolder(ctx, in); err != nil {
+		return nil, err
+	}
 	ids, err := g.mailbox.ThreadMessagesIn(ctx, thread, in)
 	if err != nil {
 		return nil, safeErr(ctx, err)
@@ -386,6 +423,11 @@ func (g *Guard) compose(ctx context.Context, op audit.Operation, source string, 
 	if onDraft {
 		var err error
 		if withdrawn, err = g.withdrawSends(ctx, source); err != nil {
+			return "", "", err
+		}
+	}
+	if ref != nil {
+		if err := g.openMessage(ctx, source); err != nil {
 			return "", "", err
 		}
 	}
@@ -507,10 +549,13 @@ func (g *Guard) DraftNew(ctx context.Context, draft model.NewDraft) (model.Draft
 
 // ReplyRecipients gives the To and CC that a reply to message id goes to, worked out from the original by the
 // adapter (all: reply all), each address cleaned. A provider whose reply picks its own recipients makes the final
-// list at send time. A failed read gives sourceUnavailable, never an empty list.
+// list at send time. A failed recipient read gives sourceUnavailable, never an empty list; metadata failures keep their safe code.
 func (g *Guard) ReplyRecipients(ctx context.Context, id string, all bool) (model.Recipients, error) {
 	if id == "" {
 		return model.Recipients{}, GuardError("invalid request")
+	}
+	if err := g.openMessage(ctx, id); err != nil {
+		return model.Recipients{}, err
 	}
 	r, err := g.mailbox.ReplyRecipients(ctx, id, all)
 	if ctx.Err() != nil {

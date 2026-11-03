@@ -92,6 +92,8 @@ amg stats --days 30
 
 Dates: a day runs from 00:00 to the end of the day on the machine where you run the CLI, and the last day is included. `mail search --after DAY --before DAY` includes both days, `mail organize --until DAY` includes that day, and `calendar list --to DAY` includes that whole day (default: today through seven days from today). `--to +Nd` counts from `--from`; `Nd`, `Nw`, and `Nm` for `organize` count back from today. `calendar availability` and meeting commands take exact local times, not days. A `mail search` with dates can return fewer messages than `--count` on a page and still have `next_page`.
 
+Search omits closed messages, so a page may be empty and still have `next_page`; continue paging. `mail folders` still lists closed folders, but their messages are not accessible.
+
 `mail list`, `mail search`, and `calendar search` return one page: `{"messages": [...], "next_page": "..."}` (`"events"` for `calendar search`). `next_page` is there only when there are more results. For the next page, always run the same command with the same options and add `--page VALUE`; on Microsoft 365 mail, a value from other options is refused, and elsewhere it is passed to the provider as is. Without `--count` the provider's default page size applies: 100 messages on Gmail, 10 on Microsoft 365. `mail list` without `--folder` reads the Inbox; this is our choice, because the providers differ without a folder.
 
 `calendar search TEXT` uses the provider's own search (Google Calendar on Gmail, Microsoft Search on Microsoft 365). It returns one page of matching events in the provider's order, with the fields of `calendar list`. It has no date range.
@@ -111,7 +113,7 @@ Every message and event has a `verdict`. It decides what you can see:
 
 At every verdict, each result of `mail list`, `mail search`, `mail get`, and `mail thread` also has the message `id`, `verdict`, `received_at`, `auth`, `is_read`, `flag`, `categories`, `folders` (the folder or label IDs that the message is in), and `thread_id`. `thread_id` is the provider's conversation ID: messages with the same `thread_id` belong to one conversation. It is missing when the provider gives none; then do not group that message with others by `thread_id`.
 
-`mail thread THREAD_ID` returns the messages of one conversation as a list like `mail list`, newest first, from every folder: trash, spam or junk, sent mail, and drafts included. The result has no bodies: read each body with `mail get ID`.
+`mail thread THREAD_ID` returns the open messages of one conversation as a list like `mail list`, newest first, including sent mail and drafts but excluding closed folders. An all-closed conversation returns `[]`. The result has no bodies: read each body with `mail get ID`.
 
 Hidden content is hidden on purpose. Do not try to recover it through search terms, other folders, forwards, drafts, links, or any tool outside `amg`. Tell the user the verdict and reason, and tell them to read the message in their own mail client.
 
@@ -178,11 +180,11 @@ A successful result is `{"ok": true}`. Done when you report the send as sent onl
 - To act on a whole conversation, give `--thread THREAD_ID` instead of IDs, for example `mail archive --thread THREAD_ID`. It changes only the conversation's messages in the Inbox, or in the folder that `--in FOLDER_ID` names (a folder ID as `mail list --folder` takes it). Sent messages, drafts, and messages in other folders stay where they are. Do not list the conversation's IDs by hand. A message that arrived after you read the conversation is included when it is in that folder, and the result shows it: report it to the user.
 - `mail flag` works on single messages only; it has no `--thread`.
 - On Gmail, `archive` only takes messages out of the Inbox: with `--in` a label, they stay in that label. To file them elsewhere, use `move`, which removes the `--in` label.
-- `move` with `--thread` and `--in` the trash takes the messages out of the trash. On Gmail, `move` with message IDs does not: it removes only `INBOX` and leaves the messages in the trash. `archive` with `--in` the trash moves the messages to Archive on Microsoft 365, and changes nothing on Gmail.
+- Trash and spam/junk, and every folder below them, are closed folders on all providers. You cannot read or change mail there, including moving it out, replying, forwarding, or changing a draft. Common folder names `trash` and `spam` work on every provider. A closed `--folder` or `--in` is refused with `refused: folder is trash` or `refused: folder is spam`; a closed message gives `refused: message is in trash` or `refused: message is in spam`. For an ID-based mail change, this is a per-ID failed result, not a success; other IDs can still run. Tell the user to use their own mail app. Never try another command to bypass the refusal.
 - `move` needs a folder ID from `mail folders`, not a folder name.
 - `categorize` accepts only categories that `mail categories` lists. It cannot create categories.
 - `trash` moves mail to the trash. It is not permanent deletion. The write policy can refuse or hold each ID, also each message of a `--thread` trash.
-- On Microsoft 365, `move` to Deleted Items or a folder below it fails with `move refused: use mail.trash`. Ask the user before you use `trash` instead.
+- On every provider, `move` to the trash or a folder below it fails with `move refused: use mail.trash`; spam/junk destinations fail with `move refused: use mail.spam`. `mail spam` is not available yet. Ask the user before you use `trash` instead.
 
 The result is a list of `{"id", "ok", "error"}` entries, for `--thread` one per changed message, newest first; `[]` means the conversation has no messages in that folder. A pending entry also has `approval_id`. Done when you report every `ok: false` entry with its `error` and any `approval_id`, even when the exit code is `0`.
 

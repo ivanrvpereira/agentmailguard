@@ -115,10 +115,11 @@ In the `mail organize --apply` report, the `move.result` of such a message is `p
 The report does not show the approval ID, and the stats count the message as `failed`.
 The message stays incomplete, so each later `--apply` run makes a new pending action for it.
 
-On Microsoft 365, `mail move` to Deleted Items or to a folder below it fails with `move refused: use mail.trash`.
-Use `mail trash` instead.
-A rule move to such a folder also fails, and the report shows `GuardError`.
-On Microsoft 365, `mail folders`, `mail move`, `mail organize`, and `rules list` fail if the daemon cannot look up Deleted Items.
+On every provider, trash and spam/junk and their subfolders are closed folders. Agents cannot read or change mail there, regardless of policy or approval. Before a mail mutation's policy decision, each ID's metadata is read under the mutation gate; a closed ID gets `refused: message is in trash` or `refused: message is in spam`, and an unreadable ID gets its safe failure code. Other IDs continue, and the operation audit keeps every result. Replies, forwards, and draft writes also refuse closed sources before any policy decision; waiting draft sends are still withdrawn first.
+
+`mail move` into closed folders fails with `move refused: use mail.trash` or `move refused: use mail.spam`, including the common destination names `trash` and `spam`. Use `mail trash` for open messages instead, after the user's approval. `mail spam` is not available yet. A rule move to a closed folder ID also fails. A rule whose target is `trash` still takes the dedicated trash path and follows `mail_trash`.
+
+A failed closed-folder lookup fails closed. Microsoft 365 looks up Deleted Items and Junk Email and their subfolders for these checks; `mail folders` itself remains an ordinary folder listing and does not need those lookups.
 
 ## Storage and audit
 

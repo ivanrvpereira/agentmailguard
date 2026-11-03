@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -132,12 +133,20 @@ func TestMoveIntoDeletedItemsIsRefusedWithPublicReason(t *testing.T) {
 			io.WriteString(w, `{"value":[{"id":"old","displayName":"Old","childFolderCount":1}]}`)
 		case "/me/mailFolders/old/childFolders":
 			io.WriteString(w, `{"value":[{"id":"older","displayName":"Older","childFolderCount":0}]}`)
+		case "/me/mailFolders/junkemail":
+			io.WriteString(w, `{"id":"junk"}`)
+		case "/me/mailFolders/junk/childFolders":
+			io.WriteString(w, `{"value":[]}`)
+		case "/me/mailFolders/del", "/me/mailFolders/older":
+			response(w, map[string]any{"id": path.Base(r.URL.Path)})
+		case "/me/messages/m1":
+			io.WriteString(w, `{"id":"m1","parentFolderId":"inbox"}`)
 		default:
 			t.Errorf("unexpected provider request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(500)
 		}
 	}), newNativeAPI())
-	for _, dest := range []string{"del", "older"} {
+	for _, dest := range []string{"del", "older", "trash"} {
 		status, b := accountRPC(t, d.s, "mail.move", "", `{"ids":["m1"],"folder":"`+dest+`"}`)
 		if status != 500 || b != `{"error":"move refused: use mail.trash"}` {
 			t.Fatalf("move to %s: %d %s", dest, status, b)

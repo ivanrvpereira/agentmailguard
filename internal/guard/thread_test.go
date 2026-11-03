@@ -46,7 +46,7 @@ func TestThreadScreensEachMessageAsListDoes(t *testing.T) {
 	g, _, _ := setup(t, b, s)
 	ctx := t.Context()
 	got, err := g.Thread(ctx, "t1")
-	if err != nil || len(got) != 2 || got[0].ID != "m2" || got[1].ID != "m1" || s.calls != 2 {
+	if err != nil || len(got) != 1 || got[0].ID != "m1" || s.calls != 1 {
 		t.Fatalf("thread=%+v err=%v screenings=%d", got, err, s.calls)
 	}
 	for _, m := range got {

@@ -356,6 +356,9 @@ func (g *Guard) List(ctx context.Context, folder string, page model.PageRequest)
 	if err := ctx.Err(); err != nil {
 		return views.MailPage{}, err
 	}
+	if err := g.openFolder(ctx, folder); err != nil {
+		return views.MailPage{}, err
+	}
 	found, err := g.mailbox.List(ctx, folder, page, false)
 	if err != nil {
 		return views.MailPage{}, safeErr(ctx, err)
@@ -366,17 +369,25 @@ func (g *Guard) mailPage(ctx context.Context, found model.MessagePage) (views.Ma
 	if !model.ValidPage(found.Next) {
 		return views.MailPage{}, GuardError("ValueError")
 	}
+	messages, err := g.openMessages(ctx, found.Messages)
+	if err != nil {
+		return views.MailPage{}, err
+	}
 	categories, err := g.Categories(ctx)
 	if err != nil {
 		return views.MailPage{}, err
 	}
-	out, err := g.summaries(ctx, found.Messages, categories)
+	out, err := g.summaries(ctx, messages, categories)
 	if err != nil {
 		return views.MailPage{}, err
 	}
 	return views.MailPage{Messages: out, NextPage: found.Next}, nil
 }
 func (g *Guard) read(ctx context.Context, id string) (model.Message, cache.Row, *content.Rendered, error) {
+	closed, err := g.closedFolders(ctx)
+	if err != nil {
+		return model.Message{}, cache.Row{}, nil, err
+	}
 	rows, err := g.cached(ctx, []string{id})
 	if err != nil {
 		return model.Message{}, cache.Row{}, nil, safeErr(ctx, err)
@@ -387,6 +398,9 @@ func (g *Guard) read(ctx context.Context, id string) (model.Message, cache.Row, 
 		return model.Message{}, cache.Row{}, nil, err
 	}
 	m := fetched[id]
+	if err := messageClosed(m, closed); err != nil {
+		return model.Message{}, cache.Row{}, nil, err
+	}
 	// A draft, or a message with BCC, is screened on every read: a draft changes, and a cached verdict may predate
 	// BCC in the screened fields.
 	fresh := m.IsDraft || len(m.BCC) > 0

@@ -35,6 +35,17 @@ type approvalGraph struct {
 func (g *approvalGraph) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method == "GET" {
+		if binFolders(w, r) {
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/me/messages/") && !strings.Contains(r.URL.Query().Get("$select"), ",body") {
+			var message map[string]any
+			_ = json.Unmarshal([]byte(*g.event.Load()), &message)
+			message["id"] = path.Base(r.URL.Path)
+			message["parentFolderId"] = "inbox"
+			response(w, message)
+			return
+		}
 		io.WriteString(w, *g.event.Load())
 		return
 	}
@@ -303,6 +314,9 @@ func TestApprovalDuringADraftUpdateFindsTheSendWithdrawn(t *testing.T) {
 	d := graphDaemon(t, "[policy]\nmail_draft='allow'\nmail_send='approve'\n", writeGrant, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == "GET" {
+			if binFolders(w, r) {
+				return
+			}
 			if blockRead.CompareAndSwap(true, false) {
 				close(reading)
 				<-release

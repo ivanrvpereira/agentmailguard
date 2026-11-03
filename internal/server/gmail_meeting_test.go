@@ -48,6 +48,10 @@ func (g *meetingGoogle) handle(w http.ResponseWriter, r *http.Request) {
 		response(w, map[string]any{"labels": []any{}})
 		return
 	}
+	if r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/gmail/messages/") {
+		response(w, map[string]any{"id": strings.TrimPrefix(r.URL.Path, "/gmail/messages/"), "labelIds": []string{"INBOX"}, "internalDate": "1791334800000", "payload": map[string]any{}})
+		return
+	}
 	id, _ := strings.CutPrefix(r.URL.Path, "/calendar/events/")
 	if r.Method == "GET" {
 		if e, ok := g.events[id]; ok {

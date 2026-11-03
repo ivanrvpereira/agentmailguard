@@ -8,6 +8,10 @@ Until version 1.0.0, a minor version can change behavior that users rely on.
 
 The first public release.
 
+### Changed
+
+- Trash and spam/junk, including their subfolders, are closed to agents on every provider: no reads, replies, draft changes, or moves out; conversation and search results omit their messages. Moves into these folders are refused; only `mail trash` can put mail in the trash.
+
 ### Added
 
 - `amgd`, a daemon that screens Microsoft 365 and Gmail mail and calendar events for AI agents, and `amg`, the agent's client, which talks to it over HTTP.

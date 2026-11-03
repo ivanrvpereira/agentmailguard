@@ -67,6 +67,11 @@ func (g *Guard) Search(ctx context.Context, q model.SearchQuery, page model.Page
 	if err := ctx.Err(); err != nil {
 		return views.MailPage{}, err
 	}
+	if q.Folder != nil {
+		if err := g.openFolder(ctx, *q.Folder); err != nil {
+			return views.MailPage{}, err
+		}
+	}
 	found, err := g.mailbox.Search(ctx, q, page, false)
 	if err != nil {
 		return views.MailPage{}, safeErr(ctx, err)
@@ -102,6 +107,10 @@ func (g *Guard) Thread(ctx context.Context, thread string) ([]views.MailSummary,
 	}
 	if !threadValid(messages, thread) {
 		return nil, GuardError("ValueError")
+	}
+	messages, err = g.openMessages(ctx, messages)
+	if err != nil {
+		return nil, err
 	}
 	categories, err := g.Categories(ctx)
 	if err != nil {

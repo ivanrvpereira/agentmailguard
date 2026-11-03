@@ -97,8 +97,6 @@ type Message struct {
 type Folder struct {
 	ID   FolderID
 	Name string
-	// Trash marks the provider's deleted-items folder and every folder below it. Moves there must use trash instead.
-	Trash bool
 }
 type Attendee struct {
 	Address  Address
@@ -335,11 +333,23 @@ type InboxScan struct {
 	Failures []ScanFailure
 }
 
+// Bin identifies why a folder is closed; the empty value is not a bin.
+type Bin string
+
+const (
+	Trash Bin = "trash"
+	Spam  Bin = "spam"
+)
+
 // Mailbox deliberately has no permanent-delete operation. Its send operations reach real recipients at once.
 // List/Search/Thread may return bodies already available even when body is false.
 // ScanInbox reads all pages before returning, metadata only, excluding drafts,
 // with since <= received_at < until (nil until means no upper bound).
 type Mailbox interface {
+	// ClosedFolders returns every closed folder by Message.Folders ID; a failed lookup is an error, never an empty map.
+	ClosedFolders(ctx context.Context) (map[FolderID]Bin, error)
+	// ResolveFolder returns the ID of a folder ID or name accepted by List; an unknown folder is an error.
+	ResolveFolder(ctx context.Context, folder FolderID) (FolderID, error)
 	List(ctx context.Context, folder FolderID, page PageRequest, body bool) (MessagePage, error)
 	Search(ctx context.Context, query SearchQuery, page PageRequest, body bool) (MessagePage, error)
 	Get(ctx context.Context, ids []MessageID, body bool) ([]Message, error)

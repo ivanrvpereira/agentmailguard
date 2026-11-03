@@ -194,14 +194,14 @@ func TestScanInboxListsNonDraftInboxMailInTheRange(t *testing.T) {
 	}
 }
 
-func TestFoldersMarkTrashAndEveryFolderBelowIt(t *testing.T) {
+func TestClosedFoldersIncludeBinDescendants(t *testing.T) {
 	m, home := mailbox(t)
 	if _, err := m.Folders(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	seed(t, home, `INSERT INTO folders (account, id, name, parent) VALUES ('demo@fake.test', 'projects', 'Projects', NULL), ('demo@fake.test', 'old', 'Old', 'trash'), ('demo@fake.test', 'older', 'Older', 'old'), ('other', 'theirs', 'Theirs', NULL)`)
-	got, err := m.Folders(context.Background())
-	want := []model.Folder{{ID: "inbox", Name: "Inbox"}, {ID: "drafts", Name: "Drafts"}, {ID: "sent", Name: "Sent"}, {ID: "archive", Name: "Archive"}, {ID: "trash", Name: "Trash", Trash: true}, {ID: "projects", Name: "Projects"}, {ID: "old", Name: "Old", Trash: true}, {ID: "older", Name: "Older", Trash: true}}
+	got, err := m.ClosedFolders(context.Background())
+	want := map[string]model.Bin{"trash": model.Trash, "spam": model.Spam, "old": model.Trash, "older": model.Trash}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("folders=%+v err=%v", got, err)
 	}

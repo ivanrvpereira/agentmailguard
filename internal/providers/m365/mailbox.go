@@ -131,7 +131,7 @@ func (b *mailbox) Get(ctx context.Context, ids []string, body bool) ([]model.Mes
 func (b *mailbox) List(ctx context.Context, folder string, page model.PageRequest, body bool) (model.MessagePage, error) {
 	q := messageQuery(body)
 	q.Set("$orderby", "receivedDateTime desc")
-	return b.page(ctx, "/me/mailFolders/"+escapeID(folder)+"/messages", q, page, body)
+	return b.page(ctx, "/me/mailFolders/"+escapeID(folderName(folder))+"/messages", q, page, body)
 }
 
 // notFound is the error of a Graph 404, which a missing message gets.
@@ -163,17 +163,33 @@ func (b *mailbox) Thread(ctx context.Context, thread string) ([]model.Message, e
 	return out, nil
 }
 
-// ThreadMessagesIn keeps the messages of Thread in folder. Messages carry the real folder ID in parentFolderId, so
-// folder, a well-known name such as inbox or a real ID, is looked up first
-// (https://learn.microsoft.com/en-us/graph/api/mailfolder-get?view=graph-rest-1.0). A failed lookup fails closed.
-func (b *mailbox) ThreadMessagesIn(ctx context.Context, thread, folder string) ([]string, error) {
-	d, err := b.c.get(ctx, b.c.endpoint("/me/mailFolders/"+escapeID(folder), url.Values{"$select": {"id"}}), false)
+func folderName(folder string) string {
+	switch strings.ToLower(folder) {
+	case "trash":
+		return "deleteditems"
+	case "spam":
+		return "junkemail"
+	}
+	return folder
+}
+
+func (b *mailbox) ResolveFolder(ctx context.Context, folder string) (string, error) {
+	d, err := b.c.get(ctx, b.c.endpoint("/me/mailFolders/"+escapeID(folderName(folder)), url.Values{"$select": {"id"}}), false)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	id := text(d, "id")
 	if id == "" {
-		return nil, invalidMetadata
+		return "", invalidMetadata
+	}
+	return id, nil
+}
+
+// ThreadMessagesIn compares parentFolderId with the resolved folder ID; a failed lookup fails closed.
+func (b *mailbox) ThreadMessagesIn(ctx context.Context, thread, folder string) ([]string, error) {
+	id, err := b.ResolveFolder(ctx, folder)
+	if err != nil {
+		return nil, err
 	}
 	all, err := b.Thread(ctx, thread)
 	if err != nil {
@@ -227,7 +243,7 @@ func kql(q model.SearchQuery) string {
 func (b *mailbox) Search(ctx context.Context, query model.SearchQuery, page model.PageRequest, body bool) (model.MessagePage, error) {
 	path := "/me/messages"
 	if query.Folder != nil {
-		path = "/me/mailFolders/" + escapeID(*query.Folder) + "/messages"
+		path = "/me/mailFolders/" + escapeID(folderName(*query.Folder)) + "/messages"
 	}
 	q := messageQuery(body)
 	q.Set("$search", kql(query))
@@ -290,28 +306,15 @@ func (b *mailbox) page(ctx context.Context, path string, q url.Values, page mode
 	return model.MessagePage{Messages: out, Next: next}, nil
 }
 
-// Folders marks Deleted Items and every folder below it, so moves there can be refused. A failed lookup fails closed.
 func (b *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
-	deleted, err := b.c.get(ctx, b.c.endpoint("/me/mailFolders/deleteditems", url.Values{"$select": {"id"}}), false)
-	if err != nil {
-		return nil, err
-	}
-	deletedID := text(deleted, "id")
-	if deletedID == "" {
-		return nil, invalidMetadata
-	}
-	type listing struct {
-		link  string
-		trash bool
-	}
 	q := url.Values{"$select": {"id,displayName,childFolderCount"}, "$top": {"100"}}
-	pending := []listing{{link: b.c.endpoint("/me/mailFolders", q)}}
+	pending := []string{b.c.endpoint("/me/mailFolders", q)}
 	seen := map[string]bool{}
 	out := []model.Folder{}
 	for len(pending) > 0 {
 		first := pending[0]
 		pending = pending[1:]
-		items, err := b.c.all(ctx, first.link, false)
+		items, err := b.c.all(ctx, first, false)
 		if err != nil {
 			return nil, err
 		}
@@ -321,17 +324,59 @@ func (b *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
 				return nil, invalidPage
 			}
 			seen[id] = true
-			trash := first.trash || id == deletedID
-			out = append(out, model.Folder{ID: id, Name: text(d, "displayName"), Trash: trash})
+			out = append(out, model.Folder{ID: id, Name: text(d, "displayName")})
 			var children int
 			_ = json.Unmarshal(d["childFolderCount"], &children)
 			if children > 0 {
-				pending = append(pending, listing{b.c.endpoint("/me/mailFolders/"+escapeID(id)+"/childFolders", q), trash})
+				pending = append(pending, b.c.endpoint("/me/mailFolders/"+escapeID(id)+"/childFolders", q))
 			}
 		}
 	}
 	return out, nil
 }
+func (b *mailbox) ClosedFolders(ctx context.Context) (map[string]model.Bin, error) {
+	out := map[string]model.Bin{}
+	// Hidden descendants are closed too; Graph excludes them unless explicitly requested.
+	q := url.Values{"$select": {"id,childFolderCount"}, "$top": {"100"}, "includeHiddenFolders": {"true"}}
+	for _, root := range []struct {
+		name string
+		bin  model.Bin
+	}{{"deleteditems", model.Trash}, {"junkemail", model.Spam}} {
+		id, err := b.ResolveFolder(ctx, root.name)
+		if err != nil {
+			return nil, err
+		}
+		if _, seen := out[id]; seen || len(out) >= 10000 {
+			return nil, invalidPage
+		}
+		out[id] = root.bin
+		pending := []string{id}
+		for len(pending) > 0 {
+			parent := pending[0]
+			pending = pending[1:]
+			items, err := b.c.all(ctx, b.c.endpoint("/me/mailFolders/"+escapeID(parent)+"/childFolders", q), false)
+			if err != nil {
+				return nil, err
+			}
+			for _, d := range items {
+				id := text(d, "id")
+				if _, seen := out[id]; id == "" || seen || len(out) >= 10000 {
+					return nil, invalidPage
+				}
+				out[id] = root.bin
+				var children int
+				if json.Unmarshal(d["childFolderCount"], &children) != nil || children < 0 {
+					return nil, invalidMetadata
+				}
+				if children > 0 {
+					pending = append(pending, id)
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
 func (b *mailbox) Categories(ctx context.Context) ([]string, error) {
 	items, err := b.c.all(ctx, b.c.endpoint("/me/outlook/masterCategories", url.Values{"$select": {"displayName"}}), false)
 	if err != nil {

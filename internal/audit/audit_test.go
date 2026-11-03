@@ -232,13 +232,13 @@ func TestConcurrentAuditRecordsRemainWhole(t *testing.T) {
 }
 
 func TestAuditAcceptsOnlyExactPolicyResultCodes(t *testing.T) {
-	for _, code := range []string{"pending", "refused by policy: mail_trash", "refused by policy: calendar_invite"} {
+	for _, code := range []string{"pending", "refused by policy: mail_trash", "refused by policy: calendar_invite", "refused: message is in trash", "refused: message is in spam"} {
 		path := filepath.Join(t.TempDir(), "audit.jsonl")
 		if err := audit.New(path).Record(context.Background(), "work", audit.Trash, []model.MutationResult{{ID: "m1", Error: &code}}, audit.Options{}); err != nil {
 			t.Errorf("%q refused: %v", code, err)
 		}
 	}
-	for _, code := range []string{"pending CANARY", "Pending", "refused by policy: CANARY", "refused by policy: mail_trash CANARY", "refused by policy: "} {
+	for _, code := range []string{"pending CANARY", "Pending", "refused by policy: CANARY", "refused by policy: mail_trash CANARY", "refused by policy: ", "refused: message is in spam CANARY", "refused: message is in junk"} {
 		path := filepath.Join(t.TempDir(), "audit.jsonl")
 		if err := audit.New(path).Record(context.Background(), "work", audit.Trash, []model.MutationResult{{ID: "m1", Error: &code}}, audit.Options{}); err == nil {
 			t.Errorf("%q accepted", code)

@@ -1093,7 +1093,7 @@ func TestPendingItemsAndVerdictsSurviveARestart(t *testing.T) {
 	}
 }
 
-func TestThreadShowsTheWholeConversationScreenedWithItsFolders(t *testing.T) {
+func TestThreadShowsOnlyOpenConversationMessagesWithTheirFolders(t *testing.T) {
 	t.Parallel()
 	s := start(t, "[policy]\nmail_draft='allow'\n")
 	s.exec(`UPDATE messages SET thread_id = 'lunch', folder = 'trash', received_at = '2020-01-01T08:00:00Z' WHERE id = 'phish'`)
@@ -1113,7 +1113,6 @@ func TestThreadShowsTheWholeConversationScreenedWithItsFolders(t *testing.T) {
 		{draft, "green", subject("Re: canary-subject-lunch"), []string{"drafts"}},
 		{"lunch-reply", "green", subject("canary-subject-lunch-reply"), []string{"sent"}},
 		{"lunch", "green", subject("canary-subject-lunch"), []string{"inbox"}},
-		{"phish", "red", nil, []string{"trash"}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("thread=%+v", got)
@@ -1199,18 +1198,15 @@ func TestConversationActionsChangeOnlyTheConversationMessagesInOneFolder(t *test
 	if out := s.ok("mail", "archive", "--thread", "lunch"); strings.TrimSpace(out) != "[]" {
 		t.Fatalf("repeated archive: %s", out)
 	}
-	// A move takes messages out of a folder in the trash like any other folder. A flag is set on single messages only.
-	if got := ids(s.ok("mail", "move", "projects", "--thread", "lunch", "--in", "old-trash")); !reflect.DeepEqual(got, []string{"lunch-binned"}) {
-		t.Fatalf("move from the trash: %v", got)
-	}
-	row("lunch-binned")["folder"] = "projects"
+	// Closed folders refuse conversation actions before choosing any messages. A flag takes single messages only.
+	s.refused("refused: folder is trash", "mail", "move", "projects", "--thread", "lunch", "--in", "old-trash")
 	if _, errout, code := s.amg("mail", "flag", "--thread", "lunch", "--state", "flagged"); code != 2 || errout != "error: invalid command usage; use --help\n" {
 		t.Fatalf("flag --thread: exit %d stderr %q", code, errout)
 	}
 	s.refused("operation failed", "mail", "archive", "--thread", "nowhere")
 	// Sent and every other message stay as they were.
 	s.assertTables(want)
-	wantRecords := []string{"read lunch [lunch-new lunch]", "categorize lunch [lunch-filed]", "move lunch [lunch-new lunch]", "archive lunch [lunch-new lunch-filed lunch]", "move lunch [lunch-binned]"}
+	wantRecords := []string{"read lunch [lunch-new lunch]", "categorize lunch [lunch-filed]", "move lunch [lunch-new lunch]", "archive lunch [lunch-new lunch-filed lunch]"}
 	if got := s.threadRecords(); !reflect.DeepEqual(got, wantRecords) {
 		t.Fatalf("audit records with a thread: %q", got)
 	}

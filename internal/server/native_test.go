@@ -67,6 +67,22 @@ func messageJSON(id string, body bool, cats []string) map[string]any {
 	}
 	return m
 }
+
+// binFolders supplies empty closed-folder subtrees for Graph fixtures that do not model folders.
+func binFolders(w http.ResponseWriter, r *http.Request) bool {
+	switch r.URL.Path {
+	case "/me/mailFolders/deleteditems":
+		response(w, map[string]any{"id": "deleted"})
+	case "/me/mailFolders/junkemail":
+		response(w, map[string]any{"id": "junk"})
+	case "/me/mailFolders/deleted/childFolders", "/me/mailFolders/junk/childFolders":
+		response(w, map[string]any{"value": []any{}})
+	default:
+		return false
+	}
+	return true
+}
+
 func (a *nativeAPI) graph(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	hang := a.hang[r.URL.Path]
@@ -112,11 +128,16 @@ func (a *nativeAPI) graph(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if binFolders(w, r) {
+		return
+	}
 	switch r.URL.Path {
 	case "/me":
 		response(w, map[string]string{"userPrincipalName": workEmail})
-	case "/me/mailFolders/deleteditems":
-		response(w, map[string]any{"id": "deleted"})
+	case "/me/mailFolders/inbox":
+		response(w, map[string]any{"id": "inbox"})
+	case "/me/mailFolders/f1":
+		response(w, map[string]any{"id": "f1"})
 	case "/me/mailFolders":
 		response(w, map[string]any{"value": []any{map[string]any{"id": "f1", "displayName": "Folder", "childFolderCount": 0}}})
 	case "/me/outlook/masterCategories":
@@ -145,7 +166,13 @@ func (a *nativeAPI) graph(w http.ResponseWriter, r *http.Request) {
 	default:
 		if id, ok := strings.CutPrefix(r.URL.Path, "/me/messages/"); ok {
 			if id == "gone" {
-				w.WriteHeader(404)
+				// Metadata is readable for the source check; screening and console reads then fail.
+				fields := r.URL.Query().Get("$select")
+				if strings.Contains(fields, "parentFolderId") && !strings.Contains(fields, ",body") {
+					response(w, map[string]any{"id": id, "parentFolderId": "inbox"})
+				} else {
+					w.WriteHeader(404)
+				}
 				return
 			}
 			body := strings.Contains(r.URL.Query().Get("$select"), ",body")

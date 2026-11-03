@@ -169,6 +169,9 @@ _Avoid_: delete, remove
 
 ### Organization
 
+**Closed folder**:
+The provider's trash or spam/junk folder, and every folder below either one. Agents neither read nor change mail there.
+
 **Rule**:
 A named instruction in `rules.toml` for one account that files matching mail into a folder or a category.
 _Avoid_: filter, policy

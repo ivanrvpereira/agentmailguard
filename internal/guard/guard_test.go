@@ -39,6 +39,12 @@ type mailbox struct {
 // summaries drops the next-page marker of a page.
 func summaries(p views.MailPage, err error) ([]views.MailSummary, error) { return p.Messages, err }
 
+func (b *mailbox) ClosedFolders(context.Context) (map[string]model.Bin, error) {
+	return map[string]model.Bin{"del": model.Trash, "trash": model.Trash, "spam": model.Spam}, nil
+}
+func (b *mailbox) ResolveFolder(_ context.Context, folder string) (string, error) {
+	return folder, nil
+}
 func (b *mailbox) Categories(context.Context) ([]string, error) { return []string{"Work"}, nil }
 func (b *mailbox) Search(ctx context.Context, _ model.SearchQuery, page model.PageRequest, body bool) (model.MessagePage, error) {
 	return b.List(ctx, "inbox", page, body)

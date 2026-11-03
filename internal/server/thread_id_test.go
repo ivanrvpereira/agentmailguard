@@ -91,11 +91,11 @@ func TestMailReadsShowTheFoldersForEveryVerdict(t *testing.T) {
 	home := fakeHome(t)
 	fakeSQL(t, home, `INSERT INTO messages (account, id, folder, sender_address, subject, received_at) VALUES
 		(?1, 'y', 'sent', 'sender@example.test', 'private-subject-y', '2026-10-06T08:00:00Z'),
-		(?1, 's', 'trash', 'sender@example.test', 'private-subject-s', '2026-10-06T07:00:00Z'),
+		(?1, 's', 'drafts', 'sender@example.test', 'private-subject-s', '2026-10-06T07:00:00Z'),
 		(?1, 'r', 'archive', 'sender@example.test', 'private-subject-r', '2026-10-06T06:00:00Z'),
 		(?1, 'down', 'inbox', 'sender@example.test', 'private-subject-down', '2026-10-06T05:00:00Z')`)
 	d := fakeDaemon(t, home, "")
-	want := map[string][2]string{"g": {"green", `["inbox"]`}, "y": {"yellow", `["sent"]`}, "s": {"sealed", `["trash"]`}, "r": {"red", `["archive"]`}, "down": {"error", `["inbox"]`}}
+	want := map[string][2]string{"g": {"green", `["inbox"]`}, "y": {"yellow", `["sent"]`}, "s": {"sealed", `["drafts"]`}, "r": {"red", `["archive"]`}, "down": {"error", `["inbox"]`}}
 	status, body := accountRPC(t, d.s, "mail.search", "demo", `{"text":"private"}`)
 	if got := folders(t, body); status != 200 || !reflect.DeepEqual(got, want) {
 		t.Errorf("mail.search: %d %v", status, got)

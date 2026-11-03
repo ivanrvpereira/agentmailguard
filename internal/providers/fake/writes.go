@@ -13,37 +13,76 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
-// Folders marks trash and every folder below it, so the guard refuses moves there.
 func (b *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
 	db, err := b.p.conn(ctx)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.QueryContext(ctx, `SELECT id, name, parent FROM folders WHERE account = ? ORDER BY rowid`, b.p.account)
+	rows, err := db.QueryContext(ctx, `SELECT id, name FROM folders WHERE account = ? ORDER BY rowid`, b.p.account)
 	if err != nil {
 		return nil, storageError
 	}
 	defer rows.Close()
 	out := []model.Folder{}
-	parents := map[string]string{}
 	for rows.Next() {
 		var f model.Folder
-		var parent sql.NullString
-		if rows.Scan(&f.ID, &f.Name, &parent) != nil {
+		if rows.Scan(&f.ID, &f.Name) != nil {
 			return nil, storageError
 		}
-		parents[f.ID] = parent.String
 		out = append(out, f)
 	}
 	if rows.Err() != nil {
 		return nil, storageError
 	}
-	for i := range out {
-		// The step limit ends parent cycles.
-		for id, steps := out[i].ID, 0; id != "" && steps <= len(parents); id, steps = parents[id], steps+1 {
-			if id == "trash" {
-				out[i].Trash = true
+	return out, nil
+}
+
+func (b *mailbox) ResolveFolder(ctx context.Context, folder string) (string, error) {
+	if err := b.folderExists(ctx, folder); err != nil {
+		return "", err
+	}
+	return folder, nil
+}
+
+func (b *mailbox) ClosedFolders(ctx context.Context) (map[string]model.Bin, error) {
+	db, err := b.p.conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT id, parent FROM folders WHERE account = ?`, b.p.account)
+	if err != nil {
+		return nil, storageError
+	}
+	defer rows.Close()
+	parents := map[string]string{}
+	for rows.Next() {
+		var id string
+		var parent sql.NullString
+		if rows.Scan(&id, &parent) != nil {
+			return nil, storageError
+		}
+		parents[id] = parent.String
+	}
+	if rows.Err() != nil {
+		return nil, storageError
+	}
+	for _, root := range []string{"trash", "spam"} {
+		if _, ok := parents[root]; !ok {
+			return nil, notFound
+		}
+	}
+	out := map[string]model.Bin{}
+	for folder := range parents {
+		for id, steps := folder, 0; id != ""; id, steps = parents[id], steps+1 {
+			if steps >= len(parents) {
+				return nil, storageError
+			}
+			if id == "trash" || id == "spam" {
+				out[folder] = model.Bin(id)
 				break
+			}
+			if _, ok := parents[id]; !ok {
+				return nil, notFound
 			}
 		}
 	}

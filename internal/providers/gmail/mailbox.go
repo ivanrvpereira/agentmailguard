@@ -71,6 +71,24 @@ func labelIn(a []label, id string) string {
 	}
 	return id
 }
+func (m *mailbox) ClosedFolders(ctx context.Context) (map[string]model.Bin, error) {
+	return map[string]model.Bin{"TRASH": model.Trash, "SPAM": model.Spam}, ctx.Err()
+}
+
+func (m *mailbox) ResolveFolder(ctx context.Context, folder string) (string, error) {
+	a, err := m.labels(ctx)
+	if err != nil {
+		return "", err
+	}
+	id := labelIn(a, folder)
+	for _, l := range a {
+		if l.ID == id {
+			return id, nil
+		}
+	}
+	return "", failure("Gmail", "NotFound")
+}
+
 func (m *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
 	a, err := m.labels(ctx)
 	if err != nil {

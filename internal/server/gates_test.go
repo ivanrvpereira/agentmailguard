@@ -15,6 +15,13 @@ func TestWritesOfAnAccountStayOneAtATimeAcrossAReload(t *testing.T) {
 	held, second, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	// The Graph API holds the write of message held until release closes, and reports the write of message second.
 	graph := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if binFolders(w, r) {
+			return
+		}
+		if r.Method == http.MethodGet {
+			response(w, map[string]any{"id": path.Base(r.URL.Path), "parentFolderId": "inbox"})
+			return
+		}
 		if r.Method != http.MethodPatch {
 			w.WriteHeader(http.StatusNotFound)
 			return

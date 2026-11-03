@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -23,10 +24,13 @@ func policyDaemon(t *testing.T, policy string) (*daemon, *atomic.Int32, *atomic.
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == "GET" {
 			reads.Add(1)
+			if binFolders(w, r) {
+				return
+			}
 			if r.URL.Path == "/me/messages/d1" {
 				io.WriteString(w, draftJSON)
 			} else if strings.HasPrefix(r.URL.Path, "/me/messages/") {
-				io.WriteString(w, message)
+				io.WriteString(w, strings.Replace(message, `"id":"m1"`, `"id":"`+path.Base(r.URL.Path)+`"`, 1))
 			} else if strings.HasSuffix(r.URL.Path, "/events/e2") {
 				io.WriteString(w, strings.Replace(attendeeEvent, `"id":"e1"`, `"id":"e2"`, 1))
 			} else {
@@ -109,8 +113,8 @@ func TestPolicyApproveHoldsTheActionWithoutAProviderWrite(t *testing.T) {
 	if writes.Load() != 0 {
 		t.Fatalf("approve wrote to the provider %d times", writes.Load())
 	}
-	if reads.Load() != 8 {
-		t.Fatalf("reads=%d; want one event check per update, cancel, and respond, one draft check, one screening of the reply source, and one read of the reply recipients and one of the forwarded message for the Jev check", reads.Load())
+	if reads.Load() != 36 {
+		t.Fatalf("reads=%d; want closed-folder and source metadata reads in addition to policy and Jev reads", reads.Load())
 	}
 }
 
@@ -134,7 +138,7 @@ func TestTrashPolicyResultsKeepOneEntryPerID(t *testing.T) {
 			t.Fatalf("item %d: %d %s", i, status, body)
 		}
 	}
-	if writes.Load() != 1 || reads.Load() != 0 {
+	if writes.Load() != 1 || reads.Load() != 11 {
 		t.Fatalf("provider accessed for pending actions: reads=%d writes=%d", reads.Load(), writes.Load())
 	}
 }
