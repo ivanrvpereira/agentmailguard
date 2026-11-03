@@ -20,7 +20,7 @@ func TestAPIOperationsAreReviewed(t *testing.T) {
 		"calendar.availability", "calendar.cancel", "calendar.get", "calendar.invite", "calendar.list", "calendar.respond", "calendar.search", "calendar.update",
 		"draft.delete", "draft.forward", "draft.new", "draft.reply", "draft.send", "draft.update",
 		"mail.archive", "mail.categories", "mail.categorize", "mail.flag", "mail.folders", "mail.forward", "mail.get", "mail.link", "mail.list",
-		"mail.move", "mail.organize", "mail.read", "mail.reply", "mail.search", "mail.send", "mail.thread", "mail.trash", "mail.unread",
+		"mail.move", "mail.organize", "mail.read", "mail.reply", "mail.search", "mail.send", "mail.spam", "mail.thread", "mail.trash", "mail.unread",
 		"rules.list", "stats",
 	}
 	if got := server.Operations(); !slices.Equal(got, reviewed) {

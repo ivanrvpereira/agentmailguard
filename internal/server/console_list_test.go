@@ -16,7 +16,7 @@ import (
 )
 
 // everyWriteWaits holds every write for approval, also of sealed messages.
-const everyWriteWaits = "[policy]\nmail_send='approve'\nmail_draft='approve'\nmail_trash='approve'\ncalendar_invite='approve'\ncalendar_update='approve'\ncalendar_cancel='approve'\ncalendar_respond='approve'\n[policy.sealed]\nmail_trash='approve'\n"
+const everyWriteWaits = "[policy]\nmail_send='approve'\nmail_draft='approve'\nmail_trash='approve'\nmail_spam='approve'\ncalendar_invite='approve'\ncalendar_update='approve'\ncalendar_cancel='approve'\ncalendar_respond='approve'\n[policy.sealed]\nmail_trash='approve'\nmail_spam='approve'\n"
 
 // waitingOps are the operations that can wait for approval, with the list group and the action label that the list
 // shows, and params that the console fixture holds. Each draft operation names its own draft, so that none withdraws
@@ -36,6 +36,7 @@ var waitingOps = []struct{ op, group, label, params string }{
 	{"calendar.cancel", "meetings", "Cancel", `{"id":"o","comment":"c"}`},
 	{"calendar.respond", "meetings", "Respond", `{"id":"e","response":"decline","comment":"c"}`},
 	{"mail.trash", "mailbox", "Trash", `{"ids":["g"]}`},
+	{"mail.spam", "mailbox", "Spam", `{"ids":["g"]}`},
 }
 
 // neverWaitingOps are the other API operations: reads, and writes that no policy key holds.

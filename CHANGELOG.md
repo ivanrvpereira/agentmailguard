@@ -10,10 +10,11 @@ The first public release.
 
 ### Changed
 
-- Trash and spam/junk, including their subfolders, are closed to agents on every provider: no reads, replies, draft changes, or moves out; conversation and search results omit their messages. Moves into these folders are refused; only `mail trash` can put mail in the trash.
+- Trash and spam/junk, including their subfolders, are closed to agents on every provider: no reads, replies, draft changes, or moves out; conversation and search results omit their messages. Moves into these folders are refused; only `mail trash` and `mail spam` can put mail in trash and spam/junk.
 
 ### Added
 
+- `amg mail spam IDS... | --thread THREAD_ID [--in FOLDER_ID]` moves open messages to spam/junk under the new `mail_spam` write policy (default allow; sealed/error default deny), with per-message approvals.
 - `amgd`, a daemon that screens Microsoft 365 and Gmail mail and calendar events for AI agents, and `amg`, the agent's client, which talks to it over HTTP.
 - Screened mail reads: list, search, read, and whole conversations. Each message gets a verdict (`green`, `yellow`, `red`, `sealed`, or `error`) that decides what the agent sees.
 - Mail changes by message or by conversation: archive, move, trash, flag, categorize, and read state.

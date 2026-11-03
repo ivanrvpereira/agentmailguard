@@ -19,6 +19,7 @@ type Operation string
 const (
 	Archive         Operation = "archive"
 	Trash           Operation = "trash"
+	Spam            Operation = "spam"
 	Move            Operation = "move"
 	Read            Operation = "read"
 	Unread          Operation = "unread"
@@ -81,7 +82,7 @@ func (l *Log) Record(ctx context.Context, account string, operation Operation, r
 		return err
 	}
 	switch operation {
-	case Archive, Trash, Move, Read, Unread, Flag, Categorize, DraftNew, DraftReply, DraftForward, DraftUpdate:
+	case Archive, Trash, Spam, Move, Read, Unread, Flag, Categorize, DraftNew, DraftReply, DraftForward, DraftUpdate:
 	case CalendarInvite, CalendarUpdate, CalendarCancel, CalendarRespond, MailSend, MailReply, MailForward, DraftDelete, DraftSend:
 		if options.Folder != nil || options.Flag != nil || options.Add != nil || options.Remove != nil || options.DraftID != nil || options.Rule != nil {
 			return errors.New("invalid audit options")
@@ -90,7 +91,7 @@ func (l *Log) Record(ctx context.Context, account string, operation Operation, r
 		return errors.New("invalid audit operation")
 	}
 	// Only an organize action other than flag can act on a conversation.
-	if options.Thread != nil && (*options.Thread == "" || !slices.Contains([]Operation{Archive, Trash, Move, Read, Unread, Categorize}, operation)) {
+	if options.Thread != nil && (*options.Thread == "" || !slices.Contains([]Operation{Archive, Trash, Spam, Move, Read, Unread, Categorize}, operation)) {
 		return errors.New("invalid audit thread")
 	}
 	if options.Flag != nil && *options.Flag != model.Flagged && *options.Flag != model.Complete && *options.Flag != model.NoFlag {

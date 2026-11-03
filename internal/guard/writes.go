@@ -97,7 +97,7 @@ func (g *Guard) audited(ctx context.Context, op audit.Operation, ids []string, h
 	}
 	// Once a provider has returned a write result, cancellation must not erase its audit record.
 	for _, id := range allowed {
-		if e := g.recordDecision(ctx, op, keyTrash, decision{value: config.Allow}, &id, nil, opts.Rule); e != nil {
+		if e := g.recordDecision(ctx, op, mutationPolicyKey(op), decision{value: config.Allow}, &id, nil, opts.Rule); e != nil {
 			return nil, e
 		}
 	}
@@ -161,8 +161,8 @@ func (g *Guard) mutationCall(ctx context.Context, op audit.Operation, ids []stri
 		}
 	}
 	var allowed []string
-	if op == audit.Trash && len(open) > 0 {
-		policyHeld, policyAllowed, err := g.trashPolicy(ctx, open, opts.Rule)
+	if key := mutationPolicyKey(op); key != "" && len(open) > 0 {
+		policyHeld, policyAllowed, err := g.mutationPolicy(ctx, op, key, open, opts.Rule)
 		if err != nil {
 			return nil, err
 		}
@@ -191,6 +191,8 @@ func (g *Guard) writer(ctx context.Context, op audit.Operation, from string, opt
 		call = func(ids []string) ([]model.MutationResult, error) { return g.mailbox.Archive(ctx, ids) }
 	case audit.Trash:
 		call = func(ids []string) ([]model.MutationResult, error) { return g.mailbox.Trash(ctx, ids) }
+	case audit.Spam:
+		call = func(ids []string) ([]model.MutationResult, error) { return g.mailbox.Spam(ctx, ids) }
 	case audit.Move:
 		bin, err := g.folderBin(ctx, *opts.Folder)
 		if err != nil {
@@ -348,6 +350,11 @@ func (g *Guard) Archive(ctx context.Context, ids []string) ([]model.MutationResu
 func (g *Guard) Trash(ctx context.Context, ids []string) ([]model.MutationResult, error) {
 	return g.manual(ctx, audit.Trash, ids, audit.Options{})
 }
+
+// Spam moves open messages to spam under the write policy, with one result per ID.
+func (g *Guard) Spam(ctx context.Context, ids []string) ([]model.MutationResult, error) {
+	return g.manual(ctx, audit.Spam, ids, audit.Options{})
+}
 func (g *Guard) Move(ctx context.Context, ids []string, dest string) ([]model.MutationResult, error) {
 	return g.manual(ctx, audit.Move, ids, audit.Options{Folder: &dest})
 }
@@ -371,6 +378,11 @@ func (g *Guard) ArchiveConversation(ctx context.Context, thread, in string) ([]m
 }
 func (g *Guard) TrashConversation(ctx context.Context, thread, in string) ([]model.MutationResult, error) {
 	return g.conversation(ctx, audit.Trash, thread, in, audit.Options{})
+}
+
+// SpamConversation decides and moves each open message of thread in folder in to spam.
+func (g *Guard) SpamConversation(ctx context.Context, thread, in string) ([]model.MutationResult, error) {
+	return g.conversation(ctx, audit.Spam, thread, in, audit.Options{})
 }
 func (g *Guard) MoveConversation(ctx context.Context, thread, in, dest string) ([]model.MutationResult, error) {
 	return g.conversation(ctx, audit.Move, thread, in, audit.Options{Folder: &dest})

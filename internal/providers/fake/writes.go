@@ -152,6 +152,9 @@ func (b *mailbox) Archive(ctx context.Context, ids []string) ([]model.MutationRe
 func (b *mailbox) Trash(ctx context.Context, ids []string) ([]model.MutationResult, error) {
 	return b.Move(ctx, ids, "inbox", "trash")
 }
+func (b *mailbox) Spam(ctx context.Context, ids []string) ([]model.MutationResult, error) {
+	return b.Move(ctx, ids, "inbox", "spam")
+}
 func (b *mailbox) Move(ctx context.Context, ids []string, _, dest string) ([]model.MutationResult, error) {
 	if err := b.folderExists(ctx, dest); err != nil {
 		return nil, err

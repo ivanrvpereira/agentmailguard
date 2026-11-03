@@ -13,7 +13,7 @@ The list page `/` puts the pending actions in three tables:
 
 - **Messages**: `mail.send`, `mail.reply`, `mail.forward`, `draft.new`, `draft.reply`, `draft.forward`, `draft.update`, `draft.send`, and `draft.delete`. The Action column shows `Send`, `Reply`, `Forward`, `New draft`, `Draft reply`, `Draft forward`, `Edit draft`, `Send draft`, or `Delete draft`.
 - **Meetings**: `calendar.invite`, `calendar.update`, `calendar.cancel`, and `calendar.respond`, shown as `Invite`, `Update`, `Cancel`, and `Respond`.
-- **Mailbox operations**: `mail.trash`, shown as `Trash`.
+- **Mailbox operations**: `mail.trash`, shown as `Trash`, and `mail.spam`, shown as `Spam`.
 
 Each table shows its pending actions newest first, at most 500 in all.
 The page hides a table that has no pending action and no handled action.
@@ -35,7 +35,7 @@ The action page shows who the reply goes to.
 
 ### Live reads
 
-An invitation stores its event, but an update, cancel, or response stores only the event ID, and a trash stores only the message ID.
+An invitation stores its event, but an update, cancel, or response stores only the event ID, and a trash or spam move stores only the message ID.
 For these rows, the list reads the event or the message when the page loads, through the same guarded read path that the agent uses (`calendar.get` or `mail.get`).
 The list never shows a body.
 If the cache has no verdict for the message, the read screens it, as on the action page.
@@ -57,7 +57,7 @@ Messages and Meetings rows also have a Score, the result of the [action check](w
 | Red | `▲ error` | Needs review | The check failed. |
 | Grey | `—` | Not checked | No check ran. |
 
-`mail.trash` never gets an action check, so Mailbox operations rows have no Score and always a grey bar.
+`mail.trash` and `mail.spam` never get an action check, so Mailbox operations rows have no Score and always a grey bar.
 The list, Recents, the open row, and the action page show no Score for them.
 A Mailbox operations row never needs review.
 
@@ -139,7 +139,7 @@ Without the script, the page reloads at the same interval through a `<noscript>`
 
 ## Action page
 
-The action page `/a/ID` shows one action: its label and operation, the state, the account, the times, the Score with its label (not for `mail.trash`), and every stored request field as plain text under **Request**.
+The action page `/a/ID` shows one action: its label and operation, the state, the account, the times, the Score with its label (not for `mail.trash` or `mail.spam`), and every stored request field as plain text under **Request**.
 `Bcc (hidden recipients)` lists people who get the message, but the other recipients do not see them.
 A `done` action shows its result, and a `failed` action its error code.
 

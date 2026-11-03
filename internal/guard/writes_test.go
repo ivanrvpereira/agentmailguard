@@ -19,6 +19,7 @@ type writer struct {
 	*mailbox
 	calls            []string
 	trashed          []string
+	spammed          []string
 	flags            []model.FlagState
 	updates          []draftUpdate
 	draftReads       int
@@ -70,6 +71,10 @@ func (w *writer) Archive(ctx context.Context, ids []string) ([]model.MutationRes
 func (w *writer) Trash(_ context.Context, ids []string) ([]model.MutationResult, error) {
 	w.trashed = append(w.trashed, ids...)
 	return w.write("trash", ids)
+}
+func (w *writer) Spam(_ context.Context, ids []string) ([]model.MutationResult, error) {
+	w.spammed = append(w.spammed, ids...)
+	return w.write("spam", ids)
 }
 func (w *writer) Move(_ context.Context, ids []string, from, _ string) ([]model.MutationResult, error) {
 	w.moveSources = append(w.moveSources, from)

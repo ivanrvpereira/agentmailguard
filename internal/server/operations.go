@@ -168,6 +168,11 @@ var operations = map[string]operation{
 	}, func(ctx context.Context, g *guard.Guard, thread, in string) ([]model.MutationResult, error) {
 		return g.TrashConversation(ctx, thread, in)
 	})},
+	"mail.spam": {decode: ids(func(ctx context.Context, g *guard.Guard, ids []string) ([]model.MutationResult, error) {
+		return g.Spam(ctx, ids)
+	}, func(ctx context.Context, g *guard.Guard, thread, in string) ([]model.MutationResult, error) {
+		return g.SpamConversation(ctx, thread, in)
+	})},
 	"mail.read": {decode: ids(func(ctx context.Context, g *guard.Guard, ids []string) ([]model.MutationResult, error) {
 		return g.MarkRead(ctx, ids, true)
 	}, func(ctx context.Context, g *guard.Guard, thread, in string) ([]model.MutationResult, error) {

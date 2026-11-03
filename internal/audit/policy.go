@@ -11,13 +11,13 @@ import (
 
 // Policy keys that can appear in records and in refusal codes.
 var policyKeys = map[string]bool{
-	"mail_trash": true, "mail_draft": true, "mail_send": true,
+	"mail_trash": true, "mail_spam": true, "mail_draft": true, "mail_send": true,
 	"calendar_invite": true, "calendar_update": true, "calendar_cancel": true, "calendar_respond": true,
 }
 
 // API operations that the write policy decides.
 var policyOperations = map[string]bool{
-	"mail.trash": true, "draft.new": true, "draft.reply": true, "draft.forward": true, "draft.update": true, "draft.delete": true,
+	"mail.trash": true, "mail.spam": true, "draft.new": true, "draft.reply": true, "draft.forward": true, "draft.update": true, "draft.delete": true,
 	"mail.send": true, "mail.reply": true, "mail.forward": true, "draft.send": true,
 	"calendar.invite": true, "calendar.update": true, "calendar.cancel": true, "calendar.respond": true,
 }

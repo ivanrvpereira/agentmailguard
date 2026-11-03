@@ -364,6 +364,8 @@ type Mailbox interface {
 	Folders(ctx context.Context) ([]Folder, error)
 	Archive(ctx context.Context, ids []MessageID) ([]MutationResult, error)
 	Trash(ctx context.Context, ids []MessageID) ([]MutationResult, error)
+	// Spam moves each message to spam/junk and returns one result per input ID, in order.
+	Spam(ctx context.Context, ids []MessageID) ([]MutationResult, error)
 	// Move moves ids from folder from to dest. Gmail removes the label of from; Microsoft 365 and the fake provider
 	// ignore it, because a message there is in one folder only.
 	Move(ctx context.Context, ids []MessageID, from, dest FolderID) ([]MutationResult, error)

@@ -24,20 +24,27 @@ func TestPolicyDefaultsWithoutPolicyTables(t *testing.T) {
 	got := policyOf(t, head+work)["work"]
 	want := config.Policy{
 		Base: config.Decisions{
-			MailTrash: "allow", MailDraft: "allow", MailSend: "deny",
+			MailTrash: "allow", MailSpam: "allow", MailDraft: "allow", MailSend: "deny",
 			CalendarInvite: "deny", CalendarUpdate: "deny", CalendarCancel: "deny", CalendarRespond: "deny",
 		},
-		Sealed: config.SealedDecisions{MailTrash: "deny"},
+		Sealed: config.SealedDecisions{MailTrash: "deny", MailSpam: "deny"},
 	}
 	if got != want {
 		t.Fatalf("policy=%+v", got)
 	}
 }
 
+func TestSpamPolicyAcceptsBaseAndSealedOverrides(t *testing.T) {
+	got := policyOf(t, head+"[policy]\nmail_spam = 'deny'\n[policy.sealed]\nmail_spam = 'approve'\n"+work+"[accounts.work.policy]\nmail_spam = 'approve'\n[accounts.work.policy.sealed]\nmail_spam = 'allow'\n")["work"]
+	if got.Base.MailSpam != config.Approve || got.Sealed.MailSpam != config.Allow {
+		t.Fatalf("spam policy=%+v", got)
+	}
+}
+
 func TestGlobalPolicyOverridesDefaultsKeyByKey(t *testing.T) {
 	got := policyOf(t, head+"[policy]\nmail_send = 'approve'\nmail_trash = 'deny'\ncalendar_respond = 'allow'\n"+work)["work"]
 	want := config.Decisions{
-		MailTrash: "deny", MailDraft: "allow", MailSend: "approve",
+		MailTrash: "deny", MailSpam: "allow", MailDraft: "allow", MailSend: "approve",
 		CalendarInvite: "deny", CalendarUpdate: "deny", CalendarCancel: "deny", CalendarRespond: "allow",
 	}
 	if got.Base != want {
@@ -66,11 +73,11 @@ client_id = "c"
 client_secret = "s"
 `)
 	personal := config.Decisions{
-		MailTrash: "allow", MailDraft: "approve", MailSend: "deny",
+		MailTrash: "allow", MailSpam: "allow", MailDraft: "approve", MailSend: "deny",
 		CalendarInvite: "approve", CalendarUpdate: "deny", CalendarCancel: "deny", CalendarRespond: "deny",
 	}
 	other := config.Decisions{
-		MailTrash: "allow", MailDraft: "allow", MailSend: "approve",
+		MailTrash: "allow", MailSpam: "allow", MailDraft: "allow", MailSend: "approve",
 		CalendarInvite: "approve", CalendarUpdate: "deny", CalendarCancel: "deny", CalendarRespond: "deny",
 	}
 	if got["personal"].Base != personal || got["other"].Base != other {
@@ -98,8 +105,8 @@ email = "other@example.test"
 client_id = "c"
 tenant_id = "t"
 `)
-	personal := config.SealedDecisions{MailTrash: "allow"}
-	other := config.SealedDecisions{MailTrash: "approve"}
+	personal := config.SealedDecisions{MailTrash: "allow", MailSpam: "deny"}
+	other := config.SealedDecisions{MailTrash: "approve", MailSpam: "deny"}
 	if got["personal"].Sealed != personal || got["other"].Sealed != other {
 		t.Fatalf("personal=%+v other=%+v", got["personal"].Sealed, got["other"].Sealed)
 	}
@@ -108,7 +115,7 @@ tenant_id = "t"
 	}
 }
 
-// Replies and forwards of a sealed message are always refused, so the sealed tables accept only mail_trash.
+// Replies and forwards of a sealed message are always refused, so the sealed tables accept only mail_trash and mail_spam.
 func TestSealedTablesRefuseMailDraftAndMailSend(t *testing.T) {
 	for _, tc := range []struct{ text, path string }{
 		{"[policy.sealed]\nmail_draft = 'allow'\n" + work, "policy.sealed.mail_draft"},

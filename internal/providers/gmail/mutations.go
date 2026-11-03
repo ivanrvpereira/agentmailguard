@@ -46,6 +46,9 @@ func (m *mailbox) Trash(ctx context.Context, ids []string) ([]model.MutationResu
 		return err
 	})
 }
+func (m *mailbox) Spam(ctx context.Context, ids []string) ([]model.MutationResult, error) {
+	return m.modify(ctx, ids, []string{"SPAM"}, []string{"INBOX"})
+}
 func (m *mailbox) MarkRead(ctx context.Context, ids []string, read bool) ([]model.MutationResult, error) {
 	if read {
 		return m.modify(ctx, ids, nil, []string{"UNREAD"})
