@@ -477,6 +477,9 @@ func TestBrowserConsoleRowsKeepTheirTextAtEveryWidth(t *testing.T) {
 // that the last row still scrolls above the bar and clearing the selection does not shorten the page.
 func TestBrowserConsoleBulkBarMovesNoRow(t *testing.T) {
 	f, b := browserConsole(t, everyWriteWaits, nil)
+	f.setScore(.62)
+	pend(t, f.d.s, "mail.send", `{"to":["a@example.test"],"subject":"s","body":"b"}`)
+	f.setScore(.1)
 	for range 12 {
 		pend(t, f.d.s, "mail.send", `{"to":["a@example.test"],"subject":"s","body":"b"}`)
 	}
@@ -508,6 +511,16 @@ func TestBrowserConsoleBulkBarMovesNoRow(t *testing.T) {
 				t.Errorf("%dpx, %s: rows %q, ticked %q; ticked and scrolled %q, cleared %q; bar %.0fpx above the bottom, last row %.0fpx under the bar, count in the bar %v",
 					width, c.where, before, ticked, ticked2, cleared, got[0], got[1], got[2] == 1)
 			}
+		}
+		// With a row that needs review ticked, the count and its review warning, which CSS writes, fit in the bar.
+		b.open(t, "/?refresh=off")
+		eval[chromedp.Void](t, b, `document.querySelector("input.sel[data-review]").click(); document.querySelector("input.sel:not([data-review])").click()`)
+		fits := eval[[]any](t, b, `(() => {
+			const c = document.querySelector(".selcount"), r = c.getBoundingClientRect(), bar = document.querySelector(".bar").getBoundingClientRect();
+			return [c.scrollHeight - c.clientHeight, r.top >= bar.top && r.bottom <= bar.bottom, getComputedStyle(c, "::after").content];
+		})()`)
+		if warning, _ := fits[2].(string); fits[0].(float64) > 0 || fits[1] != true || !strings.Contains(warning, "need review") {
+			t.Errorf("%dpx: selection text overflows its box by %vpx, box in the bar %v, warning %q", width, fits[0], fits[1], fits[2])
 		}
 	}
 }
