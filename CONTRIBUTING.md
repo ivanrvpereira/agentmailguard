@@ -6,9 +6,10 @@ This project guards real mailboxes, so a change must keep the guard safe before 
 
 ## Before you start
 
+- **Public data:** this is a public repository. Do not include real company names, people's names, email addresses, account aliases, hostnames or IP addresses, folder IDs, or any mail or calendar content in an issue, pull request, comment, commit message, test fixture, or doc. Use made-up examples (`example.com`, Alice, Bob) and redact logs. The issue forms ask you to confirm this. GitHub keeps edits, so do not add the data and then delete it.
 - **Bugs:** open an issue with the [bug report form](https://github.com/ivanrvpereira/agentmailguard/issues/new?template=bug_report.yml). Use synthetic mail and the fake provider in reproductions. Never paste real mail, tokens, passwords, callback URLs, or files from a daemon home.
 - **Security problems:** do not open an issue. Report them privately as [SECURITY.md](SECURITY.md) describes.
-- **New features and larger changes:** open an issue first, so that we can agree on the behavior before you write code.
+- **New features and larger changes:** open an issue first, so that we can agree on the behavior before you write code. Use the [feature request](https://github.com/ivanrvpereira/agentmailguard/issues/new?template=feature_request.yml), [spec](https://github.com/ivanrvpereira/agentmailguard/issues/new?template=spec.yml), or [decision](https://github.com/ivanrvpereira/agentmailguard/issues/new?template=decision.yml) form.
 - **Ask first** before a change to: a new dependency, OAuth scopes, the questions sent to Jev, screening thresholds, policy keys or their defaults, or the set of supported operations. These change the security boundary or what users grant.
 
 ## Development setup

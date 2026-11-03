@@ -2,6 +2,12 @@
 
 Long-lived daemon that screens Microsoft 365 and Gmail mail and calendars for AI agents. `amg` is the agent's client; `amgd` runs the daemon and holds every management command.
 
+## Public data
+
+Agents and automation follow this rule on every write: issues, pull requests, comments, commit messages, test fixtures, and docs. This repository is public. Do not include real company names, people's names, email addresses, account aliases, hostnames or IP addresses, folder IDs, or any mail or calendar content.
+
+Issue forms ask for a confirmation. An issue created through the API skips the templates, so follow the rule yourself. Prefer generic examples (`example.com`, Alice, Bob) and redact logs. GitHub keeps issue edits, so do not add the data and then delete it.
+
 ## Stack
 
 Go, macOS and Linux only. `amgd` needs cgo (SQLite, macOS Keychain); `amg` must build with `CGO_ENABLED=0`.
