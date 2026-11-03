@@ -31,7 +31,7 @@ func TestCheckActionAsksOneSuspiciousQuestion(t *testing.T) {
 		t.Fatalf("check=%+v %v", got, err)
 	}
 	want := map[string]any{
-		"model": "typesafe/jev-1.13",
+		"model": "typesafe/jev-1.14",
 		"state": state,
 		"questions": map[string]any{"suspicious": map[string]any{
 			"type":         "noul",

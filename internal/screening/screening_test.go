@@ -69,13 +69,13 @@ func TestRealJevProtocol(t *testing.T) {
 func TestConfiguredModelIsSentToJev(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct{ Model string }
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.Model != "jev-1.13.0" {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.Model != "jev-1.14.0" {
 			t.Errorf("model=%q err=%v", request.Model, err)
 		}
-		_, _ = w.Write([]byte(`{"model":"jev-1.13.0","usage":{},"answers":{"injection":{"type":"noul","noul":0.1},"account_security":{"type":"noul","noul":0.1}}}`))
+		_, _ = w.Write([]byte(`{"model":"jev-1.14.0","usage":{},"answers":{"injection":{"type":"noul","noul":0.1},"account_security":{"type":"noul","noul":0.1}}}`))
 	}))
 	defer server.Close()
-	s := screening.New(screening.Options{HTTPClient: server.Client(), Endpoint: server.URL, Model: "jev-1.13.0", Credentials: keyStore()})
+	s := screening.New(screening.Options{HTTPClient: server.Client(), Endpoint: server.URL, Model: "jev-1.14.0", Credentials: keyStore()})
 	result, err := s.Screen(context.Background(), map[string]any{"subject": "SYNTHETIC"})
 	if err != nil || result.Verdict != model.Green {
 		t.Fatalf("result=%+v err=%v", result, err)

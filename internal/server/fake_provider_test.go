@@ -122,10 +122,10 @@ func TestConfiguredScreeningEndpointModelAndKeyReachJev(t *testing.T) {
 	jev := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct{ Model string }
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if auth := r.Header.Get("Authorization"); r.URL.Path != "/custom/systemone" || body.Model != "jev-1.13.0" || auth != "Bearer private-jev-canary" {
+		if auth := r.Header.Get("Authorization"); r.URL.Path != "/custom/systemone" || body.Model != "jev-1.14.0" || auth != "Bearer private-jev-canary" {
 			t.Errorf("Jev call: path=%s model=%s authorization=%s", r.URL.Path, body.Model, auth)
 		}
-		response(w, map[string]any{"model": "jev-1.13.0", "usage": map[string]any{}, "answers": map[string]any{"injection": map[string]any{"type": "noul", "noul": 0.1}, "account_security": map[string]any{"type": "noul", "noul": 0.1}}})
+		response(w, map[string]any{"model": "jev-1.14.0", "usage": map[string]any{}, "answers": map[string]any{"injection": map[string]any{"type": "noul", "noul": 0.1}, "account_security": map[string]any{"type": "noul", "noul": 0.1}}})
 	}))
 	t.Cleanup(jev.Close)
 	// Every dial goes to the fake Jev, so a wrong endpoint fails the TLS check and never leaves the machine.
@@ -134,7 +134,7 @@ func TestConfiguredScreeningEndpointModelAndKeyReachJev(t *testing.T) {
 		return new(net.Dialer).DialContext(ctx, network, jev.Listener.Addr().String())
 	}
 	key := credentials.Record{Version: 1, OAuth: map[string]credentials.OAuth{}, ScreeningKey: "private-jev-canary"}
-	d := startDaemon(t, daemonSetup{home: fakeHome(t), config: demoConfig + "[screening]\nendpoint='" + jev.URL + "/custom/systemone'\nmodel='jev-1.13.0'\n", record: &key,
+	d := startDaemon(t, daemonSetup{home: fakeHome(t), config: demoConfig + "[screening]\nendpoint='" + jev.URL + "/custom/systemone'\nmodel='jev-1.14.0'\n", record: &key,
 		options: server.Options{ScreeningHTTPClient: &http.Client{Transport: transport}}})
 	// Only an answer from the fake Jev makes the verdict green.
 	status, body := accountRPC(t, d.s, "mail.list", "demo", `{}`)

@@ -83,7 +83,7 @@ Sources: [installed-app OAuth](https://developers.google.com/identity/protocols/
 
 **CAUTION: Review the data transfers before consent or the first read.** Screening sends email content, calendar event content, and the text of actions that the agent writes outside your machine.
 Organization requests also send rule instructions and criteria to OpenRouter/Jev.
-The default endpoint is `https://openrouter.ai/api/v1/systemone`, with model `typesafe/jev-1.13`. The [`[screening]`](screening.md#screening) table can select another endpoint and model, which then receives the same data.
+The default endpoint is `https://openrouter.ai/api/v1/systemone`, with model `typesafe/jev-1.14`. The [`[screening]`](screening.md#screening) table can select another endpoint and model, which then receives the same data.
 
 OpenRouter documents [data collection](https://openrouter.ai/docs/guides/privacy/data-collection) and [provider logging policies](https://openrouter.ai/docs/guides/privacy/logging).
 Retention and training policies differ by provider. Jev/System One-specific retention remains uncertain. This guide does not promise zero retention.

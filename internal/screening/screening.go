@@ -20,7 +20,7 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
-const Model = "typesafe/jev-1.13"
+const Model = "typesafe/jev-1.14"
 const Endpoint = "https://openrouter.ai/api/v1/systemone"
 const Timeout = 30 * time.Second
 const MaxParallel = 8

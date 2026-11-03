@@ -5,7 +5,7 @@ What the daemon sends to the screening service, how to configure it, and what th
 ## Privacy and external screening
 
 **Privacy warning:** Screening is an external service, not a local-only check.
-By default, the daemon sends requests to OpenRouter's System One endpoint for model `typesafe/jev-1.13`.
+By default, the daemon sends requests to OpenRouter's System One endpoint for model `typesafe/jev-1.14`.
 The [`[screening]`](#screening) table can set another endpoint and model, which then receives the same data.
 The fake screening engine sends nothing, but it is only for tests and local work.
 
@@ -32,19 +32,19 @@ The daemon screens every message and checks the text of agent actions with a dec
 [screening]
 provider = "jev"                                     # Default. Use "fake" for the keyword engine.
 endpoint = "https://openrouter.ai/api/v1/systemone"  # Default. Used only by "jev".
-model = "typesafe/jev-1.13"                          # Default. Used only by "jev".
+model = "typesafe/jev-1.14"                          # Default. Used only by "jev".
 ```
 
-- `jev` calls Jev at `endpoint` with the stored screening key. The endpoint can be OpenRouter, Jev cloud, or another host that serves the same protocol. It must be an `https` URL with a host name, no user name or password, and no fragment, because each request carries mail text and the key. A port is optional and must be from 1 to 65535.
-- `model` names the model that `jev` asks. The default, `typesafe/jev-1.13`, is the model name at OpenRouter. Jev cloud uses other model names. For example, to use Jev cloud:
+- `jev` calls Jev at `endpoint` with the stored screening key. The endpoint can be OpenRouter, TypeSafe's own API, or another host that serves the same protocol. It must be an `https` URL with a host name, no user name or password, and no fragment, because each request carries mail text and the key. A port is optional and must be from 1 to 65535.
+- `model` names the model that `jev` asks. The default, `typesafe/jev-1.14`, is the model name at OpenRouter. TypeSafe's own API uses other model names. For example, to call TypeSafe directly:
 
   ```toml
   [screening]
   endpoint = "https://api.typesafe.ai/v1/systemone"
-  model = "jev-1.13.0"
+  model = "jev-1.14.0"
   ```
 
-  A model name starts with a letter or a digit. It contains only letters, digits, `.`, `_`, `:`, `/`, and `-`, and it has a maximum of 128 characters. The screening thresholds are tuned for jev-1.13, so another model can change the verdicts.
+  A model name starts with a letter or a digit. It contains only letters, digits, `.`, `_`, `:`, `/`, and `-`, and it has a maximum of 128 characters. The screening thresholds were tuned for jev-1.13 and are not yet checked on jev-1.14, so a model change can change the verdicts.
 - `fake` decides by keywords in the message or action. It makes no network calls and needs no key. It is for tests and local development:
   - "ignore previous instructions" makes a message `red`;
   - "verification code" makes a message `sealed`;

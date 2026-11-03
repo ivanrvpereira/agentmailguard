@@ -34,12 +34,12 @@ func TestScreeningReadsProviderAndEndpoint(t *testing.T) {
 }
 
 func TestScreeningReadsModel(t *testing.T) {
-	got, err := screeningOf(t, "[screening]\nendpoint = 'https://api.typesafe.ai/v1/systemone'\nmodel = 'jev-1.13.0'\n"+work)
-	if err != nil || got != (config.Screening{Provider: "jev", Endpoint: "https://api.typesafe.ai/v1/systemone", Model: "jev-1.13.0"}) {
+	got, err := screeningOf(t, "[screening]\nendpoint = 'https://api.typesafe.ai/v1/systemone'\nmodel = 'jev-1.14.0'\n"+work)
+	if err != nil || got != (config.Screening{Provider: "jev", Endpoint: "https://api.typesafe.ai/v1/systemone", Model: "jev-1.14.0"}) {
 		t.Fatalf("screening=%+v error=%v", got, err)
 	}
-	got, err = screeningOf(t, "[screening]\nmodel = 'typesafe/jev-1.13'\n"+work)
-	if err != nil || got != (config.Screening{Provider: "jev", Model: "typesafe/jev-1.13"}) {
+	got, err = screeningOf(t, "[screening]\nmodel = 'typesafe/jev-1.14'\n"+work)
+	if err != nil || got != (config.Screening{Provider: "jev", Model: "typesafe/jev-1.14"}) {
 		t.Fatalf("screening=%+v error=%v", got, err)
 	}
 }

@@ -42,7 +42,7 @@ func screening(d map[string]any) (Screening, error) {
 	return result, nil
 }
 
-// validModel accepts model names such as typesafe/jev-1.13, jev-1.13.0, and jev-latest.
+// validModel accepts model names such as typesafe/jev-1.14, jev-1.14.0, and jev-latest.
 var validModel = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
 
 // validEndpoint accepts only an absolute HTTPS URL with a host name, no user info, and no fragment: the
