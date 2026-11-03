@@ -30,6 +30,17 @@ amgd config set credentials.backend keychain
 
 The home contains the account configuration, credential lock, cache, and audit file. See [Credential storage](credentials.md#credential-storage) for both backends.
 
+## Before you register
+
+Each user registers their own provider application. agentmailguard has no shared application.
+The type of account tells you who can register the application and which audience to select.
+
+| Account | Who registers the application | What to do |
+| --- | --- | --- |
+| Microsoft 365 work or school | Usually you. Your organization can turn off app registration and user consent. | Follow [Register Microsoft 365](#register-microsoft-365). If the portal or the sign-in refuses, see [Microsoft administrator approval](#microsoft-administrator-approval). |
+| Google Workspace | Usually you. Your administrator can block new projects or unknown apps. | Follow [Register Gmail](#register-gmail) and select the **Internal** audience. Google does not verify Internal apps, and their logins do not expire after seven days. |
+| Personal Gmail | You. | Follow [Register Gmail](#register-gmail) and select the **External** audience. Then follow [Stop the weekly Gmail sign-in](#stop-the-weekly-gmail-sign-in). |
+
 ## Register Microsoft 365
 
 1. In the [Microsoft Entra admin center](https://entra.microsoft.com/), open **App registrations → New registration**.
@@ -56,12 +67,22 @@ Device-code login requires no callback, but organization policies can refuse it.
 
 Sources: [desktop registration](https://learn.microsoft.com/en-us/entra/identity-platform/scenario-desktop-app-registration), [redirect rules](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url#localhost-exceptions), and [Graph permissions](https://learn.microsoft.com/en-us/graph/permissions-reference).
 
+### Microsoft administrator approval
+
+By default, a member of an organization can register an application and consent to access to their own mailbox. Many organizations turn off one or both of these permissions.
+
+- If **New registration** is not available, ask your administrator to register the application for you, or to give you the Application Developer role.
+- If the sign-in shows **Need admin approval**, an administrator must consent to the permissions. The administrator opens **API permissions** in the application and selects **Grant admin consent**. `Mail.ReadWrite` and `Mail.Send` often need this consent.
+- The permissions are delegated. The application can access only the mailbox of the person who signs in.
+
+Sources: [default user permissions](https://learn.microsoft.com/en-us/entra/fundamentals/users-default-permissions) and [user consent settings](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/configure-user-consent).
+
 ## Register Gmail
 
 1. In the [Google Cloud console](https://console.cloud.google.com/), select or create a project.
 2. Under **APIs & Services → Library**, enable **Gmail API** and **Google Calendar API**.
 3. Under **Google Auth platform → Branding**, enter the required application and contact information.
-4. Under **Audience**, select **Internal** for eligible organization-only use, or **External**. For External Testing, add each account as a test user.
+4. Under **Audience**, select **Internal** for a Google Workspace account, or **External** for a personal Gmail account. For **External**, add each account as a test user.
 5. Under **Data Access**, add the exact scopes next. Under **Clients**, create a **Desktop app** OAuth client. Record its client ID and client secret.
 
 ```text
@@ -73,11 +94,26 @@ The Desktop client uses the installed-app loopback flow, not a Web application r
 Login requests `http://127.0.0.1:PORT/`, with a random available port and path `/`. It uses PKCE, `access_type=offline`, and `prompt=consent`.
 Gmail device-code login does not support these scopes.
 
-**Testing caveat:** External projects in Testing receive refresh tokens that expire after seven days for these scopes.
-The basic-profile exception does not apply. See [Google's refresh-token expiration rules](https://developers.google.com/identity/protocols/oauth2#expiration).
-Publishing the OAuth application for broader use can require Google verification or a security assessment because `gmail.modify` is restricted.
-
 Sources: [installed-app OAuth](https://developers.google.com/identity/protocols/oauth2/native-app), [consent and test users](https://developers.google.com/workspace/guides/configure-oauth-consent), [Gmail scopes](https://developers.google.com/workspace/gmail/api/auth/scopes), and [Calendar scopes](https://developers.google.com/workspace/calendar/api/auth).
+
+### Stop the weekly Gmail sign-in
+
+A new **External** app has the publishing status **Testing**. Google gives a Testing app refresh tokens that expire after seven days, so the login stops after one week.
+An **Internal** app does not have this limit. Do these steps only for an **External** app:
+
+1. In **Google Auth platform → Audience**, select **Publish app**, and then select **Confirm**. The status changes to **In production**. This step does not send the app to Google for verification.
+2. On the daemon host, sign in again once:
+
+```sh
+amgd account login ALIAS
+```
+
+3. When the browser shows "Google hasn't verified this app", select **Advanced**, and then select the link to your app. You made this app, so this warning is expected.
+
+An unverified app accepts 100 users at most, for all time. For your own accounts, this limit has no effect.
+Do not submit the app for verification. Google requires verification, and for `gmail.modify` a security assessment, only for an app that you give to other people.
+
+Sources: [publishing status and limits](https://developers.google.com/identity/protocols/oauth2/production-readiness/overview) and [refresh-token expiration](https://developers.google.com/identity/protocols/oauth2#expiration).
 
 ## Approve external screening
 
@@ -235,7 +271,10 @@ Keep the daemon on its loopback listener and use an SSH tunnel for `amg` on anot
 | Missing scopes or Gmail `missing_scopes` | Restore the exact required grants. Run `amgd account login ALIAS` with full consent. |
 | `You signed in as ..., but ALIAS is ...` | Sign in again with the identity of the account. To add the other mailbox, run `amgd account add` with a new alias. |
 | Microsoft Conditional Access or device-code refusal | Ask the tenant administrator about permitted flows. Do not bypass organization policy. |
-| Google Testing token expiry | Run `amgd account login ALIAS`. Review Google's publication requirements before changing publication status. |
+| Gmail login stops after seven days | The app has the status Testing. Follow [Stop the weekly Gmail sign-in](#stop-the-weekly-gmail-sign-in). |
+| Google sign-in shows "Access blocked" | The app has the status Testing, and the account is not a test user. Add the account under **Audience → Test users**, or publish the app. |
+| Google Workspace sign-in says that your administrator blocks the app | Ask the Workspace administrator to mark the app as trusted under **API controls** in the Google Admin console. |
+| Microsoft sign-in shows **Need admin approval** | Ask the tenant administrator for consent. See [Microsoft administrator approval](#microsoft-administrator-approval). |
 | Missing account or stale login | Run `amg account list` and `amg account status`. After a hand edit of `config.toml`, run `amgd reload`. Use the same home each time. |
 | `reload refused: CODE; old settings kept` in the daemon log | Fix the key that the `error:` line names. Run `amgd config check`, and then `amgd reload`. |
 | `console password not set; run amgd config set console.password` | Run `amgd config set console.password` on the daemon host. |
