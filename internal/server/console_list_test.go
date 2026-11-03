@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"slices"
 	"strconv"
@@ -186,7 +187,9 @@ func TestConsoleListShowsMessageRows(t *testing.T) {
 func TestConsoleListPreviewsTheTextOfAnHTMLBody(t *testing.T) {
 	f := consoleDaemon(t, draftApprove, true)
 	body := `<!DOCTYPE html><HTML><Head><title>CANARY-title</title><style>p{color:red} CANARY-style</style></head><body><!-- CANARY-comment --><p>Hello   team,</p>` +
-		`<SCRIPT type='x'>CANARY-script</script ><p title="a>b">Shipped the <b>console</b> &amp; fixed &lt;bugs&gt;.</p></body></html>`
+		`<SCRIPT type='x'>CANARY-script</script ><p title="a>b">Shipped the <b>console</b> &amp; fixed &lt;bugs&gt;.</p>` +
+		// A browser ends a script only at </script followed by a space, / or >, never at a longer tag name.
+		`<script>CANARY-script</scripture>CANARY-after-scripture</script></body></html>`
 	b, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
@@ -199,6 +202,24 @@ func TestConsoleListPreviewsTheTextOfAnHTMLBody(t *testing.T) {
 	}
 	if strings.Contains(summary, "CANARY") || strings.Contains(summary, "DOCTYPE") {
 		t.Fatalf("preview keeps markup or dropped content: %s", summary)
+	}
+}
+
+// The preview of a long HTML body is its first 200 runes of text and "…", also when the text starts after a long head
+// and goes on far beyond the preview.
+func TestConsoleListPreviewsTheStartOfALongHTMLBody(t *testing.T) {
+	f := consoleDaemon(t, draftApprove, true)
+	body := `<html><head><style>` + strings.Repeat("p{color:red}", 10000) + `</style></head><body>` + strings.Repeat(`<p>word &amp; </p>`, 20000) + `</body></html>`
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","html":true,"body":`+string(b)+`}`)[0]
+	summary, _, _ := strings.Cut(rowOf(f.get(t, "/", nil).Body.String(), id), "</summary>")
+	// 28 times "word & " is 196 runes; the 200 runes end with "word".
+	want := `<span class="snip">` + strings.Repeat("word &amp; ", 28) + "word…</span>"
+	if !strings.Contains(summary, want) {
+		t.Fatalf("summary misses %q: %s", want, summary)
 	}
 }
 
@@ -789,6 +810,32 @@ func TestConsoleListShowsRowsWhoseReadFailsOrIsLate(t *testing.T) {
 	}
 	if w.Code != 200 || !strings.Contains(page, `<span class="sum num">3 waiting · 0 need review</span>`) {
 		t.Fatalf("%d %s", w.Code, page)
+	}
+}
+
+// A read that waits where its deadline cannot stop it, here a token refresh whose credential write waits as for a
+// Keychain prompt, leaves its row not available, and the page still renders at the deadline.
+func TestConsoleListRendersAtTheDeadlineWhenAReadIgnoresIt(t *testing.T) {
+	f := consoleDaemon(t, everyWriteWaits, true)
+	trash := pend(t, f.d.s, "mail.trash", `{"ids":["g"]}`)[0]
+	// The access token has expired, so the read refreshes it and saves the new login.
+	f.advance(farFuture.Sub(f.now) + time.Hour)
+	release := f.d.backend.holdWrites()
+	t.Cleanup(release)
+	deadline := 300 * time.Millisecond
+	t.Cleanup(server.SetListReadDeadline(deadline))
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- f.get(t, "/", nil) }()
+	select {
+	case w := <-done:
+		if row := rowOf(w.Body.String(), trash); w.Code != 200 || !strings.Contains(row, `<span class="from ph">Message not available</span>`) {
+			t.Fatalf("%d %s", w.Code, row)
+		}
+	case <-time.After(deadline + 2*time.Second):
+		// The page finishes before the test ends.
+		release()
+		<-done
+		t.Fatal("the page waits for a read past the deadline")
 	}
 }
 

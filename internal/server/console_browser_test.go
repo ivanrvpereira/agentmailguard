@@ -472,6 +472,29 @@ func TestBrowserConsoleRowsKeepTheirTextAtEveryWidth(t *testing.T) {
 	}
 }
 
+// A Recents row shows its Score at every width, beside the action and account, never on top of them, so that a
+// handled action that needed review stays visible as one.
+func TestBrowserConsoleRecentsKeepTheirScoreAtEveryWidth(t *testing.T) {
+	f, b := browserConsole(t, everyWriteWaits, nil)
+	f.setScore(.62)
+	if err := f.d.s.Deny(context.Background(), pend(t, f.d.s, "mail.send", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]); err != nil {
+		t.Fatal(err)
+	}
+	for _, width := range []int64{390, 1000, 1440} {
+		b.do(t, chromedp.EmulateViewport(width, 900))
+		b.open(t, "/?refresh=off")
+		got := eval[[]any](t, b, `(() => {
+			document.querySelector("details.recent").open = true;
+			const row = document.querySelector(".recent li.row"), score = row.querySelector(".score").getBoundingClientRect(), meta = row.querySelector(".meta").getBoundingClientRect();
+			const overlap = score.left < meta.right && meta.left < score.right && score.top < meta.bottom && meta.top < score.bottom;
+			return [row.querySelector(".score").innerText.trim(), score.width, overlap];
+		})()`)
+		if shown, _ := got[0].(string); !strings.HasPrefix(shown, "▲0.62") || got[1].(float64) == 0 || got[2] != false {
+			t.Errorf("%dpx: Recents score %q, %vpx wide, on top of the action %v", width, got[0], got[1], got[2])
+		}
+	}
+}
+
 // frameBody is the text of the Rendered frame and its data-ran and data-onerror marks, joined by "|". Chrome runs the
 // sandboxed frame in its own process, as a target of its own; a browser that keeps it in the page's process shows it
 // in the page's frame tree. ok is false when neither has the frame.

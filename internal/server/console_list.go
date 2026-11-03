@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -481,8 +480,9 @@ func (c *console) list(ctx context.Context, w http.ResponseWriter, r *http.Reque
 
 // Live reads of one list page. The page reads the events and messages of at most listReadsPerPage rows, in page
 // order, and at most listReadsPerAccount of one account at a time. Every read shares one deadline, listReadDeadline:
-// a read that fails or is late leaves its row not available, and the page renders once every read has returned.
-// A read waits for its account slot only until the deadline.
+// a read that fails or is late leaves its row not available, and the page renders once every read has returned or
+// the deadline has passed, also when a read waits where the deadline cannot stop it. A read waits for its account
+// slot only until the deadline.
 const (
 	listReadsPerPage    = 50
 	listReadsPerAccount = 4
@@ -506,31 +506,47 @@ func (c *console) readLive(ctx context.Context, rows []*listRow, now time.Time) 
 	}
 	ctx, cancel := context.WithTimeout(ctx, listReadDeadline)
 	defer cancel()
-	// Each worker writes only its own result.
-	results := make([]any, len(reads))
-	var wg sync.WaitGroup
+	type readResult struct {
+		i int
+		v any
+	}
+	// Each worker sends one result, which is nil when its read failed or was late. The channel holds every result,
+	// so a worker that ends after the page never blocks.
+	done := make(chan readResult, len(reads))
 	for i, r := range reads {
-		wg.Go(func() {
+		op, account, ref, slot := "mail.get", r.Account, r.ref, slots[r.Account]
+		if r.Group == groupMeetings {
+			op = "calendar.get"
+		}
+		go func() {
+			var v any
 			// A panic in a read leaves the row not available instead of ending the daemon.
-			defer func() { _ = recover() }()
-			slot := slots[r.Account]
+			defer func() {
+				_ = recover()
+				done <- readResult{i, v}
+			}()
 			select {
 			case slot <- struct{}{}:
 			case <-ctx.Done():
 				return
 			}
 			defer func() { <-slot }()
-			op := "mail.get"
-			if r.Group == groupMeetings {
-				op = "calendar.get"
-			}
-			result, err := c.guardedRead(ctx, op, r.Account, r.ref)
+			result, err := c.guardedRead(ctx, op, account, ref)
 			if err == nil && ctx.Err() == nil {
-				results[i] = result
+				v = result
 			}
-		})
+		}()
 	}
-	wg.Wait()
+	results := make([]any, len(reads))
+collect:
+	for range reads {
+		select {
+		case r := <-done:
+			results[r.i] = r.v
+		case <-ctx.Done():
+			break collect
+		}
+	}
 	for i, r := range reads {
 		switch v := results[i].(type) {
 		case views.CalendarView:
@@ -931,7 +947,7 @@ const previewRunes = 200
 func preview(body string, isHTML bool) string {
 	text := ""
 	if isHTML {
-		text = htmlText(body)
+		text = htmlText(body, previewRunes)
 	} else {
 		for line := range strings.Lines(body) {
 			if text = strings.Join(strings.Fields(line), " "); text != "" {
@@ -946,10 +962,20 @@ func preview(body string, isHTML bool) string {
 }
 
 // htmlText is the text of an HTML body: tags and comments removed, the content of style, script, and head dropped,
-// entities decoded, whitespace collapsed. It is no security boundary: the template escapes its result like any text.
-func htmlText(s string) string {
+// entities decoded, whitespace collapsed. It stops once the text has more than limit runes, so that a long body costs
+// only the start that the preview shows. It is no security boundary: the template escapes its result like any text.
+func htmlText(s string, limit int) string {
 	var b strings.Builder
-	for {
+	text := func() string { return strings.Join(strings.Fields(html.UnescapeString(b.String())), " ") }
+	// The text is counted only when the collected bytes pass check, which doubles, so the counts cost at most twice the
+	// text. A rune has at least one byte, so fewer bytes than limit are never too many runes.
+	for check := limit; ; {
+		if b.Len() > check {
+			if utf8.RuneCountInString(text()) > limit {
+				break
+			}
+			check *= 2
+		}
 		i := strings.IndexByte(s, '<')
 		if i < 0 || i+1 == len(s) {
 			b.WriteString(s)
@@ -982,7 +1008,7 @@ func htmlText(s string) string {
 			s = s[closingTag(s, name):]
 		}
 	}
-	return strings.Join(strings.Fields(html.UnescapeString(b.String())), " ")
+	return text()
 }
 
 // tagEnd is the index of the > that ends the tag at the start of s, outside quotes, or -1.
@@ -1012,7 +1038,8 @@ func tagName(tag string) string {
 	return strings.ToLower(tag)
 }
 
-// closingTag is the index of the closing tag of name in s, in any letter case, or len(s) when there is none.
+// closingTag is the index of the closing tag of name in s, in any letter case, or len(s) when there is none. As in a
+// browser, the name ends at a space, / or >, so </scripture> does not close a script.
 func closingTag(s, name string) int {
 	for i := 0; ; {
 		j := strings.Index(s[i:], "</")
@@ -1020,7 +1047,7 @@ func closingTag(s, name string) int {
 			return len(s)
 		}
 		i += j
-		if end := i + 2 + len(name); end <= len(s) && strings.EqualFold(s[i+2:end], name) {
+		if end := i + 2 + len(name); end < len(s) && strings.EqualFold(s[i+2:end], name) && strings.IndexByte(" \t\n\f\r/>", s[end]) >= 0 {
 			return i
 		}
 		i += 2

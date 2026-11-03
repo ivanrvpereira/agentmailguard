@@ -78,6 +78,11 @@ func (a *nativeAPI) graph(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 		return
 	}
+	if r.URL.Path == "/token" {
+		// A token refresh gets a new access token for an hour.
+		response(w, map[string]any{"access_token": statusJWT(m365Grant + " Calendars.ReadWrite Mail.Send"), "refresh_token": "private-refresh-canary", "expires_in": 3600})
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if r.Method != "GET" {

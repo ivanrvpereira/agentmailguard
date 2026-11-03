@@ -300,7 +300,8 @@ a.line:hover{text-decoration:none}
   .t-mail summary{grid-template-areas:"to age" "text text" "op op"}
   .t-meet summary{grid-template-areas:"ev age" "when ppl" "chg chg" "op op"}
   .t-box summary{grid-template-areas:"text age" "op op"}
-  a.line{grid-template-areas:"text st" "op age"}
+  /* Recents: the Score has its own place beside the action and account. */
+  a.line{grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:"text text st" "op score age"}
   .to{grid-area:to}
   .age{grid-area:age}
   .ev{grid-area:ev}
@@ -316,7 +317,7 @@ a.line:hover{text-decoration:none}
   .meta .acct::before{content:" · "}
   .score{grid-area:op;justify-self:end;font-size:.75rem}
   .score::before{content:"Score ";font-weight:400;color:var(--ink-3)}
-  .recent .score{display:none}
+  .recent .score{grid-area:score}
   .st{grid-area:st;justify-self:end}
   /* Row actions go under the open row; Review is the open row itself. */
   .acts{position:static;grid-column:2;opacity:1;pointer-events:auto;height:auto;padding:0 1rem 1rem 0;display:none}
