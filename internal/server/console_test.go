@@ -334,22 +334,24 @@ func onlyConsoleLinks(t *testing.T, page string) {
 	}
 }
 
-// The action page shows the action label and operation, the account alias and key, the stored arguments as text,
-// and the referenced message through the guarded read, without its body.
+// The action page shows the action label, the subject, and the operation, the account alias and key, the referenced
+// message through the guarded read with its verdict explained, without its body, and then the stored arguments as
+// text.
 func TestConsoleActionShowsStoredArgumentsAsTextAndTheMessageSummary(t *testing.T) {
 	f := consoleDaemon(t, draftApprove, true)
-	id := pend(t, f.d.s, "draft.reply", `{"id":"g","body":"<script>alert(1)</script> see https://evil.example/x"}`)[0]
+	id := pend(t, f.d.s, "draft.reply", `{"id":"g","all":true,"body":"<script>alert(1)</script> see https://evil.example/x"}`)[0]
 	w := f.get(t, "/a/"+id, nil)
 	page := w.Body.String()
 	if w.Code != 200 {
 		t.Fatalf("%d %s", w.Code, page)
 	}
 	for _, want := range []string{
-		`<h1>Draft reply <span class="opname">draft.reply</span></h1>`,
+		`<h1>Draft reply <span class="what">private-subject-g</span> <span class="opname">draft.reply</span></h1>`,
 		`<dt>State</dt><dd class="state pending">Pending</dd>`,
 		"<dt>Account</dt><dd>work · " + workEmail + "</dd>",
 		"<dt>Created</dt><dd>Tue 31 Mar 2026, 12:00</dd>",
-		`<dt>ID</dt><dd><span class="ln">g</span></dd>`,
+		`<dt>ID</dt><dd><span class="ln">g</span></dd>`, `<dt>Reply all</dt><dd><span class="ln">yes</span></dd>`,
+		`<dt>Verdict</dt><dd><span class="ln">Green: no sign of prompt injection</span></dd>`,
 		"<figcaption>Body, plain text as the agent wrote it</figcaption><pre>&lt;script&gt;alert(1)&lt;/script&gt; see https://evil.example/x</pre>",
 		"private-subject-g", "sender@example.test", "green", `<dt>Received</dt><dd><span class="ln">Mon 30 Mar 2026, 10:00</span></dd>`,
 		`<p class="back"><a href="/">All approvals</a></p>`,
@@ -362,21 +364,43 @@ func TestConsoleActionShowsStoredArgumentsAsTextAndTheMessageSummary(t *testing.
 	if strings.Contains(page, "private-body-g") || strings.Contains(page, "example.test/report") || strings.Contains(page, "<iframe") {
 		t.Errorf("action page shows the message body or a frame: %s", page)
 	}
+	message, recipients, request := strings.Index(page, "<h2>Message</h2>"), strings.Index(page, "<h2>Reply recipients</h2>"), strings.Index(page, "<h2>Request</h2>")
+	if message < 0 || message > recipients || recipients > request {
+		t.Errorf("section order: Message %d, Reply recipients %d, Request %d", message, recipients, request)
+	}
 	onlyConsoleLinks(t, page)
 }
 
-// The action page shows the same Score as the list's open row: the value and its label, the fixed code of a failed
-// check after the label. A trash gets no action check, so its page has no Score, whatever the verdict of its message.
+// The action page heading names what the action is about: the subject of the request, else the subject of the
+// message or event that the guarded read shows. A red message shows no subject, so its heading has none.
+func TestConsoleActionHeadingNamesTheSubject(t *testing.T) {
+	f := consoleDaemon(t, everyWriteWaits, true)
+	for _, tc := range []struct{ op, params, want string }{
+		{"mail.send", `{"to":["a@example.test"],"subject":"Plan","body":"b"}`, `<h1>Send <span class="what">Plan</span> <span class="opname">mail.send</span></h1>`},
+		{"draft.new", `{"to":["a@example.test"],"subject":"","body":"b"}`, `<h1>New draft <span class="opname">draft.new</span></h1>`},
+		{"calendar.cancel", `{"id":"o","comment":"c"}`, `<h1>Cancel <span class="what">private-subject-event</span> <span class="opname">calendar.cancel</span></h1>`},
+		{"mail.trash", `{"ids":["r"]}`, `<h1>Trash <span class="opname">mail.trash</span></h1>`},
+	} {
+		id := pend(t, f.d.s, tc.op, tc.params)[0]
+		if page := f.get(t, "/a/"+id, nil).Body.String(); !strings.Contains(page, tc.want) {
+			t.Errorf("%s: action page misses %q: %s", tc.op, tc.want, page)
+		}
+	}
+}
+
+// The action page shows the same Risk as the list's open row: the value out of 1 and the label, or Check failed, the fixed
+// code of a failed check after the label. A trash gets no action check, so its page has no Risk, whatever the verdict
+// of its message.
 // It never names the screening service.
-func TestConsoleActionShowsTheScore(t *testing.T) {
+func TestConsoleActionShowsTheRisk(t *testing.T) {
 	f := consoleDaemon(t, everyWriteWaits, true)
 	for _, tc := range []struct {
 		score float64
 		want  string
 	}{
-		{0.62, `<dt>Score</dt><dd class="bad">▲ 0.62 · Needs review</dd>`},
-		{0.08, `<dt>Score</dt><dd>0.08 · Checked</dd>`},
-		{2, `<dt>Score</dt><dd class="bad">▲ error · Needs review · ValidationError</dd>`},
+		{0.62, `<dt>Risk</dt><dd class="bad">▲ 0.62 of 1 · Needs review</dd>`},
+		{0.08, `<dt>Risk</dt><dd>0.08 of 1 · Checked</dd>`},
+		{2, `<dt>Risk</dt><dd class="bad">▲ Check failed · Needs review · ValidationError</dd>`},
 	} {
 		f.setScore(tc.score)
 		id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
@@ -389,7 +413,7 @@ func TestConsoleActionShowsTheScore(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct{ op, params, want string }{
-		{"draft.delete", `{"id":"draft-1"}`, `<dt>Score</dt><dd>— · Not checked</dd>`},
+		{"draft.delete", `{"id":"draft-1"}`, `<dt>Risk</dt><dd>— · Not checked</dd>`},
 		{"mail.trash", `{"ids":["g"]}`, ""},
 		{"mail.trash", `{"ids":["r"]}`, ""},
 		{"mail.trash", `{"ids":["s"]}`, ""},
@@ -401,8 +425,8 @@ func TestConsoleActionShowsTheScore(t *testing.T) {
 		if w.Code != 200 || !strings.Contains(page, "<dt>Account</dt>") {
 			t.Errorf("%s %s: no action page: %d %s", tc.op, tc.params, w.Code, page)
 		}
-		if tc.want == "" && (strings.Contains(page, "<dt>Score</dt>") || !strings.Contains(page, "<h1>Trash ")) || tc.want != "" && !strings.Contains(page, tc.want) {
-			t.Errorf("%s %s: action page Score is not %q: %s", tc.op, tc.params, tc.want, page)
+		if tc.want == "" && (strings.Contains(page, "<dt>Risk</dt>") || !strings.Contains(page, "<h1>Trash ")) || tc.want != "" && !strings.Contains(page, tc.want) {
+			t.Errorf("%s %s: action page Risk is not %q: %s", tc.op, tc.params, tc.want, page)
 		}
 		if m := oldWord(page); m != "" {
 			t.Errorf("%s %s: action page shows %q: %s", tc.op, tc.params, m, page)
@@ -427,9 +451,9 @@ const draftApproveOnly = "[policy]\nmail_draft='approve'\n"
 func TestConsoleActionTagsTheFakeCheck(t *testing.T) {
 	f := fakeConsole(t, fakeHome(t), fakeScreen+draftApproveOnly)
 	for body, want := range map[string]string{
-		"See you at noon":        `<dt>Score</dt><dd><span class="fake">fake</span>0.05 · Checked</dd>`,
-		"Your new password is x": `<dt>Score</dt><dd class="bad"><span class="fake">fake</span>▲ 0.90 · Needs review</dd>`,
-		"SCREENFAIL":             `<dt>Score</dt><dd class="bad"><span class="fake">fake</span>▲ error · Needs review · TypeSafeAPIError 503</dd>`,
+		"See you at noon":        `<dt>Risk</dt><dd><span class="fake">fake</span>0.05 of 1 · Checked</dd>`,
+		"Your new password is x": `<dt>Risk</dt><dd class="bad"><span class="fake">fake</span>▲ 0.90 of 1 · Needs review</dd>`,
+		"SCREENFAIL":             `<dt>Risk</dt><dd class="bad"><span class="fake">fake</span>▲ Check failed · Needs review · TypeSafeAPIError 503</dd>`,
 	} {
 		id := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"`+body+`"}`)[0]
 		page := f.get(t, "/a/"+id, nil).Body.String()
@@ -450,7 +474,7 @@ func TestConsoleActionKeepsTheFakeTagAfterARestartWithJev(t *testing.T) {
 	}
 	after := fakeConsole(t, home, draftApproveOnly)
 	page := after.get(t, "/a/"+id, nil).Body.String()
-	if want := `<dt>Score</dt><dd><span class="fake">fake</span>0.05 · Checked</dd>`; !strings.Contains(page, want) || oldWord(page) != "" {
+	if want := `<dt>Risk</dt><dd><span class="fake">fake</span>0.05 of 1 · Checked</dd>`; !strings.Contains(page, want) || oldWord(page) != "" {
 		t.Fatalf("action page misses %q or names the engine: %s", want, page)
 	}
 }

@@ -735,7 +735,7 @@ func TestDraftUpdateWithdrawsTheWaitingSendAndHoldsANewOne(t *testing.T) {
 	if got := s.column(`SELECT folder FROM messages WHERE id = ?`, id); !reflect.DeepEqual(got, []string{"drafts"}) {
 		t.Fatalf("a draft update sent mail: %v", got)
 	}
-	if _, item := s.consoleGet(consolePassword, "/a/"+updated.SendApprovalID); !strings.Contains(item, "<figcaption>Body, plain text as the agent wrote it</figcaption><pre>canary-body-clean: see you at noon</pre>") || !strings.Contains(item, `<dt>Score</dt><dd><span class="fake">fake</span>0.05 · Checked</dd>`) {
+	if _, item := s.consoleGet(consolePassword, "/a/"+updated.SendApprovalID); !strings.Contains(item, "<figcaption>Body, plain text as the agent wrote it</figcaption><pre>canary-body-clean: see you at noon</pre>") || !strings.Contains(item, `<dt>Risk</dt><dd><span class="fake">fake</span>0.05 of 1 · Checked</dd>`) {
 		t.Fatalf("new send page:\n%s", item)
 	}
 	policy := s.auditEvents("policy")
@@ -777,7 +777,7 @@ func TestApprovedDraftUpdateReplacesTheWaitingSendAndTheNewOneWaits(t *testing.T
 		t.Fatalf("new send after an approved update: %s", state)
 	}
 	// The new send has its own decision and Jev check: the approval of the update does not cover it.
-	if _, item := s.consoleGet(consolePassword, "/a/"+status.Result.SendApprovalID); !strings.Contains(item, `<dt>Score</dt><dd><span class="fake">fake</span>0.05 · Checked</dd>`) {
+	if _, item := s.consoleGet(consolePassword, "/a/"+status.Result.SendApprovalID); !strings.Contains(item, `<dt>Risk</dt><dd><span class="fake">fake</span>0.05 of 1 · Checked</dd>`) {
 		t.Fatalf("new send page has no new check:\n%s", item)
 	}
 	policy := s.auditEvents("policy")

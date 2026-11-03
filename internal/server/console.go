@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/cache"
+	"github.com/ivanrvpereira/agentmailguard/internal/model"
 	"github.com/ivanrvpereira/agentmailguard/internal/views"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -283,7 +284,7 @@ type field struct {
 }
 
 // actionPage is the action page of a stored action. Row is the action as the list's open row shows it: the label,
-// alias, Score, request fields, draft fields, and the body under its caption.
+// alias, Risk, request fields, draft fields, and the body under its caption.
 type actionPage struct {
 	Row                                                        listRow
 	ID, Op, StateLabel, Created, Updated, Result, Code, Notice string
@@ -299,6 +300,23 @@ type actionPage struct {
 	// DraftSend is true for a draft send, whose stored draft fields are in Row.Draft.
 	DraftSend bool
 	Pending   bool
+}
+
+// Heading is what the action is about: the subject of the request, else the subject of the message or event that the
+// guarded read shows, or empty. A placeholder is never the heading.
+func (p actionPage) Heading() string {
+	switch {
+	case p.Row.Subject != "" && !p.Row.NoSubject && !p.Row.SubjectHidden:
+		return p.Row.Subject
+	case p.Row.Event != "" && !p.Row.EventMissing && !p.Row.EventPlaceholder:
+		return p.Row.Event
+	}
+	for _, f := range p.Ref {
+		if f.Label == "Subject" && len(f.Lines) == 1 {
+			return f.Lines[0]
+		}
+	}
+	return ""
 }
 
 // longTime is a full date and time, as in "Tue 31 Mar 2026, 12:00".
@@ -442,14 +460,14 @@ func (c *console) reference(ctx context.Context, item cache.Pending, args map[st
 	}
 	switch v := result.(type) {
 	case views.MailView:
-		add("Verdict", new(string(v.Verdict)))
+		add("Verdict", new(verdictText(v.Verdict)))
 		if v.Sender != nil {
 			add("Sender", new(addressText(*v.Sender)))
 		}
 		add("Subject", v.Subject)
 		add("Received", new(longTimeText(v.ReceivedAt, c.s.options.Now().Location())))
 	case views.CalendarView:
-		add("Verdict", new(string(v.Verdict)))
+		add("Verdict", new(verdictText(v.Verdict)))
 		add("Subject", v.Subject)
 		add("Start", new(longTimeText(v.Start, nil)))
 		add("End", new(longTimeText(v.End, nil)))
@@ -468,6 +486,23 @@ func (c *console) guardedRead(ctx context.Context, op, account, id string) (any,
 		return nil, err
 	}
 	return c.s.runOn(ctx, op, account, params)
+}
+
+// verdictTexts explain each verdict as the glossary defines it.
+var verdictTexts = map[model.Verdict]string{
+	model.Green:  "Green: no sign of prompt injection",
+	model.Yellow: "Yellow: some sign of prompt injection",
+	model.Red:    "Red: likely prompt injection",
+	model.Sealed: "Sealed: account-security content",
+	model.Error:  "Error: could not be screened",
+}
+
+// verdictText is the verdict with its explanation; an unknown verdict shows as it is.
+func verdictText(v model.Verdict) string {
+	if text, ok := verdictTexts[v]; ok {
+		return text
+	}
+	return string(v)
 }
 
 func addressText(a views.Address) string {

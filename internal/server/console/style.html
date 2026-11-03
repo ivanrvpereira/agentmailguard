@@ -9,7 +9,7 @@
   --red-soft:color-mix(in srgb,var(--red) 6%,var(--bg));
   --row:2.5rem;
   /* Columns every table shares, so Action, Account and the right edge line up from table to table. */
-  --c-act:5.75rem; --c-acct:4.5rem; --c-score:6.25rem; --c-age:2.75rem; --c-slot:10.5rem;
+  --c-act:5.75rem; --c-acct:4.5rem; --c-score:7.5rem; --c-age:2.75rem; --c-slot:10.5rem;
   --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",system-ui,sans-serif;
   --letter:ui-serif,"New York",Charter,"Iowan Old Style",Georgia,serif;
   --mono:ui-monospace,Menlo,monospace;
@@ -56,15 +56,14 @@ a:hover{text-decoration:underline}
 [hidden]{display:none!important}
 
 .pane{max-width:92rem;margin:0 auto;padding:0 1.5rem 4rem}
-/* List page grid: the filter line, the notice of a batch, then the bulk bar (sticky, only while a box is ticked),
-   the tables and the footer. The selection count is the last element, so that CSS counters have counted the ticked
-   rows of every table; the grid places it into the bar. */
+/* List page grid: the filter line, the notice of a batch, the tables and the footer. The bulk bar floats over the
+   page. The selection count is the last element, so that CSS counters have counted the ticked rows of every table;
+   it floats into the bar. */
 .listpage{display:grid;grid-template-columns:minmax(0,1fr);counter-reset:sel review}
 .listpage .lead{grid-row:1}
 .listpage .notice{grid-row:2}
-.bar,.selcount{grid-row:3;grid-column:1;position:sticky;top:0}
-.listpage .waiting{grid-row:4}
-.listpage .foot{grid-row:5}
+.listpage .waiting{grid-row:3}
+.listpage .foot{grid-row:4}
 .notice{margin:.75rem 0 0;padding:.6rem .75rem;border:1px solid var(--line);border-radius:6px;font-size:.8125rem;background:color-mix(in srgb,var(--accent) 5%,var(--bg))}
 
 /* Filters: segmented server-side links. */
@@ -79,17 +78,20 @@ a:hover{text-decoration:underline}
 .filters a[aria-current]{background:var(--bg);color:var(--ink);box-shadow:0 0 0 1px var(--line),0 1px 2px rgb(0 0 0/.06)}
 .filters a[aria-current] .c{color:var(--ink-2)}
 
-/* Bulk bar: its own sticky line under the filters, shown only while a box is ticked in any table. */
-.bar{z-index:3;display:none;min-height:3rem;align-items:center;background:color-mix(in srgb,var(--accent) 5%,var(--bg));border-bottom:1px solid color-mix(in srgb,var(--accent) 30%,var(--line))}
-.bar form{display:flex;justify-content:flex-end;width:100%;padding:.5rem .5rem .5rem 0}
+/* Bulk bar: shown only while a box is ticked in any table, at the bottom of the window over the page, so that no row
+   moves under the pointer. The page gets room below its last row for it. */
+.bar,.selcount{position:fixed;left:0;right:0;bottom:0}
+.bar{z-index:3;display:none;min-height:3rem;align-items:center;background:color-mix(in srgb,var(--accent) 5%,var(--bg));border-top:1px solid color-mix(in srgb,var(--accent) 30%,var(--line));box-shadow:0 -4px 16px rgb(0 0 0/.06)}
+.bar form{display:flex;justify-content:flex-end;width:100%;max-width:92rem;margin:0 auto;padding:.5rem 2rem .5rem 1.5rem}
 .bar .live{display:flex;justify-content:flex-end;gap:.5rem;align-items:center}
 .listpage:has(.sel:checked) .bar{display:flex}
+.listpage:has(.sel:checked){padding-bottom:8rem}
 /* Batch approve skips the rows that need review. When every ticked row needs review, the real button is gone, so
    that it cannot be pressed or focused, and a disabled stand-in takes its place. */
 .bar .btn.off{display:none}
 .listpage:not(:has(.sel:not([data-review]):checked)) .bar .btn.go:not(.off){display:none}
 .listpage:not(:has(.sel:not([data-review]):checked)) .bar .btn.off{display:inline-flex}
-.selcount{margin:0;z-index:4;align-self:start;justify-self:start;padding-left:.75rem;display:none;height:3rem;align-items:center;pointer-events:none;color:var(--ink-2);font-size:.8125rem;white-space:nowrap}
+.selcount{margin:0 auto;max-width:92rem;z-index:4;padding-left:2.25rem;display:none;height:3rem;align-items:center;pointer-events:none;color:var(--ink-2);font-size:.8125rem;white-space:nowrap}
 .listpage:has(.sel:checked) .selcount{display:flex}
 .sel:checked{counter-increment:sel}
 .sel[data-review]:checked{counter-increment:sel review}
@@ -173,6 +175,8 @@ summary>span,a.line>span,.meta>span{min-width:0;overflow:hidden;white-space:nowr
 .acts{position:absolute;top:0;right:.75rem;height:var(--row);display:flex;align-items:center;gap:.25rem;opacity:0;pointer-events:none;z-index:1}
 .row:is(:hover,:focus-within) .acts,.row:has(details[open]) .acts{opacity:1;pointer-events:auto}
 @media (hover:none){.acts{opacity:1;pointer-events:auto}}
+/* An open row that needs review has Approve and Deny together in its review box, so the row buttons go. */
+.row:has(details[open] form.ack) .acts{display:none}
 
 /* Open row */
 .open{padding:.25rem 1rem 1.25rem 0;display:grid;grid-template-columns:minmax(0,46rem) minmax(0,1fr);column-gap:2rem;border-top:1px dashed var(--line)}
@@ -239,6 +243,8 @@ a.line:hover{text-decoration:none}
 .actionpage>*{max-width:52rem}
 .actionpage .back{font-size:.8125rem;margin:.75rem 0 0}
 .actionpage h1{font-size:1.125rem;font-weight:600;letter-spacing:-.01em;margin:.75rem 0 .25rem;display:flex;flex-wrap:wrap;align-items:baseline;gap:.25rem .6rem}
+.actionpage h1 .what{overflow-wrap:anywhere}
+.actionpage h1 .what::before{content:"·";margin-right:.6rem;color:var(--ink-3);font-weight:400}
 .actionpage h1 .opname{font-family:var(--mono);font-size:.75rem;font-weight:400;color:var(--ink-3)}
 .actionpage h2{margin:1.5rem 0 0;padding:0}
 .actionpage dl.f{grid-template-columns:9rem minmax(0,1fr);font-size:.875rem;margin:.5rem 0}
@@ -273,7 +279,7 @@ a.line:hover{text-decoration:none}
   .notice{margin:.75rem 1rem 0}
   .bar{min-height:0}
   .bar form{justify-content:flex-start;padding:.5rem .75rem 2.1rem}
-  .selcount{align-self:end;height:2rem;padding:0 .75rem;line-height:1.25;white-space:normal}
+  .selcount{height:2rem;padding:0 .75rem;line-height:1.25;white-space:normal}
   .listpage:has(.sel:checked) .selcount{display:block}
   .listpage:has(.sel[data-review]:checked) .selcount::after{content:"\00a0· " counter(review) " need review, Approve skips them"}
   .listpage:has(.sel:checked):not(:has(.sel:not([data-review]):checked)) .selcount::after{content:"\00a0· All need review"}
@@ -316,7 +322,7 @@ a.line:hover{text-decoration:none}
   .meta .acct{display:inline;font-size:.75rem}
   .meta .acct::before{content:" · "}
   .score{grid-area:op;justify-self:end;font-size:.75rem}
-  .score::before{content:"Score ";font-weight:400;color:var(--ink-3)}
+  .score::before{content:"Risk ";font-weight:400;color:var(--ink-3)}
   .recent .score{grid-area:score}
   .st{grid-area:st;justify-self:end}
   /* Row actions go under the open row; Review is the open row itself. */
