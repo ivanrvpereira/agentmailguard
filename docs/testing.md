@@ -37,7 +37,7 @@ Not verified against real providers or services:
 - Microsoft 365 device-code login, which organization policies can also refuse;
 - paging with `--page` and `next_page`, and the default page sizes, on `mail list`, `mail search`, and `calendar search`;
 - `mail search` date bounds: the Gmail `after:` and `before:` query in Unix seconds one second wider on each side, and the Microsoft 365 KQL `received` days one day wider on each side, each with exact times filtered by the daemon;
-- requests to Jev cloud, or to any screening endpoint or model other than the default;
+- requests to a screening endpoint or model other than the default: TypeSafe's own API with `jev-1.14.0` was checked live on 2026-11-02 with the screening package and synthetic messages, not through a running daemon; other endpoints are not checked;
 - migration of a real Keychain record.
 
 Offline verification does not establish production readiness.

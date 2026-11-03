@@ -7,7 +7,7 @@
 Give an AI agent your Microsoft 365 or Gmail mailbox and calendar, without giving it your mailbox.
 
 agentmailguard is a daemon that sits between an AI agent and the mail and calendar APIs.
-It screens every message for prompt injection before the agent sees it, hides what looks unsafe, and decides each write with a policy that you set: run it, hold it for your approval, or refuse it.
+It screens every message for prompt injection with [Jev](https://docs.typesafe.ai/models), TypeSafe's decision model, before the agent sees it, hides what looks unsafe, and decides each write with a policy that you set: run it, hold it for your approval, or refuse it.
 The agent gets a small command-line client, `amg`. It never gets a token, a password, or a raw message.
 
 ```text
@@ -56,7 +56,7 @@ agentmailguard keeps the agent's view of the mailbox and the agent's power over 
      └─────────────────┘                  └──────┬───────────────┬───────┘
                                                  │               │
                                     Microsoft Graph / Gmail   Decision engine
-                                    and Google Calendar APIs  (Jev, through OpenRouter)
+                                    and Google Calendar APIs  (Jev, through OpenRouter or TypeSafe)
 ```
 
 - `amg` is the agent's client. It has only the API commands and no daemon code, and it is one static program, so you can copy it to the machine where the agent runs.
@@ -140,7 +140,7 @@ Copy the `skills/agentmailguard` folder into your agent's skills folder.
 
 ## Privacy
 
-Screening is an external service. By default, the daemon sends mail content, calendar event details, rule instructions, and the text of agent actions to Jev through OpenRouter, before any verdict exists.
+Screening is an external service. By default, the daemon sends mail content, calendar event details, rule instructions, and the text of agent actions to Jev through OpenRouter, before any verdict exists. You can call TypeSafe's API directly instead.
 Mail that the agent never sees still reaches the screening service.
 The project does not promise zero retention, no training, or a processing region.
 Review the service's policies, and get any approval that your organization needs, before you connect a work mailbox.
