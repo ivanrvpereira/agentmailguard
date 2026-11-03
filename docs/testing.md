@@ -15,8 +15,9 @@ They run only with `AMG_BROWSER_TESTS=1`, and they skip when no Chrome or Chromi
 CI runs them in a separate job on `ubuntu-24.04`, which fails if Chrome is missing.
 They cover the console script: Auto-refresh pauses while a box is ticked or a row, Recents, or the menu is open, and reloads after the idle time with the filters only.
 They also cover the header checkbox (checked and partly checked), Approve that waits for `I reviewed it`, and the waiting count in the tab title.
-They check that the Rendered preview runs no script of the body and loads nothing remote, that an HTML write from a script fails, and that no page logs another policy violation.
-Only a manual check in a browser covers the console layout: desktop and phone widths, dark mode, and the pages with the script off.
+They check that the Rendered preview runs no script of the body, loads nothing remote, and that a click on a link or a submit button in it goes nowhere, that an HTML write from a script fails, and that no page logs another policy violation.
+They check at phone, tablet, and desktop widths that the rows keep room for the event and the subject, and that the page does not scroll sideways.
+Only a manual check in a browser covers the rest of the console layout, dark mode, and the pages with the script off.
 
 Not verified against real providers or services:
 

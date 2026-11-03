@@ -26,6 +26,7 @@ The columns of each table:
 - Meetings: Action, Account, Event, When, People, Change, Score, and Age. Change shows what the action changes, for example `Decline` with the comment, or `Start` with `10:00 → 11:00`.
 - Mailbox operations: Change, Account, Message (the sender and the subject), Received, and Age.
 
+In a window narrower than 1152 pixels, such as on a phone or a tablet, each row shows on three or four lines without column labels, so that the event and the subject always have room.
 The Account column shows the account alias.
 The tooltip and the open row show the account email.
 For a draft send, the recipients, subject, and body are those of the stored draft fields.
@@ -105,7 +106,7 @@ Each pending row has **Approve** and **Deny**.
 They show on hover, on keyboard focus, on touch, and in an open row.
 A row that needs review has **Review** and **Deny**.
 Review opens the action page.
-On a narrow screen, such as a phone, the row buttons show only in an open row, and Review does not show there.
+In a window narrower than 1152 pixels, the row buttons show only in an open row, and Review does not show there.
 To approve a row that needs review from the list, open the row, tick `I reviewed it`, and press Approve.
 The server refuses an approve of an action that needs review without that box with HTTP 400 and `review required`, and nothing runs.
 

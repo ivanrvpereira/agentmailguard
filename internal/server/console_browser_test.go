@@ -18,6 +18,7 @@ import (
 	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/network"
 	cdppage "github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	"github.com/ivanrvpereira/agentmailguard/internal/server"
@@ -361,10 +362,77 @@ func TestBrowserConsoleRenderedPreviewRunsNothingAndLoadsNothing(t *testing.T) {
 	}
 }
 
-// frameBody is the text of the Rendered frame and its data-ran and data-onerror marks, joined by "|". Chrome runs the
-// sandboxed frame in its own process, as a target of its own; a browser that keeps it in the page's process shows it
-// in the page's frame tree. ok is false when neither has the frame.
-func frameBody(t *testing.T, b *consoleBrowser) (shown string, ok bool) {
+// A click in the Rendered preview follows no link, opens no window, and sends no form: a plain link, a link to a new
+// window, a link to the whole window, and a submit button each point at a server that counts requests. Each click
+// runs in the frame as a user gesture, so the frame has the user activation that some navigations need.
+func TestBrowserConsoleRenderedPreviewFollowsNoLinkAndSendsNoForm(t *testing.T) {
+	var mu sync.Mutex
+	var remote []string
+	counter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		remote = append(remote, r.URL.Path)
+		mu.Unlock()
+	}))
+	t.Cleanup(counter.Close)
+	// The frame's blocked navigations, windows, and forms are expected messages of the frame.
+	f, b := browserConsole(t, everyWriteWaits, func(m string) bool {
+		return strings.Contains(m, counter.URL) || strings.Contains(m, "about:srcdoc")
+	})
+	at := counter.URL
+	body := `<a id="link" href="` + at + `/link">link</a><a id="window" target="_blank" href="` + at + `/window">window</a>` +
+		`<a id="top" target="_top" href="` + at + `/top">top</a><form action="` + at + `/form" method="post"><input name="x" value="1"><button id="submit">send</button></form>`
+	h, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := pend(t, f.d.s, "mail.send", `{"to":["a@example.test"],"subject":"s","html":true,"body":`+string(h)+`}`)[0]
+	for _, element := range []string{"link", "window", "top", "submit"} {
+		// A fresh page for each click: a blocked navigation can leave the frame on an error page.
+		b.open(t, "/a/"+id)
+		// Chrome runs the frame in its own process, as a target of its own. A frame that the page can reach, such as
+		// one with the same origin, is clicked from the page.
+		frame, ok := frameTarget(t, b)
+		click := `document.getElementById("` + element + `").click()`
+		if !ok {
+			frame, click = b.ctx, `(() => { const d = document.querySelector("iframe").contentDocument; if (!d) return false; d.getElementById("`+element+`").click(); return true; })()`
+		}
+		ctx, cancel := context.WithTimeout(frame, browserTimeout)
+		clicked, err := chromedp.Run(ctx, chromedp.Evaluate[any](click, asUserGesture))
+		cancel()
+		if err != nil {
+			t.Fatalf("%s: %v", element, err)
+		}
+		if clicked == false {
+			t.Skip("the browser exposes the Rendered frame neither as a target nor to the page")
+		}
+		time.Sleep(time.Second)
+		if got := eval[string](t, b, "location.pathname"); got != "/a/"+id {
+			t.Fatalf("%s: the console page went to %q", element, got)
+		}
+		ctx, cancel = context.WithTimeout(b.ctx, browserTimeout)
+		infos, err := chromedp.Targets(ctx)
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pages := slices.DeleteFunc(infos, func(info *target.Info) bool { return info.Type != "page" }); len(pages) != 1 {
+			t.Fatalf("%s: %d pages open", element, len(pages))
+		}
+		mu.Lock()
+		loaded := slices.Clone(remote)
+		mu.Unlock()
+		if len(loaded) > 0 {
+			t.Fatalf("%s: the frame reached %q", element, loaded)
+		}
+	}
+}
+
+// asUserGesture runs an evaluation as if the user started it in the page.
+func asUserGesture(p *runtime.EvaluateParams) { p.UserGesture = new(true) }
+
+// frameTarget is a browser context on the Rendered frame, which Chrome runs in its own process, as a target of its
+// own. ok is false when the browser has no such target.
+func frameTarget(t *testing.T, b *consoleBrowser) (context.Context, bool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(b.ctx, browserTimeout)
 	defer cancel()
@@ -372,9 +440,46 @@ func frameBody(t *testing.T, b *consoleBrowser) (shown string, ok bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if i := slices.IndexFunc(infos, func(info *target.Info) bool { return info.Type == "iframe" && info.URL == "about:srcdoc" }); i >= 0 {
-		frame, cancelFrame := chromedp.NewContext(b.ctx, chromedp.WithTargetID(infos[i].TargetID))
-		defer cancelFrame()
+	i := slices.IndexFunc(infos, func(info *target.Info) bool { return info.Type == "iframe" && info.URL == "about:srcdoc" })
+	if i < 0 {
+		return nil, false
+	}
+	frame, cancelFrame := chromedp.NewContext(b.ctx, chromedp.WithTargetID(infos[i].TargetID))
+	t.Cleanup(cancelFrame)
+	return frame, true
+}
+
+// Below the desktop width, the tables stack each row on a few lines, so that the event of a meeting and the subject
+// of a message always have room and the page never scrolls sideways. At a desktop width the columns fit.
+func TestBrowserConsoleRowsKeepTheirTextAtEveryWidth(t *testing.T) {
+	f, b := browserConsole(t, everyWriteWaits, nil)
+	pend(t, f.d.s, "mail.send", `{"to":["a@example.test"],"subject":"Quarterly planning notes","body":"b"}`)
+	pend(t, f.d.s, "calendar.invite", `{"to":["a@example.test"],"subject":"Quarterly planning","body":"b","start":"2026-04-01T09:00:00Z","end":"2026-04-01T10:00:00Z"}`)
+	for _, c := range []struct {
+		width   int64
+		stacked bool
+	}{{390, true}, {800, true}, {1000, true}, {1150, true}, {1160, false}, {1440, false}} {
+		b.do(t, chromedp.EmulateViewport(c.width, 900))
+		b.open(t, "/?refresh=off")
+		got := eval[[]float64](t, b, `[
+			document.querySelector('section[data-group="meetings"] li.row .ev').getBoundingClientRect().width,
+			document.querySelector('section[data-group="messages"] li.row .text').getBoundingClientRect().width,
+			document.documentElement.scrollWidth - window.innerWidth,
+			getComputedStyle(document.querySelector(".tbl > .thead .cells")).display === "none" ? 1 : 0]`)
+		if got[0] < 120 || got[1] < 120 || got[2] > 0 || (got[3] == 1) != c.stacked {
+			t.Errorf("%dpx: event %.0fpx, message %.0fpx, sideways scroll %.0fpx, stacked %v (want %v)", c.width, got[0], got[1], got[2], got[3] == 1, c.stacked)
+		}
+	}
+}
+
+// frameBody is the text of the Rendered frame and its data-ran and data-onerror marks, joined by "|". Chrome runs the
+// sandboxed frame in its own process, as a target of its own; a browser that keeps it in the page's process shows it
+// in the page's frame tree. ok is false when neither has the frame.
+func frameBody(t *testing.T, b *consoleBrowser) (shown string, ok bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(b.ctx, browserTimeout)
+	defer cancel()
+	if frame, ok := frameTarget(t, b); ok {
 		ctx, cancel := context.WithTimeout(frame, browserTimeout)
 		defer cancel()
 		shown, err := chromedp.Run(ctx, chromedp.Evaluate[string](`[document.body.innerText.trim(), document.body.dataset.ran, document.body.dataset.onerror].join("|")`))
