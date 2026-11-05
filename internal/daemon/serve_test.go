@@ -199,6 +199,9 @@ func TestChangeWithoutDaemonNamesTheServeCommandOfTheHome(t *testing.T) {
 	quoted := filepath.Join(t.TempDir(), "it's my home")
 	user := t.TempDir()
 	t.Setenv("HOME", user)
+	// A relative home is printed absolute, so the command reaches it from any directory.
+	work := t.TempDir()
+	t.Chdir(work)
 	for _, tc := range []struct {
 		args     []string
 		env, dir string
@@ -207,6 +210,7 @@ func TestChangeWithoutDaemonNamesTheServeCommandOfTheHome(t *testing.T) {
 		{[]string{"--home", plain}, "", plain, "amgd serve --home " + plain},
 		{nil, quoted, quoted, "amgd serve --home '" + strings.ReplaceAll(quoted, "'", `'\''`) + "'"},
 		{nil, "", filepath.Join(user, ".agentmailguard"), "amgd serve"},
+		{[]string{"--home", "data"}, "", filepath.Join(work, "data"), "amgd serve --home " + filepath.Join(work, "data")},
 	} {
 		t.Setenv("AMG_HOME", tc.env)
 		if err := os.MkdirAll(tc.dir, 0700); err != nil {

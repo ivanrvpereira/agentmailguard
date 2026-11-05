@@ -228,9 +228,13 @@ func reloadCmd(r *runner) *cobra.Command {
 func quoted(s string) string { return term.Safe(strings.TrimSpace(s)) }
 
 // command is an amgd command line to copy for home. The same sources as config.Home: a home from --home or AMG_HOME
-// goes into it, so the command reaches the same home in another shell.
+// goes into it, so the command reaches the same home in another shell. A relative home becomes absolute, so the
+// command also reaches it from another directory.
 func (r *runner) command(line, home string) string {
 	if r.home != "" || os.Getenv("AMG_HOME") != "" {
+		if abs, err := filepath.Abs(home); err == nil {
+			home = abs
+		}
 		line += " --home " + shellWord(home)
 	}
 	return line
