@@ -40,6 +40,8 @@ func TestServeExposureWarningCheckListAndBoundedShutdown(t *testing.T) {
 		password          bool
 	}{
 		{"127.0.0.1", "", false, true, false},
+		// localhost is loopback too: no exposure warning.
+		{"localhost", "", false, true, false},
 		// The hosts, the username, and a second account with sends that wait show in the start lines.
 		{"0.0.0.0", "hosts = ['daemon-host.example.ts.net', '192.0.2.7:8788']\nusername = 'ops'\n", true, true, true},
 		// --listen :PORT is a wildcard listener too.

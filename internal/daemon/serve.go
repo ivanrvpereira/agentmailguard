@@ -230,7 +230,7 @@ func apiLines(host, port string, accounts []config.Account) string {
 		reach = "port " + port + " on any address of this host"
 	}
 	out += "  agents connect with: AMG_HOST=" + (&url.URL{Scheme: "http", Host: address}).String() + " amg account list\n"
-	if ip != nil && ip.IsLoopback() {
+	if loopback(host) {
 		return out
 	}
 	var sends []string
