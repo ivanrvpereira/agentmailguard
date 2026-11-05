@@ -19,6 +19,8 @@ They check that the Rendered preview runs no script of the body, loads nothing r
 They check at phone, tablet, and desktop widths that the rows keep room for the event and the subject, that Recents rows keep their Score, and that the page does not scroll sideways.
 Only a manual check in a browser covers the rest of the console layout, dark mode, and the pages with the script off.
 
+The tests have no terminal, so they cover only the piped and refused paths of the terminal prompts. A manual check on a terminal covers the screening key and console password prompts of `amgd serve`.
+
 Not verified against real providers or services:
 
 - mail sends, replies, and forwards: Cc, Bcc, and `--html` bodies on new drafts and sends were checked live on 2026-10-26 on Microsoft 365 and Gmail (received copies show no Bcc, sent copies show it, and `mail get` shows the Bcc of drafts and sent mail, from Graph `bccRecipients` and the Gmail `Bcc` header); the other cases, such as no Bcc read of received mail (Gmail without the `SENT` label, Microsoft 365 `from` another address) and Cc, Bcc, and `--html` added to replies and forwards, are verified only against fake Graph and Gmail endpoints;

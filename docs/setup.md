@@ -219,6 +219,7 @@ See [Settings](daemon.md#settings) and [Reload](daemon.md#reload) for all keys a
 A service has no terminal, so prepare these items before the first start as a service:
 
 - Save the screening key with `amgd config set screening.api_key`. Without a terminal, `amgd serve` does not prompt for a missing key, and the start fails.
+- Set the console password with `amgd config set console.password`. Without a terminal, `amgd serve` does not prompt for it either, and the start fails.
 - With the file backend, supply the password in `AMG_CREDENTIALS_PASSWORD` or on stdin. See [File backend and password input](credentials.md#file-backend-and-password-input).
 - If the service uses another home than `~/.agentmailguard`, set the same `AMG_HOME` for the service and for your `amgd` commands.
 
