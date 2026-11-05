@@ -68,9 +68,17 @@ func normalize(ids []string, results []model.MutationResult, organizer bool) []m
 // audited runs call for the IDs that checks and policy did not hold and writes one record with a result for every ID.
 // held has the results of the IDs kept from the provider. allowed lists the distinct IDs with
 // an allow decision; their policy records are written with the operation record. A manual call without held
-// IDs is not audited when call fails; otherwise a failure becomes the result of each sent ID.
+// IDs is not audited when call fails; otherwise a failure becomes the result of each sent ID. A repeated ID is sent
+// once, and its result is the result of every position that names it.
 func (g *Guard) audited(ctx context.Context, op audit.Operation, ids []string, held map[string]model.MutationResult, allowed []string, opts audit.Options, call func([]string) ([]model.MutationResult, error)) ([]model.MutationResult, error) {
-	send := slices.DeleteFunc(slices.Clone(ids), func(id string) bool { _, ok := held[id]; return ok })
+	send := []string{}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if _, ok := held[id]; !ok && !seen[id] {
+			seen[id] = true
+			send = append(send, id)
+		}
+	}
 	var results []model.MutationResult
 	var err error
 	if len(send) > 0 {
@@ -87,12 +95,16 @@ func (g *Guard) audited(ctx context.Context, op audit.Operation, ids []string, h
 	} else {
 		results = normalize(send, results, opts.Rule != nil)
 	}
-	// results has one entry per sent ID, in input order.
+	// results has one entry per sent ID, in the order of send.
+	sent := make(map[string]model.MutationResult, len(send))
+	for i, id := range send {
+		sent[id] = results[i]
+	}
 	merged := make([]model.MutationResult, 0, len(ids))
 	for _, id := range ids {
 		r, ok := held[id]
 		if !ok {
-			r, results = results[0], results[1:]
+			r = sent[id]
 		}
 		merged = append(merged, r)
 	}
@@ -130,6 +142,11 @@ func publicErr(ctx context.Context, err error) error {
 // mutationCall runs op on ids. A move takes the messages from folder from.
 func (g *Guard) mutationCall(ctx context.Context, op audit.Operation, ids []string, from string, opts audit.Options) ([]model.MutationResult, error) {
 	if err := checkIDs(ids); err != nil {
+		return nil, err
+	}
+	// One closed-folder lookup serves the destination check, every source check, and the sealed lookups of the policy.
+	ctx, err := g.withClosedFolders(ctx)
+	if err != nil {
 		return nil, err
 	}
 	// Validate audit options even when every source is held back below.
@@ -316,6 +333,10 @@ func (g *Guard) conversation(ctx context.Context, op audit.Operation, thread, in
 		return nil, err
 	}
 	defer g.release()
+	ctx, err := g.withClosedFolders(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if err := g.openFolder(ctx, in); err != nil {
 		return nil, err
 	}
@@ -438,6 +459,10 @@ func (g *Guard) compose(ctx context.Context, op audit.Operation, source string, 
 		}
 	}
 	if ref != nil {
+		var err error
+		if ctx, err = g.withClosedFolders(ctx); err != nil {
+			return "", "", err
+		}
 		if err := g.openMessage(ctx, source); err != nil {
 			return "", "", err
 		}

@@ -190,6 +190,39 @@ func TestReplyRecipientsRefusesAClosedMessage(t *testing.T) {
 	}
 }
 
+// One request walks the closed folders once: a trash batch of uncached messages, whose sealed lookups read and
+// screen each message, a move with its destination check, and a reply all reuse the lookup of their request.
+func TestOneRequestLooksUpTheClosedFoldersOnce(t *testing.T) {
+	w := &writer{mailbox: &mailbox{messages: messages("m1", "m2", "m3")}}
+	g, _, _ := policyGuard(t, w, nil, &screener{verdict: model.Green}, defaultPolicy)
+	ctx := t.Context()
+	for name, run := range map[string]func() error{
+		"trash": func() error { _, err := g.Trash(ctx, []string{"m1", "m2", "m3"}); return err },
+		"move":  func() error { _, err := g.Move(ctx, []string{"m1", "m2"}, "f1"); return err },
+		"reply": func() error { _, _, err := g.DraftReply(ctx, "m3", model.Reply{}); return err },
+	} {
+		w.lookups = 0
+		if err := run(); err != nil || w.lookups != 1 {
+			t.Errorf("%s: lookups=%d err=%v", name, w.lookups, err)
+		}
+	}
+}
+
+// A repeated ID is written once and every position gets the provider's result, so a spam that moved m1 never
+// reports it failed.
+func TestRepeatedIDIsWrittenOnceAndReportedAtEveryPosition(t *testing.T) {
+	w := &writer{mailbox: &mailbox{messages: messages("m1", "m2")}}
+	g, _, path := setup(t, w, &screener{verdict: model.Green})
+	got, err := g.Spam(t.Context(), []string{"m1", "m2", "m1"})
+	want := []model.MutationResult{{ID: "m1", OK: true}, {ID: "m2", OK: true}, {ID: "m1", OK: true}}
+	if err != nil || !reflect.DeepEqual(got, want) || !reflect.DeepEqual(w.spammed, []string{"m1", "m2"}) {
+		t.Fatalf("results=%+v err=%v spammed=%v", got, err, w.spammed)
+	}
+	if records := auditRecords(t, path); len(records) != 1 || len(records[0]["results"].([]any)) != 3 {
+		t.Fatalf("records=%v", records)
+	}
+}
+
 // A conversation spam moves the open messages of the conversation to spam, not trash, and its record is a spam.
 func TestSpamConversationCallsSpam(t *testing.T) {
 	w := conversationWriter()

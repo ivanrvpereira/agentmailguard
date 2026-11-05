@@ -16,7 +16,28 @@ const (
 	MoveSpam     = GuardError("move refused: use mail.spam")
 )
 
+type closedKey struct{}
+
+// withClosedFolders looks up the closed folders once for one request and carries them in ctx, so the reads and
+// checks of that request reuse them instead of walking the folder trees again. The map is never shared between
+// requests: a folder that becomes closed later is in the next request's lookup.
+func (g *Guard) withClosedFolders(ctx context.Context) (context.Context, error) {
+	if _, ok := ctx.Value(closedKey{}).(map[string]model.Bin); ok {
+		return ctx, nil
+	}
+	closed, err := g.closedFolders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return context.WithValue(ctx, closedKey{}, closed), nil
+}
+
+// closedFolders gives the closed folders of this request, from ctx or from one lookup; a failed, empty, or invalid
+// lookup fails closed.
 func (g *Guard) closedFolders(ctx context.Context) (map[string]model.Bin, error) {
+	if closed, ok := ctx.Value(closedKey{}).(map[string]model.Bin); ok {
+		return closed, nil
+	}
 	closed, err := g.mailbox.ClosedFolders(ctx)
 	if ctx.Err() != nil {
 		return nil, ctx.Err()

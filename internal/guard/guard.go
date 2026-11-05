@@ -360,7 +360,8 @@ func (g *Guard) List(ctx context.Context, folder string, page model.PageRequest)
 	if err := checkPage(page); err != nil {
 		return views.MailPage{}, err
 	}
-	if err := ctx.Err(); err != nil {
+	ctx, err := g.withClosedFolders(ctx)
+	if err != nil {
 		return views.MailPage{}, err
 	}
 	if err := g.openFolder(ctx, folder); err != nil {

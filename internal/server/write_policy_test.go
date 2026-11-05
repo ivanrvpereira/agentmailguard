@@ -113,8 +113,9 @@ func TestPolicyApproveHoldsTheActionWithoutAProviderWrite(t *testing.T) {
 	if writes.Load() != 0 {
 		t.Fatalf("approve wrote to the provider %d times", writes.Load())
 	}
-	if reads.Load() != 36 {
-		t.Fatalf("reads=%d; want closed-folder and source metadata reads in addition to policy and Jev reads", reads.Load())
+	// One closed-folder lookup per request, plus source metadata, policy, and Jev reads.
+	if reads.Load() != 24 {
+		t.Fatalf("reads=%d; want one closed-folder lookup and the source metadata reads in addition to policy and Jev reads", reads.Load())
 	}
 }
 

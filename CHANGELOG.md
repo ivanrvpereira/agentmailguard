@@ -10,7 +10,8 @@ The first public release.
 
 ### Changed
 
-- Trash and spam/junk, including their subfolders, are closed to agents on every provider: no reads, replies, draft changes, or moves out; conversation and search results omit their messages. Moves into these folders are refused; only `mail trash` and `mail spam` can put mail in trash and spam/junk. On Microsoft 365, a message that Graph returns without its folder fails the read.
+- Trash and spam/junk, including their subfolders, are closed to agents on every provider: no reads, replies, draft changes, or moves out; conversation and search results omit their messages. Moves into these folders are refused; only `mail trash` and `mail spam` can put mail in trash and spam/junk. On Microsoft 365, a message that Graph returns without its folder fails the read. Each request looks up the closed folders once.
+- A mail change with a repeated message ID changes that message once and reports its result at every position, instead of reporting it failed.
 
 ### Added
 

@@ -64,7 +64,8 @@ func (g *Guard) Search(ctx context.Context, q model.SearchQuery, page model.Page
 	if !q.RangeValid() {
 		return views.MailPage{}, GuardError("invalid request")
 	}
-	if err := ctx.Err(); err != nil {
+	ctx, err := g.withClosedFolders(ctx)
+	if err != nil {
 		return views.MailPage{}, err
 	}
 	if q.Folder != nil {
