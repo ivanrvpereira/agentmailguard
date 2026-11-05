@@ -1,7 +1,7 @@
 # systemd unit for amgd. Prepare the home first, as docs/setup.md "Run as a service" describes. Then replace
-# CHANGE-ME with the user who owns the home (User= and the two paths), and run as root:
-#   systemd-creds encrypt --name=amgd-credentials-password - /etc/credstore.encrypted/amgd-credentials-password
-#     (type the credential file password, then Ctrl-D twice)
+# CHANGE-ME with the user who owns the home (User=, AMG_HOME, and BindPaths), and run as root:
+#   systemd-ask-password --echo=no -n 'Credential file password:' |
+#     systemd-creds encrypt --name=amgd-credentials-password - /etc/credstore.encrypted/amgd-credentials-password
 #   install -m 0644 amgd.service /etc/systemd/system/amgd.service
 #   systemctl daemon-reload && systemctl enable --now amgd
 # The daemon log is in the journal: journalctl -u amgd
@@ -10,8 +10,9 @@ Description=agentmailguard daemon (amgd)
 Documentation=https://github.com/ivanrvpereira/agentmailguard/blob/main/docs/setup.md#run-as-a-service
 After=network-online.target
 Wants=network-online.target
-# Stop restarting after 5 failed starts in 5 minutes, for example a missing console password: fix the cause,
-# then systemctl reset-failed amgd and systemctl start amgd.
+# Allow at most 5 starts in 5 minutes, the first one included. After a refused start (for example a missing
+# console password) reaches that limit, the unit stays failed: fix the cause, then systemctl reset-failed amgd
+# and systemctl start amgd.
 StartLimitIntervalSec=5min
 StartLimitBurst=5
 
@@ -33,11 +34,12 @@ RestartSec=10s
 # SIGTERM drains requests for up to 5 s and closes the cache.
 TimeoutStopSec=30s
 
-# The daemon writes only its home. The fake provider keeps its mailbox there too.
+# The daemon sees only its home under /home, and writes only there. The other files of the user stay out of
+# reach. The fake provider keeps its mailbox in the home too.
 UMask=0077
-ReadWritePaths=/home/CHANGE-ME/.agentmailguard
+ProtectHome=tmpfs
+BindPaths=/home/CHANGE-ME/.agentmailguard
 ProtectSystem=strict
-ProtectHome=read-only
 PrivateTmp=yes
 PrivateDevices=yes
 NoNewPrivileges=yes

@@ -30,8 +30,8 @@
   -->
   <key>RunAtLoad</key>
   <true/>
-  <!-- Restart when a signal ends the daemon. Not after any exit with a code: a refused start (a missing secret
-       exits 1), a clean stop, or a Go panic (exit 2). -->
+  <!-- Restart after a crash signal, such as SIGSEGV, SIGBUS, or SIGILL. Not after SIGKILL or SIGTERM, and not
+       after any exit with a code: a refused start (a missing secret exits 1), a clean stop, or a Go panic (exit 2). -->
   <key>KeepAlive</key>
   <dict>
     <key>Crashed</key>

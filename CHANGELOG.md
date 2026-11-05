@@ -16,7 +16,7 @@ The first public release.
 
 ### Added
 
-- A systemd unit and a launchd plist in each release archive (`service/`) and in Homebrew's `share/agentmailguard/service`. The systemd unit reads the credential file password from an encrypted systemd credential and lets the daemon write only its home. "Run as a service" in `docs/setup.md` has the whole first start.
+- A systemd unit and a launchd plist in each release archive (`service/`) and in Homebrew's `share/agentmailguard/service`. The systemd unit reads the credential file password from an encrypted systemd credential and shows the daemon only its home under `/home`. "Run as a service" in `docs/setup.md` has the whole first start.
 - Microsoft 365 login works on headless Linux: `amgd account add|login --no-browser` prints the sign-in URL and takes the redirected `http://localhost:PORT/?code=…` address as a paste, with the checks of the loopback callback. Browser login opens the URL with `xdg-open` on Linux, always prints it, and keeps waiting when no browser opens. A refused device-code sign-in names `--no-browser`, since many organizations block device code.
 - `amgd`, a daemon that screens Microsoft 365 and Gmail mail and calendar events for AI agents, and `amg`, the agent's client, which talks to it over HTTP.
 - Screened mail reads: list, search, read, and whole conversations. Each message gets a verdict (`green`, `yellow`, `red`, `sealed`, or `error`) that decides what the agent sees.
