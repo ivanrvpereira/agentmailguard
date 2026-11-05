@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ivanrvpereira/agentmailguard/internal/client"
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 	"github.com/ivanrvpereira/agentmailguard/internal/daemon"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
@@ -147,6 +148,31 @@ func TestServeReportsRefusedSignInOnTheAccountLine(t *testing.T) {
 	want := "checking credentials\ncredential check: credentials (keychain): ok\ncredential check: account \"good\" (gmail): ok\ncredential check: account \"revoked\" (gmail): sign-in failed; check the network, or run amgd account login\ncredential check: screening key: ok\n"
 	if text := d.log.String(); !strings.Contains(text, want) || strings.Contains(text, "private-") {
 		t.Fatalf("sign-in checks: %q", text)
+	}
+}
+
+// The AMG_HOST hint of a scoped IPv6 listener escapes the zone, so amg accepts it as it is printed.
+func TestServeHintOfAScopedIPv6ListenerIsAURLThatAmgAccepts(t *testing.T) {
+	t.Parallel()
+	standIn := freeAddress(t)
+	_, port, _ := net.SplitHostPort(standIn)
+	listen := "[fe80::1%synthetic0]:" + port
+	opts := daemon.Options{Platform: &keychain{}, Listen: func(network, address string) (net.Listener, error) {
+		if address == listen {
+			// No host has this interface: a loopback socket on the same port stands in for it.
+			address = standIn
+		}
+		return listenReserved(network, address)
+	}}
+	d := runServe(t, writeHome(t, consoleConfig(freeAddress(t))), listen, opts)
+	d.log.await(t, "local-and-remote-clients\n", 1, d.exit)
+	text := d.log.String()
+	base := "http://[fe80::1%25synthetic0]:" + port
+	if want := "daemon listening: " + base + "\n  agents connect with: AMG_HOST=" + base + " amg account list\n"; !strings.Contains(text, want) {
+		t.Fatalf("log=%q", text)
+	}
+	if _, err := client.New(base, client.Options{}); err != nil {
+		t.Fatalf("amg refuses the hint: %v", err)
 	}
 }
 

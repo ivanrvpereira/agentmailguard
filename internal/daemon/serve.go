@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"slices"
@@ -219,7 +220,8 @@ func consoleLines(c config.Console, password bool) string {
 // the address can use the API, with the mail_send decisions of the accounts, and name the fixes.
 func apiLines(host, port string, accounts []config.Account) string {
 	address := net.JoinHostPort(host, port)
-	out := "daemon listening: http://" + address + "\n"
+	// url.URL escapes the zone of a scoped IPv6 address (%25), which amg's URL parser needs.
+	out := "daemon listening: " + (&url.URL{Scheme: "http", Host: address}).String() + "\n"
 	reach := address
 	ip := net.ParseIP(host)
 	if host == "" || ip != nil && ip.IsUnspecified() {
@@ -227,7 +229,7 @@ func apiLines(host, port string, accounts []config.Account) string {
 		address = net.JoinHostPort("DAEMON-HOST", port)
 		reach = "port " + port + " on any address of this host"
 	}
-	out += "  agents connect with: AMG_HOST=http://" + address + " amg account list\n"
+	out += "  agents connect with: AMG_HOST=" + (&url.URL{Scheme: "http", Host: address}).String() + " amg account list\n"
 	if ip != nil && ip.IsLoopback() {
 		return out
 	}
