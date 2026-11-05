@@ -222,7 +222,7 @@ func apiLines(host, port string, accounts []config.Account) string {
 	out := "daemon listening: http://" + address + "\n"
 	reach := address
 	ip := net.ParseIP(host)
-	if ip != nil && ip.IsUnspecified() {
+	if host == "" || ip != nil && ip.IsUnspecified() {
 		// A wildcard address is not one that agents can connect to; the daemon does not guess its host name.
 		address = net.JoinHostPort("DAEMON-HOST", port)
 		reach = "port " + port + " on any address of this host"

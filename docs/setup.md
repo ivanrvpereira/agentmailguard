@@ -186,6 +186,7 @@ daemon listening: http://127.0.0.1:8787
 ```
 
 Open the console URL in a browser on the daemon host. Without a console password, the console line says so instead of the username.
+
 5. In a second terminal, list the accounts, inspect the status, and make the first read:
 
 ```sh

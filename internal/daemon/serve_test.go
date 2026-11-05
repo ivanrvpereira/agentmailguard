@@ -17,6 +17,7 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 	"github.com/ivanrvpereira/agentmailguard/internal/server"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // refusingAuthority is a fake token endpoint that refuses every refresh, as for a revoked login.
@@ -33,14 +34,17 @@ func refusingAuthority(t *testing.T) *httptest.Server {
 func TestServeExposureWarningCheckListAndBoundedShutdown(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		host, console string
-		warning       bool
-		loggedIn      bool
+		host, console     string
+		warning, loggedIn bool
+		password          bool
 	}{
-		{"127.0.0.1", "", false, true},
+		{"127.0.0.1", "", false, true, false},
 		// The hosts, the username, and a second account with sends that wait show in the start lines.
-		{"0.0.0.0", "hosts = ['daemon-host.example.ts.net', '192.0.2.7:8788']\nusername = 'ops'\n", true, true},
-		{"127.0.0.1", "", false, false},
+		{"0.0.0.0", "hosts = ['daemon-host.example.ts.net', '192.0.2.7:8788']\nusername = 'ops'\n", true, true, true},
+		// --listen :PORT and :: are wildcard listeners too.
+		{"", "hosts = ['daemon-host.example.ts.net', '192.0.2.7:8788']\nusername = 'ops'\n", true, true, false},
+		{"::", "hosts = ['daemon-host.example.ts.net', '192.0.2.7:8788']\nusername = 'ops'\n", true, true, false},
+		{"127.0.0.1", "", false, false, false},
 	} {
 		console := freeAddress(t)
 		other := ""
@@ -52,6 +56,15 @@ func TestServeExposureWarningCheckListAndBoundedShutdown(t *testing.T) {
 		store := credentials.New(k, home)
 		if err := store.SaveScreeningKey(t.Context(), "private-jev-canary"); err != nil {
 			t.Fatal(err)
+		}
+		if tc.password {
+			hash, err := bcrypt.GenerateFromPassword([]byte("private-console-pass"), bcrypt.MinCost)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.SaveConsoleHash(t.Context(), string(hash)); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if tc.loggedIn {
 			if err := store.SaveOAuth(t.Context(), "m365", "synthetic@example.test", credentials.OAuth{RefreshToken: "private-refresh-canary"}); err != nil {
@@ -80,20 +93,23 @@ func TestServeExposureWarningCheckListAndBoundedShutdown(t *testing.T) {
 			// An account that is not logged in does not block the start; its commands fail.
 			account = "not logged in; commands for this account fail until amgd account login"
 		}
-		demo := ""
-		start := "approval console: http://" + console + "/ (no password: the console refuses every request until amgd config set console.password)\n" +
+		demo, signIn, passwordCheck := "", "no password: the console refuses every request until amgd config set console.password", "not set; the console refuses every request until amgd config set console.password"
+		if tc.password {
+			signIn, passwordCheck = "user ops", "ok"
+		}
+		start := "approval console: http://" + console + "/ (" + signIn + ")\n" +
 			"daemon listening: http://" + listen + "\n  agents connect with: AMG_HOST=http://" + listen + " amg account list\n"
 		if tc.warning {
 			demo = "credential check: account \"demo\" (fake): no login needed\n"
 			_, port, _ := net.SplitHostPort(listen)
 			// The daemon prints no host name that it would have to guess for a wildcard listener.
-			start = "approval console: http://" + console + "/ (no password: the console refuses every request until amgd config set console.password)\n" +
+			start = "approval console: http://" + console + "/ (" + signIn + ")\n" +
 				"  also accepted as: daemon-host.example.ts.net, 192.0.2.7:8788 (from console.hosts)\n" +
 				"daemon listening: http://" + listen + "\n  agents connect with: AMG_HOST=http://DAEMON-HOST:" + port + " amg account list\n" +
 				"WARNING: this API has no login and no TLS. Anyone who can reach port " + port + " on any address of this host can read screened mail and run every action that the write policy allows (sends: approve or deny).\n" +
 				"  Restrict it: allow only the agent machine (Tailscale grant or firewall), or keep --listen on 127.0.0.1 and use an SSH tunnel. See docs/daemon.md#local-and-remote-clients\n"
 		}
-		want := "checking credentials\ncredential check: credentials (keychain): ok\n" + demo + "credential check: account \"work\" (m365): " + account + "\ncredential check: screening key: ok\ncredential check: console password: not set; the console refuses every request until amgd config set console.password\n" + start
+		want := "checking credentials\ncredential check: credentials (keychain): ok\n" + demo + "credential check: account \"work\" (m365): " + account + "\ncredential check: screening key: ok\ncredential check: console password: " + passwordCheck + "\n" + start
 		if text != want {
 			t.Errorf("start output:\n got %q\nwant %q", text, want)
 		}
@@ -132,6 +148,36 @@ func TestServeReportsRefusedSignInOnTheAccountLine(t *testing.T) {
 	want := "checking credentials\ncredential check: credentials (keychain): ok\ncredential check: account \"good\" (gmail): ok\ncredential check: account \"revoked\" (gmail): sign-in failed; check the network, or run amgd account login\ncredential check: screening key: ok\n"
 	if text := d.log.String(); !strings.Contains(text, want) || strings.Contains(text, "private-") {
 		t.Fatalf("sign-in checks: %q", text)
+	}
+}
+
+// Without a daemon, a setting change ends with the command that starts one, for the home that the command used.
+func TestChangeWithoutDaemonNamesTheServeCommandOfTheHome(t *testing.T) {
+	plain := filepath.Join(t.TempDir(), "home")
+	quoted := filepath.Join(t.TempDir(), "it's my home")
+	user := t.TempDir()
+	t.Setenv("HOME", user)
+	for _, tc := range []struct {
+		args     []string
+		env, dir string
+		want     string
+	}{
+		{[]string{"--home", plain}, "", plain, "amgd serve --home " + plain},
+		{nil, quoted, quoted, "amgd serve --home '" + strings.ReplaceAll(quoted, "'", `'\''`) + "'"},
+		{nil, "", filepath.Join(user, ".agentmailguard"), "amgd serve"},
+	} {
+		t.Setenv("AMG_HOME", tc.env)
+		if err := os.MkdirAll(tc.dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(tc.dir, "config.toml"), []byte(consoleConfig("localhost:8788")), 0600); err != nil {
+			t.Fatal(err)
+		}
+		var errout strings.Builder
+		code := daemon.Run(t.Context(), append(tc.args, "config", "set", "policy.mail_send", "approve"), io.Discard, &errout, daemon.Options{Platform: &keychain{}, LookupEnv: noEnv})
+		if code != 0 || !strings.HasSuffix(errout.String(), "no daemon runs for this home. Now run: "+tc.want+"\n") {
+			t.Errorf("AMG_HOME=%q %v: exit %d stderr %q", tc.env, tc.args, code, errout.String())
+		}
 	}
 }
 
