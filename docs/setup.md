@@ -254,7 +254,7 @@ cp io.github.ivanrvpereira.agentmailguard.plist ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.ivanrvpereira.agentmailguard.plist
 ```
 
-The daemon log is in `~/Library/Logs/agentmailguard.log`. launchd restarts the daemon after a crash, but not after a refused start. launchd has no reload action: `amgd config set` and the `amgd account` commands reload the daemon themselves; after a hand edit, run `amgd reload`. To stop the daemon, run `launchctl bootout gui/$(id -u)/io.github.ivanrvpereira.agentmailguard`.
+The daemon log is in `~/Library/Logs/agentmailguard.log`. launchd restarts the daemon when a signal ends it, for example SIGKILL or SIGSEGV. It does not restart it after any exit with a code: a refused start, a clean stop, or a Go panic (exit 2). launchd has no reload action: `amgd config set` and the `amgd account` commands reload the daemon themselves; after a hand edit, run `amgd reload`. To stop the daemon, run `launchctl bootout gui/$(id -u)/io.github.ivanrvpereira.agentmailguard`.
 
 ## Headless login
 
