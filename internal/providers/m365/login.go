@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
-	"github.com/ivanrvpereira/agentmailguard/internal/providers/loopback"
+	"github.com/ivanrvpereira/agentmailguard/internal/loopback"
 )
 
 // Login is an interactive server-host operation, never a remote API operation.

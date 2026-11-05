@@ -227,7 +227,7 @@ On macOS, start `amgd serve` once in a terminal before you start it from launchd
 Use `--no-browser` for Microsoft 365 and Gmail:
 
 1. Run `amgd account login ALIAS --no-browser` in the SSH terminal of the daemon host. For a new account, add `--no-browser` to `amgd account add`.
-2. Open the printed sign-in URL on another computer. Approve access.
+2. Open the printed sign-in URL on another computer. Approve access; for Gmail, approve both scopes.
 3. Copy the full redirected address after the expected connection error: `http://localhost:PORT/?code=...&state=...` for Microsoft 365, `http://127.0.0.1:PORT/?state=...&code=...` for Gmail.
 4. Paste the address into the operator terminal within five minutes. Never send this address or code to an assistant.
 

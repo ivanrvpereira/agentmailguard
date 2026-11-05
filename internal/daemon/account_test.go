@@ -232,3 +232,25 @@ func TestAccountLoginWithoutBrowserTakesThePastedRedirect(t *testing.T) {
 		})
 	}
 }
+
+// --device-code and --no-browser are two sign-ins: together they are a usage error before any sign-in starts.
+func TestAccountSignInRefusesDeviceCodeWithNoBrowser(t *testing.T) {
+	t.Parallel()
+	home, k, c := writeHome(t, accountConfig), &keychain{}, newClock()
+	ms := newM365(t)
+	opts := providerOptions(k, ms, nil, c)
+	if code, _, errout := amgd(t, home, opts, "", append([]string{"account", "add", "work"}, signInArgs["m365"]...)...); code != 0 {
+		t.Fatalf("add: exit %d stderr %q", code, errout)
+	}
+	itemBefore, writesBefore := k.item()
+	opts.Server.M365.OpenBrowser = func(context.Context, string) error { t.Error("browser opened"); return nil }
+	for _, args := range [][]string{append([]string{"account", "add", "second"}, signInArgs["m365"]...), {"account", "login", "work"}} {
+		code, out, errout := amgd(t, home, opts, "", append(args, "--device-code", "--no-browser")...)
+		if code != 2 || out != "" || errout != "error: invalid command usage; use --help\n" {
+			t.Fatalf("%v: exit %d stdout %q stderr %q", args, code, out, errout)
+		}
+	}
+	if item, writes := k.item(); string(item) != string(itemBefore) || writes != writesBefore || ms.profiles != 1 {
+		t.Fatal("a refused sign-in reached the provider or the credential store")
+	}
+}

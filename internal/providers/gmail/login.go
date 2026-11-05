@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard/internal/providers/loopback"
+	"github.com/ivanrvpereira/agentmailguard/internal/loopback"
 )
 
 // Login runs on the server host only. The loopback callback or a pasted redirect from Options.ReadRedirect ends

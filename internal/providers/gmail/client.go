@@ -17,8 +17,8 @@ import (
 
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/loopback"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
-	"github.com/ivanrvpereira/agentmailguard/internal/providers/loopback"
 )
 
 const gmailScope = "https://www.googleapis.com/auth/gmail.modify"

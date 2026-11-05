@@ -14,8 +14,8 @@ import (
 
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/loopback"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
-	"github.com/ivanrvpereira/agentmailguard/internal/providers/loopback"
 )
 
 // Options injects external-system seams, not account settings. BaseURL includes /v1.0;

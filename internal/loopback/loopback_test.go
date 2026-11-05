@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanrvpereira/agentmailguard/internal/providers/loopback"
+	"github.com/ivanrvpereira/agentmailguard/internal/loopback"
 )
 
 const state = "synthetic-state"
@@ -109,19 +109,22 @@ func TestWaitStopsTheBrowserAndTheReader(t *testing.T) {
 }
 
 // get sends address to the callback as a browser would: to the listener, with the address's host in the Host
-// header, and returns the status.
+// header, and returns the status, or 0 when the request fails. It runs in the browser goroutine too, so it never
+// calls t.Fatal.
 func get(t *testing.T, c *loopback.Callback, method, address string) int {
 	t.Helper()
 	u, err := url.Parse(address)
 	if err != nil {
-		t.Fatal(err)
+		t.Error(err)
+		return 0
 	}
 	_, port, _ := strings.Cut(c.Host, ":")
 	req, _ := http.NewRequest(method, "http://127.0.0.1:"+port+u.RequestURI(), nil)
 	req.Host = u.Host
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatal(err)
+		t.Error(err)
+		return 0
 	}
 	_ = resp.Body.Close()
 	return resp.StatusCode
