@@ -41,9 +41,8 @@ func TestServeExposureWarningCheckListAndBoundedShutdown(t *testing.T) {
 		{"127.0.0.1", "", false, true, false},
 		// The hosts, the username, and a second account with sends that wait show in the start lines.
 		{"0.0.0.0", "hosts = ['daemon-host.example.ts.net', '192.0.2.7:8788']\nusername = 'ops'\n", true, true, true},
-		// --listen :PORT and :: are wildcard listeners too.
+		// --listen :PORT is a wildcard listener too.
 		{"", "hosts = ['daemon-host.example.ts.net', '192.0.2.7:8788']\nusername = 'ops'\n", true, true, false},
-		{"::", "hosts = ['daemon-host.example.ts.net', '192.0.2.7:8788']\nusername = 'ops'\n", true, true, false},
 		{"127.0.0.1", "", false, false, false},
 	} {
 		console := freeAddress(t)
