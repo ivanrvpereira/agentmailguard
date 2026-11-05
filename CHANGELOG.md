@@ -8,6 +8,11 @@ Until version 1.0.0, a minor version can change behavior that users rely on.
 
 The first public release.
 
+### Changed
+
+- `amgd serve` prints the approval console URL with its username and `console.hosts`, the API URL with the `AMG_HOST` line for agents, and, for a non-loopback listener, a warning after the address that names it, the `mail_send` decisions, and the fixes. `daemon listening` is now `daemon listening: http://ADDRESS`.
+- Without a daemon, `amgd` setting changes print `no daemon runs for this home. Now run: amgd serve`, with `--home` when the command got one.
+
 ### Added
 
 - `amgd`, a daemon that screens Microsoft 365 and Gmail mail and calendar events for AI agents, and `amg`, the agent's client, which talks to it over HTTP.

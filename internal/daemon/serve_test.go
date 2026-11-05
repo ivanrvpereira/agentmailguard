@@ -33,10 +33,21 @@ func refusingAuthority(t *testing.T) *httptest.Server {
 func TestServeExposureWarningCheckListAndBoundedShutdown(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		listen            string
-		warning, loggedIn bool
-	}{{"127.0.0.1:0", false, true}, {"0.0.0.0:0", true, true}, {"127.0.0.1:0", false, false}} {
-		home := writeHome(t, "version = 1\ndefault_account = 'work'\n[credentials]\nbackend = 'keychain'\n[console]\nlisten = '"+freeAddress(t)+"'\n[accounts.work]\nprovider = 'm365'\nemail = 'synthetic@example.test'\nclient_id = 'synthetic'\ntenant_id = 'synthetic'\n")
+		host, console string
+		warning       bool
+		loggedIn      bool
+	}{
+		{"127.0.0.1", "", false, true},
+		// The hosts, the username, and a second account with sends that wait show in the start lines.
+		{"0.0.0.0", "hosts = ['daemon-host.example.ts.net', '192.0.2.7:8788']\nusername = 'ops'\n", true, true},
+		{"127.0.0.1", "", false, false},
+	} {
+		console := freeAddress(t)
+		other := ""
+		if tc.warning {
+			other = "[accounts.demo]\nprovider = 'fake'\nemail = 'demo@example.test'\n[accounts.demo.policy]\nmail_send = 'approve'\n"
+		}
+		home := writeHome(t, "version = 1\ndefault_account = 'work'\n[credentials]\nbackend = 'keychain'\n[console]\nlisten = '"+console+"'\n"+tc.console+"[accounts.work]\nprovider = 'm365'\nemail = 'synthetic@example.test'\nclient_id = 'synthetic'\ntenant_id = 'synthetic'\n"+other)
 		k := &keychain{}
 		store := credentials.New(k, home)
 		if err := store.SaveScreeningKey(t.Context(), "private-jev-canary"); err != nil {
@@ -49,8 +60,12 @@ func TestServeExposureWarningCheckListAndBoundedShutdown(t *testing.T) {
 		}
 		// The fake authority refuses every refresh, so the logged-in account fails its sign-in check.
 		authority := refusingAuthority(t)
-		d := runServe(t, home, tc.listen, daemon.Options{Platform: k, Server: server.Options{M365: m365.Options{AuthorityURL: authority.URL, BaseURL: authority.URL}}})
-		d.log.await(t, "daemon listening\n", 1, d.exit)
+		listen := reserve(t, tc.host)
+		d := runServe(t, home, listen, daemon.Options{Platform: k, Server: server.Options{M365: m365.Options{AuthorityURL: authority.URL, BaseURL: authority.URL}}})
+		d.log.await(t, "amg account list\n", 1, d.exit)
+		if tc.warning {
+			d.log.await(t, "local-and-remote-clients\n", 1, d.exit)
+		}
 		// An idle daemon stops at once: it never waits out the 5 s HTTP drain.
 		began := time.Now()
 		if code := d.stop(); code != 0 {
@@ -65,12 +80,22 @@ func TestServeExposureWarningCheckListAndBoundedShutdown(t *testing.T) {
 			// An account that is not logged in does not block the start; its commands fail.
 			account = "not logged in; commands for this account fail until amgd account login"
 		}
-		checks := "checking credentials\ncredential check: credentials (keychain): ok\ncredential check: account \"work\" (m365): " + account + "\ncredential check: screening key: ok\ncredential check: console password: not set; the console refuses every request until amgd config set console.password\napproval console listening\ndaemon listening\n"
-		if !strings.HasSuffix(text, checks) || strings.Contains(text, "private-") {
-			t.Errorf("credential checks must precede listening: %q", text)
+		demo := ""
+		start := "approval console: http://" + console + "/ (no password: the console refuses every request until amgd config set console.password)\n" +
+			"daemon listening: http://" + listen + "\n  agents connect with: AMG_HOST=http://" + listen + " amg account list\n"
+		if tc.warning {
+			demo = "credential check: account \"demo\" (fake): no login needed\n"
+			_, port, _ := net.SplitHostPort(listen)
+			// The daemon prints no host name that it would have to guess for a wildcard listener.
+			start = "approval console: http://" + console + "/ (no password: the console refuses every request until amgd config set console.password)\n" +
+				"  also accepted as: daemon-host.example.ts.net, 192.0.2.7:8788 (from console.hosts)\n" +
+				"daemon listening: http://" + listen + "\n  agents connect with: AMG_HOST=http://DAEMON-HOST:" + port + " amg account list\n" +
+				"WARNING: this API has no login and no TLS. Anyone who can reach port " + port + " on any address of this host can read screened mail and run every action that the write policy allows (sends: approve or deny).\n" +
+				"  Restrict it: allow only the agent machine (Tailscale grant or firewall), or keep --listen on 127.0.0.1 and use an SSH tunnel. See docs/daemon.md#local-and-remote-clients\n"
 		}
-		if strings.Contains(text, "WARNING: unauthenticated mailbox access; no built-in TLS. A protected network or tunnel is required.\n") != tc.warning {
-			t.Errorf("exposure warning mismatch: %s", text)
+		want := "checking credentials\ncredential check: credentials (keychain): ok\n" + demo + "credential check: account \"work\" (m365): " + account + "\ncredential check: screening key: ok\ncredential check: console password: not set; the console refuses every request until amgd config set console.password\n" + start
+		if text != want {
+			t.Errorf("start output:\n got %q\nwant %q", text, want)
 		}
 	}
 }
@@ -118,7 +143,7 @@ func consoleConfig(listen string) string {
 func TestServeWarnsWhenTheApprovalConsoleListensBeyondLoopback(t *testing.T) {
 	t.Parallel()
 	d := startServe(t, writeHome(t, consoleConfig(reserve(t, "0.0.0.0"))), "127.0.0.1:0", daemon.Options{Platform: &keychain{}})
-	if text := d.log.String(); !strings.Contains(text, "WARNING: the approval console listens beyond loopback. Use an HTTPS tunnel such as tailscale serve.\napproval console listening\n") {
+	if text := d.log.String(); !strings.Contains(text, "WARNING: the approval console listens beyond loopback. Use an HTTPS tunnel such as tailscale serve.\napproval console: http://") {
 		t.Fatalf("log=%q", text)
 	}
 }

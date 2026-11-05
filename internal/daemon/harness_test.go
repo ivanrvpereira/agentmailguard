@@ -293,7 +293,7 @@ func startServe(t *testing.T, home, listen string, opts daemon.Options) *daemonR
 			t.Errorf("serve exit %d:\n%s", code, d.log.String())
 		}
 	})
-	d.log.await(t, "daemon listening\n", 1, d.exit)
+	d.log.await(t, "amg account list\n", 1, d.exit)
 	return d
 }
 

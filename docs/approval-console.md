@@ -1,7 +1,7 @@
 # Approval console
 
 The approval console is a small web page where you approve or deny pending actions.
-It always listens, from the start of the daemon. At start, the daemon shows `approval console listening`.
+It always listens, from the start of the daemon. At start, the daemon shows the console URL, built from [`listen`](#console-configuration), and the username, for example `approval console: http://localhost:8788/ (user admin)`. A second line lists the entries of `hosts`. Without a console password, the line says that the console refuses every request.
 If the console address is taken, the daemon does not start and shows `console listener unavailable`.
 Until you set the [console password](#console-password), the console answers every request with HTTP 503 and `console password not set; run amgd config set console.password`. You do not have to restart the daemon after you set the password.
 

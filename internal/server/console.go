@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/cache"
+	"github.com/ivanrvpereira/agentmailguard/internal/config"
 	"github.com/ivanrvpereira/agentmailguard/internal/views"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -53,6 +54,16 @@ func (s *Server) ConsoleAddress() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.listen
+}
+
+// Current is the configuration of the current state, with the console address that the first Load fixed, and
+// whether that state has a console password. ok is false before the first Load succeeds.
+func (s *Server) Current() (c config.Config, password, ok bool) {
+	st := s.current.Load()
+	if st == nil {
+		return config.Config{}, false, false
+	}
+	return st.config, st.consoleHash != "", true
 }
 
 // consoleCSP allows only the console's own script and no Trusted Types policy, so that every HTML sink throws. The

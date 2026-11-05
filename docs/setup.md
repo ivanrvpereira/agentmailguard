@@ -177,7 +177,15 @@ You sign in to the console with the username `admin` and this password. To use a
 amgd serve
 ```
 
-4. Read the check list that `amgd serve` prints. Each account must show `ok` or `no login needed`. Then the daemon prints `approval console listening` and `daemon listening`.
+4. Read the check list that `amgd serve` prints. Each account must show `ok` or `no login needed`. Then the daemon prints where to go next:
+
+```text
+approval console: http://localhost:8788/ (user admin)
+daemon listening: http://127.0.0.1:8787
+  agents connect with: AMG_HOST=http://127.0.0.1:8787 amg account list
+```
+
+Open the console URL in a browser on the daemon host. Without a console password, the console line says so instead of the username.
 5. In a second terminal, list the accounts, inspect the status, and make the first read:
 
 ```sh
@@ -278,7 +286,7 @@ Keep the daemon on its loopback listener and use an SSH tunnel for `amg` on anot
 | Missing account or stale login | Run `amg account list` and `amg account status`. After a hand edit of `config.toml`, run `amgd reload`. Use the same home each time. |
 | `reload refused: CODE; old settings kept` in the daemon log | Fix the key that the `error:` line names. Run `amgd config check`, and then `amgd reload`. |
 | `console password not set; run amgd config set console.password` | Run `amgd config set console.password` on the daemon host. |
-| `no daemon runs for this home` | Start the daemon with `amgd serve`, or set the `AMG_HOME` of the daemon. |
+| `no daemon runs for this home. Now run: amgd serve` | Run the command that the line gives. It includes `--home` when the command used `--home` or `AMG_HOME`. |
 | Keychain approval or a blocked terminal | Approve access interactively. A rebuilt binary can require approval again. Choose “Always Allow” only for your trusted build of `amgd`. |
 
 Administrator consent, Google verification requirements, and screening-service access depend on your deployment.

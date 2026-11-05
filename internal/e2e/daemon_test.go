@@ -348,7 +348,7 @@ func TestAccountAddCreatesTheConfigurationOfANewHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, errout := s.amgdOK(nil, "account", "add", "other", "--provider", "fake")
-	if !strings.Contains(errout, "rules.toml already has 1 rules for other@fake.invalid; they apply to other.\n") || !strings.Contains(errout, "no daemon runs for this home") {
+	if !strings.Contains(errout, "rules.toml already has 1 rules for other@fake.invalid; they apply to other.\n") || !strings.HasSuffix(errout, "no daemon runs for this home. Now run: amgd serve --home "+s.home+"\n") {
 		t.Fatalf("stderr %q", errout)
 	}
 	if !strings.Contains(s.config(), "default_account = \"demo\"") {

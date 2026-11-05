@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -41,9 +42,6 @@ func (r *runner) serve(ctx context.Context, listen string) int {
 	home, path, e := r.paths()
 	if e != nil {
 		return r.fail("configuration unavailable")
-	}
-	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-		fmt.Fprintln(r.stderr, "WARNING: unauthenticated mailbox access; no built-in TLS. A protected network or tunnel is required.")
 	}
 	// Ask for reloads before the lock shows the PID, so a signal that amgd sends during the start is not lost and
 	// does not stop the process.
@@ -113,10 +111,12 @@ func (r *runner) serve(ctx context.Context, listen string) int {
 		servers = append(servers, h)
 		go func() { done <- h.Serve(l) }()
 	}
+	c, password, _ := s.Current()
 	start(s.Console(), consoleListener)
-	fmt.Fprintln(r.stderr, "approval console listening")
+	fmt.Fprint(r.stderr, term.Safe(consoleLines(c.Console, password)))
 	start(s, listener)
-	fmt.Fprintln(r.stderr, "daemon listening")
+	_, port, _ := net.SplitHostPort(listener.Addr().String())
+	fmt.Fprint(r.stderr, term.Safe(apiLines(host, port, c.Accounts)))
 	notifySystemd(r.opts.LookupEnv, "READY=1")
 	reloaded := make(chan struct{})
 	go func() {
@@ -199,6 +199,50 @@ func (r *runner) screeningKeyPrompt() func(context.Context) (string, error) {
 		}
 		return key, nil
 	}
+}
+
+// consoleLines tell where the approval console is: its URL from [console].listen, as in the pending url, the extra
+// host names that it accepts, and the username, or that it refuses every request without a password.
+func consoleLines(c config.Console, password bool) string {
+	signIn := "user " + c.Username
+	if !password {
+		signIn = "no password: the console refuses every request until amgd config set console.password"
+	}
+	out := fmt.Sprintf("approval console: http://%s/ (%s)\n", c.Listen, signIn)
+	if len(c.Hosts) > 0 {
+		out += "  also accepted as: " + strings.Join(c.Hosts, ", ") + " (from console.hosts)\n"
+	}
+	return out
+}
+
+// apiLines tell where the API listens and how agents connect. Beyond loopback they warn that anyone who reaches
+// the address can use the API, with the mail_send decisions of the accounts, and name the fixes.
+func apiLines(host, port string, accounts []config.Account) string {
+	address := net.JoinHostPort(host, port)
+	out := "daemon listening: http://" + address + "\n"
+	reach := address
+	ip := net.ParseIP(host)
+	if ip != nil && ip.IsUnspecified() {
+		// A wildcard address is not one that agents can connect to; the daemon does not guess its host name.
+		address = net.JoinHostPort("DAEMON-HOST", port)
+		reach = "port " + port + " on any address of this host"
+	}
+	out += "  agents connect with: AMG_HOST=http://" + address + " amg account list\n"
+	if ip != nil && ip.IsLoopback() {
+		return out
+	}
+	var sends []string
+	for _, d := range []config.Decision{config.Allow, config.Approve, config.Deny} {
+		if slices.ContainsFunc(accounts, func(a config.Account) bool { return a.Policy.Base.MailSend == d }) {
+			sends = append(sends, string(d))
+		}
+	}
+	policy := ""
+	if len(sends) > 0 {
+		policy = " (sends: " + strings.Join(sends, " or ") + ")"
+	}
+	return out + "WARNING: this API has no login and no TLS. Anyone who can reach " + reach + " can read screened mail and run every action that the write policy allows" + policy + ".\n" +
+		"  Restrict it: allow only the agent machine (Tailscale grant or firewall), or keep --listen on 127.0.0.1 and use an SSH tunnel. See docs/daemon.md#local-and-remote-clients\n"
 }
 
 // loopback reports whether host is localhost or a loopback IP address.

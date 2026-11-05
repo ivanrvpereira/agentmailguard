@@ -112,7 +112,7 @@ The file then starts with `# Written by amgd. Comments are not kept.`
 The daemon reads `config.toml`, `rules.toml`, and the credential store only at start and at a reload.
 `amgd config set`, `config unset`, `account add`, `account login`, and `account remove` reload the daemon after the change.
 They print `reload sent to daemon (PID n); see the daemon log`.
-If no daemon runs, they print `no daemon runs for this home; the change applies when amgd serve starts`.
+If no daemon runs, they print `no daemon runs for this home. Now run: amgd serve`; the change applies when the daemon starts. When the command got `--home` or `AMG_HOME`, the line ends with `--home HOME`.
 After a hand edit of `config.toml` or `rules.toml`, run `amgd reload` on the daemon host.
 
 `amgd reload` sends SIGUSR1 to the daemon. The daemon log then shows `reload requested`, the check list of a start, and `reload ok`.
@@ -212,7 +212,18 @@ Login errors are fixed texts that name the failed step. They contain no raw prov
 Anyone who can reach the listener can read guarded mailbox data and change mail.
 They can also do every action that the [write policy](write-policy.md) allows, for example create drafts, send mail, and send meeting invitations, updates, cancellations, and responses.
 The default listener is `127.0.0.1:8787`.
-A non-loopback listener requires an explicit `amgd serve --listen` option and prints a warning.
+A non-loopback listener requires an explicit `amgd serve --listen` option.
+At start, `amgd serve` prints the listener URL and how agents connect.
+For a non-loopback listener it then prints a warning that names the address and the `mail_send` decisions of the accounts (`allow`, `approve`, or `deny`), and the fixes:
+
+```text
+daemon listening: http://100.64.0.10:8787
+  agents connect with: AMG_HOST=http://100.64.0.10:8787 amg account list
+WARNING: this API has no login and no TLS. Anyone who can reach 100.64.0.10:8787 can read screened mail and run every action that the write policy allows (sends: approve).
+  Restrict it: allow only the agent machine (Tailscale grant or firewall), or keep --listen on 127.0.0.1 and use an SSH tunnel. See docs/daemon.md#local-and-remote-clients
+```
+
+For a wildcard listener such as `0.0.0.0`, the hint shows `DAEMON-HOST` in place of a host name: the daemon does not guess one.
 Browser requests with an `Origin` header are refused, and the daemon does not enable CORS.
 These restrictions are not a substitute for a protected network or encrypted tunnel.
 
