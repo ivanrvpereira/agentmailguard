@@ -240,7 +240,8 @@ func TestServeNeedsAConsolePasswordAndANewOneTakesEffectAtTheReload(t *testing.T
 	s.seed()
 	// Without a terminal, serve does not ask: it refuses to start and names the command for this home.
 	_, errout, code := s.amgd(nil, "serve", "--listen", s.api)
-	if code != 1 || !strings.HasSuffix(errout, "error: start refused: run amgd config set console.password --home "+s.home+", then start the daemon again\n") || strings.Contains(errout, "listening") {
+	// The home is quoted when the temporary directory needs it, for example with a space in GOTMPDIR.
+	if code != 1 || !strings.Contains(errout, "error: start refused: run amgd config set console.password --home ") || !strings.HasSuffix(errout, ", then start the daemon again\n") || strings.Contains(errout, "listening") {
 		t.Fatalf("serve without password: exit %d stderr %q", code, errout)
 	}
 	s.amgdOK(strings.NewReader(consolePassword+"\n"), "config", "set", "console.password")

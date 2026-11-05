@@ -204,7 +204,7 @@ func (r *runner) changed(home string) int {
 	err := r.reload(home)
 	switch {
 	case errors.Is(err, errNoDaemon):
-		fmt.Fprintln(r.stderr, term.Safe("no daemon runs for this home. Now run: "+r.command("amgd serve", home)))
+		fmt.Fprintln(r.stderr, "no daemon runs for this home. Now run: "+r.command("amgd serve", home))
 	case err != nil:
 		return r.fail(err.Error() + "; the change is saved, run amgd reload")
 	}
@@ -229,7 +229,8 @@ func quoted(s string) string { return term.Safe(strings.TrimSpace(s)) }
 
 // command is an amgd command line to copy for home. The same sources as config.Home: a home from --home or AMG_HOME
 // goes into it, so the command reaches the same home in another shell. A relative home becomes absolute, so the
-// command also reaches it from another directory.
+// command also reaches it from another directory. The result is terminal-safe: term.Safe removes control
+// characters of the home.
 func (r *runner) command(line, home string) string {
 	if r.home != "" || os.Getenv("AMG_HOME") != "" {
 		if abs, err := filepath.Abs(home); err == nil {
@@ -237,7 +238,7 @@ func (r *runner) command(line, home string) string {
 		}
 		line += " --home " + shellWord(home)
 	}
-	return line
+	return term.Safe(line)
 }
 
 // shellWord quotes s for a POSIX shell when it holds more than letters, digits, and / . _ - + : , = @.

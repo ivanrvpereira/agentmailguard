@@ -110,15 +110,24 @@ func TestServeExposureWarningCheckListAndBoundedShutdown(t *testing.T) {
 
 // Without a console password and without a terminal to ask on, serve refuses to start, so that no one else can be
 // the first to set the password in the console. The refusal names the command for the same home.
+// A home with control characters is printed without them: the command never moves the terminal cursor.
 func TestServeRefusesToStartWithoutAConsolePassword(t *testing.T) {
 	home := writeHome(t, consoleConfig(freeAddress(t)))
+	control := filepath.Join(t.TempDir(), "fake\rhome")
+	if err := os.Mkdir(control, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(control, "config.toml"), []byte(consoleConfig(freeAddress(t))), 0600); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		args []string
 		env  string
 		want string
 	}{
-		{[]string{"--home", home}, "", "amgd config set console.password --home " + home},
-		{nil, home, "amgd config set console.password --home " + home},
+		{[]string{"--home", home}, "", "amgd config set console.password --home " + shellQuoted(home)},
+		{nil, home, "amgd config set console.password --home " + shellQuoted(home)},
+		{[]string{"--home", control}, "", "amgd config set console.password --home " + strings.ReplaceAll(shellQuoted(control), "\r", "")},
 	} {
 		t.Setenv("AMG_HOME", tc.env)
 		var errout strings.Builder
@@ -193,6 +202,15 @@ func TestServeHintOfAScopedIPv6ListenerIsAURLThatAmgAccepts(t *testing.T) {
 	}
 }
 
+// shellQuoted is path as the daemon prints it in a command to copy: in single quotes unless it holds only
+// letters, digits, and / . _ - + : , = @, which a temporary directory with a space in it does not.
+func shellQuoted(path string) string {
+	if strings.Trim(path, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/._-+:,=@") == "" {
+		return path
+	}
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
+}
+
 // Without a daemon, a setting change ends with the command that starts one, for the home that the command used.
 func TestChangeWithoutDaemonNamesTheServeCommandOfTheHome(t *testing.T) {
 	plain := filepath.Join(t.TempDir(), "home")
@@ -207,10 +225,10 @@ func TestChangeWithoutDaemonNamesTheServeCommandOfTheHome(t *testing.T) {
 		env, dir string
 		want     string
 	}{
-		{[]string{"--home", plain}, "", plain, "amgd serve --home " + plain},
-		{nil, quoted, quoted, "amgd serve --home '" + strings.ReplaceAll(quoted, "'", `'\''`) + "'"},
+		{[]string{"--home", plain}, "", plain, "amgd serve --home " + shellQuoted(plain)},
+		{nil, quoted, quoted, "amgd serve --home " + shellQuoted(quoted)},
 		{nil, "", filepath.Join(user, ".agentmailguard"), "amgd serve"},
-		{[]string{"--home", "data"}, "", filepath.Join(work, "data"), "amgd serve --home " + filepath.Join(work, "data")},
+		{[]string{"--home", "data"}, "", filepath.Join(work, "data"), "amgd serve --home " + shellQuoted(filepath.Join(work, "data"))},
 	} {
 		t.Setenv("AMG_HOME", tc.env)
 		if err := os.MkdirAll(tc.dir, 0700); err != nil {
