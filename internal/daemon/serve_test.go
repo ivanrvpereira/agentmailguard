@@ -170,7 +170,7 @@ func TestServeReportsRefusedSignInOnTheAccountLine(t *testing.T) {
 		_, _ = io.WriteString(w, `{"access_token":"private-access-canary","expires_in":3600,"scope":"`+gmailScopes+`"}`)
 	}))
 	defer api.Close()
-	d := startServe(t, home, "127.0.0.1:0", daemon.Options{Platform: k, Server: server.Options{Gmail: gmail.Options{HTTPClient: api.Client(), TokenURL: api.URL + "/token", ProfileURL: api.URL + "/profile", OpenBrowser: refusingBrowser(new(bool))}}})
+	d := startServe(t, home, "127.0.0.1:0", daemon.Options{Platform: k, Server: server.Options{Gmail: gmail.Options{HTTPClient: api.Client(), TokenURL: api.URL + "/token", ProfileURL: api.URL + "/profile"}}})
 	want := "checking credentials\ncredential check: credentials (keychain): ok\ncredential check: account \"good\" (gmail): ok\ncredential check: account \"revoked\" (gmail): sign-in failed; check the network, or run amgd account login\ncredential check: screening key: ok\n"
 	if text := d.log.String(); !strings.Contains(text, want) || strings.Contains(text, "private-") {
 		t.Fatalf("sign-in checks: %q", text)

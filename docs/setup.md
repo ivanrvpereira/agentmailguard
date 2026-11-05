@@ -62,8 +62,8 @@ https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite
 Browser login requests `http://localhost:PORT` and accepts the callback path `/`.
 The listener binds to `127.0.0.1` on a random available port. This is not the daemon port `8787`.
 Microsoft ignores the port for registered localhost redirects.
-Microsoft browser login opens the browser with macOS `open`, so on Linux or a headless host use `--device-code`.
-Device-code login requires no callback, but organization policies can refuse it.
+On a headless host, `--no-browser` takes the redirected address as a paste, so no new registration is needed.
+Device-code login requires no callback, but organization policies can refuse it. Microsoft turns on a managed Conditional Access policy that blocks device code in many tenants ([managed policies](https://learn.microsoft.com/en-us/entra/identity/conditional-access/managed-policies)).
 
 Sources: [desktop registration](https://learn.microsoft.com/en-us/entra/identity-platform/scenario-desktop-app-registration), [redirect rules](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url#localhost-exceptions), and [Graph permissions](https://learn.microsoft.com/en-us/graph/permissions-reference).
 
@@ -134,7 +134,7 @@ See [Privacy and external screening](screening.md#privacy-and-external-screening
 For the file backend, enter the password at the terminal prompts. The first command creates the credential file and asks for the password twice. For other password sources, see [File backend and password input](credentials.md#file-backend-and-password-input).
 
 1. Add each account. Replace the placeholders with your application values. Each command opens the provider sign-in. Select the correct identity in the browser.
-   On Linux or a host without a browser, use the options in [Headless login](#headless-login):
+   On a host without a browser, use the options in [Headless login](#headless-login):
 
 ```sh
 amgd account add work --provider m365 --client-id '<entra-application-client-id>' --tenant-id '<entra-directory-tenant-id>'
@@ -258,23 +258,23 @@ The daemon log is in `~/Library/Logs/agentmailguard.log`. launchd restarts the d
 
 ## Headless login
 
-For Microsoft 365, add `--device-code` on the daemon host:
+Use `--no-browser` for Microsoft 365 and Gmail:
+
+1. Run `amgd account login ALIAS --no-browser` in the SSH terminal of the daemon host. For a new account, add `--no-browser` to `amgd account add`.
+2. Open the printed sign-in URL on another computer. Approve access; for Gmail, approve both scopes.
+3. Copy the full redirected address after the expected connection error: `http://localhost:PORT/?code=...&state=...` for Microsoft 365, `http://127.0.0.1:PORT/?state=...&code=...` for Gmail.
+4. Paste the address into the operator terminal within five minutes. Never send this address or code to an assistant.
+
+The pasted address must match this login's host, port, path, and state. No callback tunnel is necessary.
+
+Microsoft 365 also has device-code login, if your organization allows it:
 
 ```sh
-amgd account add work --provider m365 --client-id '<entra-application-client-id>' --tenant-id '<entra-directory-tenant-id>' --device-code
 amgd account login work --device-code
 ```
 
 Open the printed verification URL on another computer. Enter the displayed device code yourself.
-
-For Gmail:
-
-1. Run `amgd account login personal --no-browser` in the SSH terminal of the daemon host. For a new account, add `--no-browser` to `amgd account add`.
-2. Open the printed sign-in URL on another computer. Approve both scopes.
-3. Copy the full `http://127.0.0.1:PORT/?state=...&code=...` address after the expected connection error.
-4. Paste the address into the operator terminal within five minutes. Never send this address or code to an assistant.
-
-The pasted address must match this login's host, port, path, and state. No callback tunnel is necessary.
+Many organizations block device code. If the browser says that your administrator restricts this authentication flow, use `--no-browser`.
 
 ## Moving an existing home
 
@@ -304,7 +304,8 @@ Keep the daemon on its loopback listener and use an SSH tunnel for `amg` on anot
 | --- | --- |
 | Missing scopes or Gmail `missing_scopes` | Restore the exact required grants. Run `amgd account login ALIAS` with full consent. |
 | `You signed in as ..., but ALIAS is ...` | Sign in again with the identity of the account. To add the other mailbox, run `amgd account add` with a new alias. |
-| Microsoft Conditional Access or device-code refusal | Ask the tenant administrator about permitted flows. Do not bypass organization policy. |
+| Microsoft device-code refusal | Sign in with `--no-browser` instead. |
+| Microsoft Conditional Access refusal | Ask the tenant administrator about permitted flows. Do not bypass organization policy. |
 | Gmail login stops after seven days | The app has the status Testing. Follow [Stop the weekly Gmail sign-in](#stop-the-weekly-gmail-sign-in). |
 | Google sign-in shows "Access blocked" | The app has the status Testing, and the account is not a test user. Add the account under **Audience → Test users**, or publish the app. |
 | Google Workspace sign-in says that your administrator blocks the app | Ask the Workspace administrator to mark the app as trusted under **API controls** in the Google Admin console. |
