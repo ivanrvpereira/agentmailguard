@@ -31,6 +31,7 @@ class Agentmailguard < Formula
 
   def install
     bin.install "amg", "amgd"
+    pkgshare.install "service"
   end
 
   def caveats
@@ -38,6 +39,8 @@ class Agentmailguard < Formula
       amgd runs the daemon and amg is the agent's client. Set up providers, accounts,
       and screening before the first `amgd serve`:
         https://github.com/ivanrvpereira/agentmailguard/blob/main/docs/setup.md
+      To run amgd as a service, start from the file in #{opt_pkgshare}/service
+      and follow "Run as a service" in that guide.
     EOS
   end
 

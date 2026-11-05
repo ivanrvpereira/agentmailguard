@@ -215,22 +215,46 @@ See [Settings](daemon.md#settings) and [Reload](daemon.md#reload) for all keys a
 
 ## Run as a service
 
+Each release archive has a service file in `service/`: `amgd.service` for systemd on Linux, and `io.github.ivanrvpereira.agentmailguard.plist` for launchd on macOS. Homebrew installs it in `$(brew --prefix)/share/agentmailguard/service`. The same files are in [`packaging/`](../packaging/).
+
+A service has no terminal, so `amgd serve` cannot ask for a missing secret: the start fails and the log names the command to run. Prepare the home first, as the user who will run the daemon, on a terminal of the daemon host (an SSH session is enough):
+
+1. If the daemon uses another home than `~/.agentmailguard`, set `AMG_HOME` for every command, and later for the service.
+2. On macOS, select the Keychain backend: `amgd config set credentials.backend keychain`. On Linux, keep the file backend, and choose its password at the first command.
+3. Add the accounts, as in [Add the accounts](#add-the-accounts). On a host without a browser, add `--no-browser`, as in [Headless login](#headless-login).
+4. Save the screening key with `amgd config set screening.api_key`, unless `[screening]` selects the fake engine.
+5. Set the console password with `amgd config set console.password`.
+6. Optional on Linux, required on macOS: run `amgd serve` once in the terminal, read the check list, and stop it with Ctrl-C. On macOS, this is when you answer the Keychain access prompt.
+7. Install the service file, as below.
+
 `amgd serve` reloads at SIGUSR1. SIGINT, SIGTERM, and SIGHUP stop it. Do not send SIGHUP to reload the daemon.
-A service has no terminal, so prepare these items before the first start as a service:
 
-- Save the screening key with `amgd config set screening.api_key`. Without a terminal, `amgd serve` does not prompt for a missing key, and the start fails.
-- Set the console password with `amgd config set console.password`. Without a terminal, `amgd serve` does not prompt for it either, and the start fails.
-- With the file backend, supply the password in `AMG_CREDENTIALS_PASSWORD` or on stdin. See [File backend and password input](credentials.md#file-backend-and-password-input).
-- If the service uses another home than `~/.agentmailguard`, set the same `AMG_HOME` for the service and for your `amgd` commands.
+### systemd
 
-For systemd, use one of these two reload methods in the service unit:
+In `amgd.service`, replace `CHANGE-ME` with the user who owns the home (in `User=`, `AMG_HOME`, and `ReadWritePaths=`), and the path of `amgd` in `ExecStart=` if it is not `/usr/local/bin/amgd`. Then, as root:
 
-- `Type=notify-reload` with `ReloadSignal=SIGUSR1`. The daemon tells systemd when it is ready and when a reload starts and ends.
-- `ExecReload=` with the full path of `amgd` and the `reload` argument, for example `ExecReload=/usr/local/bin/amgd reload`. `Type=notify` also works, because the daemon sends `READY=1`.
+```sh
+systemd-creds encrypt --name=amgd-credentials-password - /etc/credstore.encrypted/amgd-credentials-password
+install -m 0644 amgd.service /etc/systemd/system/amgd.service
+systemctl daemon-reload
+systemctl enable --now amgd
+journalctl -u amgd
+```
 
-Then `systemctl reload` reloads the daemon.
-launchd has no reload action. Run `amgd reload` after a hand edit.
-On macOS, start `amgd serve` once in a terminal before you start it from launchd, so that you can answer the Keychain access prompt.
+`systemd-creds` reads the credential file password from stdin: type it, then press Ctrl-D twice. The unit gives it to `amgd serve` on stdin from the encrypted systemd credential, so the password is never in the environment or in a plain-text file. The unit needs systemd 253 or later for `Type=notify-reload` with `ReloadSignal=SIGUSR1`: the daemon tells systemd when it is ready and when a reload starts and ends, and `systemctl reload amgd` reloads it. With an older systemd, use `Type=notify` and `ExecReload=/usr/local/bin/amgd reload`.
+
+The unit lets the daemon write only its home, and it restarts the daemon after a failure. A refused start, for example a missing console password, also restarts every 10 seconds until you fix it.
+
+### launchd
+
+The plist runs `amgd serve` as a launch agent in your login session, so the daemon can use the Keychain. In the plist, set the path of `amgd` (`/opt/homebrew/bin/amgd` on Apple silicon, `/usr/local/bin/amgd` on Intel), replace `CHANGE-ME` in the log path, and set `AMG_HOME` if you use another home. launchd does not expand `~` or `$HOME`. Then:
+
+```sh
+cp io.github.ivanrvpereira.agentmailguard.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.ivanrvpereira.agentmailguard.plist
+```
+
+The daemon log is in `~/Library/Logs/agentmailguard.log`. launchd restarts the daemon after a crash, but not after a refused start. launchd has no reload action: `amgd config set` and the `amgd account` commands reload the daemon themselves; after a hand edit, run `amgd reload`. To stop the daemon, run `launchctl bootout gui/$(id -u)/io.github.ivanrvpereira.agentmailguard`.
 
 ## Headless login
 

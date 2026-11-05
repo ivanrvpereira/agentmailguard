@@ -1,0 +1,55 @@
+# systemd unit for amgd. Prepare the home first, as docs/setup.md "Run as a service" describes. Then replace
+# CHANGE-ME with the user who owns the home (User= and the two paths), and run as root:
+#   systemd-creds encrypt --name=amgd-credentials-password - /etc/credstore.encrypted/amgd-credentials-password
+#     (type the credential file password, then Ctrl-D twice)
+#   install -m 0644 amgd.service /etc/systemd/system/amgd.service
+#   systemctl daemon-reload && systemctl enable --now amgd
+# The daemon log is in the journal: journalctl -u amgd
+[Unit]
+Description=agentmailguard daemon (amgd)
+Documentation=https://github.com/ivanrvpereira/agentmailguard/blob/main/docs/setup.md#run-as-a-service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=CHANGE-ME
+# The home that the setup commands used. Use the same AMG_HOME for every amgd command.
+Environment=AMG_HOME=/home/CHANGE-ME/.agentmailguard
+# amgd tells systemd when it is ready and when a reload starts and ends (systemd 253 or later).
+Type=notify-reload
+ReloadSignal=SIGUSR1
+# The credential file password comes from an encrypted systemd credential, on stdin: it is never in the
+# environment or in a file in plain text. Change /usr/local/bin/amgd to where amgd is installed.
+LoadCredentialEncrypted=amgd-credentials-password
+ExecStart=/bin/sh -c 'exec /usr/local/bin/amgd serve < "$CREDENTIALS_DIRECTORY/amgd-credentials-password"'
+# A refused start (a missing secret or an invalid config.toml) exits 1; the journal names the fix.
+Restart=on-failure
+RestartSec=10s
+# SIGTERM drains requests for up to 5 s and closes the cache.
+TimeoutStopSec=30s
+
+# The daemon writes only its home. The fake provider keeps its mailbox there too.
+UMask=0077
+ReadWritePaths=/home/CHANGE-ME/.agentmailguard
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

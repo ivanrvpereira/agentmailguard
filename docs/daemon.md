@@ -140,7 +140,7 @@ A later reload applies all other changes and keeps the old value of these keys. 
 A second `amgd serve` for the same home fails with `another daemon runs for this home (PID n)`.
 `amgd` sends the reload signal only while the lock is held. Without a daemon, `amgd reload` fails with `no daemon runs for this home`.
 SIGINT, SIGTERM, and SIGHUP stop the daemon. SIGHUP keeps its usual meaning: the terminal closed.
-For systemd and launchd, see [Run as a service](setup.md#run-as-a-service).
+For systemd and launchd, use the service files in the release archive and follow [Run as a service](setup.md#run-as-a-service).
 
 ## Sign-in and daemon start
 

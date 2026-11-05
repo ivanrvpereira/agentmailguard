@@ -16,6 +16,7 @@ The first public release.
 
 ### Added
 
+- A systemd unit and a launchd plist in each release archive (`service/`) and in Homebrew's `share/agentmailguard/service`. The systemd unit reads the credential file password from an encrypted systemd credential and lets the daemon write only its home. "Run as a service" in `docs/setup.md` has the whole first start.
 - `amgd`, a daemon that screens Microsoft 365 and Gmail mail and calendar events for AI agents, and `amg`, the agent's client, which talks to it over HTTP.
 - Screened mail reads: list, search, read, and whole conversations. Each message gets a verdict (`green`, `yellow`, `red`, `sealed`, or `error`) that decides what the agent sees.
 - Mail changes by message or by conversation: archive, move, trash, flag, categorize, and read state.
