@@ -88,7 +88,7 @@ The check comes after the policy decision:
 
 Jev gives a score from 0 to 1. A score of 0.5 or more is a flag. This threshold is provisional and will change after tuning.
 The agent never sees the score or the flag. It gets the normal result or the normal `pending` result.
-The [approval console](approval-console.md#score) shows the result as the Score of the action, for example `▲ 0.62 · Needs review`, `0.08 · Checked`, `▲ error · Needs review · TimeoutError`, or `— · Not checked` when no check ran.
+The [approval console](approval-console.md#risk) shows the result as the Risk of the action, for example `▲ 0.62 of 1 · Needs review`, `0.08 of 1 · Checked`, `▲ Check failed · Needs review · TimeoutError`, or `— · Not checked` when no check ran.
 If the [fake screening engine](screening.md#screening) made the check, a `fake` tag comes before the value.
 
 ## Results

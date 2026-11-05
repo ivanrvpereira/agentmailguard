@@ -2,6 +2,10 @@ name: Feature request
 description: Suggest a new command, option, or provider behavior.
 labels: [enhancement]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        > **Public repository.** Do not include real company names, people's names, email addresses, account aliases, hostnames or IP addresses, folder IDs, or any mail or calendar content. Use made-up examples (`example.com`, Alice, Bob) and redact logs. GitHub keeps edits, so do not add this data and then delete it.
   - type: textarea
     id: problem
     attributes:
@@ -21,3 +25,10 @@ body:
     attributes:
       label: Safety
       description: Can an agent under prompt injection misuse this? Should the write policy or the approval console control it?
+  - type: checkboxes
+    id: public-data
+    attributes:
+      label: Public data
+      options:
+        - label: This issue contains no personal or company data.
+          required: true

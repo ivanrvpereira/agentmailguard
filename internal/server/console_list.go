@@ -20,7 +20,7 @@ import (
 )
 
 // listGroup is one table of the list page. Key names it in URLs and in the data-group attribute. Scored is true when
-// its actions get an action check, so that its rows show a Score.
+// its actions get an action check, so that its rows show a Risk.
 type listGroup struct {
 	Key, Title, Hint, Class string
 	Scored                  bool
@@ -36,10 +36,10 @@ const (
 var listGroups = []listGroup{
 	{groupMessages, "Messages", "Sends go out when approved. Drafts are only saved or deleted.", "t-mail", true},
 	{groupMeetings, "Meetings", "Approving notifies the attendees or the organizer.", "t-meet", true},
-	{groupMailbox, "Mailbox operations", "Changes to existing messages. Trash is a move, never a permanent delete. No score, and the Show filter does not apply.", "t-box", false},
+	{groupMailbox, "Mailbox operations", "Changes to existing messages. Trash is a move, never a permanent delete. No action check, and the Show filter does not apply.", "t-box", false},
 }
 
-// scored reports whether the list group with the key shows a Score. An unknown group shows it, so that a risk found
+// scored reports whether the list group with the key shows a Risk. An unknown group shows it, so that a risk found
 // by the check is never hidden.
 func scored(group string) bool {
 	i := slices.IndexFunc(listGroups, func(g listGroup) bool { return g.Key == group })
@@ -297,7 +297,7 @@ type groupView struct {
 // listRow is one pending action in a list table. Every text in it can come from the agent or from mail.
 type listRow struct {
 	ID, Group, Label, Alias, Account, Age string
-	// Score is nil in a group that shows no Score.
+	// Score is the Risk, nil in a group that shows no Risk.
 	Score *scoreCell
 	// Review is true when the action needs review: a Messages or Meetings action whose check found a risk or failed.
 	Review bool
@@ -335,7 +335,7 @@ type readField struct {
 	Placeholder          bool
 }
 
-// Bar is the row colour: the Bar of the Score, or none (grey) without a Score.
+// Bar is the row colour: the Bar of the Risk, or none (grey) without a Risk.
 func (r listRow) Bar() string {
 	if r.Score == nil {
 		return "none"
@@ -343,34 +343,35 @@ func (r listRow) Bar() string {
 	return r.Score.Bar
 }
 
-// scoreCell is the Score of a row. Bar is the row colour: ok (green), risky (red), or none (grey).
+// scoreCell is the Risk of a row: Value, the score from 0 to 1, when the check gave one, else Word, Check failed or —
+// when not checked. Bar is the row colour, which says whether the score is a risk: ok (green), risky (red), or none
+// (grey).
 type scoreCell struct {
-	Value, Label, Bar string
+	Word, Value, Label, Bar string
 	// Code is the fixed error code of a failed check.
 	Code       string
 	Risk, Fake bool
 }
 
-var notChecked = scoreCell{Value: "—", Label: "Not checked", Bar: "none"}
+var notChecked = scoreCell{Word: "—", Label: "Not checked", Bar: "none"}
 
-// checkScore is the Score of an action check. Only a valid score below the threshold without a flag is green; a check
+// checkScore is the Risk of an action check. Only a valid score below the threshold without a flag is green; a check
 // with a missing score or invalid data is a failed check, red.
 func checkScore(c *model.ActionCheck) scoreCell {
 	if c == nil {
 		return notChecked
 	}
-	s := scoreCell{Label: "Needs review", Bar: "risky", Risk: true, Fake: c.Fake}
+	s := scoreCell{Word: "Check failed", Label: "Needs review", Bar: "risky", Risk: true, Fake: c.Fake}
 	switch {
 	case c.Error != nil:
-		s.Value, s.Code = "error", *c.Error
+		s.Code = *c.Error
 	case c.Score == nil:
-		s.Value = "error"
 	case model.ActionScore(*c.Score).Failed():
-		s.Value, s.Code = "error", *model.ActionScore(*c.Score).Error
+		s.Code = *model.ActionScore(*c.Score).Error
 	case c.Flag || model.ActionScore(*c.Score).Flag:
-		s.Value = scoreText(*c.Score)
+		s.Word, s.Value = "", scoreText(*c.Score)
 	default:
-		s.Value, s.Label, s.Bar, s.Risk = scoreText(*c.Score), "Checked", "ok", false
+		s.Word, s.Value, s.Label, s.Bar, s.Risk = "", scoreText(*c.Score), "Checked", "ok", false
 	}
 	return s
 }
@@ -637,7 +638,7 @@ func accountAliases(cfg config.Config) map[string]string {
 }
 
 // needsReview reports whether a pending action needs review: a Messages or Meetings action whose check found a risk
-// or failed. Mailbox operations, which show no Score, never need review.
+// or failed. Mailbox operations, which show no Risk, never need review.
 func needsReview(item cache.Pending) bool {
 	return listedOps[item.Op].group != groupMailbox && checkScore(item.Jev).Risk
 }
@@ -741,7 +742,7 @@ func without(args map[string]any, key string) map[string]any {
 }
 
 // openLabels are the open-row labels of argument names that are not words.
-var openLabels = map[string]string{"html": "HTML", "id": "ID", "ids": "IDs"}
+var openLabels = map[string]string{"all": "Reply all", "html": "HTML", "id": "ID", "ids": "IDs"}
 
 // openFields gives request fields their open-row labels, capitalized with spaces for underscores, and drops empty
 // lines, so that an empty field shows as a dash.

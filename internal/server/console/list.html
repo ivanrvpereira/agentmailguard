@@ -64,7 +64,7 @@
     <div class="open">
       <dl class="f">
         <dt>Account</dt><dd>{{.Account}}</dd>
-        {{with .Score}}<dt>Score</dt>{{template "scorefield" .}}{{end}}
+        {{with .Score}}<dt>Risk</dt>{{template "scorefield" .}}{{end}}
         {{range .Read}}<dt>{{.Label}}</dt><dd{{if .Placeholder}} class="ph"{{end}}>{{.Value}}{{with .Source}} <span class="src">· {{.}}</span>{{end}}</dd>
         {{end}}
         {{template "openfields" .Fields}}
@@ -76,6 +76,7 @@
         <input type="hidden" name="return" value="{{$.Return}}">
         {{template "reviewed"}}
         <button class="btn go" type="submit" name="decision" value="approve">Approve<span class="vh">: {{template "name" .}}</span></button>
+        <button class="btn" type="submit" name="decision" value="deny" formnovalidate>Deny<span class="vh">: {{template "name" .}}</span></button>
       </form>{{end}}
       <p class="more"><a href="/a/{{.ID}}">Open the action page</a></p>
     </div>
@@ -90,7 +91,7 @@
 {{if .Recents}}<details class="recent">
 <summary>Recents <span class="n num">{{len .Recents}}</span></summary>
 <div class="colhead"><span></span><div class="cells" aria-hidden="true">
-  <span>Action</span><span>Account</span><span>Summary</span>{{if .Scored}}<span class="r">Score</span>{{end}}<span>Outcome</span><span class="r">When</span>
+  <span>Action</span><span>Account</span><span>Summary</span>{{if .Scored}}<span class="r">Risk</span>{{end}}<span>Outcome</span><span class="r">When</span>
 </div></div>
 <ol>
 {{range .Recents}}<li class="row"><span class="pick"></span><a class="line" href="/a/{{.ID}}">
@@ -107,6 +108,7 @@
 
 <p class="foot">
   <span class="key risky">Red: needs review</span> · <span class="key none">Grey: not checked</span> · <span class="key ok">Green: checked</span>
+  <br>Risk is the action check of the text that the agent wrote, from 0 (low) to 1 (high).
   <br>Recents keeps the last 10 handled actions of each table.
 </p>
 <p class="vh" id="selstatus" aria-live="polite"></p>
@@ -122,8 +124,8 @@
 {{define "filter"}}<a href="{{.URL}}"{{with .Title}} title="{{.}}"{{end}}{{if .Current}} aria-current="true"{{end}}>{{.Label}}<span class="c num">{{.Count}}</span></a>
       {{end}}
 
-{{define "columns"}}{{if eq . "messages"}}<span>Action</span><span>Account</span><span>To</span><span>Message</span><span class="r">Score</span><span class="r">Age</span><span></span>
-{{- else if eq . "meetings"}}<span>Action</span><span>Account</span><span>Event</span><span>When</span><span>People</span><span>Change</span><span class="r">Score</span><span class="r">Age</span><span></span>
+{{define "columns"}}{{if eq . "messages"}}<span>Action</span><span>Account</span><span>To</span><span>Message</span><span class="r">Risk</span><span class="r">Age</span><span></span>
+{{- else if eq . "meetings"}}<span>Action</span><span>Account</span><span>Event</span><span>When</span><span>People</span><span>Change</span><span class="r">Risk</span><span class="r">Age</span><span></span>
 {{- else}}<span>Change</span><span>Account</span><span>Message</span><span>Received</span><span class="r">Age</span><span></span>{{end}}{{end}}
 
 {{define "cells"}}{{if eq .Group "meetings"}}<span class="ev{{if .EventPlaceholder}} ph{{end}}">{{.Event}}</span>
@@ -135,9 +137,9 @@
 {{- else}}<span class="to" title="{{.ToTitle}}">{{with .ToMarker}}<span class="ph">{{.}}</span>{{if $.To}}; {{end}}{{end}}{{.To}}</span>
       <span class="text">{{if .Subject}}<span class="subj{{if .NoSubject}} ph{{end}}">{{.Subject}}</span>{{end}}{{with .Preview}}<span class="snip">{{.}}</span>{{end}}</span>{{end}}{{end}}
 
-{{define "score"}}<span class="score{{if .Risk}} bad{{end}}"{{with .Code}} title="{{.}}"{{end}}>{{if .Fake}}<span class="fake">fake</span>{{end}}{{if .Risk}}<span class="mk" aria-hidden="true">▲</span>{{end}}{{.Value}}<span class="vh"> · {{.Label}}</span></span>{{end}}
+{{define "score"}}<span class="score{{if .Risk}} bad{{end}}"{{with .Code}} title="{{.}}"{{end}}>{{if .Fake}}<span class="fake">fake</span>{{end}}{{if .Risk}}<span class="mk" aria-hidden="true">▲</span>{{end}}{{.Word}}{{.Value}}<span class="vh"> · {{.Label}}</span></span>{{end}}
 
-{{define "scorefield"}}<dd{{if .Risk}} class="bad"{{end}}>{{if .Fake}}<span class="fake">fake</span>{{end}}{{if .Risk}}▲ {{end}}{{.Value}} · {{.Label}}{{with .Code}} · {{.}}{{end}}</dd>{{end}}
+{{define "scorefield"}}<dd{{if .Risk}} class="bad"{{end}}>{{if .Fake}}<span class="fake">fake</span>{{end}}{{if .Risk}}▲ {{end}}{{.Word}}{{with .Value}}{{.}} of 1{{end}} · {{.Label}}{{with .Code}} · {{.}}{{end}}</dd>{{end}}
 
 {{define "openfields"}}{{range .}}<dt>{{.Label}}</dt><dd{{if not .Lines}} class="ph"{{end}}>{{range .Lines}}<span class="ln">{{.}}</span>{{else}}—{{end}}</dd>
         {{end}}{{end}}

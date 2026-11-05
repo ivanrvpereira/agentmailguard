@@ -303,7 +303,7 @@ func TestConsoleListRowsOfferTheirDecisions(t *testing.T) {
 		t.Errorf("row actions of a row that needs review: %s", row)
 	}
 	_, ack, _ := strings.Cut(row, `<form class="ack" method="post" action="/a/`+risk+`">`)
-	for _, want := range []string{`<input type="hidden" name="return" value="/?status=review">`, `<input type="checkbox" name="confirm" value="flagged" required> I reviewed it`, `value="approve">Approve`} {
+	for _, want := range []string{`<input type="hidden" name="return" value="/?status=review">`, `<input type="checkbox" name="confirm" value="flagged" required> I reviewed it`, `value="approve">Approve`, `name="decision" value="deny" formnovalidate>Deny`} {
 		if !strings.Contains(ack, want) {
 			t.Errorf("open row misses %q: %s", want, row)
 		}

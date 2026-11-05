@@ -264,10 +264,10 @@ func oldWord(page string) string {
 	return neverOnPage.FindString(strings.ReplaceAll(page, `name="confirm" value="flagged"`, ""))
 }
 
-// The Score is the action check: green with the value when checked, red with ▲ and Needs review for a risk or a
-// failed check (its fixed code in the title), grey — when not checked. A Mailbox operations row is grey without a
-// score. The open row shows the value with its label.
-func TestConsoleListShowsTheScoreOfTheActionCheck(t *testing.T) {
+// The Risk is the action check: green with the value when checked, red with ▲ and the value for a risk, red with ▲
+// and Check failed for a failed check (its fixed code in the title), grey — when not checked. A Mailbox operations
+// row is grey without a Risk. The open row shows the value out of 1 and the label.
+func TestConsoleListShowsTheRiskOfTheActionCheck(t *testing.T) {
 	f := consoleDaemon(t, everyWriteWaits, true)
 	f.setScore(0.06)
 	checked := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]
@@ -283,11 +283,11 @@ func TestConsoleListShowsTheScoreOfTheActionCheck(t *testing.T) {
 	trash := pend(t, f.d.s, "mail.trash", `{"ids":["gone"]}`)[0]
 	page := f.get(t, "/", nil).Body.String()
 	for id, wants := range map[string][]string{
-		checked:   {`<li class="row ok">`, `<span class="score">0.06<span class="vh"> · Checked</span></span>`, `<dd>0.06 · Checked</dd>`},
-		risk:      {`<li class="row risky">`, `<span class="score bad"><span class="mk" aria-hidden="true">▲</span>0.58<span class="vh"> · Needs review</span></span>`, `<dd class="bad">▲ 0.58 · Needs review</dd>`},
-		failed:    {`<li class="row risky">`, `<span class="score bad" title="ValidationError"><span class="mk" aria-hidden="true">▲</span>error<span class="vh"> · Needs review</span></span>`, `<dd class="bad">▲ error · Needs review · ValidationError</dd>`},
-		below:     {`<li class="row ok">`, `<span class="score">0.49<span class="vh"> · Checked</span></span>`, `<dd>0.49 · Checked</dd>`},
-		high:      {`<li class="row risky">`, `<dd class="bad">▲ 0.99 · Needs review</dd>`},
+		checked:   {`<li class="row ok">`, `<span class="score">0.06<span class="vh"> · Checked</span></span>`, `<dd>0.06 of 1 · Checked</dd>`},
+		risk:      {`<li class="row risky">`, `<span class="score bad"><span class="mk" aria-hidden="true">▲</span>0.58<span class="vh"> · Needs review</span></span>`, `<dd class="bad">▲ 0.58 of 1 · Needs review</dd>`},
+		failed:    {`<li class="row risky">`, `<span class="score bad" title="ValidationError"><span class="mk" aria-hidden="true">▲</span>Check failed<span class="vh"> · Needs review</span></span>`, `<dd class="bad">▲ Check failed · Needs review · ValidationError</dd>`},
+		below:     {`<li class="row ok">`, `<span class="score">0.49<span class="vh"> · Checked</span></span>`, `<dd>0.49 of 1 · Checked</dd>`},
+		high:      {`<li class="row risky">`, `<dd class="bad">▲ 0.99 of 1 · Needs review</dd>`},
 		unchecked: {`<li class="row none">`, `<span class="score">—<span class="vh"> · Not checked</span></span>`, `<dd>— · Not checked</dd>`},
 		trash:     {`<li class="row none">`},
 	} {
@@ -298,13 +298,13 @@ func TestConsoleListShowsTheScoreOfTheActionCheck(t *testing.T) {
 			}
 		}
 	}
-	if row := rowOf(page, trash); strings.Contains(row, `class="score`) || strings.Contains(row, "<dt>Score</dt>") {
-		t.Errorf("trash row shows a score: %s", row)
+	if row := rowOf(page, trash); strings.Contains(row, `class="score`) || strings.Contains(row, "<dt>Risk</dt>") {
+		t.Errorf("trash row shows a risk: %s", row)
 	}
 	if !strings.Contains(page, `<span class="sum num">7 waiting · <b>3 need review</b></span>`) {
 		t.Errorf("header misses the counts: %s", page)
 	}
-	if want := "Red: needs review · Grey: not checked · Green: checked Recents keeps the last 10 handled actions of each table."; !strings.Contains(pageText(page), want) || strings.Contains(page, "screening verdict") {
+	if want := "Red: needs review · Grey: not checked · Green: checked Risk is the action check of the text that the agent wrote, from 0 (low) to 1 (high). Recents keeps the last 10 handled actions of each table."; !strings.Contains(pageText(page), want) || strings.Contains(page, "screening verdict") {
 		t.Errorf("footer is not %q: %s", want, pageText(page))
 	}
 	if m := oldWord(page); m != "" {
@@ -319,8 +319,8 @@ func TestConsoleListTagsTheFakeCheck(t *testing.T) {
 	risk := pend(t, f.d.s, "draft.new", `{"to":["a@example.test"],"subject":"s","body":"Your new password is x"}`)[0]
 	page := f.get(t, "/", nil).Body.String()
 	for id, wants := range map[string][]string{
-		clear: {`<span class="score"><span class="fake">fake</span>0.05<span class="vh">`, `<dd><span class="fake">fake</span>0.05 · Checked</dd>`},
-		risk:  {`<span class="score bad"><span class="fake">fake</span><span class="mk" aria-hidden="true">▲</span>0.90<span class="vh">`, `<dd class="bad"><span class="fake">fake</span>▲ 0.90 · Needs review</dd>`},
+		clear: {`<span class="score"><span class="fake">fake</span>0.05<span class="vh">`, `<dd><span class="fake">fake</span>0.05 of 1 · Checked</dd>`},
+		risk:  {`<span class="score bad"><span class="fake">fake</span><span class="mk" aria-hidden="true">▲</span>0.90<span class="vh">`, `<dd class="bad"><span class="fake">fake</span>▲ 0.90 of 1 · Needs review</dd>`},
 	} {
 		row := rowOf(page, id)
 		for _, want := range wants {
@@ -547,7 +547,7 @@ func TestConsoleListOpenRowShowsEveryRequestFieldAndTheBody(t *testing.T) {
 	row := rowOf(page, send)
 	for _, want := range []string{
 		"<dt>Account</dt><dd>" + workEmail + "</dd>",
-		"<dt>Score</dt><dd>0.10 · Checked</dd>",
+		"<dt>Risk</dt><dd>0.10 of 1 · Checked</dd>",
 		`<dt>To</dt><dd><span class="ln">a@example.test</span></dd>`,
 		`<dt>Cc</dt><dd class="ph">—</dd>`,
 		`<dt>Bcc (hidden recipients)</dt><dd><span class="ln">d@example.test</span></dd>`,
@@ -738,7 +738,7 @@ func TestConsoleListHidesTheSubjectOfRedAndSealedMessages(t *testing.T) {
 				t.Errorf("%s: row misses %q: %s", m, want, row)
 			}
 		}
-		if strings.Contains(row, `class="score`) || strings.Contains(row, "<dt>Score</dt>") {
+		if strings.Contains(row, `class="score`) || strings.Contains(row, "<dt>Risk</dt>") {
 			t.Errorf("%s: row shows a score: %s", m, row)
 		}
 		if m != "g" && m != "y" && (strings.Contains(row, "private-") || strings.Contains(row, "subj")) {
@@ -748,7 +748,7 @@ func TestConsoleListHidesTheSubjectOfRedAndSealedMessages(t *testing.T) {
 	if want := `<span>Change</span><span>Account</span><span>Message</span><span>Received</span><span class="r">Age</span><span></span>`; !strings.Contains(sectionOf(page, "mailbox"), want) {
 		t.Errorf("Mailbox operations header is not %q: %s", want, sectionOf(page, "mailbox"))
 	}
-	if want := `<span class="hint">Changes to existing messages. Trash is a move, never a permanent delete. No score, and the Show filter does not apply.</span>`; !strings.Contains(page, want) {
+	if want := `<span class="hint">Changes to existing messages. Trash is a move, never a permanent delete. No action check, and the Show filter does not apply.</span>`; !strings.Contains(page, want) {
 		t.Errorf("page misses the hint %q", want)
 	}
 	if !strings.Contains(page, `<span class="sum num">5 waiting · 0 need review</span>`) {
