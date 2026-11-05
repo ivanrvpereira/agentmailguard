@@ -17,7 +17,7 @@ The first public release.
 - Drafts, sends, replies, reply all, and forwards that keep the original's attachments, with Cc, Bcc, and HTML bodies; draft update, delete, and send.
 - Calendar reads and search, meeting invitations with Teams or Google Meet links, updates, cancellations, responses, and Microsoft 365 availability.
 - A write policy for each account, an action check of the text that the agent writes, and a password-protected approval console for actions that wait.
-- The approval console groups pending actions into Messages, Meetings, and Mailbox operations, with a Score on each Messages and Meetings row, filters by account and review state, Recents, and decisions from a row or in a batch, and an action that needs review waits for `I reviewed it`.
+- The approval console groups pending actions into Messages, Meetings, and Mailbox operations, with a Risk (the action check score) on each Messages and Meetings row, filters by account and review state, Recents, and decisions from a row or in a batch, and an action that needs review waits for `I reviewed it`.
 - The console list refreshes by itself and pauses while you work, the action page shows a sandboxed Rendered preview of HTML bodies, and the console works without its small script.
 - Organizing rules in `rules.toml`, with a preview before any change.
 - Several accounts in one daemon, keyed by email, with browser, device-code, and headless login.
