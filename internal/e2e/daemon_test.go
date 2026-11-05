@@ -234,21 +234,21 @@ func TestSignalsDuringAReloadMergeIntoOneMoreReload(t *testing.T) {
 	s.ok("stats")
 }
 
-func TestConsoleIsOnWithoutAPasswordAndANewPasswordTakesEffectAtTheReload(t *testing.T) {
+func TestServeNeedsAConsolePasswordAndANewOneTakesEffectAtTheReload(t *testing.T) {
 	t.Parallel()
 	s := home(t, "")
 	s.seed()
+	// Without a terminal, serve does not ask: it refuses to start and names the command for this home.
+	_, errout, code := s.amgd(nil, "serve", "--listen", s.api)
+	if code != 1 || !strings.HasSuffix(errout, "error: start refused: run amgd config set console.password --home "+s.home+", then start the daemon again\n") || strings.Contains(errout, "listening") {
+		t.Fatalf("serve without password: exit %d stderr %q", code, errout)
+	}
+	s.amgdOK(strings.NewReader(consolePassword+"\n"), "config", "set", "console.password")
 	s.serve()
-	if code, body := s.consoleGet("anything", "/"); code != 503 || body != "console password not set; run amgd config set console.password\n" {
-		t.Fatalf("console without password: HTTP %d %q", code, body)
+	if code, _ := s.consoleGet(consolePassword, "/"); code != 200 {
+		t.Fatalf("console with the password: HTTP %d", code)
 	}
 	before := s.reloads()
-	s.amgdOK(strings.NewReader(consolePassword+"\n"), "config", "set", "console.password")
-	s.awaitReload(before)
-	if code, _ := s.consoleGet(consolePassword, "/"); code != 200 {
-		t.Fatalf("console with the new password: HTTP %d", code)
-	}
-	before = s.reloads()
 	s.amgdOK(strings.NewReader("e2e-second-password\n"), "config", "set", "console.password")
 	s.awaitReload(before)
 	if code, _ := s.consoleGet(consolePassword, "/"); code != 401 {

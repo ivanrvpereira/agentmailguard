@@ -45,7 +45,7 @@ Origin refusal and absent CORS are not authentication controls.
 A public listener or untrusted shared host is outside the supported security boundary.
 
 The approval console is a second listener (default `localhost:8788`). It always listens while the daemon runs.
-Until a console password is set, it refuses every request with HTTP 503.
+`amgd serve` does not start without a console password: on a terminal it asks for one, otherwise it refuses to start. The console has no way to set a password, so the first visitor cannot claim it. If the password is gone from the store while the daemon runs, the console refuses every request with HTTP 503 after the next reload.
 It requires the console username and password on every request and has no built-in TLS.
 Never forward its port through a tunnel that the agent can use.
 Every console response has this content security policy: `default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; require-trusted-types-for 'script'; trusted-types 'none'`.

@@ -11,6 +11,7 @@ The first public release.
 ### Changed
 
 - `amgd serve` prints the approval console URL with its username and `console.hosts`, the API URL with the `AMG_HOST` line for agents, and, for a non-loopback listener, a warning after the address that names it, the `mail_send` decisions, and the fixes. `daemon listening` is now `daemon listening: http://ADDRESS`.
+- `amgd serve` does not start without a console password. On a terminal it asks for one; without a terminal it refuses to start and names `amgd config set console.password`, with `--home HOME` when it got `--home` or `AMG_HOME`. Before, the daemon started and its console refused every request.
 - Without a daemon, `amgd` setting changes print `no daemon runs for this home. Now run: amgd serve`, with `--home HOME` when the command got `--home` or `AMG_HOME`.
 
 ### Added

@@ -43,7 +43,7 @@ Go, macOS and Linux only. `amgd` needs cgo (SQLite, macOS Keychain); `amg` must 
 - Policy, approval, console sign-in, account, credential, config, and reload audit records contain IDs, account keys, key paths, and fixed codes only. A `config_changed` record carries a value only for fixed-choice keys; secrets never.
 - Secrets live in the macOS Keychain or the password-encrypted file backend, on the daemon host only. `amgd config set` reads secrets from stdin, never from arguments, and stores them there; they never go to `config.toml`. The console password is stored only as a bcrypt hash.
 - The daemon binds to loopback by default and warns on remote listeners. The API listener has no client authentication or built-in TLS. Anyone who can reach it can run every action that the policy allows, including mail sends and meeting notifications.
-- The approval console is its own listener, never the API port. Every console request needs the console password; without one, the console refuses every request.
+- The approval console is its own listener, never the API port. Every console request needs the console password. `amgd serve` does not start without one: on a terminal it asks for it, otherwise it refuses and names `amgd config set console.password`. The console never sets a password, and without one it refuses every request.
 
 ## Gotchas
 

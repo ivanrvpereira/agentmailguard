@@ -87,6 +87,9 @@ func (r *runner) serve(ctx context.Context, listen string) int {
 		return r.fail("daemon state unavailable")
 	}
 	defer s.Close()
+	if problem := r.consolePasswordPrompt(ctx, store, home, c.Console.Username); problem != "" {
+		return r.fail(problem)
+	}
 	fmt.Fprintln(r.stderr, "checking credentials")
 	result, e := s.Load(ctx, r.screeningKeyPrompt())
 	r.report(result, e)
@@ -95,6 +98,11 @@ func (r *runner) serve(ctx context.Context, listen string) int {
 			return r.fail("credential check canceled")
 		}
 		return r.fail("start refused; fix the items above and start the daemon again")
+	}
+	c, password := s.Current()
+	if !password {
+		// Without a password, the first visitor of the console could set one; an agent on this host could be first.
+		return r.fail("start refused: run " + r.command("amgd config set console.password", home) + ", then start the daemon again")
 	}
 	address := s.ConsoleAddress()
 	consoleListener, e := open("tcp", address)
@@ -112,9 +120,8 @@ func (r *runner) serve(ctx context.Context, listen string) int {
 		servers = append(servers, h)
 		go func() { done <- h.Serve(l) }()
 	}
-	c, password, _ := s.Current()
 	start(s.Console(), consoleListener)
-	fmt.Fprint(r.stderr, term.Safe(consoleLines(c.Console, password)))
+	fmt.Fprint(r.stderr, term.Safe(consoleLines(c.Console)))
 	start(s, listener)
 	_, port, _ := net.SplitHostPort(listener.Addr().String())
 	fmt.Fprint(r.stderr, term.Safe(apiLines(host, port, c.Accounts)))
@@ -202,14 +209,30 @@ func (r *runner) screeningKeyPrompt() func(context.Context) (string, error) {
 	}
 }
 
-// consoleLines tell where the approval console is: its URL from [console].listen, as in the pending url, the extra
-// host names that it accepts, and the username, or that it refuses every request without a password.
-func consoleLines(c config.Console, password bool) string {
-	signIn := "user " + c.Username
-	if !password {
-		signIn = "no password: the console refuses every request until amgd config set console.password"
+// consolePasswordPrompt asks for a console password at the start when the credential store has none, only on a
+// terminal. Without a terminal the start is refused after the check list. Other store errors are left to the check
+// list too.
+func (r *runner) consolePasswordPrompt(ctx context.Context, store *credentials.RecordStore, home, user string) string {
+	if _, ok := terminal(r.stdin); !ok {
+		return ""
 	}
-	out := fmt.Sprintf("approval console: http://%s/ (%s)\n", c.Listen, signIn)
+	if _, err := store.LoadConsoleHash(ctx); !errors.Is(err, credentials.ErrNotFound) {
+		return ""
+	}
+	fmt.Fprintln(r.stderr, term.Safe("Console password not set. Choose one now; you sign in to the console as "+user+" with it."))
+	if problem := r.setConsolePassword(ctx, store); problem != "" {
+		return problem
+	}
+	if r.audit(home).Credential(context.WithoutCancel(ctx), "console_password_set") != nil {
+		return "audit record failed"
+	}
+	return ""
+}
+
+// consoleLines tell where the approval console is: its URL from [console].listen, as in the pending url, the extra
+// host names that it accepts, and the username.
+func consoleLines(c config.Console) string {
+	out := fmt.Sprintf("approval console: http://%s/ (user %s)\n", c.Listen, c.Username)
 	if len(c.Hosts) > 0 {
 		out += "  also accepted as: " + strings.Join(c.Hosts, ", ") + " (from console.hosts)\n"
 	}

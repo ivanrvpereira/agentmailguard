@@ -93,7 +93,7 @@ The commands use a throwaway daemon home, so your real home (`~/.agentmailguard`
 export AMG_HOME="$(mktemp -d)"             # a throwaway home for the demo
 amgd config set screening.provider fake    # fake screening: for tests only, needs no key
 amgd account add demo --provider fake      # a fake account needs no sign-in
-amgd serve                                 # asks you to choose a password for the encrypted credential file; keep it running
+amgd serve                                 # asks for a credential file password and a console password; keep it running
 ```
 
 In a second terminal, set `AMG_HOME` to the same folder (`echo $AMG_HOME` in the first terminal shows it).
@@ -114,11 +114,10 @@ Then let sends wait for approval, and try one:
 
 ```sh
 amgd config set policy.mail_send approve
-amgd config set console.password           # asks for the file password, then the new console password
 amg mail reply m1 --body 'Noon works.'     # returns {"status":"pending", ...} with a console URL
 ```
 
-Open the URL, sign in as `admin` with the console password, and approve or deny the reply.
+Open the URL, sign in as `admin` with the console password that you chose at the start, and approve or deny the reply.
 When you are done, stop `amgd serve` with Ctrl-C and delete the throwaway home.
 The [fake provider](docs/fake-provider.md) page shows how to seed conversations, attachments, and calendar events.
 

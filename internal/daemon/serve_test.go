@@ -1,6 +1,7 @@
 package daemon_test
 
 import (
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -18,7 +19,6 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 	"github.com/ivanrvpereira/agentmailguard/internal/server"
-	"golang.org/x/crypto/bcrypt"
 )
 
 // refusingAuthority is a fake token endpoint that refuses every refresh, as for a revoked login.
@@ -37,16 +37,15 @@ func TestServeExposureWarningCheckListAndBoundedShutdown(t *testing.T) {
 	for _, tc := range []struct {
 		host, console     string
 		warning, loggedIn bool
-		password          bool
 	}{
-		{"127.0.0.1", "", false, true, false},
+		{"127.0.0.1", "", false, true},
 		// localhost is loopback too: no exposure warning.
-		{"localhost", "", false, true, false},
+		{"localhost", "", false, true},
 		// The hosts, the username, and a second account with sends that wait show in the start lines.
-		{"0.0.0.0", "hosts = ['daemon-host.example.ts.net', '192.0.2.7:8788']\nusername = 'ops'\n", true, true, true},
+		{"0.0.0.0", "hosts = ['daemon-host.example.ts.net', '192.0.2.7:8788']\nusername = 'ops'\n", true, true},
 		// --listen :PORT is a wildcard listener too.
-		{"", "hosts = ['daemon-host.example.ts.net', '192.0.2.7:8788']\nusername = 'ops'\n", true, true, false},
-		{"127.0.0.1", "", false, false, false},
+		{"", "hosts = ['daemon-host.example.ts.net', '192.0.2.7:8788']\nusername = 'ops'\n", true, true},
+		{"127.0.0.1", "", false, false},
 	} {
 		console := freeAddress(t)
 		other := ""
@@ -58,15 +57,6 @@ func TestServeExposureWarningCheckListAndBoundedShutdown(t *testing.T) {
 		store := credentials.New(k, home)
 		if err := store.SaveScreeningKey(t.Context(), "private-jev-canary"); err != nil {
 			t.Fatal(err)
-		}
-		if tc.password {
-			hash, err := bcrypt.GenerateFromPassword([]byte("private-console-pass"), bcrypt.MinCost)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := store.SaveConsoleHash(t.Context(), string(hash)); err != nil {
-				t.Fatal(err)
-			}
 		}
 		if tc.loggedIn {
 			if err := store.SaveOAuth(t.Context(), "m365", "synthetic@example.test", credentials.OAuth{RefreshToken: "private-refresh-canary"}); err != nil {
@@ -95,9 +85,9 @@ func TestServeExposureWarningCheckListAndBoundedShutdown(t *testing.T) {
 			// An account that is not logged in does not block the start; its commands fail.
 			account = "not logged in; commands for this account fail until amgd account login"
 		}
-		demo, signIn, passwordCheck := "", "no password: the console refuses every request until amgd config set console.password", "not set; the console refuses every request until amgd config set console.password"
-		if tc.password {
-			signIn, passwordCheck = "user ops", "ok"
+		demo, signIn := "", "user admin"
+		if tc.console != "" {
+			signIn = "user ops"
 		}
 		start := "approval console: http://" + console + "/ (" + signIn + ")\n" +
 			"daemon listening: http://" + listen + "\n  agents connect with: AMG_HOST=http://" + listen + " amg account list\n"
@@ -111,9 +101,34 @@ func TestServeExposureWarningCheckListAndBoundedShutdown(t *testing.T) {
 				"WARNING: this API has no login and no TLS. Anyone who can reach port " + port + " on any address of this host can read screened mail and run every action that the write policy allows (sends: approve or deny).\n" +
 				"  Restrict it: allow only the agent machine (Tailscale grant or firewall), or keep --listen on 127.0.0.1 and use an SSH tunnel. See docs/daemon.md#local-and-remote-clients\n"
 		}
-		want := "checking credentials\ncredential check: credentials (keychain): ok\n" + demo + "credential check: account \"work\" (m365): " + account + "\ncredential check: screening key: ok\ncredential check: console password: " + passwordCheck + "\n" + start
+		want := "checking credentials\ncredential check: credentials (keychain): ok\n" + demo + "credential check: account \"work\" (m365): " + account + "\ncredential check: screening key: ok\ncredential check: console password: ok\n" + start
 		if text != want {
 			t.Errorf("start output:\n got %q\nwant %q", text, want)
+		}
+	}
+}
+
+// Without a console password and without a terminal to ask on, serve refuses to start, so that no one else can be
+// the first to set the password in the console. The refusal names the command for the same home.
+func TestServeRefusesToStartWithoutAConsolePassword(t *testing.T) {
+	home := writeHome(t, consoleConfig(freeAddress(t)))
+	for _, tc := range []struct {
+		args []string
+		env  string
+		want string
+	}{
+		{[]string{"--home", home}, "", "amgd config set console.password --home " + home},
+		{nil, home, "amgd config set console.password --home " + home},
+	} {
+		t.Setenv("AMG_HOME", tc.env)
+		var errout strings.Builder
+		// A daemon that started would run until ctx ends: it fails the test instead of hanging it.
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		code := daemon.Run(ctx, append(tc.args, "serve", "--listen", "127.0.0.1:0"), io.Discard, &errout, daemon.Options{Platform: &keychain{}, LookupEnv: noEnv, Stdin: strings.NewReader(""), Listen: listenReserved})
+		cancel()
+		want := "credential check: console password: not set\nerror: start refused: run " + tc.want + ", then start the daemon again\n"
+		if code != 1 || !strings.HasSuffix(errout.String(), want) || strings.Contains(errout.String(), "listening") {
+			t.Errorf("%v AMG_HOME=%q: exit %d stderr %q", tc.args, tc.env, code, errout.String())
 		}
 	}
 }
@@ -228,7 +243,9 @@ func TestServeRefusesToStartWhenTheConsolePortIsTaken(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer taken.Close()
-	code, _, errout := amgd(t, writeHome(t, consoleConfig(taken.Addr().String())), daemon.Options{Platform: &keychain{}}, "", "serve", "--listen", "127.0.0.1:0")
+	home, k := writeHome(t, consoleConfig(taken.Addr().String())), &keychain{}
+	setConsolePassword(t, credentials.New(k, home))
+	code, _, errout := amgd(t, home, daemon.Options{Platform: k}, "", "serve", "--listen", "127.0.0.1:0")
 	if code != 1 || !strings.HasSuffix(errout, "error: console listener unavailable\n") || strings.Contains(errout, "listening") {
 		t.Fatalf("exit %d stderr %q", code, errout)
 	}

@@ -57,13 +57,12 @@ func (s *Server) ConsoleAddress() string {
 }
 
 // Current is the configuration of the current state, with the console address that the first Load fixed, and
-// whether that state has a console password. ok is false before the first Load succeeds.
-func (s *Server) Current() (c config.Config, password, ok bool) {
-	st := s.current.Load()
-	if st == nil {
-		return config.Config{}, false, false
+// whether that state has a console password. Before the first Load succeeds it is the zero Config and false.
+func (s *Server) Current() (config.Config, bool) {
+	if st := s.current.Load(); st != nil {
+		return st.config, st.consoleHash != ""
 	}
-	return st.config, st.consoleHash != "", true
+	return config.Config{}, false
 }
 
 // consoleCSP allows only the console's own script and no Trusted Types policy, so that every HTML sink throws. The

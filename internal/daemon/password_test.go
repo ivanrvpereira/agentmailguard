@@ -271,6 +271,7 @@ func TestServeWritesTheCredentialFileWithTheProductionWorkFactor(t *testing.T) {
 	credentials.FileWorkFactor = productionWorkFactor
 	t.Cleanup(func() { credentials.FileWorkFactor = 1 })
 	home := writeHome(t, "version = 1\n[credentials]\nbackend = 'file'\n[screening]\nprovider = 'fake'\n[console]\nlisten = '"+freeAddress(t)+"'\n")
+	setConsolePassword(t, credentials.NewFile(home, "synthetic-password"))
 	input, writer := io.Pipe()
 	defer input.Close()
 	defer writer.Close()

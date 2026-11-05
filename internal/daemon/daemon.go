@@ -204,12 +204,7 @@ func (r *runner) changed(home string) int {
 	err := r.reload(home)
 	switch {
 	case errors.Is(err, errNoDaemon):
-		serve := "amgd serve"
-		// The same sources as config.Home: a home from --home or AMG_HOME goes into the command to copy.
-		if r.home != "" || os.Getenv("AMG_HOME") != "" {
-			serve += " --home " + shellWord(home)
-		}
-		fmt.Fprintln(r.stderr, term.Safe("no daemon runs for this home. Now run: "+serve))
+		fmt.Fprintln(r.stderr, term.Safe("no daemon runs for this home. Now run: "+r.command("amgd serve", home)))
 	case err != nil:
 		return r.fail(err.Error() + "; the change is saved, run amgd reload")
 	}
@@ -231,6 +226,15 @@ func reloadCmd(r *runner) *cobra.Command {
 
 // quoted renders operator text for a message line.
 func quoted(s string) string { return term.Safe(strings.TrimSpace(s)) }
+
+// command is an amgd command line to copy for home. The same sources as config.Home: a home from --home or AMG_HOME
+// goes into it, so the command reaches the same home in another shell.
+func (r *runner) command(line, home string) string {
+	if r.home != "" || os.Getenv("AMG_HOME") != "" {
+		line += " --home " + shellWord(home)
+	}
+	return line
+}
 
 // shellWord quotes s for a POSIX shell when it holds more than letters, digits, and / . _ - + : , = @.
 func shellWord(s string) string {

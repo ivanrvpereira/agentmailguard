@@ -163,7 +163,7 @@ For a test account without a provider, run `amgd account add demo --provider fak
 amgd config set screening.api_key
 ```
 
-2. Set the console password for the [approval console](approval-console.md#approval-console). Until you set it, the console refuses every request, and every action that waits for approval stays pending. That includes a policy of `approve`, and a draft, send, or meeting write that the Jev action check flags or cannot check:
+2. Set the console password for the [approval console](approval-console.md#approval-console). The daemon does not start without it: on a terminal, `amgd serve` asks for it if you skip this step. Every action that waits for approval needs it. That includes a policy of `approve`, and a draft, send, or meeting write that the Jev action check flags or cannot check:
 
 ```sh
 amgd config set console.password
@@ -185,7 +185,7 @@ daemon listening: http://127.0.0.1:8787
   agents connect with: AMG_HOST=http://127.0.0.1:8787 amg account list
 ```
 
-Open the console URL in a browser on the daemon host. Without a console password, the console line says so instead of the username.
+Open the console URL in a browser on the daemon host.
 
 5. In a second terminal, list the accounts, inspect the status, and make the first read:
 
@@ -286,7 +286,7 @@ Keep the daemon on its loopback listener and use an SSH tunnel for `amg` on anot
 | Microsoft sign-in shows **Need admin approval** | Ask the tenant administrator for consent. See [Microsoft administrator approval](#microsoft-administrator-approval). |
 | Missing account or stale login | Run `amg account list` and `amg account status`. After a hand edit of `config.toml`, run `amgd reload`. Use the same home each time. |
 | `reload refused: CODE; old settings kept` in the daemon log | Fix the key that the `error:` line names. Run `amgd config check`, and then `amgd reload`. |
-| `console password not set; run amgd config set console.password` | Run `amgd config set console.password` on the daemon host. |
+| `start refused: run amgd config set console.password, then start the daemon again` | Run the command that the line gives on the daemon host, then start the daemon again. |
 | `no daemon runs for this home. Now run: amgd serve` | Run the command that the line gives. It includes `--home` when the command used `--home` or `AMG_HOME`. |
 | Keychain approval or a blocked terminal | Approve access interactively. A rebuilt binary can require approval again. Choose “Always Allow” only for your trusted build of `amgd`. |
 
