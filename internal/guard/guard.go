@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"reflect"
-	"slices"
 	"sync"
 	"time"
 
@@ -292,9 +291,7 @@ queue:
 	return nil
 }
 
-// summaries screens messages, which openMessages kept against closed. A message whose body refetch shows it in a
-// closed folder is left out.
-func (g *Guard) summaries(ctx context.Context, messages []model.Message, closed map[string]model.Bin, categories []string) ([]views.MailSummary, error) {
+func (g *Guard) summaries(ctx context.Context, messages []model.Message, categories []string) ([]views.MailSummary, error) {
 	ids := []string{}
 	seen := map[string]bool{}
 	for _, m := range messages {
@@ -325,10 +322,6 @@ func (g *Guard) summaries(ctx context.Context, messages []model.Message, closed 
 		if err != nil {
 			return nil, err
 		}
-		messages = slices.DeleteFunc(slices.Clone(messages), func(m model.Message) bool {
-			full, ok := fetched[m.ID]
-			return ok && messageClosed(full, closed) != nil
-		})
 	}
 	out := make([]views.MailSummary, len(messages))
 	err = parallelItems(ctx, len(messages), func(i int) error {
@@ -360,11 +353,7 @@ func (g *Guard) List(ctx context.Context, folder string, page model.PageRequest)
 	if err := checkPage(page); err != nil {
 		return views.MailPage{}, err
 	}
-	ctx, err := g.withClosedFolders(ctx)
-	if err != nil {
-		return views.MailPage{}, err
-	}
-	if err := g.openFolder(ctx, folder); err != nil {
+	if err := ctx.Err(); err != nil {
 		return views.MailPage{}, err
 	}
 	found, err := g.mailbox.List(ctx, folder, page, false)
@@ -377,25 +366,17 @@ func (g *Guard) mailPage(ctx context.Context, found model.MessagePage) (views.Ma
 	if !model.ValidPage(found.Next) {
 		return views.MailPage{}, GuardError("ValueError")
 	}
-	messages, closed, err := g.openMessages(ctx, found.Messages)
-	if err != nil {
-		return views.MailPage{}, err
-	}
 	categories, err := g.Categories(ctx)
 	if err != nil {
 		return views.MailPage{}, err
 	}
-	out, err := g.summaries(ctx, messages, closed, categories)
+	out, err := g.summaries(ctx, found.Messages, categories)
 	if err != nil {
 		return views.MailPage{}, err
 	}
 	return views.MailPage{Messages: out, NextPage: found.Next}, nil
 }
 func (g *Guard) read(ctx context.Context, id string) (model.Message, cache.Row, *content.Rendered, error) {
-	closed, err := g.closedFolders(ctx)
-	if err != nil {
-		return model.Message{}, cache.Row{}, nil, err
-	}
 	rows, err := g.cached(ctx, []string{id})
 	if err != nil {
 		return model.Message{}, cache.Row{}, nil, safeErr(ctx, err)
@@ -406,9 +387,6 @@ func (g *Guard) read(ctx context.Context, id string) (model.Message, cache.Row, 
 		return model.Message{}, cache.Row{}, nil, err
 	}
 	m := fetched[id]
-	if err := messageClosed(m, closed); err != nil {
-		return model.Message{}, cache.Row{}, nil, err
-	}
 	// A draft, or a message with BCC, is screened on every read: a draft changes, and a cached verdict may predate
 	// BCC in the screened fields.
 	fresh := m.IsDraft || len(m.BCC) > 0
@@ -423,10 +401,6 @@ func (g *Guard) read(ctx context.Context, id string) (model.Message, cache.Row, 
 		}
 		m = fetched[id]
 		m.IsDraft = m.IsDraft || draft
-		// The message may have moved between the two reads.
-		if err := messageClosed(m, closed); err != nil {
-			return model.Message{}, cache.Row{}, nil, err
-		}
 	}
 	var green *cache.Row
 	if ok && row.Verdict == model.Green && !fresh {

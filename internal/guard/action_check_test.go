@@ -269,12 +269,6 @@ func TestForwardWithoutSourceTextIsPending(t *testing.T) {
 				}
 			}
 			_, _, err := g.DraftForward(ctx, "m1", model.Forward{To: []string{"a@example.test"}})
-			if name == "missing source" {
-				if err != guard.GuardError("ValueError") || len(w.calls) != 0 || len(s.checked()) != 0 || len(allAuditRecords(t, path)) != 0 {
-					t.Fatalf("missing source=%v writes=%v checks=%+v", err, w.calls, s.checked())
-				}
-				return
-			}
 			var pending guard.PendingError
 			if !errors.As(err, &pending) || len(w.calls) != 0 || len(s.checked()) != 0 {
 				t.Fatalf("forward=%v writes=%v checks=%+v", err, w.calls, s.checked())

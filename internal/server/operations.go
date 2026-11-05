@@ -50,7 +50,7 @@ func publicError(e error) (string, bool) {
 			return string(e), true
 		case "refused by policy: mail_draft", "refused by policy: mail_send", "refused by policy: calendar_invite", "refused by policy: calendar_update", "refused by policy: calendar_cancel", "refused by policy: calendar_respond":
 			return string(e), true
-		case "move refused: the destination must be a folder ID from `folders`", "move refused: use mail.trash", "move refused: use mail.spam", "refused: folder is trash", "refused: folder is spam", "refused: message is in trash", "refused: message is in spam", "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
+		case "move refused: the destination must be a folder ID from `folders`", "move refused: use mail.trash", "move refused: use mail.spam", "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
 			"link refused: message is red, not green", "link refused: message is yellow, not green", "link refused: message is sealed, not green", "link refused: message is error, not green",
 			"search needs at least one of text, from, to, subject, after, before":
 			return string(e), true

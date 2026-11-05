@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -217,8 +216,8 @@ var approveAll = config.Policy{
 	Sealed: config.SealedDecisions{MailTrash: config.Approve},
 }
 
-// A red source refuses with the reason red; sealed and error sources with the reason sealed. An unreadable
-// source fails the metadata check before policy. Other sources are screened because they have no cached verdict.
+// A red source refuses with the reason red; sealed, error, and unreadable sources with the reason sealed. The
+// source is screened in the decision, because it has no cached verdict.
 func TestReplyAndForwardOfARedOrSealedSourceAreAlwaysRefused(t *testing.T) {
 	sources := map[string]struct {
 		messages []model.Message
@@ -238,12 +237,6 @@ func TestReplyAndForwardOfARedOrSealedSourceAreAlwaysRefused(t *testing.T) {
 					s := &actionScreener{subjectScreener: &subjectScreener{verdicts: map[string]model.Verdict{"m1": src.verdict}}, check: model.ActionScore(0)}
 					g, c, path := policyGuard(t, w, nil, s, policy)
 					ctx := context.Background()
-					if source == "unreadable" {
-						if err := tc.call(ctx, g); err != guard.GuardError("ValueError") || len(allAuditRecords(t, path)) != 0 {
-							t.Fatalf("unreadable source=%v records=%v", err, allAuditRecords(t, path))
-						}
-						return
-					}
 					if err := tc.call(ctx, g); err == nil || err.Error() != "refused by policy: "+tc.key {
 						t.Fatalf("error=%v", err)
 					}
@@ -355,11 +348,11 @@ func TestTrashOfARedMessageKeepsTheBaseDecision(t *testing.T) {
 	}
 }
 
-func TestFailedMetadataReadRefusesBeforePolicy(t *testing.T) {
+func TestFailedVerdictLookupCountsAsSealed(t *testing.T) {
 	w := &writer{mailbox: &mailbox{}} // the message cannot be fetched
 	g, _, _ := policyGuard(t, w, nil, &subjectScreener{}, defaultPolicy)
 	got, err := g.Trash(context.Background(), []string{"m1"})
-	if err != nil || !reflect.DeepEqual(got, []model.MutationResult{{ID: "m1", Error: new("ValueError")}}) || len(w.calls) != 0 {
+	if err != nil || !reflect.DeepEqual(got, []model.MutationResult{refusal("m1", "mail_trash")}) || len(w.calls) != 0 {
 		t.Fatalf("trash=%+v %v writes=%v", got, err, w.calls)
 	}
 }
@@ -392,8 +385,8 @@ func TestSealedDecisionThatIsNotStricterSkipsTheLookup(t *testing.T) {
 					t.Fatalf("reply=%v want %q", err, tc.draft)
 				}
 			}
-			if s.count() != 0 || len(b.gets) < 1 || slices.ContainsFunc(b.gets, func(f fetch) bool { return f.body }) {
-				t.Fatalf("looked up the verdict instead of just metadata: screenings=%d fetches=%v", s.count(), b.gets)
+			if s.count() != 0 || len(b.gets) != 0 {
+				t.Fatalf("looked up the verdict: screenings=%d fetches=%v", s.count(), b.gets)
 			}
 		})
 	}
@@ -424,7 +417,7 @@ func TestTrashDecidesEachIDOnItsOwn(t *testing.T) {
 	}
 }
 
-func TestTrashDenyReadsMetadataButNeverWrites(t *testing.T) {
+func TestTrashDenyRefusesEveryIDWithoutProviderAccess(t *testing.T) {
 	ids := []string{"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9"}
 	b := &mailbox{messages: messages(ids...)}
 	w := &writer{mailbox: b}
@@ -440,8 +433,8 @@ func TestTrashDenyReadsMetadataButNeverWrites(t *testing.T) {
 			t.Fatalf("result %d=%+v", i, r)
 		}
 	}
-	if len(w.calls) != 0 || len(b.gets) != len(ids) || slices.ContainsFunc(b.gets, func(f fetch) bool { return f.body }) {
-		t.Fatalf("unexpected provider access: writes=%v fetches=%v", w.calls, b.gets)
+	if len(w.calls) != 0 || len(b.gets) != 0 {
+		t.Fatalf("provider accessed: writes=%v fetches=%v", w.calls, b.gets)
 	}
 }
 
@@ -719,7 +712,7 @@ func TestDraftUpdateRefusesAMessageThatIsNotADraftBeforeAnyWrite(t *testing.T) {
 		{"html without body", config.Allow, &writer{}, model.DraftChange{Subject: new("x"), HTML: true}, "invalid request", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			tc.w.mailbox = &mailbox{messages: messages("m1", "m2")}
+			tc.w.mailbox = &mailbox{}
 			s := scoring(0.08)
 			policy := allowAll
 			policy.Base.MailDraft = tc.decision
@@ -739,8 +732,8 @@ func TestDraftUpdateRefusesAMessageThatIsNotADraftBeforeAnyWrite(t *testing.T) {
 			}
 		})
 	}
-	// A denied update reads only source metadata, not the draft's content.
-	w := &writer{mailbox: &mailbox{messages: messages("m1", "m2")}, notDraft: true}
+	// A denied update reads nothing.
+	w := &writer{mailbox: &mailbox{}, notDraft: true}
 	g, _, _ := policyGuard(t, w, nil, scoring(0.08), config.Policy{})
 	if _, err := g.DraftUpdate(context.Background(), "m1", body); err == nil || err.Error() != "refused by policy: mail_draft" || w.draftReads != 0 {
 		t.Fatalf("denied update: %v reads=%d", err, w.draftReads)
@@ -776,7 +769,7 @@ func TestDraftDeleteAndSendRefuseAMessageThatIsNotADraftBeforeAnyWrite(t *testin
 			{"approved run of a draft that is gone", config.Deny, true, &writer{draftErr: model.MailboxError("NotFoundError")}, "MailboxError"},
 		} {
 			t.Run(op.name+" "+tc.name, func(t *testing.T) {
-				tc.w.mailbox = &mailbox{messages: messages("m1", "m2")}
+				tc.w.mailbox = &mailbox{}
 				s := scoring(0.08)
 				policy := allowAll
 				op.set(&policy, tc.decision)
@@ -800,7 +793,7 @@ func TestDraftDeleteAndSendRefuseAMessageThatIsNotADraftBeforeAnyWrite(t *testin
 			})
 		}
 		t.Run(op.name+" denied", func(t *testing.T) {
-			w := &writer{mailbox: &mailbox{messages: messages("m1", "m2")}, notDraft: true}
+			w := &writer{mailbox: &mailbox{}, notDraft: true}
 			g, _, _ := policyGuard(t, w, nil, scoring(0.08), config.Policy{})
 			if err := op.call(context.Background(), g); err == nil || err.Error() != op.denied || w.draftReads != 0 || len(w.calls) != 0 {
 				t.Fatalf("denied: %v reads=%d writes=%v", err, w.draftReads, w.calls)

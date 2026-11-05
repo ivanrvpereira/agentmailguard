@@ -35,17 +35,6 @@ type approvalGraph struct {
 func (g *approvalGraph) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method == "GET" {
-		if binFolders(w, r) {
-			return
-		}
-		if strings.HasPrefix(r.URL.Path, "/me/messages/") && !strings.Contains(r.URL.Query().Get("$select"), ",body") {
-			var message map[string]any
-			_ = json.Unmarshal([]byte(*g.event.Load()), &message)
-			message["id"] = path.Base(r.URL.Path)
-			message["parentFolderId"] = "inbox"
-			response(w, message)
-			return
-		}
 		io.WriteString(w, *g.event.Load())
 		return
 	}
@@ -159,7 +148,7 @@ func greenMessage(t *testing.T, id string) string {
 }
 
 // draftJSON is the Graph JSON of the draft d1, which a draft update reads before it writes.
-const draftJSON = `{"id":"d1","parentFolderId":"drafts","isDraft":true,"toRecipients":[],"ccRecipients":[],"bccRecipients":[],"subject":"CANARY draft","body":{"contentType":"text","content":"CANARY body"}}`
+const draftJSON = `{"id":"d1","isDraft":true,"toRecipients":[],"ccRecipients":[],"bccRecipients":[],"subject":"CANARY draft","body":{"contentType":"text","content":"CANARY body"}}`
 
 // The same call under an allow policy gives the expected provider writes and result: one write, and for a reply or
 // forward draft the createReply or createForward and its PATCH. A stored draft result keeps only the draft IDs (stored).
@@ -314,9 +303,6 @@ func TestApprovalDuringADraftUpdateFindsTheSendWithdrawn(t *testing.T) {
 	d := graphDaemon(t, "[policy]\nmail_draft='allow'\nmail_send='approve'\n", writeGrant, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == "GET" {
-			if binFolders(w, r) {
-				return
-			}
 			if blockRead.CompareAndSwap(true, false) {
 				close(reading)
 				<-release

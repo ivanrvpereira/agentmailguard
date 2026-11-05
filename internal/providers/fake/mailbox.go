@@ -52,10 +52,6 @@ func scan(row interface{ Scan(...any) error }, body bool) (model.Message, error)
 		return m, storageError
 	}
 	m.Folders, m.Flag = []string{folder}, model.FlagState(flag)
-	// A fake message is always in one folder: Folders is its full location (model.Mailbox).
-	if folder == "" {
-		return m, invalidData
-	}
 	if m.ReceivedAt, err = time.Parse(time.RFC3339Nano, received); err != nil {
 		return m, invalidData
 	}

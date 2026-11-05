@@ -64,14 +64,8 @@ func (g *Guard) Search(ctx context.Context, q model.SearchQuery, page model.Page
 	if !q.RangeValid() {
 		return views.MailPage{}, GuardError("invalid request")
 	}
-	ctx, err := g.withClosedFolders(ctx)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return views.MailPage{}, err
-	}
-	if q.Folder != nil {
-		if err := g.openFolder(ctx, *q.Folder); err != nil {
-			return views.MailPage{}, err
-		}
 	}
 	found, err := g.mailbox.Search(ctx, q, page, false)
 	if err != nil {
@@ -109,15 +103,11 @@ func (g *Guard) Thread(ctx context.Context, thread string) ([]views.MailSummary,
 	if !threadValid(messages, thread) {
 		return nil, GuardError("ValueError")
 	}
-	messages, closed, err := g.openMessages(ctx, messages)
-	if err != nil {
-		return nil, err
-	}
 	categories, err := g.Categories(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return g.summaries(ctx, messages, closed, categories)
+	return g.summaries(ctx, messages, categories)
 }
 func (g *Guard) Folders(ctx context.Context) ([]model.Folder, error) {
 	if err := ctx.Err(); err != nil {

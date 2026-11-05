@@ -32,9 +32,9 @@ const Pending = "pending"
 // RefusedPrefix starts the fixed refusal code of an action that the policy denies, before the policy key.
 const RefusedPrefix = "refused by policy: "
 
-// validResultError accepts safe failure codes and the exact fixed policy and closed-message refusals.
+// validResultError accepts safe failure codes and the exact fixed policy codes.
 func validResultError(text *string) error {
-	if text != nil && (*text == Pending || *text == "refused: message is in trash" || *text == "refused: message is in spam" || strings.HasPrefix(*text, RefusedPrefix) && policyKeys[strings.TrimPrefix(*text, RefusedPrefix)]) {
+	if text != nil && (*text == Pending || strings.HasPrefix(*text, RefusedPrefix) && policyKeys[strings.TrimPrefix(*text, RefusedPrefix)]) {
 		return nil
 	}
 	return model.ValidateFailureText(text)

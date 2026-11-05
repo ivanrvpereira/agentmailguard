@@ -349,7 +349,7 @@ func TestCalendarWriteFailureAndCancellationBoundaries(t *testing.T) {
 func TestCalendarWritesShareMutationGateWithMail(t *testing.T) {
 	for _, op := range []string{"invite", "update", "cancel", "respond"} {
 		t.Run(op, func(t *testing.T) {
-			w := &writer{mailbox: &mailbox{messages: messages("m1")}, entered: make(chan struct{}), release: make(chan struct{})}
+			w := &writer{mailbox: &mailbox{}, entered: make(chan struct{}), release: make(chan struct{})}
 			cal := meetingWriter()
 			cal.event.IsOrganizer = op != "respond"
 			g, _, _ := calendarGuard(t, w, cal)
@@ -377,7 +377,7 @@ func TestCalendarWritesHoldMutationGateDuringFetchAndWrite(t *testing.T) {
 				continue
 			}
 			t.Run(op+"/"+phase, func(t *testing.T) {
-				mail := &writer{mailbox: &mailbox{messages: messages("m1")}}
+				mail := &writer{mailbox: &mailbox{}}
 				cal := meetingWriter()
 				cal.event.IsOrganizer = op != "respond"
 				g, _, path := calendarGuard(t, mail, cal)

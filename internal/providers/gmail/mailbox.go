@@ -71,23 +71,9 @@ func labelIn(a []label, id string) string {
 	}
 	return id
 }
-func (m *mailbox) ClosedFolders(ctx context.Context) (map[string]model.Bin, error) {
-	return map[string]model.Bin{"TRASH": model.Trash, "SPAM": model.Spam}, ctx.Err()
-}
 
-func (m *mailbox) ResolveFolder(ctx context.Context, folder string) (string, error) {
-	a, err := m.labels(ctx)
-	if err != nil {
-		return "", err
-	}
-	id := labelIn(a, folder)
-	for _, l := range a {
-		if l.ID == id {
-			return id, nil
-		}
-	}
-	return "", failure("Gmail", "NotFound")
-}
+// bins marks the Gmail system labels that are the trash and spam.
+var bins = map[string]model.Bin{"TRASH": model.Trash, "SPAM": model.Spam}
 
 func (m *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
 	a, err := m.labels(ctx)
@@ -97,7 +83,7 @@ func (m *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
 	out := []model.Folder{}
 	for _, l := range a {
 		if l.ID != "UNREAD" && l.ID != "STARRED" {
-			out = append(out, model.Folder{ID: l.ID, Name: l.Name})
+			out = append(out, model.Folder{ID: l.ID, Name: l.Name, Bin: bins[l.ID]})
 		}
 	}
 	return out, nil

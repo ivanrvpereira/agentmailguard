@@ -173,11 +173,8 @@ _Avoid_: junk (except for the Microsoft 365 folder), report
 
 ### Organization
 
-**Closed folder**:
-The provider's trash or spam/junk folder, and every folder below either one. Agents neither read nor change mail there.
-
 **Bin**:
-Which closed folder tree a folder belongs to: trash or spam (`model.Bin`). A folder outside both has no bin.
+Which folder tree a folder belongs to: the provider's trash or spam/junk folder and every folder below it (`model.Bin`). A folder outside both has no bin. Moves into a bin go only through trash or spam.
 
 **Rule**:
 A named instruction in `rules.toml` for one account that files matching mail into a folder or a category.

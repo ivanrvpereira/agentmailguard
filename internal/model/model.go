@@ -97,6 +97,9 @@ type Message struct {
 type Folder struct {
 	ID   FolderID
 	Name string
+	// Bin marks the provider's trash or spam/junk folder and every folder below it. Moves there must use mail.trash
+	// or mail.spam instead.
+	Bin Bin
 }
 type Attendee struct {
 	Address  Address
@@ -333,7 +336,7 @@ type InboxScan struct {
 	Failures []ScanFailure
 }
 
-// Bin names the closed folder tree that a folder belongs to (trash or spam/junk); the empty value is not a bin.
+// Bin names the folder tree that a folder belongs to (trash or spam/junk); the empty value is not a bin.
 type Bin string
 
 const (
@@ -343,15 +346,9 @@ const (
 
 // Mailbox deliberately has no permanent-delete operation. Its send operations reach real recipients at once.
 // List/Search/Thread may return bodies already available even when body is false.
-// Get/List/Search/Thread give each message's full location in Message.Folders; an adapter that cannot read it fails.
-// An empty Folders means only that the provider has the message in no folder (Gmail mail without labels).
 // ScanInbox reads all pages before returning, metadata only, excluding drafts,
 // with since <= received_at < until (nil until means no upper bound).
 type Mailbox interface {
-	// ClosedFolders returns every closed folder by Message.Folders ID; a failed lookup is an error, never an empty map.
-	ClosedFolders(ctx context.Context) (map[FolderID]Bin, error)
-	// ResolveFolder returns the ID of a folder ID or name accepted by List; an unknown folder is an error.
-	ResolveFolder(ctx context.Context, folder FolderID) (FolderID, error)
 	List(ctx context.Context, folder FolderID, page PageRequest, body bool) (MessagePage, error)
 	Search(ctx context.Context, query SearchQuery, page PageRequest, body bool) (MessagePage, error)
 	Get(ctx context.Context, ids []MessageID, body bool) ([]Message, error)
@@ -368,7 +365,7 @@ type Mailbox interface {
 	Trash(ctx context.Context, ids []MessageID) ([]MutationResult, error)
 	// Spam moves each message to spam/junk and returns one result per input ID, in order.
 	Spam(ctx context.Context, ids []MessageID) ([]MutationResult, error)
-	// Move moves ids from folder from to dest. Gmail removes the label of from; Microsoft 365 and the fake provider
+	// Move moves ids from folder from to dest. Gmail removes the label of from, TRASH, and SPAM; Microsoft 365 and the fake provider
 	// ignore it, because a message there is in one folder only.
 	Move(ctx context.Context, ids []MessageID, from, dest FolderID) ([]MutationResult, error)
 	MarkRead(ctx context.Context, ids []MessageID, read bool) ([]MutationResult, error)

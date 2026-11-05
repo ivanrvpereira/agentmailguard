@@ -42,15 +42,15 @@ func writePaths(writes []meetingRequest) []string {
 	return out
 }
 
-func TestMailSendDefaultPolicyRefusesAfterSourceMetadata(t *testing.T) {
+func TestMailSendDefaultPolicyRefusesBeforeProviderAccess(t *testing.T) {
 	d, reads, writes := policyDaemon(t, "")
 	for _, tc := range sendParams {
 		if status, body := accountRPC(t, d.s, tc.op, "work", tc.params); status != 500 || body != `{"error":"refused by policy: mail_send"}` {
 			t.Errorf("%s: %d %s", tc.op, status, body)
 		}
 	}
-	if reads.Load() != 15 || writes.Load() != 0 {
-		t.Fatalf("expected only closed-folder and source metadata reads: reads=%d writes=%d", reads.Load(), writes.Load())
+	if reads.Load() != 0 || writes.Load() != 0 {
+		t.Fatalf("provider accessed: reads=%d writes=%d", reads.Load(), writes.Load())
 	}
 	text, records := auditOf(t, d.home)
 	if strings.Contains(text, "CANARY") || strings.Contains(text, "example.test") || len(records) != len(sendParams) {
@@ -58,7 +58,7 @@ func TestMailSendDefaultPolicyRefusesAfterSourceMetadata(t *testing.T) {
 	}
 }
 
-// Gmail has no extra grant for sending: source metadata is checked before the policy.
+// Gmail has no extra grant for sending: the policy decides before any provider access.
 func TestGmailMailSendFollowsThePolicyWithoutAGrantCheck(t *testing.T) {
 	d, google := gmailDaemon(t, gmailReadGrant, "")
 	before := google.requests.Load()
@@ -67,7 +67,7 @@ func TestGmailMailSendFollowsThePolicyWithoutAGrantCheck(t *testing.T) {
 			t.Errorf("%s: %d %s", tc.op, status, body)
 		}
 	}
-	if n := google.requests.Load() - before; n != 6 {
+	if n := google.requests.Load() - before; n != 0 {
 		t.Fatalf("refused send made %d Google requests", n)
 	}
 }
@@ -162,13 +162,6 @@ func TestApprovedMailSendSendsOnceAndStoresOK(t *testing.T) {
 func TestMailSendFromASealedSourceIsAlwaysRefused(t *testing.T) {
 	var writes atomic.Int32
 	d := graphDaemon(t, sendAllow, writeGrant, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if binFolders(w, r) {
-			return
-		}
-		if r.Method == "GET" && !strings.Contains(r.URL.Query().Get("$select"), ",body") {
-			response(w, map[string]any{"id": "m1", "parentFolderId": "inbox"})
-			return
-		}
 		if r.Method != "GET" {
 			writes.Add(1)
 		}
@@ -260,18 +253,15 @@ func TestApprovedDraftStoresOnlyItsIDs(t *testing.T) {
 func TestDraftUpdateResultHasOnlyTheGivenFieldsCleaned(t *testing.T) {
 	var paths []string
 	d := graphDaemon(t, "[policy]\nmail_draft='allow'\n", writeGrant, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if binFolders(w, r) {
-			return
-		}
 		paths = append(paths, r.Method+" "+r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"id":"d1","parentFolderId":"drafts","conversationId":"conv","isDraft":true,"subject":"CANARY old","toRecipients":[{"emailAddress":{"address":"old@example.test"}}],"ccRecipients":[],"bccRecipients":[],"body":{"contentType":"text","content":"CANARY"}}`)
+		io.WriteString(w, `{"id":"d1","conversationId":"conv","isDraft":true,"subject":"CANARY old","toRecipients":[{"emailAddress":{"address":"old@example.test"}}],"ccRecipients":[],"bccRecipients":[],"body":{"contentType":"text","content":"CANARY"}}`)
 	}), newNativeAPI())
 	status, body := accountRPC(t, d.s, "draft.update", "work", `{"id":"d1","to":["a@example.test\u0007"],"cc":[],"subject":"CANARY\u200b see https://evil.example.test/x"}`)
 	if want := `{"id":"d1","thread_id":"conv","ok":true,"to":["a@example.test"],"cc":[],"subject":"CANARY see [link removed]"}`; status != 200 || body != want {
 		t.Fatalf("draft.update: %d %s\nwant %s", status, body, want)
 	}
-	if want := []string{"GET /me/messages/d1", "GET /me/messages/d1", "GET /me/messages/d1", "PATCH /me/messages/d1"}; !reflect.DeepEqual(paths, want) {
+	if want := []string{"GET /me/messages/d1", "GET /me/messages/d1", "PATCH /me/messages/d1"}; !reflect.DeepEqual(paths, want) {
 		t.Fatalf("provider requests=%v", paths)
 	}
 }

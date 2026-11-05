@@ -1,15 +1,45 @@
 package e2e_test
 
-import "testing"
+import (
+	"slices"
+	"strings"
+	"testing"
+)
 
-func TestSpamMovesToClosedSpamFolder(t *testing.T) {
+// Trash and spam stay readable and restorable; mail goes into them only through mail trash and mail spam.
+func TestTrashAndSpamAreReadableAndOnlyTrashAndSpamMoveMailIntoThem(t *testing.T) {
 	t.Parallel()
 	s := start(t, "")
-	got := decode[[]result](t, s.ok("mail", "spam", "lunch"))
-	if len(got) != 1 || got[0].ID != "lunch" || !got[0].OK || s.value("folder", "lunch") != "spam" {
-		t.Fatalf("spam=%+v folder=%s", got, s.value("folder", "lunch"))
+	listed := func(folder string) []string {
+		ids := []string{}
+		for _, m := range decode[mailPage](t, s.ok("mail", "list", "--folder", folder)).Messages {
+			ids = append(ids, m.ID)
+		}
+		return ids
 	}
-	s.refused("refused: message is in spam", "mail", "get", "lunch")
+	s.ok("mail", "trash", "lunch")
+	if got := listed("trash"); !slices.Contains(got, "lunch") {
+		t.Fatalf("trash=%v", got)
+	}
+	if out := s.ok("mail", "get", "lunch"); !strings.Contains(out, "canary-body-lunch") {
+		t.Fatalf("get from the trash: %s", out)
+	}
+	got := decode[[]result](t, s.ok("mail", "move", "projects", "lunch"))
+	if len(got) != 1 || !got[0].OK || s.value("folder", "lunch") != "projects" {
+		t.Fatalf("restore=%+v folder=%s", got, s.value("folder", "lunch"))
+	}
+	s.refused("move refused: use mail.trash", "mail", "move", "trash", "invoice")
+	s.refused("move refused: use mail.spam", "mail", "move", "spam", "invoice")
+	if s.value("folder", "invoice") != "inbox" {
+		t.Fatal("refused destination changed the message")
+	}
+	got = decode[[]result](t, s.ok("mail", "spam", "invoice"))
+	if len(got) != 1 || got[0].ID != "invoice" || !got[0].OK || s.value("folder", "invoice") != "spam" {
+		t.Fatalf("spam=%+v folder=%s", got, s.value("folder", "invoice"))
+	}
+	if got := listed("spam"); !slices.Contains(got, "invoice") {
+		t.Fatalf("spam=%v", got)
+	}
 }
 
 func TestSpamApprovalActsOnlyOnItsMessage(t *testing.T) {

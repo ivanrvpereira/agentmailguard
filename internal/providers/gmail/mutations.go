@@ -78,9 +78,12 @@ func (m *mailbox) Move(ctx context.Context, ids []string, from, dest string) ([]
 	if dest != "INBOX" && !slices.ContainsFunc(a, func(l label) bool { return l.Type == "user" && l.ID == dest }) {
 		return nil, failure("Gmail", "FolderError")
 	}
-	var remove []string
-	if source := labelIn(a, from); source != dest {
-		remove = []string{source}
+	// Like Gmail's "Move to", a move also takes the message out of the trash and spam. dest is never one of them.
+	remove := []string{}
+	for _, l := range []string{labelIn(a, from), "TRASH", "SPAM"} {
+		if l != dest && !slices.Contains(remove, l) {
+			remove = append(remove, l)
+		}
 	}
 	return m.modify(ctx, ids, []string{dest}, remove)
 }

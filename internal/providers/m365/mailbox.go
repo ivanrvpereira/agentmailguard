@@ -67,10 +67,10 @@ func content(d object) (*string, *model.ContentType) {
 }
 
 // message reads BCC only of a draft or of a message from the account's address, which is one that the account sent,
-// as ReplyRecipients tells them apart. Every Graph message has a parentFolderId, its location: one without it fails.
+// as ReplyRecipients tells them apart.
 func (b *mailbox) message(d object, body bool) (model.Message, error) {
-	m := model.Message{ID: text(d, "id"), ThreadID: text(d, "conversationId"), Subject: text(d, "subject"), IsDraft: boolean(d, "isDraft"), IsRead: boolean(d, "isRead"), Flag: model.NoFlag, Categories: stringsAt(d, "categories"), Attachments: names(d), To: addresses(d, "toRecipients"), CC: addresses(d, "ccRecipients"), BCC: []model.Address{}, ReceivedAt: model.UnknownReceived, Folders: []string{text(d, "parentFolderId")}}
-	if m.ID == "" || m.Folders[0] == "" {
+	m := model.Message{ID: text(d, "id"), ThreadID: text(d, "conversationId"), Subject: text(d, "subject"), IsDraft: boolean(d, "isDraft"), IsRead: boolean(d, "isRead"), Flag: model.NoFlag, Categories: stringsAt(d, "categories"), Attachments: names(d), To: addresses(d, "toRecipients"), CC: addresses(d, "ccRecipients"), BCC: []model.Address{}, ReceivedAt: model.UnknownReceived, Folders: []string{}}
+	if m.ID == "" {
 		return m, invalidMetadata
 	}
 	if m.IsDraft || strings.EqualFold(address(obj(d, "from")).Address, b.c.account.Email) {
@@ -87,6 +87,9 @@ func (b *mailbox) message(d object, body bool) (model.Message, error) {
 			return m, invalidMetadata
 		}
 		m.ReceivedAt = stamp
+	}
+	if f := text(d, "parentFolderId"); f != "" {
+		m.Folders = []string{f}
 	}
 	switch text(obj(d, "flag"), "flagStatus") {
 	case "flagged":
@@ -170,23 +173,17 @@ func folderName(folder string) string {
 	return folder
 }
 
-func (b *mailbox) ResolveFolder(ctx context.Context, folder string) (string, error) {
+// ThreadMessagesIn keeps the messages of Thread in folder. Messages carry the real folder ID in parentFolderId, so
+// folder, a well-known name such as inbox or a real ID, is looked up first
+// (https://learn.microsoft.com/en-us/graph/api/mailfolder-get?view=graph-rest-1.0). A failed lookup fails closed.
+func (b *mailbox) ThreadMessagesIn(ctx context.Context, thread, folder string) ([]string, error) {
 	d, err := b.c.get(ctx, b.c.endpoint("/me/mailFolders/"+escapeID(folderName(folder)), url.Values{"$select": {"id"}}), false)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	id := text(d, "id")
 	if id == "" {
-		return "", invalidMetadata
-	}
-	return id, nil
-}
-
-// ThreadMessagesIn compares parentFolderId with the resolved folder ID; a failed lookup fails closed.
-func (b *mailbox) ThreadMessagesIn(ctx context.Context, thread, folder string) ([]string, error) {
-	id, err := b.ResolveFolder(ctx, folder)
-	if err != nil {
-		return nil, err
+		return nil, invalidMetadata
 	}
 	all, err := b.Thread(ctx, thread)
 	if err != nil {
@@ -303,15 +300,36 @@ func (b *mailbox) page(ctx context.Context, path string, q url.Values, page mode
 	return model.MessagePage{Messages: out, Next: next}, nil
 }
 
+// Folders marks Deleted Items, Junk Email, and every folder below them, so moves there can be refused. A failed
+// lookup fails closed.
 func (b *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
+	bins := map[string]model.Bin{}
+	for _, root := range []struct {
+		name string
+		bin  model.Bin
+	}{{"deleteditems", model.Trash}, {"junkemail", model.Spam}} {
+		d, err := b.c.get(ctx, b.c.endpoint("/me/mailFolders/"+root.name, url.Values{"$select": {"id"}}), false)
+		if err != nil {
+			return nil, err
+		}
+		id := text(d, "id")
+		if id == "" {
+			return nil, invalidMetadata
+		}
+		bins[id] = root.bin
+	}
+	type listing struct {
+		link string
+		bin  model.Bin
+	}
 	q := url.Values{"$select": {"id,displayName,childFolderCount"}, "$top": {"100"}}
-	pending := []string{b.c.endpoint("/me/mailFolders", q)}
+	pending := []listing{{link: b.c.endpoint("/me/mailFolders", q)}}
 	seen := map[string]bool{}
 	out := []model.Folder{}
 	for len(pending) > 0 {
 		first := pending[0]
 		pending = pending[1:]
-		items, err := b.c.all(ctx, first, false)
+		items, err := b.c.all(ctx, first.link, false)
 		if err != nil {
 			return nil, err
 		}
@@ -321,60 +339,20 @@ func (b *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
 				return nil, invalidPage
 			}
 			seen[id] = true
-			out = append(out, model.Folder{ID: id, Name: text(d, "displayName")})
+			bin := first.bin
+			if bin == "" {
+				bin = bins[id]
+			}
+			out = append(out, model.Folder{ID: id, Name: text(d, "displayName"), Bin: bin})
 			var children int
 			_ = json.Unmarshal(d["childFolderCount"], &children)
 			if children > 0 {
-				pending = append(pending, b.c.endpoint("/me/mailFolders/"+escapeID(id)+"/childFolders", q))
+				pending = append(pending, listing{b.c.endpoint("/me/mailFolders/"+escapeID(id)+"/childFolders", q), bin})
 			}
 		}
 	}
 	return out, nil
 }
-func (b *mailbox) ClosedFolders(ctx context.Context) (map[string]model.Bin, error) {
-	out := map[string]model.Bin{}
-	// Hidden descendants are closed too; Graph excludes them unless explicitly requested.
-	q := url.Values{"$select": {"id,childFolderCount"}, "$top": {"100"}, "includeHiddenFolders": {"true"}}
-	for _, root := range []struct {
-		name string
-		bin  model.Bin
-	}{{"deleteditems", model.Trash}, {"junkemail", model.Spam}} {
-		id, err := b.ResolveFolder(ctx, root.name)
-		if err != nil {
-			return nil, err
-		}
-		if _, seen := out[id]; seen || len(out) >= 10000 {
-			return nil, invalidPage
-		}
-		out[id] = root.bin
-		pending := []string{id}
-		for len(pending) > 0 {
-			parent := pending[0]
-			pending = pending[1:]
-			items, err := b.c.all(ctx, b.c.endpoint("/me/mailFolders/"+escapeID(parent)+"/childFolders", q), false)
-			if err != nil {
-				return nil, err
-			}
-			for _, d := range items {
-				id := text(d, "id")
-				if _, seen := out[id]; id == "" || seen || len(out) >= 10000 {
-					return nil, invalidPage
-				}
-				out[id] = root.bin
-				// JSON null decodes without an error; read as 0, it would end the walk early. A missing count fails to decode.
-				var children *int
-				if json.Unmarshal(d["childFolderCount"], &children) != nil || children == nil || *children < 0 {
-					return nil, invalidMetadata
-				}
-				if *children > 0 {
-					pending = append(pending, id)
-				}
-			}
-		}
-	}
-	return out, nil
-}
-
 func (b *mailbox) Categories(ctx context.Context) ([]string, error) {
 	items, err := b.c.all(ctx, b.c.endpoint("/me/outlook/masterCategories", url.Values{"$select": {"displayName"}}), false)
 	if err != nil {

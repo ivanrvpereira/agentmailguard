@@ -36,22 +36,25 @@ func TestMailboxMutationsAreLabelOnlyAndPerID(t *testing.T) {
 		}, []string{}, []string{"STARRED"}, false},
 		{"move", func(c *gmail.Client) ([]model.MutationResult, error) {
 			return c.Mailbox().Move(context.Background(), []string{"ok", "gone"}, "inbox", "Label_1")
-		}, []string{"Label_1"}, []string{"INBOX"}, false},
+		}, []string{"Label_1"}, []string{"INBOX", "TRASH", "SPAM"}, false},
 		{"inbox", func(c *gmail.Client) ([]model.MutationResult, error) {
 			return c.Mailbox().Move(context.Background(), []string{"ok", "gone"}, "inbox", "INBOX")
-		}, []string{"INBOX"}, []string{}, false},
+		}, []string{"INBOX"}, []string{"TRASH", "SPAM"}, false},
 		{"move from a label", func(c *gmail.Client) ([]model.MutationResult, error) {
 			return c.Mailbox().Move(context.Background(), []string{"ok", "gone"}, "Label_2", "Label_1")
-		}, []string{"Label_1"}, []string{"Label_2"}, false},
+		}, []string{"Label_1"}, []string{"Label_2", "TRASH", "SPAM"}, false},
 		{"inbox from a label", func(c *gmail.Client) ([]model.MutationResult, error) {
 			return c.Mailbox().Move(context.Background(), []string{"ok", "gone"}, "Label_2", "INBOX")
-		}, []string{"INBOX"}, []string{"Label_2"}, false},
+		}, []string{"INBOX"}, []string{"Label_2", "TRASH", "SPAM"}, false},
 		{"move from the trash", func(c *gmail.Client) ([]model.MutationResult, error) {
 			return c.Mailbox().Move(context.Background(), []string{"ok", "gone"}, "trash", "Label_1")
-		}, []string{"Label_1"}, []string{"TRASH"}, false},
+		}, []string{"Label_1"}, []string{"TRASH", "SPAM"}, false},
+		{"move from spam", func(c *gmail.Client) ([]model.MutationResult, error) {
+			return c.Mailbox().Move(context.Background(), []string{"ok", "gone"}, "spam", "INBOX")
+		}, []string{"INBOX"}, []string{"SPAM", "TRASH"}, false},
 		{"move to its source", func(c *gmail.Client) ([]model.MutationResult, error) {
 			return c.Mailbox().Move(context.Background(), []string{"ok", "gone"}, "Label_1", "Label_1")
-		}, []string{"Label_1"}, []string{}, false},
+		}, []string{"Label_1"}, []string{"TRASH", "SPAM"}, false},
 		{"categories", func(c *gmail.Client) ([]model.MutationResult, error) {
 			return c.Mailbox().Categorize(context.Background(), []string{"ok", "gone"}, []string{"Work"}, []string{"Work"})
 		}, []string{"Label_1"}, []string{}, false},
@@ -66,7 +69,7 @@ func TestMailboxMutationsAreLabelOnlyAndPerID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/labels" {
-					respond(w, map[string]any{"labels": []any{map[string]string{"id": "INBOX", "name": "INBOX", "type": "system"}, map[string]string{"id": "TRASH", "name": "TRASH", "type": "system"}, map[string]string{"id": "Label_1", "name": "Work", "type": "user"}, map[string]string{"id": "Label_2", "name": "Later", "type": "user"}}})
+					respond(w, map[string]any{"labels": []any{map[string]string{"id": "INBOX", "name": "INBOX", "type": "system"}, map[string]string{"id": "TRASH", "name": "TRASH", "type": "system"}, map[string]string{"id": "SPAM", "name": "SPAM", "type": "system"}, map[string]string{"id": "Label_1", "name": "Work", "type": "user"}, map[string]string{"id": "Label_2", "name": "Later", "type": "user"}}})
 					return
 				}
 				if r.Method != "POST" || strings.Contains(r.URL.Path, "send") {

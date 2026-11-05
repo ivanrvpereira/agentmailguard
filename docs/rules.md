@@ -22,7 +22,7 @@ The daemon reads `rules.toml` only at start and at a reload. After you edit it, 
 `amgd` never writes `rules.toml`.
 
 A folder target is a mailbox folder ID, `archive`, or `trash`.
-On every provider, a folder ID in the trash or spam/junk, including their subfolders, is a closed destination and fails. Use `trash` for the dedicated trash action under `mail_trash`; no spam action is available. Rule actions also refuse a source that is now in a closed folder before policy, approval, or a provider write.
+On every provider, a folder ID in the trash or spam/junk, including their subfolders, fails. Use `trash` for the dedicated trash action under `mail_trash`; no spam action is available.
 A category target must already exist in the mailbox.
 `rules list` shows resolved names and missing-target warnings, never instructions or confidence scores.
 Missing rules produce an empty organizer report without provider or Jev access.

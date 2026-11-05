@@ -29,7 +29,6 @@ type writer struct {
 	draftErr         error               // the ReadDraft error
 	draft            *model.DraftResult  // the DraftNew result; nil gives ID d1
 	recipientsErr    error               // the ReplyRecipients error; nil gives the recipients of replyRecipients
-	recipientReads   int                 // the ReplyRecipients calls
 	chosen           map[string][]string // the ThreadMessagesIn IDs by "thread/folder"; a missing key gives none
 	chooseErr        error               // the ThreadMessagesIn error
 	choices          []string            // the "thread/folder" of each ThreadMessagesIn call, in order
@@ -37,14 +36,6 @@ type writer struct {
 	moveSources      []string            // the source folder of each Move call, in order
 	err              error
 	entered, release chan struct{}
-}
-
-// Get supplies metadata for the drafts that ReadDraft supplies below, as well as the seeded messages.
-func (w *writer) Get(ctx context.Context, ids []string, body bool) ([]model.Message, error) {
-	if !body && len(ids) == 1 && (ids[0] == "d1" || ids[0] == "draft-source") {
-		return []model.Message{{ID: ids[0], Folders: []string{"drafts"}, IsDraft: true}}, nil
-	}
-	return w.mailbox.Get(ctx, ids, body)
 }
 
 func (w *writer) write(op string, ids []string) ([]model.MutationResult, error) {
@@ -109,7 +100,7 @@ func (w *writer) Categorize(_ context.Context, ids, _, _ []string) ([]model.Muta
 	return w.write("categorize", ids)
 }
 func (w *writer) Folders(context.Context) ([]model.Folder, error) {
-	return []model.Folder{{ID: "f1", Name: "Finance"}, {ID: "del", Name: "Deleted Items"}}, nil
+	return []model.Folder{{ID: "f1", Name: "Finance"}, {ID: "del", Name: "Deleted Items", Bin: model.Trash}, {ID: "junk", Name: "Junk Email", Bin: model.Spam}}, nil
 }
 func (w *writer) DraftNew(context.Context, model.NewDraft) (model.DraftResult, error) {
 	_, err := w.write("draft_new", nil)
@@ -133,7 +124,6 @@ func replyRecipients(all bool) model.Recipients {
 	return r
 }
 func (w *writer) ReplyRecipients(_ context.Context, _ string, all bool) (model.Recipients, error) {
-	w.recipientReads++
 	if w.recipientsErr != nil {
 		return model.Recipients{}, w.recipientsErr
 	}
@@ -247,7 +237,7 @@ func (w *cancelingFolders) Folders(context.Context) ([]model.Folder, error) {
 func TestCancellationDuringDestinationValidationDoesNotAttemptWrite(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	w := &cancelingFolders{writer: &writer{mailbox: &mailbox{messages: messages("m1", "m2")}}, cancel: cancel}
+	w := &cancelingFolders{writer: &writer{mailbox: &mailbox{}}, cancel: cancel}
 	g, _, path := setup(t, w, &screener{verdict: model.Green})
 	_, err := g.Move(ctx, []string{"m1"}, "f1")
 	if !errors.Is(err, context.Canceled) || len(w.calls) != 0 || len(auditRecords(t, path)) != 0 {
@@ -256,7 +246,7 @@ func TestCancellationDuringDestinationValidationDoesNotAttemptWrite(t *testing.T
 }
 
 func TestMutationGateCancellationDoesNotAttemptQueuedDraft(t *testing.T) {
-	w := &writer{mailbox: &mailbox{messages: messages("m1", "m2")}, entered: make(chan struct{}), release: make(chan struct{})}
+	w := &writer{mailbox: &mailbox{}, entered: make(chan struct{}), release: make(chan struct{})}
 	g, _, path := setup(t, w, &screener{verdict: model.Green})
 	done := make(chan error, 1)
 	go func() { _, err := g.Archive(context.Background(), []string{"m1"}); done <- err }()
@@ -347,7 +337,7 @@ func TestEveryManualRouteAndDraftHasContentFreeAudit(t *testing.T) {
 }
 
 func TestManualFlagAndDraftUpdatePreserveRequestedPayloads(t *testing.T) {
-	w := &writer{mailbox: &mailbox{messages: messages("m1", "m2")}}
+	w := &writer{mailbox: &mailbox{}}
 	g, _, path := setup(t, w, &screener{verdict: model.Red})
 	ctx := context.Background()
 	for _, state := range []model.FlagState{model.Flagged, model.Complete, model.NoFlag} {
@@ -371,7 +361,7 @@ func TestManualFlagAndDraftUpdatePreserveRequestedPayloads(t *testing.T) {
 }
 
 func TestManualRefusalsKeepFixedReasonsWithoutWriting(t *testing.T) {
-	w := &writer{mailbox: &mailbox{messages: messages("m1", "m2")}}
+	w := &writer{mailbox: &mailbox{}}
 	g, _, path := setup(t, w, &screener{verdict: model.Green})
 	ctx := context.Background()
 	ids := []string{"m1"}
@@ -381,6 +371,9 @@ func TestManualRefusalsKeepFixedReasonsWithoutWriting(t *testing.T) {
 	}{
 		{"move", "move refused: the destination must be a folder ID from `folders`", func() error { _, err := g.Move(ctx, ids, "CANARY destination"); return err }},
 		{"trash folder", "move refused: use mail.trash", func() error { _, err := g.Move(ctx, ids, "del"); return err }},
+		{"spam folder", "move refused: use mail.spam", func() error { _, err := g.Move(ctx, ids, "junk"); return err }},
+		{"trash name", "move refused: use mail.trash", func() error { _, err := g.Move(ctx, ids, "Trash"); return err }},
+		{"spam name", "move refused: use mail.spam", func() error { _, err := g.Move(ctx, ids, "spam"); return err }},
 		{"flag", "flag state must be one of flagged, complete, none", func() error { _, err := g.Flag(ctx, ids, "CANARY flag"); return err }},
 		{"empty categories", "categorize needs at least one category to add or remove", func() error { _, err := g.Categorize(ctx, ids, nil, nil); return err }},
 		{"unknown category", "categorize refused: not in the category list", func() error { _, err := g.Categorize(ctx, ids, []string{"CANARY category"}, nil); return err }},
@@ -441,7 +434,7 @@ func TestOrganizerRefusalsAndExternalErrorsKeepFixedAuditCodes(t *testing.T) {
 }
 
 func TestExternalGuardErrorsCannotSmuggleRefusalText(t *testing.T) {
-	w := &writer{mailbox: &mailbox{messages: messages("m1", "m2")}}
+	w := &writer{mailbox: &mailbox{}}
 	g, _, path := setup(t, w, &screener{verdict: model.Green})
 	for _, text := range []string{"CANARY provider body", "categorize refused: not in the category list CANARY"} {
 		w.err = guard.GuardError(text)
@@ -455,7 +448,7 @@ func TestExternalGuardErrorsCannotSmuggleRefusalText(t *testing.T) {
 }
 
 func TestManualMutationsDoNotScreenAndAuditOnlySafeResults(t *testing.T) {
-	w := &writer{mailbox: &mailbox{messages: messages("m1", "m2")}}
+	w := &writer{mailbox: &mailbox{}}
 	s := &screener{verdict: model.Red}
 	g, _, path := setup(t, w, s)
 	ctx := context.Background()

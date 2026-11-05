@@ -71,6 +71,10 @@ func TestReadCollectionsSearchAndCurrentNestedFolders(t *testing.T) {
 			t.Error("read wrote")
 		}
 		switch r.URL.Path {
+		case "/v1.0/me/mailFolders/deleteditems":
+			jsonResponse(w, map[string]any{"id": "deleted"})
+		case "/v1.0/me/mailFolders/junkemail":
+			jsonResponse(w, map[string]any{"id": "junk"})
 		case "/v1.0/me/mailFolders":
 			if r.URL.Query().Get("page") == "2" {
 				jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "f2", "displayName": "Sent"}}})
@@ -125,130 +129,78 @@ func TestReadCollectionsSearchAndCurrentNestedFolders(t *testing.T) {
 		t.Fatalf("search %v %v", search, err)
 	}
 }
-func TestClosedFoldersWalkOnlyBinSubtrees(t *testing.T) {
+func TestFoldersMarkDeletedItemsJunkEmailAndEveryFolderBelowThem(t *testing.T) {
 	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
-		wantQuery := "%24select=id"
-		if strings.HasSuffix(r.URL.Path, "/childFolders") {
-			wantQuery = "%24select=id%2CchildFolderCount&%24top=100&includeHiddenFolders=true"
-		}
-		if r.Method != "GET" || r.URL.RawQuery != wantQuery {
-			t.Errorf("unexpected request %s %s; want query %s", r.Method, r.URL, wantQuery)
-		}
 		switch r.URL.Path {
 		case "/v1.0/me/mailFolders/deleteditems":
 			jsonResponse(w, map[string]any{"id": "del"})
 		case "/v1.0/me/mailFolders/junkemail":
 			jsonResponse(w, map[string]any{"id": "junk"})
-		case "/v1.0/me/mailFolders/junk/childFolders":
-			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "junk-child", "childFolderCount": 0}}})
+		case "/v1.0/me/mailFolders":
+			jsonResponse(w, map[string]any{"value": []any{
+				map[string]any{"id": "inbox", "displayName": "Inbox", "childFolderCount": 1},
+				map[string]any{"id": "del", "displayName": "Deleted Items", "childFolderCount": 1},
+				map[string]any{"id": "junk", "displayName": "Junk Email", "childFolderCount": 1},
+				map[string]any{"id": "arch", "displayName": "Archive"},
+			}})
+		case "/v1.0/me/mailFolders/inbox/childFolders":
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "receipts", "displayName": "Receipts"}}})
 		case "/v1.0/me/mailFolders/del/childFolders":
 			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "old", "displayName": "Old", "childFolderCount": 1}}})
 		case "/v1.0/me/mailFolders/old/childFolders":
-			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "older", "displayName": "Older", "childFolderCount": 0}}})
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "older", "displayName": "Older"}}})
+		case "/v1.0/me/mailFolders/junk/childFolders":
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "junk-child", "displayName": "Junk child"}}})
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 			w.WriteHeader(404)
 		}
 	})
-	id, err := c.Mailbox().ResolveFolder(context.Background(), "trash")
-	if err != nil || id != "del" {
-		t.Fatalf("trash mapping = %q, %v", id, err)
+	folders, err := c.Mailbox().Folders(context.Background())
+	want := []model.Folder{
+		{ID: "inbox", Name: "Inbox"},
+		{ID: "del", Name: "Deleted Items", Bin: model.Trash},
+		{ID: "junk", Name: "Junk Email", Bin: model.Spam},
+		{ID: "arch", Name: "Archive"},
+		{ID: "receipts", Name: "Receipts"},
+		{ID: "old", Name: "Old", Bin: model.Trash},
+		{ID: "junk-child", Name: "Junk child", Bin: model.Spam},
+		{ID: "older", Name: "Older", Bin: model.Trash},
 	}
-	folders, err := c.Mailbox().ClosedFolders(context.Background())
-	want := map[string]model.Bin{"del": model.Trash, "old": model.Trash, "older": model.Trash, "junk": model.Spam, "junk-child": model.Spam}
 	if err != nil || !reflect.DeepEqual(folders, want) {
 		t.Fatalf("folders = %+v, %v; want %+v", folders, err, want)
 	}
 }
-func TestClosedFoldersFailWhenLookupFails(t *testing.T) {
-	for name, lookup := range map[string]http.HandlerFunc{
-		"graph error": func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) },
-		"missing id":  func(w http.ResponseWriter, _ *http.Request) { jsonResponse(w, map[string]any{}) },
+func TestFoldersFailWhenABinLookupFails(t *testing.T) {
+	for name, tc := range map[string]struct {
+		root   string
+		lookup http.HandlerFunc
+	}{
+		"deleted items graph error": {"deleteditems", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }},
+		"deleted items missing id":  {"deleteditems", func(w http.ResponseWriter, _ *http.Request) { jsonResponse(w, map[string]any{}) }},
+		"junk email graph error":    {"junkemail", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }},
+		"junk email missing id":     {"junkemail", func(w http.ResponseWriter, _ *http.Request) { jsonResponse(w, map[string]any{}) }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
-				case "/v1.0/me/mailFolders/deleteditems":
-					lookup(w, r)
+				case "/v1.0/me/mailFolders/" + tc.root:
+					tc.lookup(w, r)
+				case "/v1.0/me/mailFolders/deleteditems", "/v1.0/me/mailFolders/junkemail":
+					jsonResponse(w, map[string]any{"id": path.Base(r.URL.Path)})
+				case "/v1.0/me/mailFolders":
+					jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "del", "displayName": "Deleted Items"}}})
 				default:
 					w.WriteHeader(404)
 				}
 			})
-			folders, err := c.Mailbox().ClosedFolders(context.Background())
+			folders, err := c.Mailbox().Folders(context.Background())
 			if err == nil || folders != nil {
 				t.Fatalf("folders = %+v, %v; want failure", folders, err)
 			}
 		})
 	}
 }
-
-// The closed-folder walk fails on any lookup it cannot finish: a failed root or childFolders page, a child count that
-// is missing, null, or not a whole number, and a folder ID seen twice (a cycle).
-func TestClosedFoldersFailOnAnIncompleteWalk(t *testing.T) {
-	for name, tc := range map[string]struct {
-		junk     bool
-		children string
-	}{
-		"junk lookup fails":     {junk: false, children: `{"value":[]}`},
-		"childFolders fails":    {junk: true},
-		"count missing":         {junk: true, children: `{"value":[{"id":"old"}]}`},
-		"count null":            {junk: true, children: `{"value":[{"id":"old","childFolderCount":null}]}`},
-		"count string":          {junk: true, children: `{"value":[{"id":"old","childFolderCount":"1"}]}`},
-		"count fraction":        {junk: true, children: `{"value":[{"id":"old","childFolderCount":1.5}]}`},
-		"count negative":        {junk: true, children: `{"value":[{"id":"old","childFolderCount":-1}]}`},
-		"cycle to the root":     {junk: true, children: `{"value":[{"id":"del","childFolderCount":1}]}`},
-		"repeated child folder": {junk: true, children: `{"value":[{"id":"old","childFolderCount":0},{"id":"old","childFolderCount":0}]}`},
-	} {
-		t.Run(name, func(t *testing.T) {
-			c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				switch {
-				case r.URL.Path == "/v1.0/me/mailFolders/deleteditems":
-					jsonResponse(w, map[string]any{"id": "del"})
-				case r.URL.Path == "/v1.0/me/mailFolders/junkemail" && tc.junk:
-					jsonResponse(w, map[string]any{"id": "junk"})
-				case r.URL.Path == "/v1.0/me/mailFolders/del/childFolders" && tc.children != "":
-					_, _ = w.Write([]byte(tc.children))
-				case strings.HasSuffix(r.URL.Path, "/childFolders") && tc.children != "":
-					jsonResponse(w, map[string]any{"value": []any{}})
-				default:
-					w.WriteHeader(500)
-				}
-			})
-			if folders, err := c.Mailbox().ClosedFolders(context.Background()); err == nil || folders != nil {
-				t.Fatalf("folders = %+v, %v; want failure", folders, err)
-			}
-		})
-	}
-}
-
-// Every Graph message has a parentFolderId, its location, which the closed-folder check needs: a message without one
-// fails the read.
-func TestMessageWithoutAParentFolderFails(t *testing.T) {
-	for name, folder := range map[string]any{"missing": nil, "null": json.RawMessage("null"), "empty": "", "not a string": 7} {
-		t.Run(name, func(t *testing.T) {
-			c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
-				m := map[string]any{"id": "m"}
-				if folder != nil {
-					m["parentFolderId"] = folder
-				}
-				if r.URL.Path == "/v1.0/me/messages/m" {
-					jsonResponse(w, m)
-				} else {
-					jsonResponse(w, map[string]any{"value": []any{m}})
-				}
-			})
-			b := c.Mailbox()
-			if got, err := b.Get(context.Background(), []string{"m"}, false); err != model.MailboxError("Graph error InvalidMetadata") {
-				t.Fatalf("get = %+v, %v", got, err)
-			}
-			if got, err := b.List(context.Background(), "inbox", model.PageRequest{}, false); err != model.MailboxError("Graph error InvalidMetadata") {
-				t.Fatalf("list = %+v, %v", got, err)
-			}
-		})
-	}
-}
-
 func TestMalformedBodyIsNeverPresentedAsFetchedEmpty(t *testing.T) {
 	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, map[string]any{"id": "m", "body": map[string]any{"content": 17, "contentType": "text"}})

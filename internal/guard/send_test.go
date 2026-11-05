@@ -49,7 +49,7 @@ var sendCalls = []struct {
 // draftFields are the stored and checked fields of draftContent.
 const draftFields = `{"to":["CANARY-to@example.test"],"cc":[],"bcc":["CANARY-bcc@example.test"],"subject":"CANARY subject","body":"<p>CANARY body</p>","html":true}`
 
-func TestDefaultPolicyRefusesEverySendAfterSourceMetadata(t *testing.T) {
+func TestDefaultPolicyRefusesEverySendBeforeProviderAccess(t *testing.T) {
 	for _, tc := range sendCalls {
 		t.Run(tc.op, func(t *testing.T) {
 			b := &mailbox{messages: messages("m1")}
@@ -59,7 +59,7 @@ func TestDefaultPolicyRefusesEverySendAfterSourceMetadata(t *testing.T) {
 			if err := tc.call(context.Background(), g); err == nil || err.Error() != "refused by policy: mail_send" {
 				t.Fatalf("send=%v", err)
 			}
-			if len(w.calls) != 0 || slices.ContainsFunc(b.gets, func(f fetch) bool { return f.body }) || w.draftReads != 0 || len(s.checked()) != 0 || s.count() != 0 {
+			if len(w.calls) != 0 || len(b.gets) != 0 || w.draftReads != 0 || len(s.checked()) != 0 || s.count() != 0 {
 				t.Fatalf("provider or Jev accessed: writes=%v fetches=%v draft reads=%d checks=%v", w.calls, b.gets, w.draftReads, s.checked())
 			}
 			records := policyRecords(t, path)

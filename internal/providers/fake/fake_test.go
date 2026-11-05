@@ -194,37 +194,16 @@ func TestScanInboxListsNonDraftInboxMailInTheRange(t *testing.T) {
 	}
 }
 
-func TestClosedFoldersIncludeBinDescendants(t *testing.T) {
+func TestFoldersMarkTrashSpamAndEveryFolderBelowThem(t *testing.T) {
 	m, home := mailbox(t)
 	if _, err := m.Folders(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	seed(t, home, `INSERT INTO folders (account, id, name, parent) VALUES ('demo@fake.test', 'projects', 'Projects', NULL), ('demo@fake.test', 'old', 'Old', 'trash'), ('demo@fake.test', 'older', 'Older', 'old'), ('other', 'theirs', 'Theirs', NULL)`)
-	got, err := m.ClosedFolders(context.Background())
-	want := map[string]model.Bin{"trash": model.Trash, "spam": model.Spam, "old": model.Trash, "older": model.Trash}
+	seed(t, home, `INSERT INTO folders (account, id, name, parent) VALUES ('demo@fake.test', 'projects', 'Projects', NULL), ('demo@fake.test', 'old', 'Old', 'trash'), ('demo@fake.test', 'older', 'Older', 'old'), ('demo@fake.test', 'junk', 'Junk', 'spam'), ('other', 'theirs', 'Theirs', NULL)`)
+	got, err := m.Folders(context.Background())
+	want := []model.Folder{{ID: "inbox", Name: "Inbox"}, {ID: "drafts", Name: "Drafts"}, {ID: "sent", Name: "Sent"}, {ID: "archive", Name: "Archive"}, {ID: "trash", Name: "Trash", Bin: model.Trash}, {ID: "spam", Name: "Spam", Bin: model.Spam}, {ID: "projects", Name: "Projects"}, {ID: "old", Name: "Old", Bin: model.Trash}, {ID: "older", Name: "Older", Bin: model.Trash}, {ID: "junk", Name: "Junk", Bin: model.Spam}}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("folders=%+v err=%v", got, err)
-	}
-}
-
-// A parent cycle cannot hold the walk: it fails instead of looping or leaving its folders open.
-func TestClosedFoldersFailOnAParentCycle(t *testing.T) {
-	m, home := mailbox(t)
-	if _, err := m.Folders(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	seed(t, home, `INSERT INTO folders (account, id, name, parent) VALUES ('demo@fake.test', 'a', 'A', 'b'), ('demo@fake.test', 'b', 'B', 'a')`)
-	if got, err := m.ClosedFolders(context.Background()); err == nil || got != nil {
-		t.Fatalf("folders=%+v err=%v", got, err)
-	}
-}
-
-// A fake message is always in one folder: one without a folder fails the read (model.Mailbox).
-func TestMessageWithoutAFolderFails(t *testing.T) {
-	m, home := mailbox(t)
-	seed(t, home, `INSERT INTO messages (account, id, folder, sender_address, subject, received_at) VALUES ('demo@fake.test', 'nowhere', '', 'ana@example.test', 'S', '2026-03-05T09:00:00Z')`)
-	if got, err := m.Get(context.Background(), []string{"nowhere"}, false); err == nil {
-		t.Fatalf("get=%+v", got)
 	}
 }
 

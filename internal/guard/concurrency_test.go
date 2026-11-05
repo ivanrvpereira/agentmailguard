@@ -12,10 +12,6 @@ import (
 
 type concurrentMailbox struct{ model.Mailbox }
 
-func (concurrentMailbox) ClosedFolders(ctx context.Context) (map[string]model.Bin, error) {
-	return (&mailbox{}).ClosedFolders(ctx)
-}
-
 func (concurrentMailbox) Get(_ context.Context, ids []string, body bool) ([]model.Message, error) {
 	out := []model.Message{}
 	for _, id := range ids {
