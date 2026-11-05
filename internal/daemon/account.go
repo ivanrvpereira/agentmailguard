@@ -31,7 +31,8 @@ type signInFlags struct{ device, noBrowser bool }
 
 func (f *signInFlags) register(c *cobra.Command) {
 	c.Flags().BoolVar(&f.device, "device-code", false, "Microsoft 365: sign in with a code on another device")
-	c.Flags().BoolVar(&f.noBrowser, "no-browser", false, "Gmail: print the sign-in URL and read the redirected address from stdin")
+	c.Flags().BoolVar(&f.noBrowser, "no-browser", false, "print the sign-in URL and read the redirected address from stdin")
+	c.MarkFlagsMutuallyExclusive("device-code", "no-browser")
 }
 
 func accountAddCmd(r *runner) *cobra.Command {
@@ -45,7 +46,7 @@ func accountAddCmd(r *runner) *cobra.Command {
 		case !config.ValidAlias(alias):
 			return r.fail("an alias uses only letters, digits, _ and -, at most 64")
 		case provider == "fake" && (set("client-id") || set("tenant-id") || set("client-secret") || flags.device || flags.noBrowser),
-			provider == "m365" && (a.ClientID == "" || a.TenantID == "" || set("client-secret") || flags.noBrowser),
+			provider == "m365" && (a.ClientID == "" || a.TenantID == "" || set("client-secret")),
 			provider == "gmail" && (a.ClientID == "" || a.ClientSecret == "" || set("tenant-id") || flags.device),
 			provider != "fake" && provider != "m365" && provider != "gmail":
 			return 2
@@ -157,8 +158,6 @@ func accountLoginCmd(r *runner) *cobra.Command {
 			return r.fail("unknown account " + quoted(args[0]) + "; run amgd account add")
 		case a.Provider == "fake":
 			return r.fail("fake accounts need no login")
-		case flags.noBrowser && a.Provider != "gmail":
-			return r.fail("--no-browser is for Gmail; use --device-code for Microsoft 365")
 		case flags.device && a.Provider != "m365":
 			return r.fail("--device-code is for Microsoft 365; use --no-browser for Gmail")
 		}
@@ -249,39 +248,50 @@ func (r *runner) signIn(ctx context.Context, a config.Account, flags signInFlags
 	// waiting is set while the cursor sits after the paste prompt, so later output starts on a new line.
 	var waiting atomic.Bool
 	var p loginProvider
+	// The browser fails to load the redirect, which only the loopback callback on this host answers.
+	host := "localhost"
+	if a.Provider == "gmail" {
+		host = "127.0.0.1"
+	}
+	_, interactive := terminal(r.stdin)
+	read := func(ctx context.Context, retry bool) (string, error) {
+		switch {
+		case retry:
+			fmt.Fprintf(r.stderr, "%s That address is not from this sign-in. Paste the full address again.\n", term.Warning.Render("!"))
+		case flags.noBrowser:
+			fmt.Fprintf(r.stderr, "2. The browser then fails to load a %s page. That is expected.\n3. Copy the full address from the address bar and paste it here.\n\n", host)
+		default:
+			fmt.Fprintf(r.stderr, "2. If the browser then fails to load a %s page, copy the full address from the address bar and paste it here.\n\n", host)
+		}
+		fmt.Fprint(r.stderr, term.Label.Render("Address:")+" ")
+		waiting.Store(true)
+		// passwordLine reads without buffering; its errors only stop pasted input, and the program never prints the line.
+		line, err := passwordLine(ctx, r.stdin)
+		if err == nil && interactive {
+			waiting.Store(false) // Enter moved the cursor to a new line.
+		}
+		if err == nil && line == "" && !interactive {
+			return "", io.EOF // passwordLine reports EOF as an empty line; closed input would otherwise repeat forever.
+		}
+		return line, err
+	}
+	noBrowser := func(context.Context, string) error { return nil }
 	if a.Provider == "gmail" {
 		opts := r.opts.Server.Gmail
 		if flags.noBrowser {
-			opts.OpenBrowser = func(context.Context, string) error { return nil }
+			opts.OpenBrowser = noBrowser
 		}
-		_, interactive := terminal(r.stdin)
-		opts.ReadRedirect = func(ctx context.Context, retry bool) (string, error) {
-			switch {
-			case retry:
-				fmt.Fprintf(r.stderr, "%s That address is not from this sign-in. Paste the full address again.\n", term.Warning.Render("!"))
-			case flags.noBrowser:
-				fmt.Fprint(r.stderr, "2. The browser then fails to load a 127.0.0.1 page. That is expected.\n3. Copy the full address from the address bar and paste it here.\n\n")
-			default:
-				fmt.Fprint(r.stderr, "2. If the browser then fails to load a 127.0.0.1 page, copy the full address from the address bar and paste it here.\n\n")
-			}
-			fmt.Fprint(r.stderr, term.Label.Render("Address:")+" ")
-			waiting.Store(true)
-			// passwordLine reads without buffering; its errors only stop pasted input, and the program never prints the line.
-			line, err := passwordLine(ctx, r.stdin)
-			if err == nil && interactive {
-				waiting.Store(false) // Enter moved the cursor to a new line.
-			}
-			if err == nil && line == "" && !interactive {
-				return "", io.EOF // passwordLine reports EOF as an empty line; closed input would otherwise repeat forever.
-			}
-			return line, err
-		}
+		opts.ReadRedirect = read
 		p = gmail.New(a, stage, opts)
 	} else {
-		if !flags.device {
-			fmt.Fprintln(r.stderr, "Complete the sign-in in the browser window that opens.")
+		opts := r.opts.Server.M365
+		if flags.noBrowser {
+			opts.OpenBrowser = noBrowser
 		}
-		p = m365.New(a, stage, r.opts.Server.M365)
+		if !flags.device {
+			opts.ReadRedirect = read
+		}
+		p = m365.New(a, stage, opts)
 	}
 	_, _, err := p.Login(ctx, flags.device, func(uri, code string) {
 		step := "1. Open this URL in a browser on any computer and approve access:"

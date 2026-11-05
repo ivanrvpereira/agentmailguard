@@ -2,21 +2,20 @@ package m365
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
-	"net"
+	"errors"
 	"net/http"
 	"net/url"
-	"os/exec"
 	"time"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/loopback"
 )
 
 // Login is an interactive server-host operation, never a remote API operation.
-// The prompt receives only the verification URI and user code for device login.
+// The prompt receives the verification URI and user code for device login, and the sign-in URL without a code for
+// browser login, which the loopback callback or a pasted redirect from Options.ReadRedirect ends.
 func (c *Client) Login(ctx context.Context, deviceCode bool, prompt func(uri, code string)) (user string, granted []string, retErr error) {
 	ctx, cancel := context.WithTimeout(ctx, 300*time.Second)
 	defer cancel()
@@ -44,7 +43,7 @@ func (c *Client) Login(ctx context.Context, deviceCode bool, prompt func(uri, co
 	if deviceCode {
 		response, err = c.deviceLogin(ctx, prompt)
 	} else {
-		response, err = c.browserLogin(ctx)
+		response, err = c.browserLogin(ctx, prompt)
 	}
 	if err != nil {
 		return "", nil, err
@@ -138,75 +137,38 @@ func (c *Client) deviceLogin(ctx context.Context, prompt func(string, string)) (
 		}
 	}
 }
-func randomCode() (string, error) {
-	var b [32]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", authError
-	}
-	return base64.RawURLEncoding.EncodeToString(b[:]), nil
-}
-func (c *Client) browserLogin(ctx context.Context) (tokenResponse, error) {
-	state, err := randomCode()
+func (c *Client) browserLogin(ctx context.Context, prompt func(string, string)) (tokenResponse, error) {
+	state, err := loopback.Random()
 	if err != nil {
 		return tokenResponse{}, loginBrowserStart
 	}
-	verifier, err := randomCode()
+	verifier, err := loopback.Random()
 	if err != nil {
 		return tokenResponse{}, loginBrowserStart
 	}
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		return tokenResponse{}, loginBrowserStart
-	}
-	defer listener.Close()
-	_, port, _ := net.SplitHostPort(listener.Addr().String())
 	// Match azure-identity's localhost redirect registration while binding only loopback.
-	host := net.JoinHostPort("localhost", port)
-	redirect := "http://" + host
-	type callback struct {
-		code string
-		err  bool
+	callback, err := loopback.Listen("localhost", state)
+	if err != nil {
+		return tokenResponse{}, loginBrowserStart
 	}
-	result := make(chan callback, 1)
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		q := r.URL.Query()
-		if r.Method != http.MethodGet || r.URL.Path != "/" || r.Host != host || len(q["state"]) != 1 || subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(state)) != 1 {
-			w.WriteHeader(400)
-			_, _ = w.Write([]byte("Invalid callback"))
-			return
-		}
-		response := callback{code: q.Get("code"), err: q.Get("error") != "" || len(q["code"]) != 1 || q.Get("code") == ""}
-		select {
-		case result <- response:
-		default:
-		}
-		_, _ = w.Write([]byte("Sign-in response received. Return to the terminal for the login result."))
-	})
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second, IdleTimeout: 5 * time.Second, MaxHeaderBytes: 16 << 10}
-	defer server.Close()
-	go func() { _ = server.Serve(listener) }()
+	defer callback.Close()
+	redirect := "http://" + callback.Host
 	hash := sha256.Sum256([]byte(verifier))
 	q := url.Values{"client_id": {c.account.ClientID}, "response_type": {"code"}, "response_mode": {"query"}, "redirect_uri": {redirect}, "scope": {requestedScopes}, "state": {state}, "code_challenge": {base64.RawURLEncoding.EncodeToString(hash[:])}, "code_challenge_method": {"S256"}}
-	open := c.openBrowser
-	if open == nil {
-		open = func(ctx context.Context, uri string) error { return exec.CommandContext(ctx, "open", uri).Run() }
+	uri := c.authority + "/authorize?" + q.Encode()
+	if prompt != nil {
+		prompt(uri, "")
 	}
-	if open(ctx, c.authority+"/authorize?"+q.Encode()) != nil {
-		return tokenResponse{}, loginBrowserOpen
+	code, err := callback.Wait(ctx, uri, c.openBrowser, c.readRedirect)
+	if errors.Is(err, loopback.ErrDenied) {
+		return tokenResponse{}, loginAuthorization
 	}
-	select {
-	case <-ctx.Done():
+	if err != nil {
 		return tokenResponse{}, loginCanceled
-	case response := <-result:
-		if response.err {
-			return tokenResponse{}, loginAuthorization
-		}
-		token, err := c.oauth(ctx, "/token", url.Values{"client_id": {c.account.ClientID}, "grant_type": {"authorization_code"}, "code": {response.code}, "redirect_uri": {redirect}, "code_verifier": {verifier}, "scope": {requestedScopes}})
-		if err != nil {
-			return tokenResponse{}, loginTokenExchange
-		}
-		return token, nil
 	}
+	token, err := c.oauth(ctx, "/token", url.Values{"client_id": {c.account.ClientID}, "grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {redirect}, "code_verifier": {verifier}, "scope": {requestedScopes}})
+	if err != nil {
+		return tokenResponse{}, loginTokenExchange
+	}
+	return token, nil
 }

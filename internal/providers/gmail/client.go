@@ -10,9 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
-	"os/exec"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +18,7 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
+	"github.com/ivanrvpereira/agentmailguard/internal/providers/loopback"
 )
 
 const gmailScope = "https://www.googleapis.com/auth/gmail.modify"
@@ -40,9 +39,8 @@ type Options struct {
 	Now                                                                            func() time.Time
 	OpenBrowser                                                                    func(context.Context, string) error
 	Sleep                                                                          func(context.Context, time.Duration) error
-	// ReadRedirect returns the browser's redirected address, pasted on hosts the loopback callback cannot reach.
-	// Login calls it again with retry set after an address that does not belong to this sign-in. It must return
-	// when ctx ends: Login cancels ctx and waits for it before Login returns.
+	// ReadRedirect returns the browser's redirected address, pasted on hosts the loopback callback cannot reach;
+	// see loopback.Callback.Wait.
 	ReadRedirect func(ctx context.Context, retry bool) (string, error)
 }
 
@@ -94,11 +92,7 @@ func New(account config.Account, store credentials.Store, opts Options) *Client 
 		}
 	}
 	if opts.OpenBrowser == nil {
-		opener := "xdg-open"
-		if runtime.GOOS == "darwin" {
-			opener = "open"
-		}
-		opts.OpenBrowser = func(ctx context.Context, uri string) error { return exec.CommandContext(ctx, opener, uri).Run() }
+		opts.OpenBrowser = loopback.Open
 	}
 	h := http.Client{}
 	if opts.HTTPClient != nil {

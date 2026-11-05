@@ -241,7 +241,7 @@ Done when the applied run's `stats` (`applied`, `tagged`, `skipped`, `failed`) a
 
 ## Sign-in problems
 
-If a command fails with `sign-in failed; ...` or `no accounts; run amgd account add`, or `amg account status` reports that the account is not logged in, tell the user the exact error text. The operator must sign in again with `amgd account login ALIAS`, or add an account with `amgd account add`, on the daemon host. On a host without a browser, Gmail login uses `--no-browser` and Microsoft 365 login uses `--device-code`.
+If a command fails with `sign-in failed; ...` or `no accounts; run amgd account add`, or `amg account status` reports that the account is not logged in, tell the user the exact error text. The operator must sign in again with `amgd account login ALIAS`, or add an account with `amgd account add`, on the daemon host. On a host without a browser, login uses `--no-browser`; Microsoft 365 also has `--device-code`, which many organizations block.
 If a command fails with `unknown account; run amg account list`, run `amg account list` and use an alias from it, or ask the user.
 Do not run `amgd` commands yourself. Do not ask for, read, store, or repeat a sign-in address, authorization code, password, or token.
 

@@ -10,7 +10,6 @@ const (
 	loginCredentialSave
 	loginInvalidToken
 	loginBrowserStart
-	loginBrowserOpen
 	loginAuthorization
 	loginDeviceRequest
 	loginDeviceAuthorization
@@ -33,14 +32,12 @@ func (e LoginError) Message() string {
 		return "provider login failed: token validation failed"
 	case loginBrowserStart:
 		return "provider login failed: could not start browser authentication"
-	case loginBrowserOpen:
-		return "provider login failed: could not open the browser"
 	case loginAuthorization:
 		return "provider login failed: authorization response failed; check Microsoft sign-in logs"
 	case loginDeviceRequest:
 		return "provider login failed: device-code request failed"
 	case loginDeviceAuthorization:
-		return "provider login failed: device-code authorization refused; check Microsoft sign-in logs"
+		return "provider login failed: device-code authorization refused; organizations can block device code, so sign in with --no-browser instead, or check Microsoft sign-in logs"
 	case loginDevicePolling:
 		return "provider login failed: device-code polling failed"
 	case loginTimeout:

@@ -5,10 +5,13 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,11 +29,26 @@ func fileHome(t *testing.T) string {
 	return writeHome(t, fileConfig)
 }
 
-// refusingBrowser records that the sign-in opened the browser and then fails the sign-in.
-func refusingBrowser(opened *bool) func(context.Context, string) error {
-	return func(context.Context, string) error {
-		*opened = true
-		return errors.New("synthetic-refusal")
+// denyingBrowser records that the sign-in opened the browser, runs check, and then denies the sign-in at its
+// callback, which ends the login.
+func denyingBrowser(opened *atomic.Bool, check func()) func(context.Context, string) error {
+	return func(ctx context.Context, raw string) error {
+		opened.Store(true)
+		check()
+		u, err := url.Parse(raw)
+		if err != nil {
+			return err
+		}
+		q := u.Query()
+		req, err := http.NewRequestWithContext(ctx, "GET", q.Get("redirect_uri")+"?"+url.Values{"state": {q.Get("state")}, "error": {"access_denied"}}.Encode(), nil)
+		if err != nil {
+			return err
+		}
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			return err
+		}
+		return resp.Body.Close()
 	}
 }
 
@@ -72,10 +90,10 @@ func TestFilePasswordDoesNotWaitForEOF(t *testing.T) {
 	go func() { _, _ = io.WriteString(writer, "synthetic-password\n") }()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	opened := false
-	opts := daemon.Options{Stdin: input, LookupEnv: noEnv, Server: server.Options{M365: m365.Options{AuthorityURL: "http://127.0.0.1:1", OpenBrowser: refusingBrowser(&opened)}}}
+	var opened atomic.Bool
+	opts := daemon.Options{Stdin: input, LookupEnv: noEnv, Server: server.Options{M365: m365.Options{AuthorityURL: "http://127.0.0.1:1", OpenBrowser: denyingBrowser(&opened, func() {})}}}
 	daemon.Run(ctx, []string{"--home", home, "account", "login", "work"}, io.Discard, io.Discard, opts)
-	if !opened || ctx.Err() != nil {
+	if !opened.Load() || ctx.Err() != nil {
 		t.Fatal("one password line waited for EOF")
 	}
 }
@@ -136,17 +154,15 @@ func TestInjectedPasswordLookupIgnoresProcessEnvironment(t *testing.T) {
 	if os.Getenv(childMode) == "injected" {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		opened := false
+		var opened atomic.Bool
 		var out, stderr bytes.Buffer
-		opts := daemon.Options{Stdin: strings.NewReader("synthetic-password\n"), LookupEnv: noEnv, Server: server.Options{M365: m365.Options{AuthorityURL: "http://127.0.0.1:1", OpenBrowser: func(context.Context, string) error {
-			opened = true
+		opts := daemon.Options{Stdin: strings.NewReader("synthetic-password\n"), LookupEnv: noEnv, Server: server.Options{M365: m365.Options{AuthorityURL: "http://127.0.0.1:1", OpenBrowser: denyingBrowser(&opened, func() {
 			if _, present := os.LookupEnv(credentials.PasswordEnvironment); present {
 				t.Error("process password remained available to browser")
 			}
-			return errors.New("synthetic-refusal")
-		}}}}
+		})}}}
 		daemon.Run(ctx, []string{"--home", fileHome(t), "account", "login", "work"}, &out, &stderr, opts)
-		if !opened || strings.Contains(out.String()+stderr.String(), "private-") {
+		if !opened.Load() || strings.Contains(out.String()+stderr.String(), "private-") {
 			t.Fatalf("injected environment did not isolate password selection: stderr %q", stderr.String())
 		}
 		return
@@ -173,19 +189,17 @@ func TestFilePasswordEnvironmentDoesNotReachBrowserChild(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		opened := false
-		opts.Server.M365 = m365.Options{AuthorityURL: "http://127.0.0.1:1", OpenBrowser: func(context.Context, string) error {
-			opened = true
+		var opened atomic.Bool
+		opts.Server.M365 = m365.Options{AuthorityURL: "http://127.0.0.1:1", OpenBrowser: denyingBrowser(&opened, func() {
 			child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestFilePasswordEnvironmentDoesNotReachBrowserChild$")
 			child.Env = append(os.Environ(), childMode+"=browser")
 			if child.Run() != nil {
 				t.Error("password inherited by browser child")
 			}
-			return errors.New("synthetic-refusal")
-		}}
+		})}
 		var out, stderr bytes.Buffer
 		daemon.Run(ctx, []string{"--home", home, "account", "login", "work"}, &out, &stderr, opts)
-		if !opened {
+		if !opened.Load() {
 			t.Fatalf("environment password did not bypass stdin: stderr %q", stderr.String())
 		}
 		if strings.Contains(out.String()+stderr.String(), "private-password") {
