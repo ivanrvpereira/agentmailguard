@@ -60,7 +60,7 @@ func TestWaitAcceptsOnlyTheRedirectOfThisSignIn(t *testing.T) {
 
 // A redirect of this sign-in with a provider error or without exactly one code ends the wait with ErrDenied.
 func TestWaitEndsOnADeniedRedirect(t *testing.T) {
-	for _, query := range []string{"&error=access_denied&code=synthetic-code", "", "&code=", "&code=a&code=b"} {
+	for _, query := range []string{"&error=access_denied&code=synthetic-code", "&error=&error=access_denied&code=synthetic-code", "", "&code=", "&code=a&code=b"} {
 		c, err := loopback.Listen("127.0.0.1", state)
 		if err != nil {
 			t.Fatal(err)

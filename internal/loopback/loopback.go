@@ -70,6 +70,7 @@ func Listen(name, state string) (*Callback, error) {
 	return c, nil
 }
 
+// Close stops the callback; a redirect that arrives later gets no answer.
 func (c *Callback) Close() {
 	_ = c.server.Close()
 	_ = c.listener.Close()
@@ -95,7 +96,7 @@ func (c *Callback) accept(host, path, rawQuery string) bool {
 		return false
 	}
 	got := result{code: q.Get("code")}
-	if len(q["code"]) != 1 || got.code == "" || q.Get("error") != "" {
+	if len(q["code"]) != 1 || got.code == "" || q.Has("error") {
 		got.err = ErrDenied
 	}
 	select {
