@@ -147,7 +147,7 @@ For systemd and launchd, see [Run as a service](setup.md#run-as-a-service).
 Run sign-in on the daemon host. `amgd account add` signs in to a new account. `amgd account login` signs in again to an existing account:
 
 ```sh
-amgd account add work --provider m365 --client-id '<client-id>' --tenant-id '<tenant-id>' --device-code
+amgd account add work --provider m365 --client-id '<client-id>' --tenant-id '<tenant-id>' --no-browser
 amgd account login work
 amgd account login work --device-code
 amgd account login personal --no-browser
@@ -181,16 +181,16 @@ A token refresh saves to the store only if the stored login did not change since
 A token refresh saves without losing the entries of the other accounts or the screening key.
 
 Browser login is the default.
-Microsoft 365 supports device-code login.
+Microsoft 365 supports device-code login, but many organizations block it. When it is refused, the error names `--no-browser`.
 Gmail refuses device-code login because that flow does not support the required scopes.
+`--device-code` and `--no-browser` cannot be used together.
 
-On a headless host, use Gmail login with `--no-browser`. It needs no SSH tunnel; the steps are in [Headless login](setup.md#headless-login).
+On a headless host, use `--no-browser`. It needs no SSH tunnel; the steps are in [Headless login](setup.md#headless-login).
 The pasted address gets the same checks as the loopback callback: host, port, path, and `state` must match this sign-in.
 If the address does not match, login asks for it again. A provider error in a matching address ends the login.
 The PKCE verifier stays on the daemon host, so the code in the address cannot be exchanged anywhere else.
 The program does not print or log the pasted address. The terminal shows it as you paste it.
-Without `--no-browser`, Gmail login opens the URL with `open` on macOS or `xdg-open` on Linux. If that fails, login continues and accepts the loopback callback or a pasted address.
-`--no-browser` is refused for Microsoft 365. Use `--device-code` on a headless host.
+Without `--no-browser`, browser login prints the URL and opens it with `open` on macOS or `xdg-open` on Linux. If that fails, login continues and accepts the loopback callback or a pasted address.
 
 `amgd` saves a login only after the email check.
 A successful `account login` prints a final `✓ Signed in as EMAIL` line on stderr. A successful `account add` prints `✓ Added account ALIAS: EMAIL (PROVIDER)`.

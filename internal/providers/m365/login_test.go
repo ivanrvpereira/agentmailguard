@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -198,5 +199,39 @@ func TestBrowserLoginPKCEStateAndCheckedCredentialPersistence(t *testing.T) {
 	}
 	if _, _, err := c.Status(context.Background()); err != nil || s.loads != 0 {
 		t.Fatal("login token not cached")
+	}
+}
+
+// On a host that the browser's redirect cannot reach, the pasted localhost address completes the login, and the
+// token request uses the redirect URI of the sign-in.
+func TestBrowserLoginAcceptsAPastedRedirect(t *testing.T) {
+	s := validStore()
+	auth := make(chan *url.URL, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			_ = r.ParseForm()
+			u := <-auth
+			if r.Form.Get("code") != "pasted" || r.Form.Get("redirect_uri") != u.Query().Get("redirect_uri") {
+				t.Error("pasted code exchange mismatch")
+			}
+			jsonResponse(w, map[string]any{"access_token": goodToken(), "refresh_token": "new-refresh", "expires_in": 3600})
+		case "/v1.0/me":
+			jsonResponse(w, map[string]string{"userPrincipalName": "login@example.test"})
+		default:
+			t.Errorf("unexpected OAuth path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	var prompt string
+	read := func(context.Context, bool) (string, error) {
+		u, _ := url.Parse(prompt)
+		auth <- u
+		return u.Query().Get("redirect_uri") + "/?state=" + url.QueryEscape(u.Query().Get("state")) + "&code=pasted", nil
+	}
+	c := m365.New(account(), s, m365.Options{HTTPClient: server.Client(), AuthorityURL: server.URL, BaseURL: server.URL + "/v1.0", Now: func() time.Time { return now }, OpenBrowser: func(context.Context, string) error { return errors.New("no browser") }, ReadRedirect: read})
+	user, _, err := c.Login(context.Background(), false, func(uri, code string) { prompt = uri })
+	if err != nil || user != "login@example.test" || s.saves != 1 || !strings.HasPrefix(prompt, server.URL+"/authorize?") {
+		t.Fatal(user, err, s.saves)
 	}
 }

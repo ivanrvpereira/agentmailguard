@@ -14,6 +14,7 @@ import (
 
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
+	"github.com/ivanrvpereira/agentmailguard/internal/loopback"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
@@ -25,6 +26,9 @@ type Options struct {
 	Now                   func() time.Time
 	Wait                  func(context.Context, time.Duration) error
 	OpenBrowser           func(context.Context, string) error
+	// ReadRedirect returns the browser's redirected address, pasted on hosts the loopback callback cannot reach;
+	// see loopback.Callback.Wait.
+	ReadRedirect func(ctx context.Context, retry bool) (string, error)
 }
 type Client struct {
 	account         config.Account
@@ -34,6 +38,7 @@ type Client struct {
 	now             func() time.Time
 	wait            func(context.Context, time.Duration) error
 	openBrowser     func(context.Context, string) error
+	readRedirect    func(context.Context, bool) (string, error)
 	authGate        chan struct{}
 	token           *credentials.OAuth
 	limit           chan struct{}
@@ -63,7 +68,11 @@ func New(account config.Account, store credentials.Store, opts Options) *Client 
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Client{account: account, store: store, http: &h, base: strings.TrimRight(base, "/"), authority: strings.TrimRight(authority, "/"), now: clock, wait: opts.Wait, openBrowser: opts.OpenBrowser, authGate: make(chan struct{}, 1), mutationGate: make(chan struct{}, 1), limit: make(chan struct{}, 4)}
+	open := opts.OpenBrowser
+	if open == nil {
+		open = loopback.Open
+	}
+	return &Client{account: account, store: store, http: &h, base: strings.TrimRight(base, "/"), authority: strings.TrimRight(authority, "/"), now: clock, wait: opts.Wait, openBrowser: open, readRedirect: opts.ReadRedirect, authGate: make(chan struct{}, 1), mutationGate: make(chan struct{}, 1), limit: make(chan struct{}, 4)}
 }
 
 const authError = model.MailboxError("AuthError")
