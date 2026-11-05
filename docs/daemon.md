@@ -174,7 +174,7 @@ Its commands fail until the cause is fixed.
 A login can also expire or be revoked while the daemon runs. Commands for that account then fail with `sign-in failed; check the network, or run amgd account login`.
 A failed credential store, a missing screening key, or an invalid configuration refuses the start.
 Store statuses include `ok`, `access denied`, `wrong password or damaged file`, `password missing`, and `unsupported version`.
-A missing console password also refuses the start. On a terminal, `amgd serve` first asks for one. Without a terminal, its line is `console password: not set`, and the start ends with `start refused: run amgd config set console.password, then start the daemon again`. See [Console password](approval-console.md#console-password).
+A missing console password also refuses the start. On a terminal, `amgd serve` first asks for one. Without a terminal, its line is `console password: not set; run amgd config set console.password`, and the start ends with `start refused: run amgd config set console.password, then start the daemon again`. See [Console password](approval-console.md#console-password).
 
 After the start, the daemon keeps credentials in memory. A reload reads the store again.
 A token refresh saves to the store only if the stored login did not change since the daemon read it. Otherwise the daemon uses the stored login. Thus a login that `amgd account login` saved while the daemon runs is never lost.

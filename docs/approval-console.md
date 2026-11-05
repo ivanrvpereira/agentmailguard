@@ -221,7 +221,7 @@ An invalid table stops `amgd serve` with `config.toml: KEY_PATH: PROBLEM`, for e
 
 The console password protects the [approval console](#approval-console). The console itself never sets one, so the first visitor cannot claim it.
 
-`amgd serve` needs it to start. On a terminal without a stored password, it asks for one (twice, echo off) before the check list, saves its hash, and writes a `console_password_set` audit record. Without a terminal, for example under systemd or launchd, it shows `credential check: console password: not set` and refuses to start with `start refused: run amgd config set console.password, then start the daemon again`. The command has `--home HOME` when the daemon got `--home` or `AMG_HOME`.
+`amgd serve` needs it to start. On a terminal without a stored password, it asks for one (twice, echo off) before the check list, saves its hash, and writes a `console_password_set` audit record. Without a terminal, for example under systemd or launchd, it shows `credential check: console password: not set; run amgd config set console.password` and refuses to start with `start refused: run amgd config set console.password, then start the daemon again`. Both commands have `--home HOME` when the daemon got `--home` or `AMG_HOME`.
 
 Run `amgd config set console.password` on the daemon host to set or change it.
 The command does not ask for the current password, so you can also reset a forgotten password with it.
@@ -231,4 +231,4 @@ The password must be 8 to 72 bytes of valid UTF-8 without control characters.
 The command stores only a bcrypt hash of the password in the credential store (Keychain or the encrypted file). It never prints the password or the hash, and it does not accept them as arguments.
 It prints `Console password saved. Sign in to the console as USERNAME (console.username).`, writes a `console_password_set` audit record, and reloads the daemon. The new password takes effect at the reload, and the old password stops working at once. Make sure that the daemon log shows `reload ok`: after `reload refused`, the old password stays valid until a reload succeeds.
 
-The daemon reads the hash at start and at each reload. It shows `credential check: console password: ok` or `not set`. A missing password stops the start. If the password is gone from the store when a reload runs, the console answers every request with HTTP 503 and `console password not set; run amgd config set console.password`.
+The daemon reads the hash at start and at each reload. It shows `credential check: console password: ok` or `not set; run amgd config set console.password`. A missing password stops the start. If the password is gone from the store when a reload runs, the console answers every request with HTTP 503 and `console password not set; run amgd config set console.password`.

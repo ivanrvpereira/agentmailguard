@@ -35,7 +35,7 @@ const noScreeningKey = "not needed (fake screening)"
 
 // consoleNotSet is the console check without a console password. amgd serve then refuses to start and names the
 // command for its home; the console refuses every request.
-const consoleNotSet = "not set"
+const consoleNotSet = "not set; run amgd config set console.password"
 
 // noAccounts is the account check of a configuration without accounts.
 const noAccounts = "none; run amgd account add"

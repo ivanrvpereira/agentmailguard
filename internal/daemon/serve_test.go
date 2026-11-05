@@ -126,7 +126,7 @@ func TestServeRefusesToStartWithoutAConsolePassword(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		code := daemon.Run(ctx, append(tc.args, "serve", "--listen", "127.0.0.1:0"), io.Discard, &errout, daemon.Options{Platform: &keychain{}, LookupEnv: noEnv, Stdin: strings.NewReader(""), Listen: listenReserved})
 		cancel()
-		want := "credential check: console password: not set\nerror: start refused: run " + tc.want + ", then start the daemon again\n"
+		want := "credential check: console password: not set; run " + tc.want + "\nerror: start refused: run " + tc.want + ", then start the daemon again\n"
 		if code != 1 || !strings.HasSuffix(errout.String(), want) || strings.Contains(errout.String(), "listening") {
 			t.Errorf("%v AMG_HOME=%q: exit %d stderr %q", tc.args, tc.env, code, errout.String())
 		}

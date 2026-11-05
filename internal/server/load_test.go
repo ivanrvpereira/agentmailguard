@@ -19,7 +19,7 @@ import (
 )
 
 // consoleNotSet is the console check while the store holds no console password.
-const consoleNotSet = "not set"
+const consoleNotSet = "not set; run amgd config set console.password"
 
 // The load reports one fixed line per item. An account without a login does not stop the start; its calls fail.
 func TestLoadChecksEveryItemAndStartsWithAnAccountThatIsNotLoggedIn(t *testing.T) {

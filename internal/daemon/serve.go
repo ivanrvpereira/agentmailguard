@@ -92,7 +92,7 @@ func (r *runner) serve(ctx context.Context, listen string) int {
 	}
 	fmt.Fprintln(r.stderr, "checking credentials")
 	result, e := s.Load(ctx, r.screeningKeyPrompt())
-	r.report(result, e)
+	r.report(home, result, e)
 	if e != nil {
 		if ctx.Err() != nil {
 			return r.fail("credential check canceled")
@@ -140,7 +140,7 @@ func (r *runner) serve(ctx context.Context, listen string) int {
 			notifySystemd(r.opts.LookupEnv, reloading())
 			fmt.Fprintln(r.stderr, "reload requested")
 			result, err := s.Reload(ctx)
-			r.report(result, err)
+			r.report(home, result, err)
 			switch {
 			case err == nil:
 				fmt.Fprintln(r.stderr, "reload ok")
@@ -179,9 +179,16 @@ func (r *runner) serve(ctx context.Context, listen string) int {
 }
 
 // report writes the check list, the detail of a refusal, warnings, and restart reminders of a load.
-func (r *runner) report(result server.Result, err error) {
+func (r *runner) report(home string, result server.Result, err error) {
 	for _, c := range result.Checks {
-		fmt.Fprintf(r.stderr, "credential check: %s: %s\n", c.Item, c.Status)
+		status := c.Status
+		// A check that ends with a command to copy gets the home of this daemon, as the refusal does.
+		for _, cmd := range []string{"amgd config set console.password", "amgd config set screening.api_key"} {
+			if before, ok := strings.CutSuffix(status, cmd); ok {
+				status = before + r.command(cmd, home)
+			}
+		}
+		fmt.Fprintf(r.stderr, "credential check: %s: %s\n", c.Item, status)
 	}
 	if e, ok := errors.AsType[server.LoadError](err); ok && e.Err != nil {
 		fmt.Fprintln(r.stderr, "error: "+quoted(e.Err.Error()))
