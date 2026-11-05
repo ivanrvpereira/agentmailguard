@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -107,8 +106,6 @@ func checkLoginDiagnostic(t *testing.T, scenario loginScenario) {
 			t.Error("device flow opened browser")
 		}
 		switch scenario.mode {
-		case "browser-open":
-			return errors.New("private-browser-canary")
 		case "timeout":
 			return nil
 		case "canceled":
@@ -126,7 +123,8 @@ func checkLoginDiagnostic(t *testing.T, scenario loginScenario) {
 			values.Set("error", "private-auth-error-canary")
 			values.Set("error_description", "private-auth-description-canary")
 		}
-		req, err := http.NewRequestWithContext(ctx, "GET", q.Get("redirect_uri")+"?"+values.Encode(), nil)
+		// Login cancels the browser once the callback has the code, which can be before this response arrives.
+		req, err := http.NewRequestWithContext(context.WithoutCancel(ctx), "GET", q.Get("redirect_uri")+"?"+values.Encode(), nil)
 		if err != nil {
 			return err
 		}
@@ -164,13 +162,13 @@ func checkLoginDiagnostic(t *testing.T, scenario loginScenario) {
 		t.Fatalf("failure crossed wrong boundaries: token=%d profile=%d save=%d", tokens.Load(), profiles.Load(), saves)
 	}
 	wantCallbacks := int32(1)
-	if scenario.device || scenario.mode == "browser-open" || scenario.mode == "timeout" || scenario.mode == "canceled" {
+	if scenario.device || scenario.mode == "timeout" || scenario.mode == "canceled" {
 		wantCallbacks = 0
 	}
 	if callbacks.Load() != wantCallbacks {
 		t.Fatal("unexpected browser callback count")
 	}
-	if strings.Contains(out.String()+stderr.String(), "private-") || strings.Contains(stderr.String(), "localhost") {
+	if strings.Contains(out.String()+stderr.String(), "private-") {
 		t.Fatal("login diagnostic leaked token/callback data")
 	}
 }
@@ -187,12 +185,11 @@ func TestM365LoginWarnsAboutExtraGrants(t *testing.T) {
 func TestM365LoginReportsAuthorizationFailures(t *testing.T) {
 	t.Parallel()
 	for _, scenario := range []loginScenario{
-		{mode: "browser-open", want: "provider login failed: could not open the browser"},
 		{mode: "browser-denied", want: "provider login failed: authorization response failed; check Microsoft sign-in logs"},
 		{mode: "timeout", want: "provider login failed: login timed out"},
 		{mode: "canceled", want: "provider login failed: login canceled"},
 		{mode: "device-request", device: true, want: "provider login failed: device-code request failed"},
-		{mode: "device-denied", device: true, want: "provider login failed: device-code authorization refused; check Microsoft sign-in logs", tokens: 1},
+		{mode: "device-denied", device: true, want: "provider login failed: device-code authorization refused; organizations can block device code, so sign in with --no-browser instead, or check Microsoft sign-in logs", tokens: 1},
 		{mode: "token-http", device: true, want: "provider login failed: token exchange failed", tokens: 1},
 	} {
 		t.Run(scenario.mode, func(t *testing.T) { checkLoginDiagnostic(t, scenario) })

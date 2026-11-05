@@ -16,6 +16,7 @@ The first public release.
 ### Added
 
 - `amg mail spam IDS... | --thread THREAD_ID [--in FOLDER_ID]` moves open messages to spam/junk under the new `mail_spam` write policy (default allow; sealed/error default deny), with per-message approvals.
+- Microsoft 365 login works on headless Linux: `amgd account add|login --no-browser` prints the sign-in URL and takes the redirected `http://localhost:PORT/?code=…` address as a paste, with the checks of the loopback callback. Browser login opens the URL with `xdg-open` on Linux, always prints it, and keeps waiting when no browser opens. A refused device-code sign-in names `--no-browser`, since many organizations block device code.
 - `amgd`, a daemon that screens Microsoft 365 and Gmail mail and calendar events for AI agents, and `amg`, the agent's client, which talks to it over HTTP.
 - Screened mail reads: list, search, read, and whole conversations. Each message gets a verdict (`green`, `yellow`, `red`, `sealed`, or `error`) that decides what the agent sees.
 - Mail changes by message or by conversation: archive, move, trash, flag, categorize, and read state.

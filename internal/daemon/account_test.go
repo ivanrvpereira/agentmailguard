@@ -1,14 +1,20 @@
 package daemon_test
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
+	"github.com/ivanrvpereira/agentmailguard/internal/daemon"
 )
 
 // signInArgs are the account add flags of each provider that signs in.
@@ -152,5 +158,99 @@ func TestAccountAddThatCannotSaveTheLoginPointsToAccountLogin(t *testing.T) {
 	}
 	if got := auditEvents(t, home, "account_added"); !reflect.DeepEqual(got, []map[string]any{{"event": "account_added", "account": "ana@example.test"}}) {
 		t.Fatalf("audit: %v", got)
+	}
+}
+
+// paster is the terminal of a user who signs in on another computer: it watches stderr for the sign-in URL and,
+// at each Address prompt, pastes the next address that paste makes from that URL.
+type paster struct {
+	mu     sync.Mutex
+	text   strings.Builder
+	stdin  *io.PipeWriter
+	paste  func(n int, authorize *url.URL) string
+	pasted int
+}
+
+func (p *paster) Write(b []byte) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.text.Write(b)
+	if strings.Count(p.text.String(), "Address:") > p.pasted {
+		p.pasted++
+		var authorize *url.URL
+		for line := range strings.Lines(p.text.String()) {
+			if u, err := url.Parse(strings.TrimSpace(line)); err == nil && u.Query().Has("redirect_uri") {
+				authorize = u
+			}
+		}
+		go func(line string) { _, _ = io.WriteString(p.stdin, line+"\n") }(p.paste(p.pasted, authorize))
+	}
+	return len(b), nil
+}
+
+// With --no-browser, amgd never opens a browser, refuses an address of another sign-in, and saves the login of
+// the pasted redirect after the email check.
+func TestAccountLoginWithoutBrowserTakesThePastedRedirect(t *testing.T) {
+	for _, tc := range []struct{ provider, host string }{{"m365", "localhost"}, {"gmail", "127.0.0.1"}} {
+		t.Run(tc.provider, func(t *testing.T) {
+			t.Parallel()
+			home, k, c := writeHome(t, accountConfig), &keychain{}, newClock()
+			opts := providerOptions(k, newM365(t), newGmail(t), c)
+			if code, _, errout := amgd(t, home, opts, "", append([]string{"account", "add", "work"}, signInArgs[tc.provider]...)...); code != 0 {
+				t.Fatalf("add: exit %d stderr %q", code, errout)
+			}
+			opts.Server.M365.OpenBrowser = func(context.Context, string) error { t.Error("--no-browser opened a browser"); return nil }
+			opts.Server.Gmail.OpenBrowser = opts.Server.M365.OpenBrowser
+			stdin, writer := io.Pipe()
+			defer writer.Close()
+			opts.Stdin = stdin
+			terminal := &paster{stdin: writer, paste: func(n int, authorize *url.URL) string {
+				q := authorize.Query()
+				redirect := strings.TrimSuffix(q.Get("redirect_uri"), "/")
+				if !strings.HasPrefix(redirect, "http://"+tc.host+":") {
+					t.Errorf("redirect URI %q", redirect)
+				}
+				if n == 1 {
+					return redirect + "/?state=synthetic-other&code=synthetic-code"
+				}
+				return redirect + "/?state=" + url.QueryEscape(q.Get("state")) + "&code=synthetic-code"
+			}}
+			ctx, cancel := context.WithTimeout(t.Context(), bound)
+			defer cancel()
+			var out bytes.Buffer
+			code := daemon.Run(ctx, []string{"--home", home, "account", "login", "work", "--no-browser"}, &out, terminal, opts)
+			terminal.mu.Lock()
+			errout := terminal.text.String()
+			terminal.mu.Unlock()
+			want := "2. The browser then fails to load a " + tc.host + " page. That is expected.\n3. Copy the full address from the address bar and paste it here.\n\nAddress: ! That address is not from this sign-in. Paste the full address again.\nAddress: "
+			if code != 0 || !strings.Contains(errout, want) || !strings.Contains(errout, "Signed in as ana@example.test\n") || strings.Contains(errout+out.String(), "synthetic-code") {
+				t.Fatalf("exit %d stderr %q", code, errout)
+			}
+			if login := k.login(t, home, tc.provider, "ana@example.test"); login.RefreshToken == "" {
+				t.Fatal("the pasted sign-in was not saved")
+			}
+		})
+	}
+}
+
+// --device-code and --no-browser are two sign-ins: together they are a usage error before any sign-in starts.
+func TestAccountSignInRefusesDeviceCodeWithNoBrowser(t *testing.T) {
+	t.Parallel()
+	home, k, c := writeHome(t, accountConfig), &keychain{}, newClock()
+	ms := newM365(t)
+	opts := providerOptions(k, ms, nil, c)
+	if code, _, errout := amgd(t, home, opts, "", append([]string{"account", "add", "work"}, signInArgs["m365"]...)...); code != 0 {
+		t.Fatalf("add: exit %d stderr %q", code, errout)
+	}
+	itemBefore, writesBefore := k.item()
+	opts.Server.M365.OpenBrowser = func(context.Context, string) error { t.Error("browser opened"); return nil }
+	for _, args := range [][]string{append([]string{"account", "add", "second"}, signInArgs["m365"]...), {"account", "login", "work"}} {
+		code, out, errout := amgd(t, home, opts, "", append(args, "--device-code", "--no-browser")...)
+		if code != 2 || out != "" || errout != "error: invalid command usage; use --help\n" {
+			t.Fatalf("%v: exit %d stdout %q stderr %q", args, code, out, errout)
+		}
+	}
+	if item, writes := k.item(); string(item) != string(itemBefore) || writes != writesBefore || ms.profiles != 1 {
+		t.Fatal("a refused sign-in reached the provider or the credential store")
 	}
 }
