@@ -472,9 +472,82 @@ func TestBrowserConsoleRowsKeepTheirTextAtEveryWidth(t *testing.T) {
 	}
 }
 
-// A Recents row shows its Score at every width, beside the action and account, never on top of them, so that a
+// Ticking or clearing a box moves no row on the screen, at the top of the list or scrolled to its bottom: the bulk bar
+// floats at the bottom of the window with the selection count in it, and the page keeps room below its last row, so
+// that the last row still scrolls above the bar and clearing the selection does not shorten the page.
+func TestBrowserConsoleBulkBarMovesNoRow(t *testing.T) {
+	f, b := browserConsole(t, everyWriteWaits, nil)
+	f.setScore(.62)
+	pend(t, f.d.s, "mail.send", `{"to":["a@example.test"],"subject":"s","body":"b"}`)
+	f.setScore(.1)
+	for range 12 {
+		pend(t, f.d.s, "mail.send", `{"to":["a@example.test"],"subject":"s","body":"b"}`)
+	}
+	// The rows' places on the screen, and the scroll position.
+	onScreen := `[scrollY, ...Array.from(document.querySelectorAll("li.row"), (r) => r.getBoundingClientRect().top)].join(" ")`
+	for _, width := range []int64{390, 1000, 1440} {
+		b.do(t, chromedp.EmulateViewport(width, 900))
+		for _, c := range []struct{ where, scroll, box string }{
+			{"top", "scrollTo(0, 0)", `document.querySelector("input.sel")`},
+			{"bottom", "scrollTo(0, document.documentElement.scrollHeight)", `Array.from(document.querySelectorAll("input.sel")).at(-1)`},
+		} {
+			b.open(t, "/?refresh=off")
+			eval[chromedp.Void](t, b, c.scroll)
+			before := eval[string](t, b, onScreen)
+			eval[chromedp.Void](t, b, c.box+".click()")
+			ticked := eval[string](t, b, onScreen)
+			got := eval[[]float64](t, b, `(() => {
+				const bar = document.querySelector(".bar").getBoundingClientRect(), count = document.querySelector(".selcount").getBoundingClientRect(), rows = document.querySelectorAll(".waiting li.row");
+				scrollTo(0, document.documentElement.scrollHeight);
+				const last = rows[rows.length - 1].getBoundingClientRect().bottom - document.querySelector(".bar").getBoundingClientRect().top;
+				return [innerHeight - bar.bottom, last, count.top >= bar.top && count.bottom <= bar.bottom && count.height > 0 ? 1 : 0];
+			})()`)
+			eval[chromedp.Void](t, b, c.scroll)
+			ticked2 := eval[string](t, b, onScreen)
+			eval[chromedp.Void](t, b, c.box+".click()")
+			cleared := eval[string](t, b, onScreen)
+			// Ticking moves no row; scrolled as far as the ticked page goes, clearing moves no row either.
+			if before != ticked || ticked2 != cleared || got[0] != 0 || got[1] > 0 || got[2] != 1 {
+				t.Errorf("%dpx, %s: rows %q, ticked %q; ticked and scrolled %q, cleared %q; bar %.0fpx above the bottom, last row %.0fpx under the bar, count in the bar %v",
+					width, c.where, before, ticked, ticked2, cleared, got[0], got[1], got[2] == 1)
+			}
+		}
+		// With a row that needs review ticked, the count and its review warning, which CSS writes, fit in the bar.
+		b.open(t, "/?refresh=off")
+		eval[chromedp.Void](t, b, `document.querySelector("input.sel[data-review]").click(); document.querySelector("input.sel:not([data-review])").click()`)
+		fits := eval[[]any](t, b, `(() => {
+			const c = document.querySelector(".selcount"), r = c.getBoundingClientRect(), bar = document.querySelector(".bar").getBoundingClientRect();
+			return [c.scrollHeight - c.clientHeight, r.top >= bar.top && r.bottom <= bar.bottom, getComputedStyle(c, "::after").content];
+		})()`)
+		if warning, _ := fits[2].(string); fits[0].(float64) > 0 || fits[1] != true || !strings.Contains(warning, "need review") {
+			t.Errorf("%dpx: selection text overflows its box by %vpx, box in the bar %v, warning %q", width, fits[0], fits[1], fits[2])
+		}
+	}
+}
+
+// In an open row that needs review, Approve and Deny sit side by side in the review box, and the row buttons hide.
+func TestBrowserConsoleOpenReviewRowKeepsApproveAndDenyTogether(t *testing.T) {
+	f, b := browserConsole(t, everyWriteWaits, nil)
+	f.setScore(.62)
+	pend(t, f.d.s, "mail.send", `{"to":["a@example.test"],"subject":"s","body":"b"}`)
+	for _, width := range []int64{390, 1440} {
+		b.do(t, chromedp.EmulateViewport(width, 900))
+		b.open(t, "/?refresh=off")
+		got := eval[[]float64](t, b, `(() => {
+			const row = document.querySelector("li.row:has(form.ack)");
+			row.querySelector("details").open = true;
+			const approve = row.querySelector("form.ack button[value=approve]").getBoundingClientRect(), deny = row.querySelector("form.ack button[value=deny]").getBoundingClientRect();
+			return [Math.abs(approve.top - deny.top), deny.left - approve.right, getComputedStyle(row.querySelector("form.acts")).display === "none" ? 1 : 0];
+		})()`)
+		if got[0] != 0 || got[1] < 0 || got[1] > 16 || got[2] != 1 {
+			t.Errorf("%dpx: Approve and Deny %.0fpx apart in height, %.0fpx apart in width, row buttons hidden %v", width, got[0], got[1], got[2] == 1)
+		}
+	}
+}
+
+// A Recents row shows its Risk at every width, beside the action and account, never on top of them, so that a
 // handled action that needed review stays visible as one.
-func TestBrowserConsoleRecentsKeepTheirScoreAtEveryWidth(t *testing.T) {
+func TestBrowserConsoleRecentsKeepTheirRiskAtEveryWidth(t *testing.T) {
 	f, b := browserConsole(t, everyWriteWaits, nil)
 	f.setScore(.62)
 	if err := f.d.s.Deny(context.Background(), pend(t, f.d.s, "mail.send", `{"to":["a@example.test"],"subject":"s","body":"b"}`)[0]); err != nil {

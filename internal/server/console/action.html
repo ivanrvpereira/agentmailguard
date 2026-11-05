@@ -1,22 +1,22 @@
+{{/* The action page: what the action is about first, the stored request fields after it, then the body and the
+   decision. */}}
 {{define "action"}}{{template "head" (printf "%s · AgentMailGuard · Web console" .Row.Label)}}
 </head>
 <body>
 <header class="top">{{template "brand"}}</header>
 <main class="pane actionpage">
 <p class="back"><a href="/">All approvals</a></p>
-<h1>{{.Row.Label}} <span class="opname">{{.Op}}</span></h1>
+<h1>{{.Row.Label}} {{with .Heading}}<span class="what">{{.}}</span> {{end}}<span class="opname">{{.Op}}</span></h1>
 {{if .Notice}}<p class="notice">{{.Notice}}</p>{{end}}
 <dl class="f">
 <dt>State</dt><dd class="state {{.State}}">{{.StateLabel}}</dd>
 <dt>Account</dt><dd>{{.Row.Alias}}{{if ne .Row.Alias .Row.Account}} · {{.Row.Account}}{{end}}</dd>
+{{with .Row.Score}}<dt>Risk</dt>{{template "scorefield" .}}{{end}}
 <dt>Created</dt><dd>{{.Created}}</dd>
 <dt>Updated</dt><dd>{{.Updated}}</dd>
-{{with .Row.Score}}<dt>Score</dt>{{template "scorefield" .}}{{end}}
 {{if .Code}}<dt>Error</dt><dd class="bad">{{.Code}}</dd>{{end}}
 {{if .Result}}<dt>Result</dt><dd class="mono">{{.Result}}</dd>{{end}}
 </dl>
-{{with .Row.Fields}}<h2>Request</h2>
-<dl class="f">{{template "openfields" .}}</dl>{{end}}
 {{if .RefKind}}<h2>{{.RefKind}}</h2>
 {{if .RefMissing}}<p class="ph">{{.RefKind}} not available.</p>{{else}}<dl class="f">{{template "openfields" .Ref}}</dl>{{end}}{{end}}
 {{if .Reply}}<h2>Reply recipients</h2>
@@ -25,6 +25,8 @@
 {{if .DraftSend}}<h2>Draft</h2>
 {{if .Row.Draft}}<p class="sub">The draft as the daemon read it for the action check when the agent asked to send it. The send sends the draft as it is at the provider when it runs.</p>
 <dl class="f">{{template "openfields" .Row.Draft}}</dl>{{else}}<p class="ph">Draft fields not available.</p>{{end}}{{end}}
+{{with .Row.Fields}}<h2>Request</h2>
+<dl class="f">{{template "openfields" .}}</dl>{{end}}
 {{if .Row.Caption}}{{if .Row.BodyHTML}}<figure class="body rendered"><figcaption>Rendered preview: links, images, and forms are off. Hidden text shows only in the source.</figcaption>
 <iframe sandbox="" srcdoc="{{.Row.Body}}" referrerpolicy="no-referrer" title="Rendered preview of the HTML body"></iframe></figure>
 {{end}}<figure class="body"><figcaption>{{.Row.Caption}}</figcaption><pre>{{.Row.Body}}</pre></figure>{{end}}
