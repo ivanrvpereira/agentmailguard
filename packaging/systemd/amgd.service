@@ -10,6 +10,10 @@ Description=agentmailguard daemon (amgd)
 Documentation=https://github.com/ivanrvpereira/agentmailguard/blob/main/docs/setup.md#run-as-a-service
 After=network-online.target
 Wants=network-online.target
+# Stop restarting after 5 failed starts in 5 minutes, for example a missing console password: fix the cause,
+# then systemctl reset-failed amgd and systemctl start amgd.
+StartLimitIntervalSec=5min
+StartLimitBurst=5
 
 [Service]
 User=CHANGE-ME
@@ -23,6 +27,7 @@ ReloadSignal=SIGUSR1
 LoadCredentialEncrypted=amgd-credentials-password
 ExecStart=/bin/sh -c 'exec /usr/local/bin/amgd serve < "$CREDENTIALS_DIRECTORY/amgd-credentials-password"'
 # A refused start (a missing secret or an invalid config.toml) exits 1; the journal names the fix.
+# [Unit] limits how often it restarts.
 Restart=on-failure
 RestartSec=10s
 # SIGTERM drains requests for up to 5 s and closes the cache.

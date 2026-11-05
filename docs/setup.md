@@ -243,7 +243,7 @@ journalctl -u amgd
 
 `systemd-creds` reads the credential file password from stdin: type it, then press Ctrl-D twice. The unit gives it to `amgd serve` on stdin from the encrypted systemd credential, so the password is never in the environment or in a plain-text file. The unit needs systemd 253 or later for `Type=notify-reload` with `ReloadSignal=SIGUSR1`: the daemon tells systemd when it is ready and when a reload starts and ends, and `systemctl reload amgd` reloads it. With an older systemd, use `Type=notify` and `ExecReload=/usr/local/bin/amgd reload`.
 
-The unit lets the daemon write only its home, and it restarts the daemon after a failure. A refused start, for example a missing console password, also restarts every 10 seconds until you fix it.
+The unit lets the daemon write only its home, and it restarts the daemon after a failure. A refused start, for example a missing console password, restarts every 10 seconds, at most 5 times in 5 minutes. Then the unit stays failed: fix the cause that the journal names, then run `systemctl reset-failed amgd` and `systemctl start amgd`.
 
 ### launchd
 
