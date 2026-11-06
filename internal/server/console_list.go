@@ -64,6 +64,7 @@ var listedOps = map[string]struct{ group, label string }{
 	"calendar.cancel":  {groupMeetings, "Cancel"},
 	"calendar.respond": {groupMeetings, "Respond"},
 	"mail.trash":       {groupMailbox, "Trash"},
+	"mail.spam":        {groupMailbox, "Spam"},
 }
 
 // recentsListed is the number of handled actions that each table lists under Recents.

@@ -73,6 +73,8 @@ func TestReadCollectionsSearchAndCurrentNestedFolders(t *testing.T) {
 		switch r.URL.Path {
 		case "/v1.0/me/mailFolders/deleteditems":
 			jsonResponse(w, map[string]any{"id": "deleted"})
+		case "/v1.0/me/mailFolders/junkemail":
+			jsonResponse(w, map[string]any{"id": "junk"})
 		case "/v1.0/me/mailFolders":
 			if r.URL.Query().Get("page") == "2" {
 				jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "f2", "displayName": "Sent"}}})
@@ -93,13 +95,13 @@ func TestReadCollectionsSearchAndCurrentNestedFolders(t *testing.T) {
 			if q.Get("$top") != "10" || q.Has("$skip") || q.Get("$orderby") != "receivedDateTime desc" || strings.Contains(q.Get("$select"), "body") {
 				t.Errorf("bad list query %v", q)
 			}
-			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "listed", "body": map[string]string{"content": "unrequested"}}}})
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "listed", "parentFolderId": "inbox-id", "body": map[string]string{"content": "unrequested"}}}})
 		case "/v1.0/me/messages":
 			q := r.URL.Query()
 			if q.Get("$search") != `"from:bob subject:\"hello world\" received>=2026-09-20 received<=2026-09-22 back\\slash"` || !strings.Contains(q.Get("$select"), "internetMessageHeaders") {
 				t.Errorf("bad search %s", q.Get("$search"))
 			}
-			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "searched", "receivedDateTime": "2026-09-21T00:00:00Z"}}})
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "searched", "parentFolderId": "inbox-id", "receivedDateTime": "2026-09-21T00:00:00Z"}}})
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
@@ -127,15 +129,18 @@ func TestReadCollectionsSearchAndCurrentNestedFolders(t *testing.T) {
 		t.Fatalf("search %v %v", search, err)
 	}
 }
-func TestFoldersMarkDeletedItemsAndEveryFolderBelowIt(t *testing.T) {
+func TestFoldersMarkDeletedItemsJunkEmailAndEveryFolderBelowThem(t *testing.T) {
 	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1.0/me/mailFolders/deleteditems":
 			jsonResponse(w, map[string]any{"id": "del"})
+		case "/v1.0/me/mailFolders/junkemail":
+			jsonResponse(w, map[string]any{"id": "junk"})
 		case "/v1.0/me/mailFolders":
 			jsonResponse(w, map[string]any{"value": []any{
 				map[string]any{"id": "inbox", "displayName": "Inbox", "childFolderCount": 1},
 				map[string]any{"id": "del", "displayName": "Deleted Items", "childFolderCount": 1},
+				map[string]any{"id": "junk", "displayName": "Junk Email", "childFolderCount": 1},
 				map[string]any{"id": "arch", "displayName": "Archive"},
 			}})
 		case "/v1.0/me/mailFolders/inbox/childFolders":
@@ -144,6 +149,8 @@ func TestFoldersMarkDeletedItemsAndEveryFolderBelowIt(t *testing.T) {
 			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "old", "displayName": "Old", "childFolderCount": 1}}})
 		case "/v1.0/me/mailFolders/old/childFolders":
 			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "older", "displayName": "Older"}}})
+		case "/v1.0/me/mailFolders/junk/childFolders":
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "junk-child", "displayName": "Junk child"}}})
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 			w.WriteHeader(404)
@@ -152,26 +159,35 @@ func TestFoldersMarkDeletedItemsAndEveryFolderBelowIt(t *testing.T) {
 	folders, err := c.Mailbox().Folders(context.Background())
 	want := []model.Folder{
 		{ID: "inbox", Name: "Inbox"},
-		{ID: "del", Name: "Deleted Items", Trash: true},
+		{ID: "del", Name: "Deleted Items", Bin: model.Trash},
+		{ID: "junk", Name: "Junk Email", Bin: model.Spam},
 		{ID: "arch", Name: "Archive"},
 		{ID: "receipts", Name: "Receipts"},
-		{ID: "old", Name: "Old", Trash: true},
-		{ID: "older", Name: "Older", Trash: true},
+		{ID: "old", Name: "Old", Bin: model.Trash},
+		{ID: "junk-child", Name: "Junk child", Bin: model.Spam},
+		{ID: "older", Name: "Older", Bin: model.Trash},
 	}
 	if err != nil || !reflect.DeepEqual(folders, want) {
 		t.Fatalf("folders = %+v, %v; want %+v", folders, err, want)
 	}
 }
-func TestFoldersFailWhenDeletedItemsLookupFails(t *testing.T) {
-	for name, lookup := range map[string]http.HandlerFunc{
-		"graph error": func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) },
-		"missing id":  func(w http.ResponseWriter, _ *http.Request) { jsonResponse(w, map[string]any{}) },
+func TestFoldersFailWhenABinLookupFails(t *testing.T) {
+	for name, tc := range map[string]struct {
+		root   string
+		lookup http.HandlerFunc
+	}{
+		"deleted items graph error": {"deleteditems", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }},
+		"deleted items missing id":  {"deleteditems", func(w http.ResponseWriter, _ *http.Request) { jsonResponse(w, map[string]any{}) }},
+		"junk email graph error":    {"junkemail", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }},
+		"junk email missing id":     {"junkemail", func(w http.ResponseWriter, _ *http.Request) { jsonResponse(w, map[string]any{}) }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
-				case "/v1.0/me/mailFolders/deleteditems":
-					lookup(w, r)
+				case "/v1.0/me/mailFolders/" + tc.root:
+					tc.lookup(w, r)
+				case "/v1.0/me/mailFolders/deleteditems", "/v1.0/me/mailFolders/junkemail":
+					jsonResponse(w, map[string]any{"id": path.Base(r.URL.Path)})
 				case "/v1.0/me/mailFolders":
 					jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "del", "displayName": "Deleted Items"}}})
 				default:
@@ -199,7 +215,7 @@ func TestGetPreservesBodyAbsenceAndEscapesIDs(t *testing.T) {
 		if r.Method != "GET" || r.URL.EscapedPath() != "/v1.0/me/messages/a%2Fb%3Fc%23d%20%25" {
 			t.Errorf("unsafe request %s %s", r.Method, r.URL.EscapedPath())
 		}
-		jsonResponse(w, map[string]any{"id": "immutable", "sender": map[string]any{"emailAddress": map[string]string{"address": "fallback@example.test"}}, "isDraft": true, "body": map[string]string{"content": "", "contentType": "text"}, "internetMessageHeaders": []map[string]string{{"name": "Authentication-Results-Original", "value": "spf=pass"}, {"name": "Authentication-Results", "value": "spf=pass; spf=fail; dkim=none; compauth=fail reason=001"}}})
+		jsonResponse(w, map[string]any{"id": "immutable", "parentFolderId": "inbox-id", "sender": map[string]any{"emailAddress": map[string]string{"address": "fallback@example.test"}}, "isDraft": true, "body": map[string]string{"content": "", "contentType": "text"}, "internetMessageHeaders": []map[string]string{{"name": "Authentication-Results-Original", "value": "spf=pass"}, {"name": "Authentication-Results", "value": "spf=pass; spf=fail; dkim=none; compauth=fail reason=001"}}})
 	})
 	meta, err := c.Mailbox().Get(context.Background(), []string{"a/b?c#d %"}, false)
 	if err != nil {
@@ -222,7 +238,7 @@ func TestListSearchAndGetSelectAndCarryTheConversationID(t *testing.T) {
 		if !slices.Contains(strings.Split(r.URL.Query().Get("$select"), ","), "conversationId") {
 			t.Errorf("%s selects %q", r.URL.Path, r.URL.Query().Get("$select"))
 		}
-		m := map[string]any{"id": "m", "conversationId": "conversation-" + path.Base(r.URL.Path)}
+		m := map[string]any{"id": "m", "parentFolderId": "inbox-id", "conversationId": "conversation-" + path.Base(r.URL.Path)}
 		if r.URL.Path == "/v1.0/me/messages/m" {
 			jsonResponse(w, m)
 			return
@@ -280,11 +296,11 @@ func TestSearchWidensReceivedDaysAndKeepsExactTimes(t *testing.T) {
 		next := r.URL.Query()
 		next.Set("$skiptoken", "opaque-token")
 		jsonResponse(w, map[string]any{"value": []any{
-			map[string]any{"id": "at-before", "receivedDateTime": "2026-03-09T07:00:00Z"},
-			map[string]any{"id": "last-second", "receivedDateTime": "2026-03-09T06:59:59Z"},
-			map[string]any{"id": "at-after", "receivedDateTime": "2026-03-07T07:00:00Z"},
-			map[string]any{"id": "day-before", "receivedDateTime": "2026-03-07T06:59:59Z"},
-			map[string]any{"id": "no-time"},
+			map[string]any{"id": "at-before", "parentFolderId": "inbox-id", "receivedDateTime": "2026-03-09T07:00:00Z"},
+			map[string]any{"id": "last-second", "parentFolderId": "inbox-id", "receivedDateTime": "2026-03-09T06:59:59Z"},
+			map[string]any{"id": "at-after", "parentFolderId": "inbox-id", "receivedDateTime": "2026-03-07T07:00:00Z"},
+			map[string]any{"id": "day-before", "parentFolderId": "inbox-id", "receivedDateTime": "2026-03-07T06:59:59Z"},
+			map[string]any{"id": "no-time", "parentFolderId": "inbox-id"},
 		}, "@odata.nextLink": nextLink(r, next)})
 	})
 	zone := time.FixedZone("UTC-7", -7*60*60)
@@ -462,7 +478,7 @@ func TestListAndSearchReadOneGraphPageAndReturnTheNextLink(t *testing.T) {
 		requests = append(requests, r.URL.Path+"?"+r.URL.RawQuery)
 		next := r.URL.Query()
 		if next.Has("$skip") || next.Has("$skiptoken") {
-			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "second"}}})
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "second", "parentFolderId": "inbox-id"}}})
 			return
 		}
 		if next.Has("$search") {
@@ -471,7 +487,7 @@ func TestListAndSearchReadOneGraphPageAndReturnTheNextLink(t *testing.T) {
 			next.Set("$top", "10")
 			next.Set("$skip", "10")
 		}
-		jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "first"}}, "@odata.nextLink": nextLink(r, next)})
+		jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "first", "parentFolderId": "inbox-id"}}, "@odata.nextLink": nextLink(r, next)})
 	})
 	b := c.Mailbox()
 	first, err := b.List(t.Context(), "inbox", model.PageRequest{}, false)
@@ -589,7 +605,7 @@ func TestListAndSearchRefuseAGraphPageLargerThanAsked(t *testing.T) {
 	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
 		value := []any{}
 		for i := range items {
-			value = append(value, map[string]any{"id": "m" + strconv.Itoa(i)})
+			value = append(value, map[string]any{"id": "m" + strconv.Itoa(i), "parentFolderId": "inbox-id"})
 		}
 		jsonResponse(w, map[string]any{"value": value})
 	})
@@ -625,11 +641,11 @@ func TestListFollowsANextLinkInODataKeyForm(t *testing.T) {
 		requests = append(requests, r.URL.EscapedPath())
 		next := r.URL.Query()
 		if next.Has("$skip") {
-			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "second"}}})
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "second", "parentFolderId": "inbox-id"}}})
 			return
 		}
 		next.Set("$skip", "1")
-		jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "first"}}, "@odata.nextLink": nextLink(r, next)})
+		jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "first", "parentFolderId": "inbox-id"}}, "@odata.nextLink": nextLink(r, next)})
 	})
 	b := c.Mailbox()
 	first, err := b.List(t.Context(), "inbox", model.PageRequest{Size: 1}, false)

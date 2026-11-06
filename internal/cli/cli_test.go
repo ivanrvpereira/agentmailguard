@@ -56,6 +56,7 @@ func TestCommandsUseHTTPWithoutLocalState(t *testing.T) {
 		{[]string{"mail", "categorize", "a", "--add", "One", "--add", "Two", "--remove", "Old"}, "mail.categorize", `{"ids":["a"],"add":["One","Two"],"remove":["Old"]}`},
 		{[]string{"mail", "archive", "--thread", "t"}, "mail.archive", `{"thread":"t"}`},
 		{[]string{"mail", "trash", "--thread", "t", "--in", "f"}, "mail.trash", `{"thread":"t","in":"f"}`},
+		{[]string{"mail", "spam", "--thread", "t", "--in", "f"}, "mail.spam", `{"thread":"t","in":"f"}`},
 		{[]string{"mail", "move", "f", "--thread", "t", "--in", "Label_2"}, "mail.move", `{"folder":"f","thread":"t","in":"Label_2"}`},
 		{[]string{"mail", "read", "--thread", "t"}, "mail.read", `{"thread":"t"}`},
 		{[]string{"mail", "unread", "--in", "inbox", "--thread", "t"}, "mail.unread", `{"thread":"t","in":"inbox"}`},

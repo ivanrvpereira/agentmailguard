@@ -3,11 +3,17 @@ package guard
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/audit"
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
 	"github.com/ivanrvpereira/agentmailguard/internal/content"
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
+)
+
+const (
+	MoveTrash = GuardError("move refused: use mail.trash")
+	MoveSpam  = GuardError("move refused: use mail.spam")
 )
 
 // checkIDs needs at least one ID. There is no maximum of ours: the providers change one message per call.
@@ -67,9 +73,17 @@ func normalize(ids []string, results []model.MutationResult, organizer bool) []m
 // audited runs call for the IDs that the policy did not hold and writes one record with a result for every ID.
 // held has the results of the IDs that the policy kept from the provider. allowed lists the distinct IDs with
 // an allow decision; their policy records are written with the operation record. A manual call without held
-// IDs is not audited when call fails; otherwise a failure becomes the result of each sent ID.
+// IDs is not audited when call fails; otherwise a failure becomes the result of each sent ID. A repeated ID is sent
+// once, and its result is the result of every position that names it.
 func (g *Guard) audited(ctx context.Context, op audit.Operation, ids []string, held map[string]model.MutationResult, allowed []string, opts audit.Options, call func([]string) ([]model.MutationResult, error)) ([]model.MutationResult, error) {
-	send := slices.DeleteFunc(slices.Clone(ids), func(id string) bool { _, ok := held[id]; return ok })
+	send := []string{}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if _, ok := held[id]; !ok && !seen[id] {
+			seen[id] = true
+			send = append(send, id)
+		}
+	}
 	var results []model.MutationResult
 	var err error
 	if len(send) > 0 {
@@ -86,18 +100,22 @@ func (g *Guard) audited(ctx context.Context, op audit.Operation, ids []string, h
 	} else {
 		results = normalize(send, results, opts.Rule != nil)
 	}
-	// results has one entry per sent ID, in input order.
+	// results has one entry per sent ID, in the order of send.
+	sent := make(map[string]model.MutationResult, len(send))
+	for i, id := range send {
+		sent[id] = results[i]
+	}
 	merged := make([]model.MutationResult, 0, len(ids))
 	for _, id := range ids {
 		r, ok := held[id]
 		if !ok {
-			r, results = results[0], results[1:]
+			r = sent[id]
 		}
 		merged = append(merged, r)
 	}
 	// Once a provider has returned a write result, cancellation must not erase its audit record.
 	for _, id := range allowed {
-		if e := g.recordDecision(ctx, op, keyTrash, decision{value: config.Allow}, &id, nil, opts.Rule); e != nil {
+		if e := g.recordDecision(ctx, op, mutationPolicyKey(op), decision{value: config.Allow}, &id, nil, opts.Rule); e != nil {
 			return nil, e
 		}
 	}
@@ -116,7 +134,7 @@ func publicErr(ctx context.Context, err error) error {
 	if ctx.Err() == nil {
 		switch err {
 		case GuardError("move refused: the destination must be a folder ID from `folders`"),
-			GuardError("move refused: use mail.trash"),
+			MoveTrash, MoveSpam,
 			GuardError("flag state must be one of flagged, complete, none"),
 			GuardError("categorize needs at least one category to add or remove"),
 			GuardError("categorize refused: not in the category list"):
@@ -133,9 +151,9 @@ func (g *Guard) mutationCall(ctx context.Context, op audit.Operation, ids []stri
 	}
 	var held map[string]model.MutationResult
 	var allowed []string
-	if op == audit.Trash {
+	if key := mutationPolicyKey(op); key != "" {
 		var err error
-		if held, allowed, err = g.trashPolicy(ctx, ids, opts.Rule); err != nil {
+		if held, allowed, err = g.mutationPolicy(ctx, op, key, ids, opts.Rule); err != nil {
 			return nil, err
 		}
 	}
@@ -163,18 +181,27 @@ func (g *Guard) writer(ctx context.Context, op audit.Operation, from string, opt
 		call = func(ids []string) ([]model.MutationResult, error) { return g.mailbox.Archive(ctx, ids) }
 	case audit.Trash:
 		call = func(ids []string) ([]model.MutationResult, error) { return g.mailbox.Trash(ctx, ids) }
+	case audit.Spam:
+		call = func(ids []string) ([]model.MutationResult, error) { return g.mailbox.Spam(ctx, ids) }
 	case audit.Move:
-		folders, err := g.mailbox.Folders(ctx)
-		if err != nil {
-			return nil, err
+		// A move into trash or spam would bypass mail.trash or mail.spam and their policy keys.
+		bin := model.Bin(strings.ToLower(*opts.Folder))
+		if bin != model.Trash && bin != model.Spam {
+			folders, err := g.mailbox.Folders(ctx)
+			if err != nil {
+				return nil, err
+			}
+			i := slices.IndexFunc(folders, func(f model.Folder) bool { return f.ID == *opts.Folder })
+			if i < 0 {
+				return nil, GuardError("move refused: the destination must be a folder ID from `folders`")
+			}
+			bin = folders[i].Bin
 		}
-		i := slices.IndexFunc(folders, func(f model.Folder) bool { return f.ID == *opts.Folder })
-		if i < 0 {
-			return nil, GuardError("move refused: the destination must be a folder ID from `folders`")
-		}
-		// A move into deleted items would bypass the trash operation.
-		if folders[i].Trash {
-			return nil, GuardError("move refused: use mail.trash")
+		switch bin {
+		case model.Trash:
+			return nil, MoveTrash
+		case model.Spam:
+			return nil, MoveSpam
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -311,6 +338,11 @@ func (g *Guard) Archive(ctx context.Context, ids []string) ([]model.MutationResu
 func (g *Guard) Trash(ctx context.Context, ids []string) ([]model.MutationResult, error) {
 	return g.manual(ctx, audit.Trash, ids, audit.Options{})
 }
+
+// Spam moves messages to spam under the write policy, with one result per ID.
+func (g *Guard) Spam(ctx context.Context, ids []string) ([]model.MutationResult, error) {
+	return g.manual(ctx, audit.Spam, ids, audit.Options{})
+}
 func (g *Guard) Move(ctx context.Context, ids []string, dest string) ([]model.MutationResult, error) {
 	return g.manual(ctx, audit.Move, ids, audit.Options{Folder: &dest})
 }
@@ -334,6 +366,11 @@ func (g *Guard) ArchiveConversation(ctx context.Context, thread, in string) ([]m
 }
 func (g *Guard) TrashConversation(ctx context.Context, thread, in string) ([]model.MutationResult, error) {
 	return g.conversation(ctx, audit.Trash, thread, in, audit.Options{})
+}
+
+// SpamConversation decides and moves each message of thread in folder in to spam.
+func (g *Guard) SpamConversation(ctx context.Context, thread, in string) ([]model.MutationResult, error) {
+	return g.conversation(ctx, audit.Spam, thread, in, audit.Options{})
 }
 func (g *Guard) MoveConversation(ctx context.Context, thread, in, dest string) ([]model.MutationResult, error) {
 	return g.conversation(ctx, audit.Move, thread, in, audit.Options{Folder: &dest})

@@ -97,8 +97,9 @@ type Message struct {
 type Folder struct {
 	ID   FolderID
 	Name string
-	// Trash marks the provider's deleted-items folder and every folder below it. Moves there must use trash instead.
-	Trash bool
+	// Bin marks the provider's trash or spam/junk folder and every folder below it. Moves there must use mail.trash
+	// or mail.spam instead.
+	Bin Bin
 }
 type Attendee struct {
 	Address  Address
@@ -335,6 +336,14 @@ type InboxScan struct {
 	Failures []ScanFailure
 }
 
+// Bin names the folder tree that a folder belongs to (trash or spam/junk); the empty value is not a bin.
+type Bin string
+
+const (
+	Trash Bin = "trash"
+	Spam  Bin = "spam"
+)
+
 // Mailbox deliberately has no permanent-delete operation. Its send operations reach real recipients at once.
 // List/Search/Thread may return bodies already available even when body is false.
 // ScanInbox reads all pages before returning, metadata only, excluding drafts,
@@ -354,7 +363,9 @@ type Mailbox interface {
 	Folders(ctx context.Context) ([]Folder, error)
 	Archive(ctx context.Context, ids []MessageID) ([]MutationResult, error)
 	Trash(ctx context.Context, ids []MessageID) ([]MutationResult, error)
-	// Move moves ids from folder from to dest. Gmail removes the label of from; Microsoft 365 and the fake provider
+	// Spam moves each message to spam/junk and returns one result per input ID, in order.
+	Spam(ctx context.Context, ids []MessageID) ([]MutationResult, error)
+	// Move moves ids from folder from to dest. Gmail removes the label of from, TRASH, and SPAM; Microsoft 365 and the fake provider
 	// ignore it, because a message there is in one folder only.
 	Move(ctx context.Context, ids []MessageID, from, dest FolderID) ([]MutationResult, error)
 	MarkRead(ctx context.Context, ids []MessageID, read bool) ([]MutationResult, error)

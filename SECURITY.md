@@ -79,7 +79,7 @@ Only a person in the approval console approves a waiting action. A draft change 
 Meeting invitations, updates, cancellations, and responses send notifications to attendees. The default policy denies them.
 The command set never permanently deletes mail, except a draft through `draft delete`: Gmail deletes drafts for good, and Microsoft 365 keeps the deleted item restorable. `draft delete` and `draft send` refuse a message that is not a draft.
 Read state, flag, categorize, archive, and move have no policy key. The daemon runs them for anyone who can reach the listener.
-Trash is a provider move, not permanent deletion.
+Trash is a provider move, not permanent deletion, and only `mail.trash` can put mail there. Only `mail.spam` moves mail into spam/junk, under the `mail_spam` policy key: allowed by default, denied by default for `sealed` and `error` messages. Agents can list, search, read, and reply to mail in trash and spam/junk, and move it out of them, screened like any other mail. Moves into trash or spam/junk, including every folder below them, are refused on every provider: mail goes there only through `mail.trash` and `mail.spam`.
 
 ## Credentials and storage
 

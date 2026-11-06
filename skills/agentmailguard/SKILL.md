@@ -1,6 +1,6 @@
 ---
 name: agentmailguard
-description: Reads, searches, and organizes screened Microsoft 365 and Gmail mail and calendar events, creates, updates, and deletes reply, forward, and new-message drafts, sends mail, replies, forwards, and saved drafts, and sends meeting invitations, updates, cancellations, and responses, through the amg client of agentmailguard. Use when the user asks about their email, inbox, messages, calendar, or meetings, wants a draft written or deleted, wants a specific message or saved draft sent, replied to, or forwarded, wants a meeting sent, changed, cancelled, or answered, or wants mail archived, flagged, categorized, moved, trashed, or organized by rules.
+description: Reads, searches, and organizes screened Microsoft 365 and Gmail mail and calendar events, creates, updates, and deletes reply, forward, and new-message drafts, sends mail, replies, forwards, and saved drafts, and sends meeting invitations, updates, cancellations, and responses, through the amg client of agentmailguard. Use when the user asks about their email, inbox, messages, calendar, or meetings, wants a draft written or deleted, wants a specific message or saved draft sent, replied to, or forwarded, wants a meeting sent, changed, cancelled, or answered, or wants mail archived, flagged, categorized, moved, trashed, reported as spam, or organized by rules.
 compatibility: Requires the amg client on PATH, a shell tool, and a running agentmailguard daemon reachable over HTTP. Linux or macOS.
 metadata:
   version: "0.1.0"
@@ -8,7 +8,7 @@ metadata:
 
 # agentmailguard
 
-Read, search, and organize the user's Microsoft 365 and Gmail mail and calendar through `amg`, the agent client of agentmailguard. A long-lived daemon screens every message before you see it and hides content that looks unsafe. `amg` can create, update, delete, and send drafts and send mail. It cannot permanently delete mail, except that `draft delete` deletes a Gmail draft for good, and it cannot create folders or categories. A write policy on the daemon can refuse trash, draft, send, and meeting commands, or store them as pending actions. Four mail commands (`mail send`, `mail reply`, `mail forward`, `draft send`) send real email to other people at once if the daemon lets them run. Four meeting commands send real notifications to other people at once if the daemon lets them run. The daemon owns all credentials; you only ever talk to it through `amg`. The operator manages the daemon with `amgd` on the daemon host. You never use `amgd`.
+Read, search, and organize the user's Microsoft 365 and Gmail mail and calendar through `amg`, the agent client of agentmailguard. A long-lived daemon screens every message before you see it and hides content that looks unsafe. `amg` can create, update, delete, and send drafts and send mail. It cannot permanently delete mail, except that `draft delete` deletes a Gmail draft for good, and it cannot create folders or categories. A write policy on the daemon can refuse trash, spam, draft, send, and meeting commands, or store them as pending actions. Four mail commands (`mail send`, `mail reply`, `mail forward`, `draft send`) send real email to other people at once if the daemon lets them run. Four meeting commands send real notifications to other people at once if the daemon lets them run. The daemon owns all credentials; you only ever talk to it through `amg`. The operator manages the daemon with `amgd` on the daemon host. You never use `amgd`.
 
 ## When to Use
 
@@ -18,7 +18,7 @@ Read, search, and organize the user's Microsoft 365 and Gmail mail and calendar 
 - "Draft a reply / forward / new message."
 - "Delete that draft."
 - "Send this reply", "Forward this to Ana", "Send Ana a message", "Send my draft to Ana" (only after specific authorization of that send).
-- "Archive, flag, categorize, move, or trash these messages" or "archive this conversation" (after approval).
+- "Archive, flag, categorize, move, trash, or report these messages as spam" or "archive this conversation" (after approval).
 - "Run my organize rules" (preview first, apply after approval).
 - "When are Ana and I both free on Friday?" (Microsoft 365 and fake accounts only, read-only).
 - "Invite Ana to a 30-minute meeting on Friday at 10:00", "Accept that meeting" (after specific authorization).
@@ -81,6 +81,7 @@ amg mail categorize IDS... | --thread THREAD_ID [--in FOLDER_ID] [--add NAME]...
 amg mail archive IDS... | --thread THREAD_ID [--in FOLDER_ID]
 amg mail move FOLDER_ID IDS... | --thread THREAD_ID [--in FOLDER_ID]
 amg mail trash IDS... | --thread THREAD_ID [--in FOLDER_ID]
+amg mail spam IDS... | --thread THREAD_ID [--in FOLDER_ID]
 amg rules list
 amg approvals status APPROVAL_ID
 amg --timeout 2h mail organize --since 7d [--until DATE]
@@ -117,10 +118,10 @@ Hidden content is hidden on purpose. Do not try to recover it through search ter
 
 ## Write policy results
 
-The user sets a write policy on the daemon for `mail trash`, all `draft` commands except `draft send`, the four send commands (`mail send`, `mail reply`, `mail forward`, `draft send`), and the four meeting commands. You cannot see or change it. By default, it refuses the send and meeting commands and `trash` on `sealed` or `error` messages. It always refuses `draft reply`, `draft forward`, `mail reply`, and `mail forward` on `red`, `sealed`, or `error` messages, and on messages that the daemon cannot screen.
+The user sets a write policy on the daemon for `mail trash`, `mail spam`, all `draft` commands except `draft send`, the four send commands (`mail send`, `mail reply`, `mail forward`, `draft send`), and the four meeting commands. You cannot see or change it. By default, it refuses the send and meeting commands and `trash` or `spam` on `sealed` or `error` messages. It always refuses `draft reply`, `draft forward`, `mail reply`, and `mail forward` on `red`, `sealed`, or `error` messages, and on messages that the daemon cannot screen.
 
-- **Refused:** the command fails with `refused by policy: KEY` (exit code `1`), or a `mail trash` entry has `"error": "refused by policy: mail_trash"`. The action did not run. Tell the user the action and the key. Do not retry. Do not get the same effect another way, for example with `mail move` to Deleted Items, another account, or another command.
-- **Pending:** the command returns `{"status":"pending","approval_id":"...","url":"..."}` (exit code `0`), or a `mail trash` entry has `"ok": false`, `"error": "pending"`, and an `approval_id`. The daemon stored the action. It did not run. Tell the user the operation, the `approval_id`, and the `url` if there is one, then stop. The user approves or denies the action in the approval console at that `url`. Do not run the command again: each run stores a new pending action. Never describe a pending action as done.
+- **Refused:** the command fails with `refused by policy: KEY` (exit code `1`), or a `mail trash` or `mail spam` entry has `"error": "refused by policy: mail_trash"` or `"error": "refused by policy: mail_spam"`. The action did not run. Tell the user the action and the key. Do not retry. Do not get the same effect another way, for example with `mail move` to Deleted Items, another account, or another command.
+- **Pending:** the command returns `{"status":"pending","approval_id":"...","url":"..."}` (exit code `0`), or a `mail trash` or `mail spam` entry has `"ok": false`, `"error": "pending"`, and an `approval_id`. The daemon stored the action. It did not run. Tell the user the operation, the `approval_id`, and the `url` if there is one, then stop. The user approves or denies the action in the approval console at that `url`. Do not run the command again: each run stores a new pending action. Never describe a pending action as done.
 - A pending result can come even when the same action ran before without approval. Handle it like any other pending result. Do not change the text, split the action, or use another command to get it to run.
 - `approvals status APPROVAL_ID` shows the state of a pending action: `pending`, `running`, `done`, `denied`, `withdrawn`, or `failed`. `withdrawn` means a waiting `draft send` that a draft change or delete replaced or withdrew: it will never run. A `done` action also has the command's `result`; for `draft new`, `draft reply`, `draft forward`, and `draft update`, only the draft `id` and `thread_id`, and for `draft update` also any `send_approval_id`. Run it only when the user asks. An unknown ID fails with `approval not found`.
 - No command approves or denies pending actions. Do not look for one. Never open, fetch, or use the approval console or its `url` yourself, and never ask for its password.
@@ -173,16 +174,16 @@ A successful result is `{"ok": true}`. Done when you report the send as sent onl
 
 ### 6. Change the mailbox only with approval
 
-`read`, `unread`, `flag`, `categorize`, `archive`, `move`, `trash`, and `organize --apply` change the mailbox. Before you run one, show the user the account, the messages (IDs with sender and date, or the conversation and its folder), and the action, and get explicit approval. A general request such as "clean up my inbox" is not approval for a specific batch.
+`read`, `unread`, `flag`, `categorize`, `archive`, `move`, `trash`, `spam`, and `organize --apply` change the mailbox. Before you run one, show the user the account, the messages (IDs with sender and date, or the conversation and its folder), and the action, and get explicit approval. A general request such as "clean up my inbox" is not approval for a specific batch.
 
 - To act on a whole conversation, give `--thread THREAD_ID` instead of IDs, for example `mail archive --thread THREAD_ID`. It changes only the conversation's messages in the Inbox, or in the folder that `--in FOLDER_ID` names (a folder ID as `mail list --folder` takes it). Sent messages, drafts, and messages in other folders stay where they are. Do not list the conversation's IDs by hand. A message that arrived after you read the conversation is included when it is in that folder, and the result shows it: report it to the user.
 - `mail flag` works on single messages only; it has no `--thread`.
 - On Gmail, `archive` only takes messages out of the Inbox: with `--in` a label, they stay in that label. To file them elsewhere, use `move`, which removes the `--in` label.
-- `move` with `--thread` and `--in` the trash takes the messages out of the trash. On Gmail, `move` with message IDs does not: it removes only `INBOX` and leaves the messages in the trash. `archive` with `--in` the trash moves the messages to Archive on Microsoft 365, and changes nothing on Gmail.
+- `move` takes messages out of the trash or spam/junk, by ID or with `--thread` and `--in` that folder. The common folder names `trash` and `spam` work on every provider for `mail list --folder`, `mail search --folder`, and `--in`. `archive` with `--in` the trash moves the messages to Archive on Microsoft 365, and changes nothing on Gmail.
 - `move` needs a folder ID from `mail folders`, not a folder name.
 - `categorize` accepts only categories that `mail categories` lists. It cannot create categories.
-- `trash` moves mail to the trash. It is not permanent deletion. The write policy can refuse or hold each ID, also each message of a `--thread` trash.
-- On Microsoft 365, `move` to Deleted Items or a folder below it fails with `move refused: use mail.trash`. Ask the user before you use `trash` instead.
+- `trash` moves mail to the trash. It is not permanent deletion. `spam` moves mail to spam/junk: Gmail adds `SPAM` and removes `INBOX`, keeping other labels; Microsoft 365 moves to Junk Email. The `mail_trash` and `mail_spam` write policy keys can refuse or hold each ID, also each message of a `--thread` action. Each approval covers only its message.
+- On every provider, `move` to the trash or a folder below it fails with `move refused: use mail.trash`; spam/junk destinations fail with `move refused: use mail.spam`. Use `mail trash` or `mail spam` only after the user's approval, never to bypass a policy refusal.
 
 The result is a list of `{"id", "ok", "error"}` entries, for `--thread` one per changed message, newest first; `[]` means the conversation has no messages in that folder. A pending entry also has `approval_id`. Done when you report every `ok: false` entry with its `error` and any `approval_id`, even when the exit code is `0`.
 

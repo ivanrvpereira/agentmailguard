@@ -41,6 +41,7 @@ A forward puts its --body note above the original, carries the original's attach
 draft update changes only the given fields of any draft: a list replaces the old one and --to '' clears it; --body replaces the whole body, quoted original included. Gmail gives the draft a new ID: use the returned id.
 draft delete and draft send act only on a draft; draft send sends the draft as it is at the provider when it runs.
 draft update, draft delete, and a second draft send withdraw a waiting draft send of that draft, also when they are refused or wait themselves; it never runs. A draft update that runs then makes a new send that waits for approval and returns its send_approval_id.
+Moves into trash or spam/junk, including their subfolders, are refused: use mail trash or mail spam. mail move takes mail out of them. Common folder names trash and spam work on every provider.
 Days in date options run from 00:00 to the end of the day on this machine's clock and time zone; the last day is included.
 Client authentication and built-in TLS are absent. Anyone who reaches the daemon can run every action that the write policy allows. Protect remote access with a tunnel.`
 
@@ -367,6 +368,7 @@ func mailCmd(r *runner) *cobra.Command {
 		r.leaf("categories", "List mail categories", 0, 0, r.none("mail.categories")),
 		r.organize("archive (IDS... | --thread THREAD_ID)", "Move messages, or a conversation's messages in one folder, to the archive", "mail.archive"),
 		r.organize("trash (IDS... | --thread THREAD_ID)", "Move messages, or a conversation's messages in one folder, to the trash", "mail.trash"),
+		r.organize("spam (IDS... | --thread THREAD_ID)", "Move messages, or a conversation's messages in one folder, to spam/junk", "mail.spam"),
 		r.organize("read (IDS... | --thread THREAD_ID)", "Mark messages, or a conversation's messages in one folder, as read", "mail.read"),
 		r.organize("unread (IDS... | --thread THREAD_ID)", "Mark messages, or a conversation's messages in one folder, as unread", "mail.unread"),
 		mailMoveCmd(r), mailFlagCmd(r), mailCategorizeCmd(r), mailOrganizeCmd(r),

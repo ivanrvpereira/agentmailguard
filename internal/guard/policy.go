@@ -16,6 +16,7 @@ import (
 // mail.forward, and draft.send.
 const (
 	keyTrash = "mail_trash"
+	keySpam  = "mail_spam"
 	keyDraft = "mail_draft"
 	keySend  = "mail_send"
 )
@@ -72,6 +73,8 @@ func (g *Guard) baseDecision(key string) config.Decision {
 	switch key {
 	case keyTrash:
 		return normal(b.MailTrash)
+	case keySpam:
+		return normal(b.MailSpam)
 	case keyDraft:
 		return normal(b.MailDraft)
 	case keySend:
@@ -88,12 +91,15 @@ func (g *Guard) baseDecision(key string) config.Decision {
 	return config.Deny
 }
 
-// sealedDecision is the decision of key for a sealed message, and for a red message under any key but mail_trash.
-// Only mail_trash has a sealed setting; every other key, such as a reply or forward under mail_draft or mail_send,
+// sealedDecision is the decision of key for a sealed message, and for a red message under any key but mail_trash or mail_spam.
+// Only mail_trash and mail_spam have sealed settings; every other key, such as a reply or forward under mail_draft or mail_send,
 // is denied.
 func (g *Guard) sealedDecision(key string) config.Decision {
-	if key == keyTrash {
+	switch key {
+	case keyTrash:
 		return normal(g.policy.Sealed.MailTrash)
+	case keySpam:
+		return normal(g.policy.Sealed.MailSpam)
 	}
 	return config.Deny
 }
@@ -221,7 +227,7 @@ func (g *Guard) forwardedText(ctx context.Context, id string) (map[string]any, e
 // decide returns the decision of key for each message ID. It looks up or screens a message only when the
 // sealed decision is stricter than the base decision; for a reply or forward that is whenever the base is not
 // deny. A sealed or error verdict, or a failed lookup, counts as sealed. A red verdict counts as red, which gives
-// the sealed decision to a reply or forward and leaves the base decision of a trash. The caller holds the mutation
+// the sealed decision to a reply or forward and leaves the base decision of a trash or spam move. The caller holds the mutation
 // gate and not the security gate: screening can take the security gate.
 func (g *Guard) decide(ctx context.Context, key string, ids []string) (map[string]decision, error) {
 	base, sealed := g.base(ctx, key), g.sealedDecision(key)
@@ -252,7 +258,7 @@ func (g *Guard) decide(ctx context.Context, key string, ids []string) (map[strin
 		switch verdicts[i] {
 		case model.Green, model.Yellow:
 		case model.Red:
-			if key != keyTrash {
+			if key != keyTrash && key != keySpam {
 				out[id] = decision{value: sealed, reason: "red"}
 			}
 		default:
@@ -269,7 +275,7 @@ func (e PendingError) Error() string { return audit.Pending }
 
 // apiOperations maps audit operations to the API operation names that pending actions and policy records use.
 var apiOperations = map[audit.Operation]string{
-	audit.Trash: "mail.trash", audit.DraftNew: "draft.new", audit.DraftReply: "draft.reply", audit.DraftForward: "draft.forward", audit.DraftUpdate: "draft.update",
+	audit.Trash: "mail.trash", audit.Spam: "mail.spam", audit.DraftNew: "draft.new", audit.DraftReply: "draft.reply", audit.DraftForward: "draft.forward", audit.DraftUpdate: "draft.update",
 	audit.DraftDelete: "draft.delete", audit.MailSend: "mail.send", audit.MailReply: "mail.reply", audit.MailForward: "mail.forward", audit.DraftSend: "draft.send",
 	audit.CalendarInvite: "calendar.invite", audit.CalendarUpdate: "calendar.update", audit.CalendarCancel: "calendar.cancel", audit.CalendarRespond: "calendar.respond",
 }
@@ -343,10 +349,21 @@ func (g *Guard) single(ctx context.Context, op audit.Operation, key string, d de
 	return refused(key)
 }
 
-// trashPolicy decides each trash ID before any provider access. It records deny and approve decisions,
+// mutationPolicyKey gives the policy key of a mailbox mutation, or empty when it needs no policy decision.
+func mutationPolicyKey(op audit.Operation) string {
+	switch op {
+	case audit.Trash:
+		return keyTrash
+	case audit.Spam:
+		return keySpam
+	}
+	return ""
+}
+
+// mutationPolicy decides each trash or spam ID before any provider write. It records deny and approve decisions,
 // stores each approve ID as its own pending action, and returns the results of the IDs it held back and
 // the distinct IDs that the policy allows.
-func (g *Guard) trashPolicy(ctx context.Context, ids []string, rule *string) (map[string]model.MutationResult, []string, error) {
+func (g *Guard) mutationPolicy(ctx context.Context, op audit.Operation, key string, ids []string, rule *string) (map[string]model.MutationResult, []string, error) {
 	unique := []string{}
 	seen := map[string]bool{}
 	for _, id := range ids {
@@ -355,7 +372,7 @@ func (g *Guard) trashPolicy(ctx context.Context, ids []string, rule *string) (ma
 			unique = append(unique, id)
 		}
 	}
-	decisions, err := g.decide(ctx, keyTrash, unique)
+	decisions, err := g.decide(ctx, key, unique)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -367,16 +384,16 @@ func (g *Guard) trashPolicy(ctx context.Context, ids []string, rule *string) (ma
 		case config.Allow:
 			allowed = append(allowed, id)
 		case config.Approve:
-			approval, err := g.hold(ctx, audit.Trash, keyTrash, d, &id, rule, idsArgs{[]string{id}})
+			approval, err := g.hold(ctx, op, key, d, &id, rule, idsArgs{[]string{id}})
 			if err != nil {
 				return nil, nil, err
 			}
 			held[id] = model.MutationResult{ID: id, Error: pointer(audit.Pending), ApprovalID: &approval}
 		default:
-			if err := g.recordDecision(ctx, audit.Trash, keyTrash, d, &id, nil, rule); err != nil {
+			if err := g.recordDecision(ctx, op, key, d, &id, nil, rule); err != nil {
 				return nil, nil, err
 			}
-			held[id] = model.MutationResult{ID: id, Error: new(string(refused(keyTrash)))}
+			held[id] = model.MutationResult{ID: id, Error: new(string(refused(key)))}
 		}
 	}
 	return held, allowed, nil

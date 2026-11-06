@@ -50,7 +50,7 @@ func TestWritesNeverReplayOnStaleKeepAlive(t *testing.T) {
 				if operation == "refresh" {
 					jsonResponse(w, map[string]any{"access_token": goodToken(), "expires_in": 1})
 				} else {
-					jsonResponse(w, map[string]string{"id": "m"})
+					jsonResponse(w, map[string]string{"id": "m", "parentFolderId": "inbox-id"})
 				}
 			}))
 			defer server.Close()
@@ -146,7 +146,7 @@ func TestMailboxAndCalendarShareFourRequestLimit(t *testing.T) {
 		if strings.Contains(r.URL.Path, "/events/") {
 			jsonResponse(w, event())
 		} else {
-			jsonResponse(w, map[string]string{"id": "m"})
+			jsonResponse(w, map[string]string{"id": "m", "parentFolderId": "inbox-id"})
 		}
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

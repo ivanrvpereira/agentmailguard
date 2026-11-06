@@ -19,7 +19,7 @@ func TestAPIOperationsAreReviewed(t *testing.T) {
 		"calendar.availability", "calendar.cancel", "calendar.get", "calendar.invite", "calendar.list", "calendar.respond", "calendar.search", "calendar.update",
 		"draft.delete", "draft.forward", "draft.new", "draft.reply", "draft.send", "draft.update",
 		"mail.archive", "mail.categories", "mail.categorize", "mail.flag", "mail.folders", "mail.forward", "mail.get", "mail.link", "mail.list",
-		"mail.move", "mail.organize", "mail.read", "mail.reply", "mail.search", "mail.send", "mail.thread", "mail.trash", "mail.unread",
+		"mail.move", "mail.organize", "mail.read", "mail.reply", "mail.search", "mail.send", "mail.spam", "mail.thread", "mail.trash", "mail.unread",
 		"rules.list", "stats",
 	}
 	if got := server.Operations(); !slices.Equal(got, reviewed) {
@@ -74,6 +74,8 @@ func TestValidatedAccountOperationsReachTheProviderOnlyWhenValid(t *testing.T) {
 		switch r.URL.Path {
 		case "/me/mailFolders/deleteditems":
 			io.WriteString(w, `{"id":"deleted"}`)
+		case "/me/mailFolders/junkemail":
+			io.WriteString(w, `{"id":"junk"}`)
 		case "/me/mailFolders":
 			io.WriteString(w, `{"value":[{"id":"f1","displayName":"Correspondência 日本","childFolderCount":0}]}`)
 		default:
@@ -114,7 +116,7 @@ func TestValidatedAccountOperationsReachTheProviderOnlyWhenValid(t *testing.T) {
 	}
 }
 
-func TestMoveIntoDeletedItemsIsRefusedWithPublicReason(t *testing.T) {
+func TestMoveIntoDeletedItemsOrJunkEmailIsRefusedWithPublicReason(t *testing.T) {
 	var writes atomic.Int32
 	d := graphDaemon(t, "", m365Grant, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
@@ -126,8 +128,10 @@ func TestMoveIntoDeletedItemsIsRefusedWithPublicReason(t *testing.T) {
 		switch r.URL.Path {
 		case "/me/mailFolders/deleteditems":
 			io.WriteString(w, `{"id":"del"}`)
+		case "/me/mailFolders/junkemail":
+			io.WriteString(w, `{"id":"junk"}`)
 		case "/me/mailFolders":
-			io.WriteString(w, `{"value":[{"id":"f1","displayName":"Finance","childFolderCount":0},{"id":"del","displayName":"Deleted Items","childFolderCount":1}]}`)
+			io.WriteString(w, `{"value":[{"id":"f1","displayName":"Finance","childFolderCount":0},{"id":"del","displayName":"Deleted Items","childFolderCount":1},{"id":"junk","displayName":"Junk Email","childFolderCount":0}]}`)
 		case "/me/mailFolders/del/childFolders":
 			io.WriteString(w, `{"value":[{"id":"old","displayName":"Old","childFolderCount":1}]}`)
 		case "/me/mailFolders/old/childFolders":
@@ -137,9 +141,9 @@ func TestMoveIntoDeletedItemsIsRefusedWithPublicReason(t *testing.T) {
 			w.WriteHeader(500)
 		}
 	}), newNativeAPI())
-	for _, dest := range []string{"del", "older"} {
+	for dest, want := range map[string]string{"del": "mail.trash", "older": "mail.trash", "trash": "mail.trash", "junk": "mail.spam", "spam": "mail.spam"} {
 		status, b := accountRPC(t, d.s, "mail.move", "", `{"ids":["m1"],"folder":"`+dest+`"}`)
-		if status != 500 || b != `{"error":"move refused: use mail.trash"}` {
+		if status != 500 || b != `{"error":"move refused: use `+want+`"}` {
 			t.Fatalf("move to %s: %d %s", dest, status, b)
 		}
 	}
@@ -147,7 +151,7 @@ func TestMoveIntoDeletedItemsIsRefusedWithPublicReason(t *testing.T) {
 		t.Fatal("refused move reached the provider")
 	}
 	status, b := accountRPC(t, d.s, "mail.folders", "", `{}`)
-	if status != 200 || b != `[{"id":"f1","name":"Finance"},{"id":"del","name":"Deleted Items"},{"id":"old","name":"Old"},{"id":"older","name":"Older"}]` {
+	if status != 200 || b != `[{"id":"f1","name":"Finance"},{"id":"del","name":"Deleted Items"},{"id":"junk","name":"Junk Email"},{"id":"old","name":"Old"},{"id":"older","name":"Older"}]` {
 		t.Fatalf("folders %d %s", status, b)
 	}
 }

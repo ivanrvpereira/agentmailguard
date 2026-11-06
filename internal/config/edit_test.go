@@ -180,6 +180,8 @@ func TestListShowsEffectiveValuesAndMarksDefaults(t *testing.T) {
 		"default_account":                        {Key: "default_account", Value: "work"},
 		"policy.mail_send":                       {Key: "policy.mail_send", Value: "approve"},
 		"policy.mail_trash":                      {Key: "policy.mail_trash", Value: "allow", Default: true},
+		"policy.mail_spam":                       {Key: "policy.mail_spam", Value: "allow", Default: true},
+		"policy.sealed.mail_spam":                {Key: "policy.sealed.mail_spam", Value: "deny", Default: true},
 		"accounts.work.policy.mail_send":         {Key: "accounts.work.policy.mail_send", Value: "approve", Default: true},
 		"accounts.home.policy.mail_send":         {Key: "accounts.home.policy.mail_send", Value: "deny"},
 		"accounts.home.client_secret":            {Key: "accounts.home.client_secret", Value: "set", Secret: true},
@@ -197,8 +199,8 @@ func TestListShowsEffectiveValuesAndMarksDefaults(t *testing.T) {
 		}
 	}
 	for key := range got {
-		if strings.Contains(key, ".sealed.") && !strings.HasSuffix(key, ".sealed.mail_trash") {
-			t.Errorf("listed sealed key %s; the sealed tables accept only mail_trash", key)
+		if strings.Contains(key, ".sealed.") && !strings.HasSuffix(key, ".sealed.mail_trash") && !strings.HasSuffix(key, ".sealed.mail_spam") {
+			t.Errorf("listed sealed key %s; the sealed tables accept only mail_trash and mail_spam", key)
 		}
 	}
 }

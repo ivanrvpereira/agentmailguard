@@ -35,6 +35,7 @@ mail_trash = "deny"
 | Key | Commands | Default |
 | --- | --- | --- |
 | `mail_trash` | `mail trash`, and rule moves to `trash` | `allow` |
+| `mail_spam` | `mail spam` | `allow` |
 | `mail_draft` | `draft new`, `draft reply`, `draft forward`, `draft update`, `draft delete` | `allow` |
 | `mail_send` | `mail send`, `mail reply`, `mail forward`, `draft send` | `deny` |
 | `calendar_invite` | `calendar invite` | `deny` |
@@ -50,21 +51,21 @@ In `mail organize --apply`, only a rule move to `trash` has a key.
 An invalid policy stops `amgd serve` with `config.toml: KEY_PATH: PROBLEM`, and a reload with an invalid policy is refused.
 For example: `config.toml: accounts.personal.policy.sealed.calendar_invite: unknown key`. The error never shows the value.
 `amgd config set` refuses an invalid policy key or value and leaves the file unchanged.
-A policy is invalid if it has an unknown key or table, a value other than `allow`, `approve`, or `deny`, or a key other than `mail_trash` in a sealed table.
+A policy is invalid if it has an unknown key or table, a value other than `allow`, `approve`, or `deny`, or a key other than `mail_trash` or `mail_spam` in a sealed table.
 
 ## Sealed messages
 
 The daemon always refuses `draft reply`, `draft forward`, `mail reply`, and `mail forward` on a `red`, `sealed`, or `error` message, with the refusal of their key: `refused by policy: mail_draft` or `refused by policy: mail_send`. No setting allows them.
 Unless the base decision is `deny`, the daemon looks up the verdict of the message for each reply and forward.
 
-The sealed tables apply only to `mail trash` and accept only `mail_trash`.
+The sealed tables apply only to `mail trash` and `mail spam` and accept only `mail_trash` and `mail_spam`.
 The sealed decision is the first value in this order: `[accounts.ALIAS.policy.sealed]`, `[policy.sealed]`, `deny`.
-If the message to trash is `sealed` or `error`, the daemon uses the stricter of the base decision and the sealed decision.
+If the message to trash or move to spam is `sealed` or `error`, the daemon uses the stricter of the base decision and the sealed decision.
 The order is `allow`, then `approve`, then `deny`.
 The daemon looks up the verdict only when the sealed decision is stricter than the base decision.
 
 If the message has no cached verdict, the daemon screens it first. A message that the daemon cannot screen counts as `sealed`.
-For replies and forwards of `green` and `yellow` messages, and for `mail trash` of `green`, `yellow`, and `red` messages, only the base decision applies.
+For replies and forwards of `green` and `yellow` messages, and for `mail trash` or `mail spam` of `green`, `yellow`, and `red` messages, only the base decision applies.
 `draft new`, `draft update`, `draft delete`, `draft send`, and `mail send` do not reference a received message, so only the base decision applies. Unless the base decision is `deny`, `draft update`, `draft delete`, and `draft send` first read their message and refuse one that is not a draft, before the Jev action check and any pending action. An approved run reads the message again.
 
 ## Jev action check
@@ -72,7 +73,7 @@ For replies and forwards of `green` and `yellow` messages, and for `mail trash` 
 Before an action runs, Jev checks the text that the agent wrote for it. The agent can be under prompt injection from mail it read, so the daemon does not trust this text.
 
 - Checked actions: `draft new`, `draft reply`, `draft update`, `draft forward`, `mail send`, `mail reply`, `mail forward`, `draft send`, `calendar invite`, and `calendar update`. `calendar respond` and `calendar cancel` are checked only when they have a comment, so `calendar respond --no-notify` is never checked.
-- Not checked: `mail trash`, `draft delete`, rule moves, and the commands without a policy key.
+- Not checked: `mail trash`, `mail spam`, `draft delete`, rule moves, and the commands without a policy key.
 - Jev sees the operation name, a fixed description of what the action does, and the action fields that the agent gave: recipients (for `draft new`, `mail send`, and forwards, To, Cc, and Bcc; for `draft update`, the lists that it gives; for replies, the added Cc and Bcc; for `calendar invite`, also the `--optional` attendees), subject, body (for `calendar update`, the new `--body`; an `--html` body, on mail or meetings, as its HTML source, not rendered), the HTML flag, the reply-all flag, comment, response, and event fields. It never sees a message or event ID. A `draft update` gives only the fields that it changes.
 - For `draft reply` and `mail reply`, Jev also sees `reply_recipients`: the To and Cc addresses that the reply goes to, worked out from the original message with the reply rule of [Mail send](sending.md). On Microsoft 365 this list is for the check; Microsoft picks the final list when it makes the reply. If the daemon cannot read them, the check fails.
 - For `draft forward` and `mail forward`, Jev also sees the subject and body of the forwarded message, read through the screened read path. If the daemon cannot read this text, for example because the message is not `green`, the check fails.
@@ -99,11 +100,11 @@ If the [fake screening engine](screening.md#screening) made the check, a `fake` 
 The daemon validates a meeting action before it stores it.
 Thus an invalid time, a wrong role, or a recurring or cancelled event fails with the usual error, not `pending`.
 
-`mail trash` decides each message ID on its own.
-The daemon trashes the allowed IDs.
-A denied ID gets `"ok": false` and `"error": "refused by policy: mail_trash"`.
+`mail trash` and `mail spam` decide each message ID on its own.
+The daemon moves the allowed IDs to trash or spam/junk.
+A denied ID gets `"ok": false` and `"error": "refused by policy: mail_trash"` or `"error": "refused by policy: mail_spam"`.
 An ID that needs approval gets `"ok": false`, `"error": "pending"`, and an `approval_id`, but no `url`. Each such ID is its own pending action.
-A conversation trash (`mail trash --thread`) decides each chosen message the same way. An approved action trashes only the message of its approval, never a message that arrived later.
+A conversation trash or spam move (`mail trash --thread` or `mail spam --thread`) decides each chosen message the same way. An approved action moves only the message of its approval, never a message that arrived later.
 
 `approvals status ID` returns `{"state":"..."}` for a pending action. The state is `pending`, `running`, `done`, `denied`, `withdrawn`, or `failed`. A `withdrawn` action is a waiting `draft send` that a draft change or delete withdrew; it never runs.
 A `done` action also has `result`: the normal result of the command, except that a `draft new`, `draft reply`, `draft forward`, or `draft update` result keeps only `id` and `thread_id`, and for `draft update` also `send_approval_id`, because the stored result holds no mail content.
@@ -115,10 +116,9 @@ In the `mail organize --apply` report, the `move.result` of such a message is `p
 The report does not show the approval ID, and the stats count the message as `failed`.
 The message stays incomplete, so each later `--apply` run makes a new pending action for it.
 
-On Microsoft 365, `mail move` to Deleted Items or to a folder below it fails with `move refused: use mail.trash`.
-Use `mail trash` instead.
-A rule move to such a folder also fails, and the report shows `GuardError`.
-On Microsoft 365, `mail folders`, `mail move`, `mail organize`, and `rules list` fail if the daemon cannot look up Deleted Items.
+On every provider, `mail move` into trash or spam/junk, or a folder below either one, fails with `move refused: use mail.trash` or `move refused: use mail.spam`, including the common destination names `trash` and `spam`. Use `mail trash` or `mail spam` instead. A rule move to such a folder ID also fails. A rule whose target is `trash` still takes the dedicated trash path and follows `mail_trash`.
+
+On Microsoft 365, `mail folders`, `mail move`, `mail organize`, and `rules list` fail if the daemon cannot look up Deleted Items or Junk Email.
 
 ## Storage and audit
 

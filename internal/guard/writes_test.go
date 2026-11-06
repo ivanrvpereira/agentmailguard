@@ -19,6 +19,7 @@ type writer struct {
 	*mailbox
 	calls            []string
 	trashed          []string
+	spammed          []string
 	flags            []model.FlagState
 	updates          []draftUpdate
 	draftReads       int
@@ -63,6 +64,10 @@ func (w *writer) Trash(_ context.Context, ids []string) ([]model.MutationResult,
 	w.trashed = append(w.trashed, ids...)
 	return w.write("trash", ids)
 }
+func (w *writer) Spam(_ context.Context, ids []string) ([]model.MutationResult, error) {
+	w.spammed = append(w.spammed, ids...)
+	return w.write("spam", ids)
+}
 func (w *writer) Move(_ context.Context, ids []string, from, _ string) ([]model.MutationResult, error) {
 	w.moveSources = append(w.moveSources, from)
 	return w.write("move", ids)
@@ -95,7 +100,7 @@ func (w *writer) Categorize(_ context.Context, ids, _, _ []string) ([]model.Muta
 	return w.write("categorize", ids)
 }
 func (w *writer) Folders(context.Context) ([]model.Folder, error) {
-	return []model.Folder{{ID: "f1", Name: "Finance"}, {ID: "del", Name: "Deleted Items", Trash: true}}, nil
+	return []model.Folder{{ID: "f1", Name: "Finance"}, {ID: "del", Name: "Deleted Items", Bin: model.Trash}, {ID: "junk", Name: "Junk Email", Bin: model.Spam}}, nil
 }
 func (w *writer) DraftNew(context.Context, model.NewDraft) (model.DraftResult, error) {
 	_, err := w.write("draft_new", nil)
@@ -366,6 +371,9 @@ func TestManualRefusalsKeepFixedReasonsWithoutWriting(t *testing.T) {
 	}{
 		{"move", "move refused: the destination must be a folder ID from `folders`", func() error { _, err := g.Move(ctx, ids, "CANARY destination"); return err }},
 		{"trash folder", "move refused: use mail.trash", func() error { _, err := g.Move(ctx, ids, "del"); return err }},
+		{"spam folder", "move refused: use mail.spam", func() error { _, err := g.Move(ctx, ids, "junk"); return err }},
+		{"trash name", "move refused: use mail.trash", func() error { _, err := g.Move(ctx, ids, "Trash"); return err }},
+		{"spam name", "move refused: use mail.spam", func() error { _, err := g.Move(ctx, ids, "spam"); return err }},
 		{"flag", "flag state must be one of flagged, complete, none", func() error { _, err := g.Flag(ctx, ids, "CANARY flag"); return err }},
 		{"empty categories", "categorize needs at least one category to add or remove", func() error { _, err := g.Categorize(ctx, ids, nil, nil); return err }},
 		{"unknown category", "categorize refused: not in the category list", func() error { _, err := g.Categorize(ctx, ids, []string{"CANARY category"}, nil); return err }},
