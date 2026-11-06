@@ -57,6 +57,11 @@ const (
 	NoFlag   FlagState = "none"
 )
 
+// FlagStates lists every FlagState in the order that help and refusals name them.
+var FlagStates = []FlagState{Flagged, Complete, NoFlag}
+
+func (s FlagState) Valid() bool { return slices.Contains(FlagStates, s) }
+
 type ContentType string
 
 const (
@@ -492,9 +497,10 @@ const (
 	ResponseDecline   MeetingResponse = "decline"
 )
 
-func (r MeetingResponse) Valid() bool {
-	return r == ResponseAccept || r == ResponseTentative || r == ResponseDecline
-}
+// MeetingResponses lists every MeetingResponse in the order that help names them.
+var MeetingResponses = []MeetingResponse{ResponseAccept, ResponseTentative, ResponseDecline}
+
+func (r MeetingResponse) Valid() bool { return slices.Contains(MeetingResponses, r) }
 
 type EventResponse struct {
 	Response MeetingResponse

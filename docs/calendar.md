@@ -17,6 +17,8 @@ Without this grant, meeting commands fail with `missing_scopes` before any Graph
 After `missing_scopes`, run `amgd account login ALIAS` again on the daemon host.
 Gmail login requests the `calendar.events.owned` scope. Without this grant, meeting commands fail with `missing_scopes` before any Google Calendar request.
 
+An event's `show_as` is the provider's own value: Graph `showAs` on Microsoft 365 (`free`, `tentative`, `busy`, `oof`, `workingElsewhere`, or `unknown`), and on Gmail `free` for an event that does not block time (transparency `transparent`) and `busy` otherwise.
+
 Times use the format `YYYY-MM-DD HH:MM` in the local timezone of the client.
 The client refuses other formats, times that do not exist because of a DST change, and years outside 1–9999.
 The client does not refuse a time that occurs two times when clocks go back. It uses one of the two offsets, so do not use such a time.

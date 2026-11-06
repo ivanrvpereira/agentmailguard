@@ -209,6 +209,15 @@ func optional(c *cobra.Command, p map[string]any, name string, value *string) {
 	}
 }
 
+// choices names the values of a closed model set in help: "a, b, or c".
+func choices[T ~string](values []T) string {
+	s := make([]string, len(values))
+	for i, v := range values {
+		s[i] = string(v)
+	}
+	return strings.Join(s[:len(s)-1], ", ") + ", or " + s[len(s)-1]
+}
+
 // negated adds --NAME and --no-NAME; the last option on the command line wins. *target is the default.
 func negated(c *cobra.Command, name, short string, target *bool) {
 	c.Flags().BoolVar(target, name, *target, short)
@@ -515,12 +524,12 @@ func mailMoveCmd(r *runner) *cobra.Command {
 func mailFlagCmd(r *runner) *cobra.Command {
 	state := ""
 	c := r.leaf("flag IDS...", "Set the follow-up flag of messages", 1, -1, func(c *cobra.Command, args []string) error {
-		if state != "flagged" && state != "complete" && state != "none" {
+		if !model.FlagState(state).Valid() {
 			return errUsage
 		}
 		return r.call(c, "mail.flag", map[string]any{"ids": args, "state": state}, false)
 	})
-	c.Flags().StringVar(&state, "state", "", "flagged, complete, or none; Gmail has no complete")
+	c.Flags().StringVar(&state, "state", "", choices(model.FlagStates)+"; Gmail has no complete")
 	return c
 }
 

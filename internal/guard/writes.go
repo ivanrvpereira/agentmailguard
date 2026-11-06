@@ -223,7 +223,7 @@ func (g *Guard) writer(ctx context.Context, op audit.Operation, from string, opt
 			return g.mailbox.MarkRead(ctx, ids, op == audit.Read)
 		}
 	case audit.Flag:
-		if opts.Flag == nil || (*opts.Flag != model.Flagged && *opts.Flag != model.Complete && *opts.Flag != model.NoFlag) {
+		if opts.Flag == nil || !opts.Flag.Valid() {
 			return nil, GuardError("flag state must be one of flagged, complete, none")
 		}
 		if *opts.Flag == model.Complete && limits(g.mailbox).NoFlagComplete {

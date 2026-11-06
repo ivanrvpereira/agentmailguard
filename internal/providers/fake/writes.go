@@ -129,7 +129,7 @@ func (b *mailbox) MarkRead(ctx context.Context, ids []string, read bool) ([]mode
 	return b.each(ctx, ids, func(db *sql.DB, id string) error { return b.update(ctx, db, id, `is_read = ?`, read) })
 }
 func (b *mailbox) Flag(ctx context.Context, ids []string, state model.FlagState) ([]model.MutationResult, error) {
-	if state != model.Flagged && state != model.Complete && state != model.NoFlag {
+	if !state.Valid() {
 		return nil, invalid
 	}
 	return b.each(ctx, ids, func(db *sql.DB, id string) error { return b.update(ctx, db, id, `flag = ?`, string(state)) })
