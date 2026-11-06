@@ -456,14 +456,14 @@ func (b *mailbox) Archive(ctx context.Context, ids []string) ([]model.MutationRe
 	return b.Move(ctx, ids, "inbox", "archive")
 }
 func (b *mailbox) Trash(ctx context.Context, ids []string) ([]model.MutationResult, error) {
-	return b.Move(ctx, ids, "inbox", "deleteditems")
+	return b.Move(ctx, ids, "inbox", wellKnown[model.Trash])
 }
 func (b *mailbox) Spam(ctx context.Context, ids []string) ([]model.MutationResult, error) {
-	return b.Move(ctx, ids, "inbox", "junkemail")
+	return b.Move(ctx, ids, "inbox", wellKnown[model.Spam])
 }
 func (b *mailbox) Move(ctx context.Context, ids []string, _, dest string) ([]model.MutationResult, error) {
 	return b.each(ctx, ids, func(id string) error {
-		_, err := b.c.request(ctx, http.MethodPost, b.c.endpoint("/me/messages/"+escapeID(id)+"/move", nil), map[string]any{"destinationId": folderName(dest)}, false)
+		_, err := b.c.request(ctx, http.MethodPost, b.c.endpoint("/me/messages/"+escapeID(id)+"/move", nil), map[string]any{"destinationId": folderID(dest)}, false)
 		return err
 	})
 }

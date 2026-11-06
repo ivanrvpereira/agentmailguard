@@ -131,7 +131,7 @@ func (b *mailbox) Get(ctx context.Context, ids []string, body bool) ([]model.Mes
 func (b *mailbox) List(ctx context.Context, folder string, page model.PageRequest, body bool) (model.MessagePage, error) {
 	q := messageQuery(body)
 	q.Set("$orderby", "receivedDateTime desc")
-	return b.page(ctx, "/me/mailFolders/"+escapeID(folderName(folder))+"/messages", q, page, body)
+	return b.page(ctx, "/me/mailFolders/"+escapeID(folderID(folder))+"/messages", q, page, body)
 }
 
 // notFound is the error of a Graph 404, which a missing message gets.
@@ -163,12 +163,15 @@ func (b *mailbox) Thread(ctx context.Context, thread string) ([]model.Message, e
 	return out, nil
 }
 
-func folderName(folder string) string {
-	switch strings.ToLower(folder) {
-	case "trash":
-		return "deleteditems"
-	case "spam":
-		return "junkemail"
+// wellKnown maps the common folder names to Graph's well-known folder names
+// (https://learn.microsoft.com/en-us/graph/api/resources/mailfolder?view=graph-rest-1.0).
+var wellKnown = map[model.FolderName]string{model.Inbox: "inbox", model.Trash: "deleteditems", model.Spam: "junkemail"}
+
+// folderID gives the Graph folder of folder: a common folder name maps to its well-known name, and any other value
+// is a folder ID or well-known name as given.
+func folderID(folder string) string {
+	if n, ok := model.ParseFolderName(folder); ok {
+		return wellKnown[n]
 	}
 	return folder
 }
@@ -177,7 +180,7 @@ func folderName(folder string) string {
 // folder, a well-known name such as inbox or a real ID, is looked up first
 // (https://learn.microsoft.com/en-us/graph/api/mailfolder-get?view=graph-rest-1.0). A failed lookup fails closed.
 func (b *mailbox) ThreadMessagesIn(ctx context.Context, thread, folder string) ([]string, error) {
-	d, err := b.c.get(ctx, b.c.endpoint("/me/mailFolders/"+escapeID(folderName(folder)), url.Values{"$select": {"id"}}), false)
+	d, err := b.c.get(ctx, b.c.endpoint("/me/mailFolders/"+escapeID(folderID(folder)), url.Values{"$select": {"id"}}), false)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +240,7 @@ func kql(q model.SearchQuery) string {
 func (b *mailbox) Search(ctx context.Context, query model.SearchQuery, page model.PageRequest, body bool) (model.MessagePage, error) {
 	path := "/me/messages"
 	if query.Folder != nil {
-		path = "/me/mailFolders/" + escapeID(folderName(*query.Folder)) + "/messages"
+		path = "/me/mailFolders/" + escapeID(folderID(*query.Folder)) + "/messages"
 	}
 	q := messageQuery(body)
 	q.Set("$search", kql(query))
@@ -303,12 +306,9 @@ func (b *mailbox) page(ctx context.Context, path string, q url.Values, page mode
 // Folders marks Deleted Items, Junk Email, and every folder below them, so moves there can be refused. A failed
 // lookup fails closed.
 func (b *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
-	bins := map[string]model.Bin{}
-	for _, root := range []struct {
-		name string
-		bin  model.Bin
-	}{{"deleteditems", model.Trash}, {"junkemail", model.Spam}} {
-		d, err := b.c.get(ctx, b.c.endpoint("/me/mailFolders/"+root.name, url.Values{"$select": {"id"}}), false)
+	bins := map[string]model.FolderName{}
+	for _, bin := range []model.FolderName{model.Trash, model.Spam} {
+		d, err := b.c.get(ctx, b.c.endpoint("/me/mailFolders/"+wellKnown[bin], url.Values{"$select": {"id"}}), false)
 		if err != nil {
 			return nil, err
 		}
@@ -316,11 +316,11 @@ func (b *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
 		if id == "" {
 			return nil, invalidMetadata
 		}
-		bins[id] = root.bin
+		bins[id] = bin
 	}
 	type listing struct {
 		link string
-		bin  model.Bin
+		bin  model.FolderName
 	}
 	q := url.Values{"$select": {"id,displayName,childFolderCount"}, "$top": {"100"}}
 	pending := []listing{{link: b.c.endpoint("/me/mailFolders", q)}}

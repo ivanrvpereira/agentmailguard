@@ -264,7 +264,8 @@ func TestThreadMessagesInKeepsTheThreadMessagesThatCarryTheFolderLabel(t *testin
 	ctx := t.Context()
 	// A folder other than the trash or spam skips their messages, as messages.list does by default
 	// (includeSpamTrash, https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list).
-	for folder, want := range map[string][]string{"inbox": {"in-new", "in-old"}, "Label_7": {"in-new", "labeled"}, "sent": {"sent"}, "trash": {"binned"}, "spam": {"spam"}} {
+	// The common folder names map to their system labels in any case; any other value is a label ID as given.
+	for folder, want := range map[string][]string{"inbox": {"in-new", "in-old"}, "Label_7": {"in-new", "labeled"}, "SENT": {"sent"}, "Trash": {"binned"}, "spam": {"spam"}} {
 		requests = nil
 		got, err := b.ThreadMessagesIn(ctx, "t-7", folder)
 		if err != nil || !reflect.DeepEqual(got, want) {
@@ -286,8 +287,10 @@ func TestThreadMessagesInKeepsTheThreadMessagesThatCarryTheFolderLabel(t *testin
 	if !reflect.DeepEqual(requests, []string{"GET /threads/gone?format=minimal"}) {
 		t.Fatalf("unknown thread requests=%q", requests)
 	}
-	if got, err := b.ThreadMessagesIn(ctx, "t-7", "Label_404"); err != model.MailboxError("Gmail error FolderError") || len(got) != 0 {
-		t.Fatalf("unknown folder: ids=%q err=%v", got, err)
+	for _, folder := range []string{"Label_404", "sent"} {
+		if got, err := b.ThreadMessagesIn(ctx, "t-7", folder); err != model.MailboxError("Gmail error FolderError") || len(got) != 0 {
+			t.Fatalf("unknown folder %s: ids=%q err=%v", folder, got, err)
+		}
 	}
 }
 
@@ -395,5 +398,30 @@ func TestListAndSearchRefuseAGmailPageLargerThanAsked(t *testing.T) {
 			t.Errorf("%s size 3 with 3 IDs: %d messages, %v", name, len(got.Messages), err)
 		}
 		gets.Store(0)
+	}
+}
+
+// The common folder names map to their system labels in any case; any other value, a lowercase system label name
+// included, is a label ID as given. A read of TRASH or SPAM sets includeSpamTrash, which messages.list needs to return
+// their messages (https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list).
+func TestListAndSearchMapTheCommonFolderNamesToSystemLabels(t *testing.T) {
+	var labelIDs []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if bin := q.Get("labelIds") == "TRASH" || q.Get("labelIds") == "SPAM"; q.Has("includeSpamTrash") != bin || bin && q.Get("includeSpamTrash") != "true" {
+			t.Errorf("labelIds=%s: includeSpamTrash=%q", q.Get("labelIds"), q.Get("includeSpamTrash"))
+		}
+		labelIDs = append(labelIDs, q.Get("labelIds"))
+		respond(w, map[string]any{"messages": []any{}})
+	}))
+	defer server.Close()
+	b := gmail.New(account, validStore(), gmail.Options{HTTPClient: server.Client(), GmailURL: server.URL}).Mailbox()
+	for folder, want := range map[string]string{"inbox": "INBOX", "Trash": "TRASH", "SPAM": "SPAM", "SENT": "SENT", "sent": "sent", "Label_7": "Label_7"} {
+		labelIDs = nil
+		_, err := b.List(t.Context(), folder, model.PageRequest{}, false)
+		_, err2 := b.Search(t.Context(), model.SearchQuery{Folder: &folder}, model.PageRequest{}, false)
+		if err != nil || err2 != nil || !reflect.DeepEqual(labelIDs, []string{want, want}) {
+			t.Fatalf("%s: labelIds=%q err=%v %v", folder, labelIDs, err, err2)
+		}
 	}
 }

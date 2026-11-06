@@ -89,7 +89,7 @@ amg --timeout 2h mail organize --since 7d [--until DATE] --apply
 amg stats --days 30
 ```
 
-`mail list --folder` takes a folder ID from `mail folders` or a well-known name such as `inbox`, and defaults to `inbox`. `mail search` needs at least one of `--text`, `--from`, `--to`, `--subject`, `--after`, or `--before`. `--to` matches the To and Cc addresses.
+`mail list --folder` takes a folder ID from `mail folders` or a common folder name (`inbox`, `trash`, `spam`, on every provider), and defaults to `inbox`. `mail search` needs at least one of `--text`, `--from`, `--to`, `--subject`, `--after`, or `--before`. `--to` matches the To and Cc addresses.
 
 Dates: a day runs from 00:00 to the end of the day on the machine where you run the CLI, and the last day is included. `mail search --after DAY --before DAY` includes both days, `mail organize --until DAY` includes that day, and `calendar list --to DAY` includes that whole day (default: today through seven days from today). `--to +Nd` counts from `--from`; `Nd`, `Nw`, and `Nm` for `organize` count back from today. `calendar availability` and meeting commands take exact local times, not days. A `mail search` with dates can return fewer messages than `--count` on a page and still have `next_page`.
 
@@ -177,9 +177,9 @@ A successful result is `{"ok": true}`. Done when you report the send as sent onl
 `read`, `unread`, `flag`, `categorize`, `archive`, `move`, `trash`, `spam`, and `organize --apply` change the mailbox. Before you run one, show the user the account, the messages (IDs with sender and date, or the conversation and its folder), and the action, and get explicit approval. A general request such as "clean up my inbox" is not approval for a specific batch.
 
 - To act on a whole conversation, give `--thread THREAD_ID` instead of IDs, for example `mail archive --thread THREAD_ID`. It changes only the conversation's messages in the Inbox, or in the folder that `--in FOLDER_ID` names (a folder ID as `mail list --folder` takes it). Sent messages, drafts, and messages in other folders stay where they are. Do not list the conversation's IDs by hand. A message that arrived after you read the conversation is included when it is in that folder, and the result shows it: report it to the user.
-- `mail flag` works on single messages only; it has no `--thread`.
+- `mail flag` works on single messages only; it has no `--thread`. Gmail has only a star, so `--state complete` fails there with `flag refused: complete is not supported for this account`; use `flagged` or `none`.
 - On Gmail, `archive` only takes messages out of the Inbox: with `--in` a label, they stay in that label. To file them elsewhere, use `move`, which removes the `--in` label.
-- `move` takes messages out of the trash or spam/junk, by ID or with `--thread` and `--in` that folder. The common folder names `trash` and `spam` work on every provider for `mail list --folder`, `mail search --folder`, and `--in`. `archive` with `--in` the trash moves the messages to Archive on Microsoft 365, and changes nothing on Gmail.
+- `move` takes messages out of the trash or spam/junk, by ID or with `--thread` and `--in` that folder. The common folder names `inbox`, `trash`, and `spam` work on every provider for `mail list --folder`, `mail search --folder`, and `--in`. `archive` with `--in` the trash moves the messages to Archive on Microsoft 365, and changes nothing on Gmail.
 - `move` needs a folder ID from `mail folders`, not a folder name.
 - `categorize` accepts only categories that `mail categories` lists. It cannot create categories.
 - `trash` moves mail to the trash. It is not permanent deletion. `spam` moves mail to spam/junk: Gmail adds `SPAM` and removes `INBOX`, keeping other labels; Microsoft 365 moves to Junk Email. The `mail_trash` and `mail_spam` write policy keys can refuse or hold each ID, also each message of a `--thread` action. Each approval covers only its message.

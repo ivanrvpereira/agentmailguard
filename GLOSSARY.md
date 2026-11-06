@@ -174,7 +174,10 @@ _Avoid_: junk (except for the Microsoft 365 folder), report
 ### Organization
 
 **Bin**:
-Which folder tree a folder belongs to: the provider's trash or spam/junk folder and every folder below it (`model.Bin`). A folder outside both has no bin. Moves into a bin go only through trash or spam.
+Which folder tree a folder belongs to: the provider's trash or spam/junk folder and every folder below it (`model.Folder.Bin`, `model.Trash` or `model.Spam`). A folder outside both has no bin. Moves into a bin go only through trash or spam.
+
+**Common folder name**:
+A folder name that works on every provider, in any case: `inbox`, `trash`, or `spam` (`model.FolderName`). Each adapter maps it to its own folder or label ID; any other folder value is that ID.
 
 **Rule**:
 A named instruction in `rules.toml` for one account that files matching mail into a folder or a category.
