@@ -1,6 +1,7 @@
 package daemon_test
 
 import (
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ivanrvpereira/agentmailguard/internal/client"
 	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 	"github.com/ivanrvpereira/agentmailguard/internal/daemon"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
@@ -33,10 +35,24 @@ func refusingAuthority(t *testing.T) *httptest.Server {
 func TestServeExposureWarningCheckListAndBoundedShutdown(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		listen            string
+		host, console     string
 		warning, loggedIn bool
-	}{{"127.0.0.1:0", false, true}, {"0.0.0.0:0", true, true}, {"127.0.0.1:0", false, false}} {
-		home := writeHome(t, "version = 1\ndefault_account = 'work'\n[credentials]\nbackend = 'keychain'\n[console]\nlisten = '"+freeAddress(t)+"'\n[accounts.work]\nprovider = 'm365'\nemail = 'synthetic@example.test'\nclient_id = 'synthetic'\ntenant_id = 'synthetic'\n")
+	}{
+		{"127.0.0.1", "", false, true},
+		// localhost is loopback too: no exposure warning.
+		{"localhost", "", false, true},
+		// The hosts, the username, and a second account with sends that wait show in the start lines.
+		{"0.0.0.0", "hosts = ['daemon-host.example.ts.net', '192.0.2.7:8788']\nusername = 'ops'\n", true, true},
+		// --listen :PORT is a wildcard listener too.
+		{"", "hosts = ['daemon-host.example.ts.net', '192.0.2.7:8788']\nusername = 'ops'\n", true, true},
+		{"127.0.0.1", "", false, false},
+	} {
+		console := freeAddress(t)
+		other := ""
+		if tc.warning {
+			other = "[accounts.demo]\nprovider = 'fake'\nemail = 'demo@example.test'\n[accounts.demo.policy]\nmail_send = 'approve'\n"
+		}
+		home := writeHome(t, "version = 1\ndefault_account = 'work'\n[credentials]\nbackend = 'keychain'\n[console]\nlisten = '"+console+"'\n"+tc.console+"[accounts.work]\nprovider = 'm365'\nemail = 'synthetic@example.test'\nclient_id = 'synthetic'\ntenant_id = 'synthetic'\n"+other)
 		k := &keychain{}
 		store := credentials.New(k, home)
 		if err := store.SaveScreeningKey(t.Context(), "private-jev-canary"); err != nil {
@@ -49,8 +65,12 @@ func TestServeExposureWarningCheckListAndBoundedShutdown(t *testing.T) {
 		}
 		// The fake authority refuses every refresh, so the logged-in account fails its sign-in check.
 		authority := refusingAuthority(t)
-		d := runServe(t, home, tc.listen, daemon.Options{Platform: k, Server: server.Options{M365: m365.Options{AuthorityURL: authority.URL, BaseURL: authority.URL}}})
-		d.log.await(t, "daemon listening\n", 1, d.exit)
+		listen := reserve(t, tc.host)
+		d := runServe(t, home, listen, daemon.Options{Platform: k, Server: server.Options{M365: m365.Options{AuthorityURL: authority.URL, BaseURL: authority.URL}}})
+		d.log.await(t, "amg account list\n", 1, d.exit)
+		if tc.warning {
+			d.log.await(t, "local-and-remote-clients\n", 1, d.exit)
+		}
 		// An idle daemon stops at once: it never waits out the 5 s HTTP drain.
 		began := time.Now()
 		if code := d.stop(); code != 0 {
@@ -65,12 +85,59 @@ func TestServeExposureWarningCheckListAndBoundedShutdown(t *testing.T) {
 			// An account that is not logged in does not block the start; its commands fail.
 			account = "not logged in; commands for this account fail until amgd account login"
 		}
-		checks := "checking credentials\ncredential check: credentials (keychain): ok\ncredential check: account \"work\" (m365): " + account + "\ncredential check: screening key: ok\ncredential check: console password: not set; the console refuses every request until amgd config set console.password\napproval console listening\ndaemon listening\n"
-		if !strings.HasSuffix(text, checks) || strings.Contains(text, "private-") {
-			t.Errorf("credential checks must precede listening: %q", text)
+		demo, signIn := "", "user admin"
+		if tc.console != "" {
+			signIn = "user ops"
 		}
-		if strings.Contains(text, "WARNING: unauthenticated mailbox access; no built-in TLS. A protected network or tunnel is required.\n") != tc.warning {
-			t.Errorf("exposure warning mismatch: %s", text)
+		start := "approval console: http://" + console + "/ (" + signIn + ")\n" +
+			"daemon listening: http://" + listen + "\n  agents connect with: AMG_HOST=http://" + listen + " amg account list\n"
+		if tc.warning {
+			demo = "credential check: account \"demo\" (fake): no login needed\n"
+			_, port, _ := net.SplitHostPort(listen)
+			// The daemon prints no host name that it would have to guess for a wildcard listener.
+			start = "approval console: http://" + console + "/ (" + signIn + ")\n" +
+				"  also accepted as: daemon-host.example.ts.net, 192.0.2.7:8788 (from console.hosts)\n" +
+				"daemon listening: http://" + listen + "\n  agents connect with: AMG_HOST=http://DAEMON-HOST:" + port + " amg account list\n" +
+				"WARNING: this API has no login and no TLS. Anyone who can reach port " + port + " on any address of this host can read screened mail and run every action that the write policy allows (sends: approve or deny).\n" +
+				"  Restrict it: allow only the agent machine (Tailscale grant or firewall), or keep --listen on 127.0.0.1 and use an SSH tunnel. See docs/daemon.md#local-and-remote-clients\n"
+		}
+		want := "checking credentials\ncredential check: credentials (keychain): ok\n" + demo + "credential check: account \"work\" (m365): " + account + "\ncredential check: screening key: ok\ncredential check: console password: ok\n" + start
+		if text != want {
+			t.Errorf("start output:\n got %q\nwant %q", text, want)
+		}
+	}
+}
+
+// Without a console password and without a terminal to ask on, serve refuses to start, so that no one else can be
+// the first to set the password in the console. The refusal names the command for the same home.
+// A home with control characters is printed without them: the command never moves the terminal cursor.
+func TestServeRefusesToStartWithoutAConsolePassword(t *testing.T) {
+	home := writeHome(t, consoleConfig(freeAddress(t)))
+	control := filepath.Join(t.TempDir(), "fake\rhome")
+	if err := os.Mkdir(control, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(control, "config.toml"), []byte(consoleConfig(freeAddress(t))), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		args []string
+		env  string
+		want string
+	}{
+		{[]string{"--home", home}, "", "amgd config set console.password --home " + shellQuoted(home)},
+		{nil, home, "amgd config set console.password --home " + shellQuoted(home)},
+		{[]string{"--home", control}, "", "amgd config set console.password --home " + strings.ReplaceAll(shellQuoted(control), "\r", "")},
+	} {
+		t.Setenv("AMG_HOME", tc.env)
+		var errout strings.Builder
+		// A daemon that started would run until ctx ends: it fails the test instead of hanging it.
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		code := daemon.Run(ctx, append(tc.args, "serve", "--listen", "127.0.0.1:0"), io.Discard, &errout, daemon.Options{Platform: &keychain{}, LookupEnv: noEnv, Stdin: strings.NewReader(""), Listen: listenReserved})
+		cancel()
+		want := "credential check: console password: not set; run " + tc.want + "\nerror: start refused: run " + tc.want + ", then start the daemon again\n"
+		if code != 1 || !strings.HasSuffix(errout.String(), want) || strings.Contains(errout.String(), "listening") {
+			t.Errorf("%v AMG_HOME=%q: exit %d stderr %q", tc.args, tc.env, code, errout.String())
 		}
 	}
 }
@@ -110,6 +177,74 @@ func TestServeReportsRefusedSignInOnTheAccountLine(t *testing.T) {
 	}
 }
 
+// The AMG_HOST hint of a scoped IPv6 listener escapes the zone, so amg accepts it as it is printed.
+func TestServeHintOfAScopedIPv6ListenerIsAURLThatAmgAccepts(t *testing.T) {
+	t.Parallel()
+	standIn := freeAddress(t)
+	_, port, _ := net.SplitHostPort(standIn)
+	listen := "[fe80::1%synthetic0]:" + port
+	opts := daemon.Options{Platform: &keychain{}, Listen: func(network, address string) (net.Listener, error) {
+		if address == listen {
+			// No host has this interface: a loopback socket on the same port stands in for it.
+			address = standIn
+		}
+		return listenReserved(network, address)
+	}}
+	d := runServe(t, writeHome(t, consoleConfig(freeAddress(t))), listen, opts)
+	d.log.await(t, "local-and-remote-clients\n", 1, d.exit)
+	text := d.log.String()
+	base := "http://[fe80::1%25synthetic0]:" + port
+	if want := "daemon listening: " + base + "\n  agents connect with: AMG_HOST=" + base + " amg account list\n"; !strings.Contains(text, want) {
+		t.Fatalf("log=%q", text)
+	}
+	if _, err := client.New(base, client.Options{}); err != nil {
+		t.Fatalf("amg refuses the hint: %v", err)
+	}
+}
+
+// shellQuoted is path as the daemon prints it in a command to copy: in single quotes unless it holds only
+// letters, digits, and / . _ - + : , = @, which a temporary directory with a space in it does not.
+func shellQuoted(path string) string {
+	if strings.Trim(path, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/._-+:,=@") == "" {
+		return path
+	}
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
+}
+
+// Without a daemon, a setting change ends with the command that starts one, for the home that the command used.
+func TestChangeWithoutDaemonNamesTheServeCommandOfTheHome(t *testing.T) {
+	plain := filepath.Join(t.TempDir(), "home")
+	quoted := filepath.Join(t.TempDir(), "it's my home")
+	user := t.TempDir()
+	t.Setenv("HOME", user)
+	// A relative home is printed absolute, so the command reaches it from any directory.
+	work := t.TempDir()
+	t.Chdir(work)
+	for _, tc := range []struct {
+		args     []string
+		env, dir string
+		want     string
+	}{
+		{[]string{"--home", plain}, "", plain, "amgd serve --home " + shellQuoted(plain)},
+		{nil, quoted, quoted, "amgd serve --home " + shellQuoted(quoted)},
+		{nil, "", filepath.Join(user, ".agentmailguard"), "amgd serve"},
+		{[]string{"--home", "data"}, "", filepath.Join(work, "data"), "amgd serve --home " + shellQuoted(filepath.Join(work, "data"))},
+	} {
+		t.Setenv("AMG_HOME", tc.env)
+		if err := os.MkdirAll(tc.dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(tc.dir, "config.toml"), []byte(consoleConfig("localhost:8788")), 0600); err != nil {
+			t.Fatal(err)
+		}
+		var errout strings.Builder
+		code := daemon.Run(t.Context(), append(tc.args, "config", "set", "policy.mail_send", "approve"), io.Discard, &errout, daemon.Options{Platform: &keychain{}, LookupEnv: noEnv})
+		if code != 0 || !strings.HasSuffix(errout.String(), "no daemon runs for this home. Now run: "+tc.want+"\n") {
+			t.Errorf("AMG_HOME=%q %v: exit %d stderr %q", tc.env, tc.args, code, errout.String())
+		}
+	}
+}
+
 // consoleConfig is a home without accounts, with fake screening and the console on listen.
 func consoleConfig(listen string) string {
 	return "version = 1\n[screening]\nprovider = 'fake'\n[credentials]\nbackend = 'keychain'\n[console]\nlisten = '" + listen + "'\n"
@@ -118,7 +253,7 @@ func consoleConfig(listen string) string {
 func TestServeWarnsWhenTheApprovalConsoleListensBeyondLoopback(t *testing.T) {
 	t.Parallel()
 	d := startServe(t, writeHome(t, consoleConfig(reserve(t, "0.0.0.0"))), "127.0.0.1:0", daemon.Options{Platform: &keychain{}})
-	if text := d.log.String(); !strings.Contains(text, "WARNING: the approval console listens beyond loopback. Use an HTTPS tunnel such as tailscale serve.\napproval console listening\n") {
+	if text := d.log.String(); !strings.Contains(text, "WARNING: the approval console listens beyond loopback. Use an HTTPS tunnel such as tailscale serve.\napproval console: http://") {
 		t.Fatalf("log=%q", text)
 	}
 }
@@ -130,7 +265,9 @@ func TestServeRefusesToStartWhenTheConsolePortIsTaken(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer taken.Close()
-	code, _, errout := amgd(t, writeHome(t, consoleConfig(taken.Addr().String())), daemon.Options{Platform: &keychain{}}, "", "serve", "--listen", "127.0.0.1:0")
+	home, k := writeHome(t, consoleConfig(taken.Addr().String())), &keychain{}
+	setConsolePassword(t, credentials.New(k, home))
+	code, _, errout := amgd(t, home, daemon.Options{Platform: k}, "", "serve", "--listen", "127.0.0.1:0")
 	if code != 1 || !strings.HasSuffix(errout, "error: console listener unavailable\n") || strings.Contains(errout, "listening") {
 		t.Fatalf("exit %d stderr %q", code, errout)
 	}

@@ -29,6 +29,7 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/gmail"
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 	"github.com/ivanrvpereira/agentmailguard/internal/server"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // productionWorkFactor is the scrypt work factor of credential files before TestMain lowers it.
@@ -293,14 +294,17 @@ func startServe(t *testing.T, home, listen string, opts daemon.Options) *daemonR
 			t.Errorf("serve exit %d:\n%s", code, d.log.String())
 		}
 	})
-	d.log.await(t, "daemon listening\n", 1, d.exit)
+	d.log.await(t, "amg account list\n", 1, d.exit)
 	return d
 }
 
 // runServe starts amgd serve on home without waiting. It stops serve when the test ends, before the temporary
-// home goes.
+// home goes. With a fake Keychain it first stores a console password, which serve needs to start.
 func runServe(t *testing.T, home, listen string, opts daemon.Options) *daemonRun {
 	t.Helper()
+	if opts.Platform != nil {
+		setConsolePassword(t, credentials.New(opts.Platform, home))
+	}
 	if opts.LookupEnv == nil {
 		opts.LookupEnv = noEnv
 	}
@@ -317,6 +321,18 @@ func runServe(t *testing.T, home, listen string, opts daemon.Options) *daemonRun
 	}()
 	t.Cleanup(func() { d.stop() })
 	return d
+}
+
+// setConsolePassword stores the hash of a synthetic console password, at the cheapest bcrypt cost.
+func setConsolePassword(t *testing.T, store *credentials.RecordStore) {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte("synthetic-console-pass"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveConsoleHash(t.Context(), string(hash)); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // stop cancels serve and returns its exit code; -1 when it did not stop in time.

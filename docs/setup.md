@@ -163,7 +163,7 @@ For a test account without a provider, run `amgd account add demo --provider fak
 amgd config set screening.api_key
 ```
 
-2. Set the console password for the [approval console](approval-console.md#approval-console). Until you set it, the console refuses every request, and every action that waits for approval stays pending. That includes a policy of `approve`, and a draft, send, or meeting write that the Jev action check flags or cannot check:
+2. Set the console password for the [approval console](approval-console.md#approval-console). The daemon does not start without it: on a terminal, `amgd serve` asks for it if you skip this step. Every action that waits for approval needs it. That includes a policy of `approve`, and a draft, send, or meeting write that the Jev action check flags or cannot check:
 
 ```sh
 amgd config set console.password
@@ -177,7 +177,16 @@ You sign in to the console with the username `admin` and this password. To use a
 amgd serve
 ```
 
-4. Read the check list that `amgd serve` prints. Each account must show `ok` or `no login needed`. Then the daemon prints `approval console listening` and `daemon listening`.
+4. Read the check list that `amgd serve` prints. Each account must show `ok` or `no login needed`. Then the daemon prints where to go next:
+
+```text
+approval console: http://localhost:8788/ (user admin)
+daemon listening: http://127.0.0.1:8787
+  agents connect with: AMG_HOST=http://127.0.0.1:8787 amg account list
+```
+
+Open the console URL in a browser on the daemon host.
+
 5. In a second terminal, list the accounts, inspect the status, and make the first read:
 
 ```sh
@@ -206,21 +215,46 @@ See [Settings](daemon.md#settings) and [Reload](daemon.md#reload) for all keys a
 
 ## Run as a service
 
+Each release archive has a service file in `service/`: `amgd.service` for systemd on Linux, and `io.github.ivanrvpereira.agentmailguard.plist` for launchd on macOS. Homebrew installs it in `$(brew --prefix)/share/agentmailguard/service`. The same files are in [`packaging/`](../packaging/).
+
+A service has no terminal, so `amgd serve` cannot ask for a missing secret: the start fails and the log names the command to run. Prepare the home first, as the user who will run the daemon, on a terminal of the daemon host (an SSH session is enough):
+
+1. If the daemon uses another home than `~/.agentmailguard`, set `AMG_HOME` for every command, and later for the service.
+2. On macOS, select the Keychain backend: `amgd config set credentials.backend keychain`. On Linux, keep the file backend, and choose its password at the first command.
+3. Add the accounts, as in [Add the accounts](#add-the-accounts). On a host without a browser, add `--no-browser`, as in [Headless login](#headless-login).
+4. Save the screening key with `amgd config set screening.api_key`, unless `[screening]` selects the fake engine.
+5. Set the console password with `amgd config set console.password`.
+6. Optional on Linux, required on macOS: run `amgd serve` once in the terminal, read the check list, and stop it with Ctrl-C. On macOS, this is when you answer the Keychain access prompt.
+7. Install the service file, as below.
+
 `amgd serve` reloads at SIGUSR1. SIGINT, SIGTERM, and SIGHUP stop it. Do not send SIGHUP to reload the daemon.
-A service has no terminal, so prepare these items before the first start as a service:
 
-- Save the screening key with `amgd config set screening.api_key`. Without a terminal, `amgd serve` does not prompt for a missing key, and the start fails.
-- With the file backend, supply the password in `AMG_CREDENTIALS_PASSWORD` or on stdin. See [File backend and password input](credentials.md#file-backend-and-password-input).
-- If the service uses another home than `~/.agentmailguard`, set the same `AMG_HOME` for the service and for your `amgd` commands.
+### systemd
 
-For systemd, use one of these two reload methods in the service unit:
+In `amgd.service`, replace `CHANGE-ME` with the user who owns the home (in `User=`, `AMG_HOME`, and `BindPaths=`), and the path of `amgd` in `ExecStart=` if it is not `/usr/local/bin/amgd`. Then, as root:
 
-- `Type=notify-reload` with `ReloadSignal=SIGUSR1`. The daemon tells systemd when it is ready and when a reload starts and ends.
-- `ExecReload=` with the full path of `amgd` and the `reload` argument, for example `ExecReload=/usr/local/bin/amgd reload`. `Type=notify` also works, because the daemon sends `READY=1`.
+```sh
+systemd-ask-password --echo=no -n 'Credential file password:' | systemd-creds encrypt --name=amgd-credentials-password - /etc/credstore.encrypted/amgd-credentials-password
+install -m 0644 amgd.service /etc/systemd/system/amgd.service
+systemctl daemon-reload
+systemctl enable --now amgd
+journalctl -u amgd
+```
 
-Then `systemctl reload` reloads the daemon.
-launchd has no reload action. Run `amgd reload` after a hand edit.
-On macOS, start `amgd serve` once in a terminal before you start it from launchd, so that you can answer the Keychain access prompt.
+`systemd-ask-password` asks for the credential file password without echo, and `systemd-creds` encrypts it. The unit gives it to `amgd serve` on stdin from the encrypted systemd credential, so the password is never in the environment or in a plain-text file. The unit needs systemd 253 or later for `Type=notify-reload` with `ReloadSignal=SIGUSR1`: the daemon tells systemd when it is ready and when a reload starts and ends, and `systemctl reload amgd` reloads it. With an older systemd, use `Type=notify` and `ExecReload=/usr/local/bin/amgd reload`.
+
+The unit shows the daemon only its home under `/home` and lets it write only there, so the other files of that user stay out of its reach. It restarts the daemon after a failure. A refused start, for example a missing console password, restarts every 10 seconds, up to the limit of 5 starts in 5 minutes, the first start included. Then the unit stays failed: fix the cause that the journal names, then run `systemctl reset-failed amgd` and `systemctl start amgd`.
+
+### launchd
+
+The plist runs `amgd serve` as a launch agent in your login session, so the daemon can use the Keychain. In the plist, set the path of `amgd` (`/opt/homebrew/bin/amgd` on Apple silicon, `/usr/local/bin/amgd` on Intel), replace `CHANGE-ME` in the log path, and set `AMG_HOME` if you use another home. launchd does not expand `~` or `$HOME`. Then:
+
+```sh
+cp io.github.ivanrvpereira.agentmailguard.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.ivanrvpereira.agentmailguard.plist
+```
+
+The daemon log is in `~/Library/Logs/agentmailguard.log`. launchd restarts the daemon after a crash signal, such as SIGSEGV, SIGBUS, or SIGILL. It does not restart it after SIGKILL or SIGTERM, or after any exit with a code: a refused start, a clean stop, or a Go panic (exit 2). launchd has no reload action: `amgd config set` and the `amgd account` commands reload the daemon themselves; after a hand edit, run `amgd reload`. To stop the daemon, run `launchctl bootout gui/$(id -u)/io.github.ivanrvpereira.agentmailguard`.
 
 ## Headless login
 
@@ -278,8 +312,8 @@ Keep the daemon on its loopback listener and use an SSH tunnel for `amg` on anot
 | Microsoft sign-in shows **Need admin approval** | Ask the tenant administrator for consent. See [Microsoft administrator approval](#microsoft-administrator-approval). |
 | Missing account or stale login | Run `amg account list` and `amg account status`. After a hand edit of `config.toml`, run `amgd reload`. Use the same home each time. |
 | `reload refused: CODE; old settings kept` in the daemon log | Fix the key that the `error:` line names. Run `amgd config check`, and then `amgd reload`. |
-| `console password not set; run amgd config set console.password` | Run `amgd config set console.password` on the daemon host. |
-| `no daemon runs for this home` | Start the daemon with `amgd serve`, or set the `AMG_HOME` of the daemon. |
+| `start refused: run amgd config set console.password, then start the daemon again` | Run the command that the line gives on the daemon host, then start the daemon again. |
+| `no daemon runs for this home. Now run: amgd serve` | Run the command that the line gives. It includes `--home` when the command used `--home` or `AMG_HOME`. |
 | Keychain approval or a blocked terminal | Approve access interactively. A rebuilt binary can require approval again. Choose “Always Allow” only for your trusted build of `amgd`. |
 
 Administrator consent, Google verification requirements, and screening-service access depend on your deployment.

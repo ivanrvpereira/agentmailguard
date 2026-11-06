@@ -228,7 +228,7 @@ func (s *server) logLen() int {
 }
 
 // logWriter appends all that the daemon writes to stderr to the daemon log, and closes listening when the daemon
-// writes the line "daemon listening". exec calls Write from one goroutine.
+// writes the line "daemon listening: URL". exec calls Write from one goroutine.
 type logWriter struct {
 	s         *server
 	line      []byte // the part of the current line that serve wrote, until serve listens
@@ -248,7 +248,7 @@ func (w *logWriter) Write(p []byte) (int, error) {
 		if end < 0 {
 			return len(p), nil
 		}
-		if string(w.line[:end]) == "daemon listening" {
+		if bytes.HasPrefix(w.line[:end], []byte("daemon listening: ")) {
 			close(w.listening)
 			w.line, w.listening = nil, nil
 			return len(p), nil

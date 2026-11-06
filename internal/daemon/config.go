@@ -11,6 +11,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
+	"github.com/ivanrvpereira/agentmailguard/internal/credentials"
 	"github.com/ivanrvpereira/agentmailguard/internal/rules"
 	"github.com/ivanrvpereira/agentmailguard/internal/screening"
 	"github.com/ivanrvpereira/agentmailguard/internal/term"
@@ -225,18 +226,27 @@ func (r *runner) setSecret(ctx context.Context, home, backend, user, key string)
 		}
 		return r.stored(home, "Screening key saved.", log.Credential(ctx, "screening_api_key_set"))
 	}
+	if problem := r.setConsolePassword(ctx, store); problem != "" {
+		return r.fail(problem)
+	}
+	return r.stored(home, "Console password saved. Sign in to the console as "+term.Safe(user)+" (console.username).", log.Credential(ctx, "console_password_set"))
+}
+
+// setConsolePassword reads a new console password from stdin and stores its bcrypt hash. It returns a fixed problem
+// message, or "" when the hash is stored.
+func (r *runner) setConsolePassword(ctx context.Context, store *credentials.RecordStore) string {
 	password, problem := readConsolePassword(ctx, r.stdin, r.stderr)
 	if problem != "" {
-		return r.fail(problem)
+		return problem
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		return r.fail("console password hashing failed")
+		return "console password hashing failed"
 	}
 	if store.SaveConsoleHash(ctx, string(hash)) != nil {
-		return r.fail("credential save failed")
+		return "credential save failed"
 	}
-	return r.stored(home, "Console password saved. Sign in to the console as "+term.Safe(user)+" (console.username).", log.Credential(ctx, "console_password_set"))
+	return ""
 }
 
 // stored finishes a change that the credential store already holds: it reports the change or the failed audit

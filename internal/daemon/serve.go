@@ -8,8 +8,10 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -41,9 +43,6 @@ func (r *runner) serve(ctx context.Context, listen string) int {
 	home, path, e := r.paths()
 	if e != nil {
 		return r.fail("configuration unavailable")
-	}
-	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-		fmt.Fprintln(r.stderr, "WARNING: unauthenticated mailbox access; no built-in TLS. A protected network or tunnel is required.")
 	}
 	// Ask for reloads before the lock shows the PID, so a signal that amgd sends during the start is not lost and
 	// does not stop the process.
@@ -88,14 +87,22 @@ func (r *runner) serve(ctx context.Context, listen string) int {
 		return r.fail("daemon state unavailable")
 	}
 	defer s.Close()
+	if problem := r.consolePasswordPrompt(ctx, store, home, c.Console.Username); problem != "" {
+		return r.fail(problem)
+	}
 	fmt.Fprintln(r.stderr, "checking credentials")
 	result, e := s.Load(ctx, r.screeningKeyPrompt())
-	r.report(result, e)
+	r.report(home, result, e)
 	if e != nil {
 		if ctx.Err() != nil {
 			return r.fail("credential check canceled")
 		}
 		return r.fail("start refused; fix the items above and start the daemon again")
+	}
+	c, password := s.Current()
+	if !password {
+		// Without a password, the first visitor of the console could set one; an agent on this host could be first.
+		return r.fail("start refused: run " + r.command("amgd config set console.password", home) + ", then start the daemon again")
 	}
 	address := s.ConsoleAddress()
 	consoleListener, e := open("tcp", address)
@@ -114,9 +121,10 @@ func (r *runner) serve(ctx context.Context, listen string) int {
 		go func() { done <- h.Serve(l) }()
 	}
 	start(s.Console(), consoleListener)
-	fmt.Fprintln(r.stderr, "approval console listening")
+	fmt.Fprint(r.stderr, term.Safe(consoleLines(c.Console)))
 	start(s, listener)
-	fmt.Fprintln(r.stderr, "daemon listening")
+	_, port, _ := net.SplitHostPort(listener.Addr().String())
+	fmt.Fprint(r.stderr, term.Safe(apiLines(host, port, c.Accounts)))
 	notifySystemd(r.opts.LookupEnv, "READY=1")
 	reloaded := make(chan struct{})
 	go func() {
@@ -132,7 +140,7 @@ func (r *runner) serve(ctx context.Context, listen string) int {
 			notifySystemd(r.opts.LookupEnv, reloading())
 			fmt.Fprintln(r.stderr, "reload requested")
 			result, err := s.Reload(ctx)
-			r.report(result, err)
+			r.report(home, result, err)
 			switch {
 			case err == nil:
 				fmt.Fprintln(r.stderr, "reload ok")
@@ -171,9 +179,16 @@ func (r *runner) serve(ctx context.Context, listen string) int {
 }
 
 // report writes the check list, the detail of a refusal, warnings, and restart reminders of a load.
-func (r *runner) report(result server.Result, err error) {
+func (r *runner) report(home string, result server.Result, err error) {
 	for _, c := range result.Checks {
-		fmt.Fprintf(r.stderr, "credential check: %s: %s\n", c.Item, c.Status)
+		status := c.Status
+		// A check that ends with a command to copy gets the home of this daemon, as the refusal does.
+		for _, cmd := range []string{"amgd config set console.password", "amgd config set screening.api_key"} {
+			if before, ok := strings.CutSuffix(status, cmd); ok {
+				status = before + r.command(cmd, home)
+			}
+		}
+		fmt.Fprintf(r.stderr, "credential check: %s: %s\n", c.Item, status)
 	}
 	if e, ok := errors.AsType[server.LoadError](err); ok && e.Err != nil {
 		fmt.Fprintln(r.stderr, "error: "+quoted(e.Err.Error()))
@@ -199,6 +214,67 @@ func (r *runner) screeningKeyPrompt() func(context.Context) (string, error) {
 		}
 		return key, nil
 	}
+}
+
+// consolePasswordPrompt asks for a console password at the start when the credential store has none, only on a
+// terminal. Without a terminal the start is refused after the check list. Other store errors are left to the check
+// list too.
+func (r *runner) consolePasswordPrompt(ctx context.Context, store *credentials.RecordStore, home, user string) string {
+	if _, ok := terminal(r.stdin); !ok {
+		return ""
+	}
+	if _, err := store.LoadConsoleHash(ctx); !errors.Is(err, credentials.ErrNotFound) {
+		return ""
+	}
+	fmt.Fprintln(r.stderr, term.Safe("Console password not set. Choose one now; you sign in to the console as "+user+" with it."))
+	if problem := r.setConsolePassword(ctx, store); problem != "" {
+		return problem
+	}
+	if r.audit(home).Credential(context.WithoutCancel(ctx), "console_password_set") != nil {
+		return "audit record failed"
+	}
+	return ""
+}
+
+// consoleLines tell where the approval console is: its URL from [console].listen, as in the pending url, the extra
+// host names that it accepts, and the username.
+func consoleLines(c config.Console) string {
+	out := fmt.Sprintf("approval console: http://%s/ (user %s)\n", c.Listen, c.Username)
+	if len(c.Hosts) > 0 {
+		out += "  also accepted as: " + strings.Join(c.Hosts, ", ") + " (from console.hosts)\n"
+	}
+	return out
+}
+
+// apiLines tell where the API listens and how agents connect. Beyond loopback they warn that anyone who reaches
+// the address can use the API, with the mail_send decisions of the accounts, and name the fixes.
+func apiLines(host, port string, accounts []config.Account) string {
+	address := net.JoinHostPort(host, port)
+	// url.URL escapes the zone of a scoped IPv6 address (%25), which amg's URL parser needs.
+	out := "daemon listening: " + (&url.URL{Scheme: "http", Host: address}).String() + "\n"
+	reach := address
+	ip := net.ParseIP(host)
+	if host == "" || ip != nil && ip.IsUnspecified() {
+		// A wildcard address is not one that agents can connect to; the daemon does not guess its host name.
+		address = net.JoinHostPort("DAEMON-HOST", port)
+		reach = "port " + port + " on any address of this host"
+	}
+	out += "  agents connect with: AMG_HOST=" + (&url.URL{Scheme: "http", Host: address}).String() + " amg account list\n"
+	if loopback(host) {
+		return out
+	}
+	var sends []string
+	for _, d := range []config.Decision{config.Allow, config.Approve, config.Deny} {
+		if slices.ContainsFunc(accounts, func(a config.Account) bool { return a.Policy.Base.MailSend == d }) {
+			sends = append(sends, string(d))
+		}
+	}
+	policy := ""
+	if len(sends) > 0 {
+		policy = " (sends: " + strings.Join(sends, " or ") + ")"
+	}
+	return out + "WARNING: this API has no login and no TLS. Anyone who can reach " + reach + " can read screened mail and run every action that the write policy allows" + policy + ".\n" +
+		"  Restrict it: allow only the agent machine (Tailscale grant or firewall), or keep --listen on 127.0.0.1 and use an SSH tunnel. See docs/daemon.md#local-and-remote-clients\n"
 }
 
 // loopback reports whether host is localhost or a loopback IP address.

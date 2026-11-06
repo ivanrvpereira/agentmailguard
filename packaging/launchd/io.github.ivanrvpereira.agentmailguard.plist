@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd agent for amgd on macOS. It runs in your login session, so amgd can use the Keychain backend.
+  Prepare the home first, as docs/setup.md "Run as a service" describes, with credentials.backend = "keychain",
+  and start amgd serve once in a terminal to answer the Keychain access prompt. Then change the paths below
+  (launchd does not expand ~ or $HOME) and run:
+    cp io.github.ivanrvpereira.agentmailguard.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.ivanrvpereira.agentmailguard.plist
+  launchd has no reload action: amgd config set and amgd account commands reload the daemon themselves; after a
+  hand edit, run amgd reload. Stop it with launchctl bootout gui/$(id -u)/io.github.ivanrvpereira.agentmailguard.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>io.github.ivanrvpereira.agentmailguard</string>
+  <key>ProgramArguments</key>
+  <array>
+    <!-- Where amgd is installed: /opt/homebrew/bin/amgd on Apple silicon, /usr/local/bin/amgd on Intel. -->
+    <string>/opt/homebrew/bin/amgd</string>
+    <string>serve</string>
+  </array>
+  <!-- For another home than ~/.agentmailguard, set AMG_HOME here and use the same one for your amgd commands. -->
+  <!--
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AMG_HOME</key>
+    <string>/Users/CHANGE-ME/agentmailguard-home</string>
+  </dict>
+  -->
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- Restart after a crash signal, such as SIGSEGV, SIGBUS, or SIGILL. Not after SIGKILL or SIGTERM, and not
+       after any exit with a code: a refused start (a missing secret exits 1), a clean stop, or a Go panic (exit 2). -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>Crashed</key>
+    <true/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>Umask</key>
+  <integer>63</integer>
+  <!-- The daemon log: the check list, the start lines, and reloads. -->
+  <key>StandardErrorPath</key>
+  <string>/Users/CHANGE-ME/Library/Logs/agentmailguard.log</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

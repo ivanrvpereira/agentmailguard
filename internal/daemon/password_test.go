@@ -224,7 +224,7 @@ func TestFileServePipedPasswordNeverPromptsForScreeningKey(t *testing.T) {
 	defer cancel()
 	var stderr bytes.Buffer
 	code := daemon.Run(ctx, []string{"--home", home, "serve", "--listen", "127.0.0.1:0"}, io.Discard, &stderr, daemon.Options{Stdin: input, LookupEnv: noEnv})
-	if code != 1 || ctx.Err() != nil || !strings.Contains(stderr.String(), "credential check: screening key: missing; run amgd config set screening.api_key\n") || strings.Contains(stderr.String(), "Enter the screening") {
+	if code != 1 || ctx.Err() != nil || !strings.Contains(stderr.String(), "credential check: screening key: missing; run amgd config set screening.api_key --home "+shellQuoted(home)+"\n") || strings.Contains(stderr.String(), "Enter the screening") {
 		t.Fatalf("piped password led to a screening key prompt: exit %d stderr %q", code, stderr.String())
 	}
 }
@@ -282,9 +282,11 @@ func TestFileServeRefusesAWrongPassword(t *testing.T) {
 // The daemon writes the credential file with the production scrypt work factor, 18. It runs alone: it raises the
 // work factor that TestMain lowered for every other test.
 func TestServeWritesTheCredentialFileWithTheProductionWorkFactor(t *testing.T) {
+	home := writeHome(t, "version = 1\n[credentials]\nbackend = 'file'\n[screening]\nprovider = 'fake'\n[console]\nlisten = '"+freeAddress(t)+"'\n")
+	// The file starts at the lowered work factor, so only the start of serve can raise it.
+	setConsolePassword(t, credentials.NewFile(home, "synthetic-password"))
 	credentials.FileWorkFactor = productionWorkFactor
 	t.Cleanup(func() { credentials.FileWorkFactor = 1 })
-	home := writeHome(t, "version = 1\n[credentials]\nbackend = 'file'\n[screening]\nprovider = 'fake'\n[console]\nlisten = '"+freeAddress(t)+"'\n")
 	input, writer := io.Pipe()
 	defer input.Close()
 	defer writer.Close()

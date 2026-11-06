@@ -112,7 +112,7 @@ The file then starts with `# Written by amgd. Comments are not kept.`
 The daemon reads `config.toml`, `rules.toml`, and the credential store only at start and at a reload.
 `amgd config set`, `config unset`, `account add`, `account login`, and `account remove` reload the daemon after the change.
 They print `reload sent to daemon (PID n); see the daemon log`.
-If no daemon runs, they print `no daemon runs for this home; the change applies when amgd serve starts`.
+If no daemon runs, they print `no daemon runs for this home. Now run: amgd serve`; the change applies when the daemon starts. When the command got `--home` or `AMG_HOME`, the line ends with `--home HOME`.
 After a hand edit of `config.toml` or `rules.toml`, run `amgd reload` on the daemon host.
 
 `amgd reload` sends SIGUSR1 to the daemon. The daemon log then shows `reload requested`, the check list of a start, and `reload ok`.
@@ -140,7 +140,7 @@ A later reload applies all other changes and keeps the old value of these keys. 
 A second `amgd serve` for the same home fails with `another daemon runs for this home (PID n)`.
 `amgd` sends the reload signal only while the lock is held. Without a daemon, `amgd reload` fails with `no daemon runs for this home`.
 SIGINT, SIGTERM, and SIGHUP stop the daemon. SIGHUP keeps its usual meaning: the terminal closed.
-For systemd and launchd, see [Run as a service](setup.md#run-as-a-service).
+For systemd and launchd, use the service files in the release archive and follow [Run as a service](setup.md#run-as-a-service).
 
 ## Sign-in and daemon start
 
@@ -174,7 +174,7 @@ Its commands fail until the cause is fixed.
 A login can also expire or be revoked while the daemon runs. Commands for that account then fail with `sign-in failed; check the network, or run amgd account login`.
 A failed credential store, a missing screening key, or an invalid configuration refuses the start.
 Store statuses include `ok`, `access denied`, `wrong password or damaged file`, `password missing`, and `unsupported version`.
-A missing console password does not block the start. Its line is `console password: not set; the console refuses every request until amgd config set console.password`.
+A missing console password also refuses the start. On a terminal, `amgd serve` first asks for one. Without a terminal, its line is `console password: not set; run amgd config set console.password`, and the start ends with `start refused: run amgd config set console.password, then start the daemon again`. See [Console password](approval-console.md#console-password).
 
 After the start, the daemon keeps credentials in memory. A reload reads the store again.
 A token refresh saves to the store only if the stored login did not change since the daemon read it. Otherwise the daemon uses the stored login. Thus a login that `amgd account login` saved while the daemon runs is never lost.
@@ -212,7 +212,18 @@ Login errors are fixed texts that name the failed step. They contain no raw prov
 Anyone who can reach the listener can read guarded mailbox data and change mail.
 They can also do every action that the [write policy](write-policy.md) allows, for example create drafts, send mail, and send meeting invitations, updates, cancellations, and responses.
 The default listener is `127.0.0.1:8787`.
-A non-loopback listener requires an explicit `amgd serve --listen` option and prints a warning.
+A non-loopback listener requires an explicit `amgd serve --listen` option.
+At start, `amgd serve` prints the listener URL and how agents connect.
+For a non-loopback listener it then prints a warning that names the address and the `mail_send` decisions of the accounts (`allow`, `approve`, or `deny`), and the fixes:
+
+```text
+daemon listening: http://100.64.0.10:8787
+  agents connect with: AMG_HOST=http://100.64.0.10:8787 amg account list
+WARNING: this API has no login and no TLS. Anyone who can reach 100.64.0.10:8787 can read screened mail and run every action that the write policy allows (sends: approve).
+  Restrict it: allow only the agent machine (Tailscale grant or firewall), or keep --listen on 127.0.0.1 and use an SSH tunnel. See docs/daemon.md#local-and-remote-clients
+```
+
+For a wildcard listener such as `0.0.0.0`, the hint shows `DAEMON-HOST` in place of a host name: the daemon does not guess one.
 Browser requests with an `Origin` header are refused, and the daemon does not enable CORS.
 These restrictions are not a substitute for a protected network or encrypted tunnel.
 

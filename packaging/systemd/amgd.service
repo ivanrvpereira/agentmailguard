@@ -1,0 +1,62 @@
+# systemd unit for amgd. Prepare the home first, as docs/setup.md "Run as a service" describes. Then replace
+# CHANGE-ME with the user who owns the home (User=, AMG_HOME, and BindPaths), and run as root:
+#   systemd-ask-password --echo=no -n 'Credential file password:' |
+#     systemd-creds encrypt --name=amgd-credentials-password - /etc/credstore.encrypted/amgd-credentials-password
+#   install -m 0644 amgd.service /etc/systemd/system/amgd.service
+#   systemctl daemon-reload && systemctl enable --now amgd
+# The daemon log is in the journal: journalctl -u amgd
+[Unit]
+Description=agentmailguard daemon (amgd)
+Documentation=https://github.com/ivanrvpereira/agentmailguard/blob/main/docs/setup.md#run-as-a-service
+After=network-online.target
+Wants=network-online.target
+# Allow at most 5 starts in 5 minutes, the first one included. After a refused start (for example a missing
+# console password) reaches that limit, the unit stays failed: fix the cause, then systemctl reset-failed amgd
+# and systemctl start amgd.
+StartLimitIntervalSec=5min
+StartLimitBurst=5
+
+[Service]
+User=CHANGE-ME
+# The home that the setup commands used. Use the same AMG_HOME for every amgd command.
+Environment=AMG_HOME=/home/CHANGE-ME/.agentmailguard
+# amgd tells systemd when it is ready and when a reload starts and ends (systemd 253 or later).
+Type=notify-reload
+ReloadSignal=SIGUSR1
+# The credential file password comes from an encrypted systemd credential, on stdin: it is never in the
+# environment or in a file in plain text. Change /usr/local/bin/amgd to where amgd is installed.
+LoadCredentialEncrypted=amgd-credentials-password
+ExecStart=/bin/sh -c 'exec /usr/local/bin/amgd serve < "$CREDENTIALS_DIRECTORY/amgd-credentials-password"'
+# A refused start (a missing secret or an invalid config.toml) exits 1; the journal names the fix.
+# [Unit] limits how often it restarts.
+Restart=on-failure
+RestartSec=10s
+# SIGTERM drains requests for up to 5 s and closes the cache.
+TimeoutStopSec=30s
+
+# The daemon sees only its home under /home, and writes only there. The other files of the user stay out of
+# reach. The fake provider keeps its mailbox in the home too.
+UMask=0077
+ProtectHome=tmpfs
+BindPaths=/home/CHANGE-ME/.agentmailguard
+ProtectSystem=strict
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

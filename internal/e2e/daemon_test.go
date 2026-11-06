@@ -234,21 +234,22 @@ func TestSignalsDuringAReloadMergeIntoOneMoreReload(t *testing.T) {
 	s.ok("stats")
 }
 
-func TestConsoleIsOnWithoutAPasswordAndANewPasswordTakesEffectAtTheReload(t *testing.T) {
+func TestServeNeedsAConsolePasswordAndANewOneTakesEffectAtTheReload(t *testing.T) {
 	t.Parallel()
 	s := home(t, "")
 	s.seed()
+	// Without a terminal, serve does not ask: it refuses to start and names the command for this home.
+	_, errout, code := s.amgd(nil, "serve", "--listen", s.api)
+	// The home is quoted when the temporary directory needs it, for example with a space in GOTMPDIR.
+	if code != 1 || !strings.Contains(errout, "error: start refused: run amgd config set console.password --home ") || !strings.HasSuffix(errout, ", then start the daemon again\n") || strings.Contains(errout, "listening") {
+		t.Fatalf("serve without password: exit %d stderr %q", code, errout)
+	}
+	s.amgdOK(strings.NewReader(consolePassword+"\n"), "config", "set", "console.password")
 	s.serve()
-	if code, body := s.consoleGet("anything", "/"); code != 503 || body != "console password not set; run amgd config set console.password\n" {
-		t.Fatalf("console without password: HTTP %d %q", code, body)
+	if code, _ := s.consoleGet(consolePassword, "/"); code != 200 {
+		t.Fatalf("console with the password: HTTP %d", code)
 	}
 	before := s.reloads()
-	s.amgdOK(strings.NewReader(consolePassword+"\n"), "config", "set", "console.password")
-	s.awaitReload(before)
-	if code, _ := s.consoleGet(consolePassword, "/"); code != 200 {
-		t.Fatalf("console with the new password: HTTP %d", code)
-	}
-	before = s.reloads()
 	s.amgdOK(strings.NewReader("e2e-second-password\n"), "config", "set", "console.password")
 	s.awaitReload(before)
 	if code, _ := s.consoleGet(consolePassword, "/"); code != 401 {
@@ -348,7 +349,7 @@ func TestAccountAddCreatesTheConfigurationOfANewHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, errout := s.amgdOK(nil, "account", "add", "other", "--provider", "fake")
-	if !strings.Contains(errout, "rules.toml already has 1 rules for other@fake.invalid; they apply to other.\n") || !strings.Contains(errout, "no daemon runs for this home") {
+	if !strings.Contains(errout, "rules.toml already has 1 rules for other@fake.invalid; they apply to other.\n") || !strings.Contains(errout, "no daemon runs for this home. Now run: amgd serve --home ") {
 		t.Fatalf("stderr %q", errout)
 	}
 	if !strings.Contains(s.config(), "default_account = \"demo\"") {

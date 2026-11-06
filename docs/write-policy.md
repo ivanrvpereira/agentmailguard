@@ -7,8 +7,7 @@ Each policy key has one of three decisions:
 - `approve`: the daemon stores the action as a pending action. The action does not run.
 - `deny`: the daemon refuses the action.
 
-**Caution:** Do not set `approve` unless the [console password](approval-console.md#console-password) is set.
-Only a person in the [approval console](approval-console.md#approval-console) can approve or deny a pending action. Without the password, the console refuses every request and a pending action stays pending.
+Only a person in the [approval console](approval-console.md#approval-console) can approve or deny a pending action. The daemon does not start without a [console password](approval-console.md#console-password).
 `amg` and the API cannot approve or deny. A draft change or delete through the API withdraws a waiting send of that draft and never runs or approves anything (see [Waiting sends and draft changes](sending.md#waiting-sends-and-draft-changes)). `approvals status ID` shows the state of a pending action. See [Results](#results).
 
 Example:
