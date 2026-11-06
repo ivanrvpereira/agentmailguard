@@ -402,11 +402,16 @@ func TestListAndSearchRefuseAGmailPageLargerThanAsked(t *testing.T) {
 }
 
 // The common folder names map to their system labels in any case; any other value, a lowercase system label name
-// included, is a label ID as given.
+// included, is a label ID as given. A read of TRASH or SPAM sets includeSpamTrash, which messages.list needs to return
+// their messages (https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list).
 func TestListAndSearchMapTheCommonFolderNamesToSystemLabels(t *testing.T) {
 	var labelIDs []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		labelIDs = append(labelIDs, r.URL.Query().Get("labelIds"))
+		q := r.URL.Query()
+		if bin := q.Get("labelIds") == "TRASH" || q.Get("labelIds") == "SPAM"; q.Has("includeSpamTrash") != bin || bin && q.Get("includeSpamTrash") != "true" {
+			t.Errorf("labelIds=%s: includeSpamTrash=%q", q.Get("labelIds"), q.Get("includeSpamTrash"))
+		}
+		labelIDs = append(labelIDs, q.Get("labelIds"))
 		respond(w, map[string]any{"messages": []any{}})
 	}))
 	defer server.Close()

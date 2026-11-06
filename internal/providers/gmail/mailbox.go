@@ -70,6 +70,18 @@ func labelOf(folder string) string {
 	return folder
 }
 
+// inFolder makes q read the label of folder. messages.list skips the trash and spam unless includeSpamTrash is set
+// (https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list), so a read of either
+// sets it.
+func inFolder(q url.Values, folder string) url.Values {
+	id := labelOf(folder)
+	q.Set("labelIds", id)
+	if bins[id] != "" {
+		q.Set("includeSpamTrash", "true")
+	}
+	return q
+}
+
 func (m *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
 	a, err := m.labels(ctx)
 	if err != nil {
@@ -154,7 +166,7 @@ func (m *mailbox) List(ctx context.Context, folder string, page model.PageReques
 	if page.Size < 0 {
 		return model.MessagePage{}, failure("Gmail", "ValueError")
 	}
-	return m.messages(ctx, url.Values{"labelIds": {labelOf(folder)}}, page)
+	return m.messages(ctx, inFolder(url.Values{}, folder), page)
 }
 func phrase(s string) string {
 	s = strings.Map(func(r rune) rune {
@@ -199,7 +211,7 @@ func (m *mailbox) Search(ctx context.Context, query model.SearchQuery, page mode
 	}
 	q := url.Values{"q": {strings.Join(terms, " ")}}
 	if query.Folder != nil {
-		q.Set("labelIds", labelOf(*query.Folder))
+		inFolder(q, *query.Folder)
 	}
 	found, err := m.messages(ctx, q, page)
 	if err != nil {

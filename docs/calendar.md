@@ -59,7 +59,7 @@ The daemon refuses recurring events and cancelled events. It does not write in t
 
 Every Gmail meeting command notifies all guests (`sendUpdates=all`).
 On Gmail, `calendar cancel` deletes the event and notifies the guests. Google keeps the deleted event on your calendar with the status `cancelled`, so it can be restored from the calendar trash for 30 days. The daemon never deletes an event permanently.
-Google sends no cancellation message. On Gmail, `calendar cancel --comment` fails with `calendar cancel refused: comments are not supported for this account`, before the policy decision and any write. On Microsoft 365, the comment goes with the cancellation.
+Google sends no cancellation message. On Gmail, `calendar cancel` with a nonempty `--comment` fails with `calendar cancel refused: comments are not supported for this account`, before the policy decision and any write. On Microsoft 365, the comment goes with the cancellation.
 
 Invites need at least one required attendee address. The daemon sets no maximum on attendee lists: the provider refuses what it does not accept.
 

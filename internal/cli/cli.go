@@ -41,7 +41,7 @@ A forward puts its --body note above the original, carries the original's attach
 draft update changes only the given fields of any draft: a list replaces the old one and --to '' clears it; --body replaces the whole body, quoted original included. Gmail gives the draft a new ID: use the returned id.
 draft delete and draft send act only on a draft; draft send sends the draft as it is at the provider when it runs.
 draft update, draft delete, and a second draft send withdraw a waiting draft send of that draft, also when they are refused or wait themselves; it never runs. A draft update that runs then makes a new send that waits for approval and returns its send_approval_id.
-Moves into trash or spam/junk, including their subfolders, are refused: use mail trash or mail spam. mail move takes mail out of them. Common folder names inbox, trash, and spam work on every provider; other folders need their ID from mail folders.
+Moves into trash or spam/junk, including their subfolders, are refused: use mail trash or mail spam. mail move takes mail out of them. Common folder names inbox, trash, and spam work on every provider in mail list --folder, mail search --folder, and --in; other folders, and every mail move destination, need their ID from mail folders.
 Days in date options run from 00:00 to the end of the day on this machine's clock and time zone; the last day is included.
 Client authentication and built-in TLS are absent. Anyone who reaches the daemon can run every action that the write policy allows. Protect remote access with a tunnel.`
 
