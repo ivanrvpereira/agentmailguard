@@ -50,7 +50,7 @@ func publicError(e error) (string, bool) {
 			return string(e), true
 		case "refused by policy: mail_draft", "refused by policy: mail_send", "refused by policy: calendar_invite", "refused by policy: calendar_update", "refused by policy: calendar_cancel", "refused by policy: calendar_respond":
 			return string(e), true
-		case "move refused: the destination must be a folder ID from `folders`", "move refused: use mail.trash", "move refused: use mail.spam", "flag state must be one of flagged, complete, none", "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
+		case "move refused: the destination must be a folder ID from `folders`", "move refused: use mail.trash", "move refused: use mail.spam", "flag state must be one of flagged, complete, none", guard.FlagCompleteUnsupported, "categorize needs at least one category to add or remove", "categorize refused: not in the category list",
 			"link refused: message is red, not green", "link refused: message is yellow, not green", "link refused: message is sealed, not green", "link refused: message is error, not green",
 			"search needs at least one of text, from, to, subject, after, before":
 			return string(e), true
@@ -63,8 +63,7 @@ func publicError(e error) (string, bool) {
 type call func(*account) (any, error)
 
 // decoder validates the complete typed params of an account operation before any account or provider access.
-// A non-empty gmailRefusal refuses a valid request that Gmail cannot carry out.
-type decoder func(ctx context.Context, s *Server, raw json.RawMessage) (c call, gmailRefusal guard.GuardError, err error)
+type decoder func(ctx context.Context, s *Server, raw json.RawMessage) (call, error)
 
 // operation is one entry of the API. An account operation has decode and runs on one account; a daemon operation
 // has daemon and runs on the daemon state.
@@ -76,12 +75,12 @@ type operation struct {
 
 // typed builds a decoder from a parameter struct with its defaults, a validation, and the run on one account.
 func typed[P any](defaults P, valid func(*P) bool, run func(ctx context.Context, s *Server, p P, a *account) (any, error)) decoder {
-	return func(ctx context.Context, s *Server, raw json.RawMessage) (call, guard.GuardError, error) {
+	return func(ctx context.Context, s *Server, raw json.RawMessage) (call, error) {
 		p := defaults
 		if params(raw, &p) != nil || !valid(&p) {
-			return nil, "", errInvalid
+			return nil, errInvalid
 		}
-		return func(a *account) (any, error) { return run(ctx, s, p, a) }, "", nil
+		return func(a *account) (any, error) { return run(ctx, s, p, a) }, nil
 	}
 }
 
@@ -509,14 +508,14 @@ type rulesDTO struct {
 	Warnings []guard.Warning `json:"warnings"`
 }
 
-func mailSearch(ctx context.Context, _ *Server, raw json.RawMessage) (call, guard.GuardError, error) {
+func mailSearch(ctx context.Context, _ *Server, raw json.RawMessage) (call, error) {
 	var p searchParam
 	if params(raw, &p) != nil || p.Count < 0 || !model.ValidPage(p.Page) {
-		return nil, "", errInvalid
+		return nil, errInvalid
 	}
 	for _, v := range []*string{p.Text, p.Sender, p.To, p.Subject, p.Folder} {
 		if v != nil && !validString(*v, 4096, true) {
-			return nil, "", errInvalid
+			return nil, errInvalid
 		}
 	}
 	q := model.SearchQuery{Text: p.Text, Sender: p.Sender, To: p.To, Subject: p.Subject, Folder: p.Folder}
@@ -527,63 +526,63 @@ func mailSearch(ctx context.Context, _ *Server, raw json.RawMessage) (call, guar
 		if d.v != nil {
 			t, e := time.Parse(time.RFC3339, *d.v)
 			if e != nil {
-				return nil, "", errInvalid
+				return nil, errInvalid
 			}
 			*d.out = &t
 		}
 	}
 	if !q.RangeValid() {
-		return nil, "", errInvalid
+		return nil, errInvalid
 	}
 	return func(a *account) (any, error) {
 		return a.guard.Search(ctx, q, model.PageRequest{Size: p.Count, Page: p.Page})
-	}, "", nil
+	}, nil
 }
 
-func mailOrganize(ctx context.Context, s *Server, raw json.RawMessage) (call, guard.GuardError, error) {
+func mailOrganize(ctx context.Context, s *Server, raw json.RawMessage) (call, error) {
 	var p organizeParam
 	if params(raw, &p) != nil {
-		return nil, "", errInvalid
+		return nil, errInvalid
 	}
 	// The client resolves days: since and until are exact times, and until may be in the future.
 	now := s.options.Now().UTC()
 	since, e := time.Parse(time.RFC3339, p.Since)
 	if e != nil || since.Year() < 1 || since.After(now) {
-		return nil, "", errInvalid
+		return nil, errInvalid
 	}
 	var until *time.Time
 	if p.Until != nil {
 		u, e := time.Parse(time.RFC3339, *p.Until)
 		if e != nil || !u.After(since) {
-			return nil, "", errInvalid
+			return nil, errInvalid
 		}
 		until = &u
 	}
-	return func(a *account) (any, error) { return a.guard.Organize(ctx, since, a.rules, now, p.Apply, until) }, "", nil
+	return func(a *account) (any, error) { return a.guard.Organize(ctx, since, a.rules, now, p.Apply, until) }, nil
 }
 
-func calendarList(ctx context.Context, _ *Server, raw json.RawMessage) (call, guard.GuardError, error) {
+func calendarList(ctx context.Context, _ *Server, raw json.RawMessage) (call, error) {
 	var p calendarParam
 	if params(raw, &p) != nil {
-		return nil, "", errInvalid
+		return nil, errInvalid
 	}
 	first, e := time.Parse(time.RFC3339, p.Start)
 	last, e2 := time.Parse(time.RFC3339, p.End)
 	if e != nil || e2 != nil || !last.After(first) {
-		return nil, "", errInvalid
+		return nil, errInvalid
 	}
-	return func(a *account) (any, error) { return a.guard.CalendarList(ctx, first, last) }, "", nil
+	return func(a *account) (any, error) { return a.guard.CalendarList(ctx, first, last) }, nil
 }
 
-func calendarAvailability(ctx context.Context, _ *Server, raw json.RawMessage) (call, guard.GuardError, error) {
+func calendarAvailability(ctx context.Context, _ *Server, raw json.RawMessage) (call, error) {
 	var p availabilityParam
 	if params(raw, &p) != nil || !listValid(p.To, 1, model.MaxAvailabilityAddresses) {
-		return nil, "", errInvalid
+		return nil, errInvalid
 	}
 	first, e := time.Parse(time.RFC3339, p.Start)
 	last, e2 := time.Parse(time.RFC3339, p.End)
 	if e != nil || e2 != nil || !model.ValidAvailabilityRequest(p.To, first, last) {
-		return nil, "", errInvalid
+		return nil, errInvalid
 	}
 	return func(a *account) (any, error) {
 		v, e := a.guard.CalendarAvailability(ctx, p.To, first, last)
@@ -595,23 +594,23 @@ func calendarAvailability(ctx context.Context, _ *Server, raw json.RawMessage) (
 			out.Schedules = append(out.Schedules, scheduleDTO{schedule.Address, schedule.Slots})
 		}
 		return out, nil
-	}, guard.CalendarAvailabilityUnsupported, nil
+	}, nil
 }
 
 // newMessage is the decoder of mail.send (send) and draft.new. Every param is optional; a send needs a
 // recipient in to, cc, or bcc.
 func newMessage(send bool) decoder {
-	return func(ctx context.Context, _ *Server, raw json.RawMessage) (call, guard.GuardError, error) {
+	return func(ctx context.Context, _ *Server, raw json.RawMessage) (call, error) {
 		var p newParam
 		if params(raw, &p) != nil || !listValid(p.To, 0, noMax) || !listValid(p.CC, 0, noMax) || !listValid(p.BCC, 0, noMax) || !validString(p.Subject, 65536, true) || !validString(p.Body, MaxRequestBytes, true) {
-			return nil, "", errInvalid
+			return nil, errInvalid
 		}
 		draft := model.NewDraft{To: p.To, CC: p.CC, BCC: p.BCC, Subject: p.Subject, Body: p.Body, HTML: p.HTML}
 		if send && !draft.Addressed() {
-			return nil, "", errInvalid
+			return nil, errInvalid
 		}
 		if send {
-			return func(a *account) (any, error) { return sent(a.guard.SendNew(ctx, draft)) }, "", nil
+			return func(a *account) (any, error) { return sent(a.guard.SendNew(ctx, draft)) }, nil
 		}
 		return func(a *account) (any, error) {
 			d, e := a.guard.DraftNew(ctx, draft)
@@ -619,21 +618,21 @@ func newMessage(send bool) decoder {
 				return nil, e
 			}
 			return newDraft(d), nil
-		}, "", nil
+		}, nil
 	}
 }
 
 // replyMessage is the decoder of mail.reply (send) and draft.reply: one message ID; body, html, all, cc, and bcc
 // are optional.
 func replyMessage(send bool) decoder {
-	return func(ctx context.Context, _ *Server, raw json.RawMessage) (call, guard.GuardError, error) {
+	return func(ctx context.Context, _ *Server, raw json.RawMessage) (call, error) {
 		var p replyParam
 		if params(raw, &p) != nil || !idValid(p.ID) || !validString(p.Body, MaxRequestBytes, true) || !listValid(p.CC, 0, noMax) || !listValid(p.BCC, 0, noMax) {
-			return nil, "", errInvalid
+			return nil, errInvalid
 		}
 		reply := model.Reply{Body: p.Body, HTML: p.HTML, All: p.All, CC: p.CC, BCC: p.BCC}
 		if send {
-			return func(a *account) (any, error) { return sent(a.guard.SendReply(ctx, p.ID, reply)) }, "", nil
+			return func(a *account) (any, error) { return sent(a.guard.SendReply(ctx, p.ID, reply)) }, nil
 		}
 		return func(a *account) (any, error) {
 			d, source, e := a.guard.DraftReply(ctx, p.ID, reply)
@@ -644,25 +643,25 @@ func replyMessage(send bool) decoder {
 				return draftIDsDTO{d.ID, d.ThreadID}, nil
 			}
 			return newDraft(d), nil
-		}, "", nil
+		}, nil
 	}
 }
 
 // draftUpdate is the decoder of draft.update: one message ID and at least one of to, cc, bcc, subject, and body. An
 // absent param is unchanged; an empty list clears; html goes only with body.
-func draftUpdate(ctx context.Context, _ *Server, raw json.RawMessage) (call, guard.GuardError, error) {
+func draftUpdate(ctx context.Context, _ *Server, raw json.RawMessage) (call, error) {
 	var p draftChangeParam
 	if params(raw, &p) != nil || !idValid(p.ID) || p.Subject != nil && !validString(*p.Subject, 65536, true) || p.Body != nil && !validString(*p.Body, MaxRequestBytes, true) {
-		return nil, "", errInvalid
+		return nil, errInvalid
 	}
 	for _, list := range []*[]string{p.To, p.CC, p.BCC} {
 		if list != nil && !listValid(*list, 0, noMax) {
-			return nil, "", errInvalid
+			return nil, errInvalid
 		}
 	}
 	change := model.DraftChange{To: p.To, CC: p.CC, BCC: p.BCC, Subject: p.Subject, Body: p.Body, HTML: p.HTML}
 	if change.Empty() || change.HTMLWithoutBody() {
-		return nil, "", errInvalid
+		return nil, errInvalid
 	}
 	return func(a *account) (any, error) {
 		d, e := a.guard.DraftUpdate(ctx, p.ID, change)
@@ -670,23 +669,23 @@ func draftUpdate(ctx context.Context, _ *Server, raw json.RawMessage) (call, gua
 			return nil, e
 		}
 		return updatedDraft(d, change), nil
-	}, "", nil
+	}, nil
 }
 
 // forwardMessage is the decoder of mail.forward (send) and draft.forward: one message ID; to, cc, bcc, body, and
 // html are optional, but a send needs a recipient in to, cc, or bcc.
 func forwardMessage(send bool) decoder {
-	return func(ctx context.Context, _ *Server, raw json.RawMessage) (call, guard.GuardError, error) {
+	return func(ctx context.Context, _ *Server, raw json.RawMessage) (call, error) {
 		var p forwardParam
 		if params(raw, &p) != nil || !idValid(p.ID) || !listValid(p.To, 0, noMax) || !listValid(p.CC, 0, noMax) || !listValid(p.BCC, 0, noMax) || !validString(p.Body, MaxRequestBytes, true) {
-			return nil, "", errInvalid
+			return nil, errInvalid
 		}
 		forward := model.Forward{Body: p.Body, HTML: p.HTML, To: p.To, CC: p.CC, BCC: p.BCC}
 		if send && !forward.Addressed() {
-			return nil, "", errInvalid
+			return nil, errInvalid
 		}
 		if send {
-			return func(a *account) (any, error) { return sent(a.guard.SendForward(ctx, p.ID, forward)) }, "", nil
+			return func(a *account) (any, error) { return sent(a.guard.SendForward(ctx, p.ID, forward)) }, nil
 		}
 		return func(a *account) (any, error) {
 			d, source, e := a.guard.DraftForward(ctx, p.ID, forward)
@@ -697,22 +696,19 @@ func forwardMessage(send bool) decoder {
 				return draftIDsDTO{d.ID, d.ThreadID}, nil
 			}
 			return newDraft(d), nil
-		}, "", nil
+		}, nil
 	}
 }
 
 // accountCall validates the complete typed request first. Account and provider access come only afterwards.
 func (s *Server) accountCall(ctx context.Context, st *state, op operation, r request) (any, error) {
-	run, unsupported, e := op.decode(ctx, s, r.Params)
+	run, e := op.decode(ctx, s, r.Params)
 	if e != nil {
 		return nil, e
 	}
 	a, e := st.account(r.Account, r.key)
 	if e != nil {
 		return nil, e
-	}
-	if unsupported != "" && a.config.Provider == "gmail" {
-		return nil, unsupported
 	}
 	// The grant check comes before the policy decision.
 	if needed := op.grants[a.config.Provider]; needed != nil {

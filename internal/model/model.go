@@ -505,6 +505,17 @@ type EventResponse struct {
 // Valid refuses an unknown response, and a comment without notification, which would reach nobody.
 func (r EventResponse) Valid() bool { return r.Response.Valid() && !(r.NoNotify && r.Comment != "") }
 
+// Limits lists the parts of operations that a provider cannot carry out; the zero value has none.
+type Limits struct {
+	NoFlagComplete   bool // the provider has no completed flag state
+	NoCancelComment  bool // the provider sends no cancellation message, so a cancel comment would be lost
+	NoSilentResponse bool // the provider always notifies the organizer of a meeting response
+}
+
+// Limited is optional for a Mailbox or a Calendar: the guard refuses each part in Limits by name before any policy
+// decision or provider call. An adapter must still refuse a part that it cannot carry out, listed or not.
+type Limited interface{ Limits() Limits }
+
 // CalendarWriter is optional; read-only calendar providers need not implement it.
 // Callers must resolve start-only changes into explicit Start and End.
 type CalendarWriter interface {

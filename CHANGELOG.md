@@ -14,6 +14,7 @@ The first public release.
 - `amgd serve` does not start without a console password. On a terminal it asks for one; without a terminal it refuses to start and names `amgd config set console.password`, with `--home HOME` when it got `--home` or `AMG_HOME`. Before, the daemon started and its console refused every request.
 - Without a daemon, `amgd` setting changes print `no daemon runs for this home. Now run: amgd serve`, with `--home HOME` when the command got `--home` or `AMG_HOME`.
 - Trash and spam/junk stay readable to agents. Moves into them, including their subfolders, are refused on every provider with `move refused: use mail.trash` or `move refused: use mail.spam`; only `mail trash` and `mail spam` put mail there. A Gmail move takes a message out of the trash or spam. `inbox`, `trash`, and `spam` work as folder names on every provider, in any case. On Gmail, other system labels need their label ID, such as `SENT`; lowercase `sent` or `draft` no longer works.
+- On Gmail, `mail flag --state complete` fails with `flag refused: complete is not supported for this account`, instead of a provider error. Gmail has only a star. The Gmail refusals of a cancel comment and of a response without notification now come after the account's scope check, with the same text.
 - A mail change with a repeated message ID changes that message once and reports its result at every position, instead of reporting it failed.
 
 ### Added

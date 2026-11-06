@@ -143,24 +143,33 @@ func TestGmailMeetingHTTPNeedsTheWriteGrant(t *testing.T) {
 	}
 }
 
-// Google has no cancellation message. A comment is refused before any provider access.
+// Google has no cancellation message. A comment is refused before the policy decision and any provider write.
 func TestGmailMeetingHTTPCancelRefusesAComment(t *testing.T) {
 	d, google := gmailDaemon(t, gmailWriteGrant, allowAll)
-	before := google.requests.Load()
 	status, body := accountRPC(t, d.s, "calendar.cancel", "gmail", `{"id":"org","comment":"CANARY comment"}`)
-	if status != 500 || body != `{"error":"calendar cancel refused: comments are not supported for this account"}` || google.requests.Load() != before {
-		t.Fatalf("response=%d %s requests=%d", status, body, google.requests.Load()-before)
+	if status != 500 || body != `{"error":"calendar cancel refused: comments are not supported for this account"}` || len(google.writes) != 0 {
+		t.Fatalf("response=%d %s writes=%v", status, body, google.writes)
 	}
 	assertNoAudit(t, d.home)
 }
 
-// Google Calendar always notifies the organizer of a response. no_notify is refused before any provider access.
+// Google Calendar always notifies the organizer of a response. no_notify is refused before the policy decision and
+// any provider write.
 func TestGmailMeetingHTTPRespondRefusesNoNotify(t *testing.T) {
 	d, google := gmailDaemon(t, gmailWriteGrant, allowAll)
-	before := google.requests.Load()
 	status, body := accountRPC(t, d.s, "calendar.respond", "gmail", `{"id":"att","response":"accept","no_notify":true}`)
-	if status != 500 || body != `{"error":"calendar response refused: responses without notification are not supported for this account"}` || google.requests.Load() != before {
-		t.Fatalf("response=%d %s requests=%d", status, body, google.requests.Load()-before)
+	if status != 500 || body != `{"error":"calendar response refused: responses without notification are not supported for this account"}` || len(google.writes) != 0 {
+		t.Fatalf("response=%d %s writes=%v", status, body, google.writes)
+	}
+	assertNoAudit(t, d.home)
+}
+
+// Gmail has only a star, so the complete flag state is refused by name and nothing is written.
+func TestGmailHTTPFlagRefusesComplete(t *testing.T) {
+	d, google := gmailDaemon(t, gmailWriteGrant, allowAll)
+	status, body := accountRPC(t, d.s, "mail.flag", "gmail", `{"ids":["m1"],"state":"complete"}`)
+	if status != 500 || body != `{"error":"flag refused: complete is not supported for this account"}` || len(google.writes) != 0 {
+		t.Fatalf("response=%d %s writes=%v", status, body, google.writes)
 	}
 	assertNoAudit(t, d.home)
 }

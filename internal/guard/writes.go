@@ -13,7 +13,17 @@ import (
 const (
 	MoveTrash = GuardError("move refused: use mail.trash")
 	MoveSpam  = GuardError("move refused: use mail.spam")
+	// FlagCompleteUnsupported refuses the complete flag state where the provider has none (Gmail's star).
+	FlagCompleteUnsupported = GuardError("flag refused: complete is not supported for this account")
 )
+
+// limits gives the Limits of an adapter view, and none for a view that states no limits.
+func limits(v any) model.Limits {
+	if l, ok := v.(model.Limited); ok {
+		return l.Limits()
+	}
+	return model.Limits{}
+}
 
 // checkIDs needs at least one ID. There is no maximum of ours: the providers change one message per call.
 func checkIDs(ids []string) error {
@@ -134,7 +144,7 @@ func publicErr(ctx context.Context, err error) error {
 		switch err {
 		case GuardError("move refused: the destination must be a folder ID from `folders`"),
 			MoveTrash, MoveSpam,
-			GuardError("flag state must be one of flagged, complete, none"),
+			GuardError("flag state must be one of flagged, complete, none"), FlagCompleteUnsupported,
 			GuardError("categorize needs at least one category to add or remove"),
 			GuardError("categorize refused: not in the category list"):
 			return err
@@ -215,6 +225,9 @@ func (g *Guard) writer(ctx context.Context, op audit.Operation, from string, opt
 	case audit.Flag:
 		if opts.Flag == nil || (*opts.Flag != model.Flagged && *opts.Flag != model.Complete && *opts.Flag != model.NoFlag) {
 			return nil, GuardError("flag state must be one of flagged, complete, none")
+		}
+		if *opts.Flag == model.Complete && limits(g.mailbox).NoFlagComplete {
+			return nil, FlagCompleteUnsupported
 		}
 		call = func(ids []string) ([]model.MutationResult, error) { return g.mailbox.Flag(ctx, ids, *opts.Flag) }
 	case audit.Categorize:

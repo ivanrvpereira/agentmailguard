@@ -520,7 +520,7 @@ func mailFlagCmd(r *runner) *cobra.Command {
 		}
 		return r.call(c, "mail.flag", map[string]any{"ids": args, "state": state}, false)
 	})
-	c.Flags().StringVar(&state, "state", "", "flagged, complete, or none")
+	c.Flags().StringVar(&state, "state", "", "flagged, complete, or none; Gmail has no complete")
 	return c
 }
 
