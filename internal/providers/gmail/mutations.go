@@ -80,7 +80,7 @@ func (m *mailbox) Move(ctx context.Context, ids []string, from, dest string) ([]
 	}
 	// Like Gmail's "Move to", a move also takes the message out of the trash and spam. dest is never one of them.
 	remove := []string{}
-	for _, l := range []string{labelIn(a, from), "TRASH", "SPAM"} {
+	for _, l := range []string{labelOf(from), "TRASH", "SPAM"} {
 		if l != dest && !slices.Contains(remove, l) {
 			remove = append(remove, l)
 		}

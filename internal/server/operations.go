@@ -112,7 +112,7 @@ func targetValid(ids []string, thread, in *string) bool {
 // inOrInbox is the folder of a conversation action: in, or the Inbox, as mail.list defaults to it.
 func inOrInbox(in *string) string {
 	if in == nil {
-		return model.Inbox
+		return string(model.Inbox)
 	}
 	return *in
 }
@@ -133,7 +133,7 @@ var operations = map[string]operation{
 	"mail.get": {decode: typed(idParam{}, func(p *idParam) bool { return idValid(p.ID) }, func(ctx context.Context, _ *Server, p idParam, a *account) (any, error) {
 		return a.guard.Get(ctx, p.ID)
 	})},
-	"mail.list": {decode: typed(listParam{Folder: model.Inbox}, func(p *listParam) bool {
+	"mail.list": {decode: typed(listParam{Folder: string(model.Inbox)}, func(p *listParam) bool {
 		return idValid(p.Folder) && p.Count >= 0 && model.ValidPage(p.Page)
 	}, func(ctx context.Context, _ *Server, p listParam, a *account) (any, error) {
 		return a.guard.List(ctx, p.Folder, model.PageRequest{Size: p.Count, Page: p.Page})

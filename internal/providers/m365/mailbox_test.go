@@ -669,3 +669,43 @@ func TestListFollowsANextLinkInODataKeyForm(t *testing.T) {
 		t.Fatalf("a refused page reached Graph: %q", requests)
 	}
 }
+
+// The common folder names map to Graph's well-known names in any case, for list, search, a conversation's folder,
+// and a move; any other value, a well-known name of Graph's own included, reaches Graph as given.
+func TestCommonFolderNamesMapToGraphWellKnownNames(t *testing.T) {
+	var paths []string
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		paths = append(paths, r.Method+" "+r.URL.EscapedPath()+" "+text(body["destinationId"]))
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/move"):
+			jsonResponse(w, map[string]string{"id": "m"})
+		case strings.HasSuffix(r.URL.Path, "/messages"):
+			jsonResponse(w, map[string]any{"value": []any{map[string]any{"id": "m", "conversationId": "c", "receivedDateTime": "2026-03-01T09:00:00Z", "parentFolderId": "folder-id"}}})
+		default:
+			jsonResponse(w, map[string]any{"id": "folder-id"})
+		}
+	})
+	b := c.Mailbox()
+	ctx := t.Context()
+	for folder, want := range map[string]string{"Inbox": "inbox", "TRASH": "deleteditems", "spam": "junkemail", "sentitems": "sentitems", "AQMk-id": "AQMk-id"} {
+		paths = nil
+		_, errs := b.List(ctx, folder, model.PageRequest{}, false)
+		_, err := b.Search(ctx, model.SearchQuery{Folder: &folder}, model.PageRequest{}, false)
+		_, err2 := b.ThreadMessagesIn(ctx, "c", folder)
+		_, err3 := b.Move(ctx, []string{"m"}, "inbox", folder)
+		if errs != nil || err != nil || err2 != nil || err3 != nil {
+			t.Fatalf("%s: %v %v %v %v", folder, errs, err, err2, err3)
+		}
+		wantPaths := []string{"GET /v1.0/me/mailFolders/" + want + "/messages ", "GET /v1.0/me/mailFolders/" + want + "/messages ", "GET /v1.0/me/mailFolders/" + want + " ", "GET /v1.0/me/messages ", "POST /v1.0/me/messages/m/move " + want}
+		if !reflect.DeepEqual(paths, wantPaths) {
+			t.Fatalf("%s: paths=%q\nwant %q", folder, paths, wantPaths)
+		}
+	}
+}
+
+func text(v any) string {
+	s, _ := v.(string)
+	return s
+}

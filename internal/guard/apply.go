@@ -21,7 +21,7 @@ func (g *Guard) batches(ctx context.Context, op audit.Operation, ids []string, o
 		}
 		chunk := ids[start:min(start+50, len(ids))]
 		// Organizer rule moves take the messages from the Inbox, which the rules match.
-		results, err := g.mutationCall(ctx, op, chunk, model.Inbox, opts)
+		results, err := g.mutationCall(ctx, op, chunk, string(model.Inbox), opts)
 		if err != nil {
 			for _, id := range chunk {
 				outcome[id] = safeCode(err)

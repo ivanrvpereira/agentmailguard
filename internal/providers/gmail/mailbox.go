@@ -53,27 +53,22 @@ func (m *mailbox) userLabels(ctx context.Context) (map[string]string, error) {
 	}
 	return out, nil
 }
-func (m *mailbox) labelID(ctx context.Context, id string) (string, error) {
-	a, err := m.labels(ctx)
-	if err != nil {
-		return "", err
-	}
-	return labelIn(a, id), nil
-}
 
-// labelIn gives the label ID of folder id among labels a: a system label name such as inbox is that label's ID; any
-// other ID stays as given.
-func labelIn(a []label, id string) string {
-	for _, l := range a {
-		if l.Type == "system" && l.ID == strings.ToUpper(id) {
-			return l.ID
-		}
-	}
-	return id
-}
+// systemLabels maps the common folder names to their Gmail system label IDs
+// (https://developers.google.com/workspace/gmail/api/guides/labels#manage_labels_on_messages_threads).
+var systemLabels = map[model.FolderName]string{model.Inbox: "INBOX", model.Trash: "TRASH", model.Spam: "SPAM"}
 
 // bins marks the Gmail system labels that are the trash and spam.
-var bins = map[string]model.Bin{"TRASH": model.Trash, "SPAM": model.Spam}
+var bins = map[string]model.FolderName{systemLabels[model.Trash]: model.Trash, systemLabels[model.Spam]: model.Spam}
+
+// labelOf gives the label ID of folder: a common folder name maps to its system label, and any other value is a
+// label ID as given.
+func labelOf(folder string) string {
+	if n, ok := model.ParseFolderName(folder); ok {
+		return systemLabels[n]
+	}
+	return folder
+}
 
 func (m *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
 	a, err := m.labels(ctx)
@@ -159,11 +154,7 @@ func (m *mailbox) List(ctx context.Context, folder string, page model.PageReques
 	if page.Size < 0 {
 		return model.MessagePage{}, failure("Gmail", "ValueError")
 	}
-	id, err := m.labelID(ctx, folder)
-	if err != nil {
-		return model.MessagePage{}, err
-	}
-	return m.messages(ctx, url.Values{"labelIds": {id}}, page)
+	return m.messages(ctx, url.Values{"labelIds": {labelOf(folder)}}, page)
 }
 func phrase(s string) string {
 	s = strings.Map(func(r rune) rune {
@@ -208,11 +199,7 @@ func (m *mailbox) Search(ctx context.Context, query model.SearchQuery, page mode
 	}
 	q := url.Values{"q": {strings.Join(terms, " ")}}
 	if query.Folder != nil {
-		id, err := m.labelID(ctx, *query.Folder)
-		if err != nil {
-			return model.MessagePage{}, err
-		}
-		q.Set("labelIds", id)
+		q.Set("labelIds", labelOf(*query.Folder))
 	}
 	found, err := m.messages(ctx, q, page)
 	if err != nil {
@@ -272,7 +259,7 @@ func (m *mailbox) ThreadMessagesIn(ctx context.Context, thread, folder string) (
 	if err != nil {
 		return nil, err
 	}
-	id := labelIn(a, folder)
+	id := labelOf(folder)
 	if !slices.ContainsFunc(a, func(l label) bool { return l.ID == id }) {
 		return nil, failure("Gmail", "FolderError")
 	}

@@ -19,9 +19,28 @@ type ThreadID = string
 
 type FolderID = string
 
-// Inbox is the folder ID of the Inbox on every provider: mail list reads it without a folder, and a move by message
-// ID or a conversation action without a folder takes the messages from it.
-const Inbox FolderID = "inbox"
+// FolderName is a provider-neutral folder name. The names work on every provider, in any case, where the API reads a
+// folder (mail list, mail search, and a conversation action's in); each adapter maps them to its own folder or label
+// ID in one place. Any other value is a provider folder ID and reaches the provider unchanged.
+type FolderName string
+
+const (
+	// Inbox is the folder that mail list reads without a folder, and that a move by message ID or a conversation
+	// action without a folder takes the messages from.
+	Inbox FolderName = "inbox"
+	Trash FolderName = "trash"
+	// Spam is the spam folder, junk on Microsoft 365.
+	Spam FolderName = "spam"
+)
+
+// ParseFolderName gives the FolderName that s is, in any case, and false with the empty name for any other value.
+func ParseFolderName(s string) (FolderName, bool) {
+	switch n := FolderName(strings.ToLower(s)); n {
+	case Inbox, Trash, Spam:
+		return n, true
+	}
+	return "", false
+}
 
 type EventID = string
 
@@ -97,9 +116,9 @@ type Message struct {
 type Folder struct {
 	ID   FolderID
 	Name string
-	// Bin marks the provider's trash or spam/junk folder and every folder below it. Moves there must use mail.trash
-	// or mail.spam instead.
-	Bin Bin
+	// Bin is Trash or Spam for the provider's trash or spam/junk folder and every folder below it, and empty for any
+	// other folder. Moves there must use mail.trash or mail.spam instead.
+	Bin FolderName
 }
 type Attendee struct {
 	Address  Address
@@ -335,14 +354,6 @@ type InboxScan struct {
 	Messages []InboxEntry
 	Failures []ScanFailure
 }
-
-// Bin names the folder tree that a folder belongs to (trash or spam/junk); the empty value is not a bin.
-type Bin string
-
-const (
-	Trash Bin = "trash"
-	Spam  Bin = "spam"
-)
 
 // Mailbox deliberately has no permanent-delete operation. Its send operations reach real recipients at once.
 // List/Search/Thread may return bodies already available even when body is false.

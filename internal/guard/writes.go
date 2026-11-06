@@ -3,7 +3,6 @@ package guard
 import (
 	"context"
 	"slices"
-	"strings"
 
 	"github.com/ivanrvpereira/agentmailguard/internal/audit"
 	"github.com/ivanrvpereira/agentmailguard/internal/config"
@@ -185,7 +184,7 @@ func (g *Guard) writer(ctx context.Context, op audit.Operation, from string, opt
 		call = func(ids []string) ([]model.MutationResult, error) { return g.mailbox.Spam(ctx, ids) }
 	case audit.Move:
 		// A move into trash or spam would bypass mail.trash or mail.spam and their policy keys.
-		bin := model.Bin(strings.ToLower(*opts.Folder))
+		bin, _ := model.ParseFolderName(*opts.Folder)
 		if bin != model.Trash && bin != model.Spam {
 			folders, err := g.mailbox.Folders(ctx)
 			if err != nil {
@@ -292,7 +291,7 @@ func (g *Guard) manual(ctx context.Context, op audit.Operation, ids []string, op
 	}
 	defer g.release()
 	// Moves by message ID take the messages from the Inbox.
-	return g.mutationCall(ctx, op, ids, model.Inbox, opts)
+	return g.mutationCall(ctx, op, ids, string(model.Inbox), opts)
 }
 
 // conversation runs op on the messages of conversation thread in folder in, as manual runs it on message IDs. The

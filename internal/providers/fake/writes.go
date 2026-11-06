@@ -13,6 +13,9 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
+// bins marks the fake folders that are the trash and spam.
+var bins = map[string]model.FolderName{string(model.Trash): model.Trash, string(model.Spam): model.Spam}
+
 // Folders marks trash, spam, and every folder below them, so the guard refuses moves there.
 func (b *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
 	db, err := b.p.conn(ctx)
@@ -41,8 +44,8 @@ func (b *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
 	for i := range out {
 		// The step limit ends parent cycles.
 		for id, steps := out[i].ID, 0; id != "" && steps <= len(parents); id, steps = parents[id], steps+1 {
-			if id == "trash" || id == "spam" {
-				out[i].Bin = model.Bin(id)
+			if bin, ok := bins[id]; ok {
+				out[i].Bin = bin
 				break
 			}
 		}

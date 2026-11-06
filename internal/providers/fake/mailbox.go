@@ -95,6 +95,15 @@ func (b *mailbox) query(ctx context.Context, body bool, where string, args ...an
 	return out, nil
 }
 
+// folderID gives the fake folder of folder: a common folder name is the folder of that name, and any other value is a
+// folder ID as given.
+func folderID(folder string) string {
+	if n, ok := model.ParseFolderName(folder); ok {
+		return string(n)
+	}
+	return folder
+}
+
 func (b *mailbox) folderExists(ctx context.Context, folder string) error {
 	db, err := b.p.conn(ctx)
 	if err != nil {
@@ -147,6 +156,7 @@ func cut[T any](all []T, offset, size int) ([]T, string) {
 }
 
 func (b *mailbox) List(ctx context.Context, folder string, page model.PageRequest, body bool) (model.MessagePage, error) {
+	folder = folderID(folder)
 	offset, size, err := window(page)
 	if err != nil {
 		return model.MessagePage{}, err
@@ -177,6 +187,7 @@ func (b *mailbox) Thread(ctx context.Context, thread string) ([]model.Message, e
 // ThreadMessagesIn keeps the messages of Thread whose folder column is folder. An unknown folder is notFound, as in
 // List.
 func (b *mailbox) ThreadMessagesIn(ctx context.Context, thread, folder string) ([]string, error) {
+	folder = folderID(folder)
 	if err := b.folderExists(ctx, folder); err != nil {
 		return nil, err
 	}
@@ -206,10 +217,11 @@ func (b *mailbox) Search(ctx context.Context, q model.SearchQuery, page model.Pa
 	}
 	where, args := newest, []any{}
 	if q.Folder != nil {
-		if err := b.folderExists(ctx, *q.Folder); err != nil {
+		folder := folderID(*q.Folder)
+		if err := b.folderExists(ctx, folder); err != nil {
 			return model.MessagePage{}, err
 		}
-		where, args = `AND folder = ?`+newest, []any{*q.Folder}
+		where, args = `AND folder = ?`+newest, []any{folder}
 	}
 	all, err := b.query(ctx, true, where, args...)
 	if err != nil {
