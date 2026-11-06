@@ -69,7 +69,7 @@ func (p *Provider) conn(ctx context.Context) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, storageError
 	}
-	_, err = db.ExecContext(ctx, `INSERT OR IGNORE INTO folders (account, id, name) VALUES (?1, 'inbox', 'Inbox'), (?1, 'drafts', 'Drafts'), (?1, 'sent', 'Sent'), (?1, 'archive', 'Archive'), (?1, 'trash', 'Trash')`, p.account)
+	_, err = db.ExecContext(ctx, `INSERT OR IGNORE INTO folders (account, id, name) VALUES (?1, 'inbox', 'Inbox'), (?1, 'drafts', 'Drafts'), (?1, 'sent', 'Sent'), (?1, 'archive', 'Archive'), (?1, 'trash', 'Trash'), (?1, 'spam', 'Spam')`, p.account)
 	if err != nil {
 		_ = db.Close()
 		return nil, storageError

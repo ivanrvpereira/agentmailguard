@@ -19,14 +19,14 @@ const (
 // Decisions holds one decision per policy key. The struct is comparable, so a policy change
 // makes a loaded Account differ from the one the server started with.
 type Decisions struct {
-	MailTrash, MailDraft, MailSend                                  Decision
+	MailTrash, MailSpam, MailDraft, MailSend                        Decision
 	CalendarInvite, CalendarUpdate, CalendarCancel, CalendarRespond Decision
 }
 
-// SealedDecisions applies to actions on an existing message with the verdict sealed. It has only mail_trash:
+// SealedDecisions applies to actions on an existing message with the verdict sealed. It has only mail_trash and mail_spam:
 // the guard always refuses replies to and forwards of a sealed message.
 type SealedDecisions struct {
-	MailTrash Decision
+	MailTrash, MailSpam Decision
 }
 
 // Policy is the fully resolved write policy of one account.
@@ -39,6 +39,8 @@ func (d *Decisions) field(key string) *Decision {
 	switch key {
 	case "mail_trash":
 		return &d.MailTrash
+	case "mail_spam":
+		return &d.MailSpam
 	case "mail_draft":
 		return &d.MailDraft
 	case "mail_send":
@@ -56,8 +58,11 @@ func (d *Decisions) field(key string) *Decision {
 }
 
 func (s *SealedDecisions) field(key string) *Decision {
-	if key == "mail_trash" {
+	switch key {
+	case "mail_trash":
 		return &s.MailTrash
+	case "mail_spam":
+		return &s.MailSpam
 	}
 	return nil
 }
@@ -82,10 +87,10 @@ const invalidDecision = "must be allow, approve, or deny"
 // DefaultPolicy is the policy without any [policy] table.
 var DefaultPolicy = Policy{
 	Base: Decisions{
-		MailTrash: Allow, MailDraft: Allow, MailSend: Deny,
+		MailTrash: Allow, MailSpam: Allow, MailDraft: Allow, MailSend: Deny,
 		CalendarInvite: Deny, CalendarUpdate: Deny, CalendarCancel: Deny, CalendarRespond: Deny,
 	},
-	Sealed: SealedDecisions{MailTrash: Deny},
+	Sealed: SealedDecisions{MailTrash: Deny, MailSpam: Deny},
 }
 
 // globalPolicy is the default policy with the [policy] table applied. Each account table applies on top of it.

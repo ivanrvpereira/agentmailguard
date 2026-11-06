@@ -93,7 +93,7 @@ No data is lost, because the data uses the email.
 A key is a dotted path:
 
 - `default_account`.
-- `policy.KEY`, `policy.sealed.mail_trash`, `accounts.ALIAS.policy.KEY`, and `accounts.ALIAS.policy.sealed.mail_trash`, for example `policy.mail_send`. See [Write policy](write-policy.md#write-policy).
+- `policy.KEY`, `policy.sealed.mail_trash`, `policy.sealed.mail_spam`, `accounts.ALIAS.policy.KEY`, `accounts.ALIAS.policy.sealed.mail_trash`, and `accounts.ALIAS.policy.sealed.mail_spam`, for example `policy.mail_send`. See [Write policy](write-policy.md#write-policy).
 - `accounts.ALIAS.client_id`, `accounts.ALIAS.tenant_id` (Microsoft 365), and `accounts.ALIAS.client_secret` (Gmail).
 - `screening.provider`, `screening.endpoint`, and `screening.model`. See [Screening](screening.md#screening).
 - `console.listen`, `console.hosts`, and `console.username`. `console.hosts` takes a comma-separated list. See [Console configuration](approval-console.md#console-configuration).

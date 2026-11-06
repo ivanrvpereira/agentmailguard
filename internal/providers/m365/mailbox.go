@@ -131,7 +131,7 @@ func (b *mailbox) Get(ctx context.Context, ids []string, body bool) ([]model.Mes
 func (b *mailbox) List(ctx context.Context, folder string, page model.PageRequest, body bool) (model.MessagePage, error) {
 	q := messageQuery(body)
 	q.Set("$orderby", "receivedDateTime desc")
-	return b.page(ctx, "/me/mailFolders/"+escapeID(folder)+"/messages", q, page, body)
+	return b.page(ctx, "/me/mailFolders/"+escapeID(folderName(folder))+"/messages", q, page, body)
 }
 
 // notFound is the error of a Graph 404, which a missing message gets.
@@ -163,11 +163,21 @@ func (b *mailbox) Thread(ctx context.Context, thread string) ([]model.Message, e
 	return out, nil
 }
 
+func folderName(folder string) string {
+	switch strings.ToLower(folder) {
+	case "trash":
+		return "deleteditems"
+	case "spam":
+		return "junkemail"
+	}
+	return folder
+}
+
 // ThreadMessagesIn keeps the messages of Thread in folder. Messages carry the real folder ID in parentFolderId, so
 // folder, a well-known name such as inbox or a real ID, is looked up first
 // (https://learn.microsoft.com/en-us/graph/api/mailfolder-get?view=graph-rest-1.0). A failed lookup fails closed.
 func (b *mailbox) ThreadMessagesIn(ctx context.Context, thread, folder string) ([]string, error) {
-	d, err := b.c.get(ctx, b.c.endpoint("/me/mailFolders/"+escapeID(folder), url.Values{"$select": {"id"}}), false)
+	d, err := b.c.get(ctx, b.c.endpoint("/me/mailFolders/"+escapeID(folderName(folder)), url.Values{"$select": {"id"}}), false)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +237,7 @@ func kql(q model.SearchQuery) string {
 func (b *mailbox) Search(ctx context.Context, query model.SearchQuery, page model.PageRequest, body bool) (model.MessagePage, error) {
 	path := "/me/messages"
 	if query.Folder != nil {
-		path = "/me/mailFolders/" + escapeID(*query.Folder) + "/messages"
+		path = "/me/mailFolders/" + escapeID(folderName(*query.Folder)) + "/messages"
 	}
 	q := messageQuery(body)
 	q.Set("$search", kql(query))
@@ -290,19 +300,27 @@ func (b *mailbox) page(ctx context.Context, path string, q url.Values, page mode
 	return model.MessagePage{Messages: out, Next: next}, nil
 }
 
-// Folders marks Deleted Items and every folder below it, so moves there can be refused. A failed lookup fails closed.
+// Folders marks Deleted Items, Junk Email, and every folder below them, so moves there can be refused. A failed
+// lookup fails closed.
 func (b *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
-	deleted, err := b.c.get(ctx, b.c.endpoint("/me/mailFolders/deleteditems", url.Values{"$select": {"id"}}), false)
-	if err != nil {
-		return nil, err
-	}
-	deletedID := text(deleted, "id")
-	if deletedID == "" {
-		return nil, invalidMetadata
+	bins := map[string]model.Bin{}
+	for _, root := range []struct {
+		name string
+		bin  model.Bin
+	}{{"deleteditems", model.Trash}, {"junkemail", model.Spam}} {
+		d, err := b.c.get(ctx, b.c.endpoint("/me/mailFolders/"+root.name, url.Values{"$select": {"id"}}), false)
+		if err != nil {
+			return nil, err
+		}
+		id := text(d, "id")
+		if id == "" {
+			return nil, invalidMetadata
+		}
+		bins[id] = root.bin
 	}
 	type listing struct {
-		link  string
-		trash bool
+		link string
+		bin  model.Bin
 	}
 	q := url.Values{"$select": {"id,displayName,childFolderCount"}, "$top": {"100"}}
 	pending := []listing{{link: b.c.endpoint("/me/mailFolders", q)}}
@@ -321,12 +339,15 @@ func (b *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
 				return nil, invalidPage
 			}
 			seen[id] = true
-			trash := first.trash || id == deletedID
-			out = append(out, model.Folder{ID: id, Name: text(d, "displayName"), Trash: trash})
+			bin := first.bin
+			if bin == "" {
+				bin = bins[id]
+			}
+			out = append(out, model.Folder{ID: id, Name: text(d, "displayName"), Bin: bin})
 			var children int
 			_ = json.Unmarshal(d["childFolderCount"], &children)
 			if children > 0 {
-				pending = append(pending, listing{b.c.endpoint("/me/mailFolders/"+escapeID(id)+"/childFolders", q), trash})
+				pending = append(pending, listing{b.c.endpoint("/me/mailFolders/"+escapeID(id)+"/childFolders", q), bin})
 			}
 		}
 	}

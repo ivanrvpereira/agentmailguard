@@ -71,6 +71,10 @@ func labelIn(a []label, id string) string {
 	}
 	return id
 }
+
+// bins marks the Gmail system labels that are the trash and spam.
+var bins = map[string]model.Bin{"TRASH": model.Trash, "SPAM": model.Spam}
+
 func (m *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
 	a, err := m.labels(ctx)
 	if err != nil {
@@ -79,7 +83,7 @@ func (m *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
 	out := []model.Folder{}
 	for _, l := range a {
 		if l.ID != "UNREAD" && l.ID != "STARRED" {
-			out = append(out, model.Folder{ID: l.ID, Name: l.Name})
+			out = append(out, model.Folder{ID: l.ID, Name: l.Name, Bin: bins[l.ID]})
 		}
 	}
 	return out, nil

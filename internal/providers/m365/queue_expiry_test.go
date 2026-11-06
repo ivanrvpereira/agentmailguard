@@ -50,7 +50,7 @@ func TestQueuedRequestsRecheckExpiryBeforeTransmission(t *testing.T) {
 							w.WriteHeader(401)
 							return
 						}
-						jsonResponse(w, map[string]string{"id": "queued"})
+						jsonResponse(w, map[string]string{"id": "queued", "parentFolderId": "inbox-id"})
 					default:
 						started <- struct{}{}
 						select {
@@ -58,7 +58,7 @@ func TestQueuedRequestsRecheckExpiryBeforeTransmission(t *testing.T) {
 						case <-r.Context().Done():
 							return
 						}
-						jsonResponse(w, map[string]string{"id": "blocked"})
+						jsonResponse(w, map[string]string{"id": "blocked", "parentFolderId": "inbox-id"})
 					}
 				}))
 				defer server.Close()

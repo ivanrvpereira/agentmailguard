@@ -458,9 +458,12 @@ func (b *mailbox) Archive(ctx context.Context, ids []string) ([]model.MutationRe
 func (b *mailbox) Trash(ctx context.Context, ids []string) ([]model.MutationResult, error) {
 	return b.Move(ctx, ids, "inbox", "deleteditems")
 }
+func (b *mailbox) Spam(ctx context.Context, ids []string) ([]model.MutationResult, error) {
+	return b.Move(ctx, ids, "inbox", "junkemail")
+}
 func (b *mailbox) Move(ctx context.Context, ids []string, _, dest string) ([]model.MutationResult, error) {
 	return b.each(ctx, ids, func(id string) error {
-		_, err := b.c.request(ctx, http.MethodPost, b.c.endpoint("/me/messages/"+escapeID(id)+"/move", nil), map[string]any{"destinationId": dest}, false)
+		_, err := b.c.request(ctx, http.MethodPost, b.c.endpoint("/me/messages/"+escapeID(id)+"/move", nil), map[string]any{"destinationId": folderName(dest)}, false)
 		return err
 	})
 }

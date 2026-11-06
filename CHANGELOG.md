@@ -13,10 +13,13 @@ The first public release.
 - `amgd serve` prints the approval console URL with its username and `console.hosts`, the API URL with the `AMG_HOST` line for agents, and, for a non-loopback listener, a warning after the address that names it, the `mail_send` decisions, and the fixes. `daemon listening` is now `daemon listening: http://ADDRESS`.
 - `amgd serve` does not start without a console password. On a terminal it asks for one; without a terminal it refuses to start and names `amgd config set console.password`, with `--home HOME` when it got `--home` or `AMG_HOME`. Before, the daemon started and its console refused every request.
 - Without a daemon, `amgd` setting changes print `no daemon runs for this home. Now run: amgd serve`, with `--home HOME` when the command got `--home` or `AMG_HOME`.
+- Trash and spam/junk stay readable to agents. Moves into them, including their subfolders, are refused on every provider with `move refused: use mail.trash` or `move refused: use mail.spam`; only `mail trash` and `mail spam` put mail there. A Gmail move takes a message out of the trash or spam. `trash` and `spam` work as folder names on every provider.
+- A mail change with a repeated message ID changes that message once and reports its result at every position, instead of reporting it failed.
 
 ### Added
 
 - A systemd unit and a launchd plist in each release archive (`service/`) and in Homebrew's `share/agentmailguard/service`. The systemd unit reads the credential file password from an encrypted systemd credential and shows the daemon only its home under `/home`. "Run as a service" in `docs/setup.md` has the whole first start.
+- `amg mail spam IDS... | --thread THREAD_ID [--in FOLDER_ID]` moves messages to spam/junk under the new `mail_spam` write policy (default allow; sealed/error default deny), with per-message approvals.
 - Microsoft 365 login works on headless Linux: `amgd account add|login --no-browser` prints the sign-in URL and takes the redirected `http://localhost:PORT/?code=…` address as a paste, with the checks of the loopback callback. Browser login opens the URL with `xdg-open` on Linux, always prints it, and keeps waiting when no browser opens. A refused device-code sign-in names `--no-browser`, since many organizations block device code.
 - `amgd`, a daemon that screens Microsoft 365 and Gmail mail and calendar events for AI agents, and `amg`, the agent's client, which talks to it over HTTP.
 - Screened mail reads: list, search, read, and whole conversations. Each message gets a verdict (`green`, `yellow`, `red`, `sealed`, or `error`) that decides what the agent sees.

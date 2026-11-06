@@ -36,7 +36,7 @@ agentmailguard keeps the agent's view of the mailbox and the agent's power over 
 
 - **Screened reads.** Every message gets a verdict (`green`, `yellow`, `red`, `sealed`, or `error`) before the agent reads it. Only `green` mail shows its body. Hidden HTML text is removed, and links show only their domain until the agent asks for one.
 - **Fail closed.** If screening is missing or fails, the agent gets no body.
-- **A write policy.** For each account, you decide whether trash, drafts, sends, and meeting changes run, wait for your approval, or are refused. Sending mail and meeting notifications are off by default.
+- **A write policy.** For each account, you decide whether trash, spam, drafts, sends, and meeting changes run, wait for your approval, or are refused. Sending mail and meeting notifications are off by default.
 - **An action check.** Before a draft, send, or meeting write runs, Jev, the decision engine that screens mail, checks the text that the agent wrote. A flagged action waits for your approval, also when the policy allows it.
 - **Human approval.** Actions that wait appear in a password-protected approval console. Only a person there can approve them; the agent's API cannot.
 - **No credentials on the agent's side.** OAuth tokens and keys stay in the daemon, in the macOS Keychain or a password-encrypted file. The agent can run only `amg`, and `amg` cannot change the daemon's settings.
@@ -65,7 +65,7 @@ agentmailguard keeps the agent's view of the mailbox and the agent's power over 
 
 ## Features
 
-- **Mail:** list, search, read, and read whole conversations; archive, move, trash, flag, categorize, and mark read or unread, by message or by conversation.
+- **Mail:** list, search, read, and read whole conversations; archive, move, trash, report spam, flag, categorize, and mark read or unread, by message or by conversation.
 - **Drafts and sending:** new messages, replies, reply all, and forwards that keep the original's attachments, as drafts or sent at once; Cc, Bcc, and HTML bodies; update, delete, and send saved drafts.
 - **Calendar:** list, search, and read events; send invitations with Teams or Google Meet links; update, cancel, and respond; availability (free/busy) for Microsoft 365.
 - **Organizing:** rules in `rules.toml` move and categorize mail by meaning. A preview shows the plan before anything changes.

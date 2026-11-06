@@ -446,7 +446,7 @@ func (c *console) reference(ctx context.Context, item cache.Pending, args map[st
 	ref, _ := args["id"].(string)
 	op, kind := "mail.get", "Message"
 	switch item.Op {
-	case "mail.trash":
+	case "mail.trash", "mail.spam":
 		if ids, ok := args["ids"].([]any); ok && len(ids) > 0 {
 			ref, _ = ids[0].(string)
 		}

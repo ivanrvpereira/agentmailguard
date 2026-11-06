@@ -4,9 +4,9 @@
 -- chosen when its rule name is in the message. Every sender or identity name, subject, body, address, and code
 -- here is a canary that must never reach a log or the audit file: those names, subjects, and bodies start with
 -- canary-, and addresses are in the domains example.test, evil.test, and demo.test. Messages get the insert time, so organize
--- windows always hold them. The folders include inbox, drafts, sent, archive, and trash, which the fake
+-- windows always hold them. The folders include inbox, drafts, sent, archive, trash, and spam, which the fake
 -- provider adds when it first opens the database, so that first open changes no row.
-INSERT INTO folders (account, id, name) VALUES ('demo@fake.invalid', 'inbox', 'Inbox'), ('demo@fake.invalid', 'drafts', 'Drafts'), ('demo@fake.invalid', 'sent', 'Sent'), ('demo@fake.invalid', 'archive', 'Archive'), ('demo@fake.invalid', 'trash', 'Trash'), ('demo@fake.invalid', 'projects', 'Projects');
+INSERT INTO folders (account, id, name) VALUES ('demo@fake.invalid', 'inbox', 'Inbox'), ('demo@fake.invalid', 'drafts', 'Drafts'), ('demo@fake.invalid', 'sent', 'Sent'), ('demo@fake.invalid', 'archive', 'Archive'), ('demo@fake.invalid', 'trash', 'Trash'), ('demo@fake.invalid', 'spam', 'Spam'), ('demo@fake.invalid', 'projects', 'Projects');
 INSERT INTO folders (account, id, name, parent) VALUES ('demo@fake.invalid', 'old-trash', 'Old trash', 'trash');
 INSERT INTO categories VALUES ('demo@fake.invalid', 'Invoices'), ('demo@fake.invalid', 'Red'), ('demo@fake.invalid', 'Sealed');
 INSERT INTO messages (account, id, sender_name, sender_address, to_addresses, subject, body, spf, dkim, dmarc) VALUES

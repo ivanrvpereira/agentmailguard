@@ -15,6 +15,22 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/providers/m365"
 )
 
+func TestSpamMovesToJunkEmail(t *testing.T) {
+	calls := 0
+	c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body map[string]any
+		if r.Method != "POST" || r.URL.EscapedPath() != "/v1.0/me/messages/m%2F1/move" || json.NewDecoder(r.Body).Decode(&body) != nil || !reflect.DeepEqual(body, map[string]any{"destinationId": "junkemail"}) {
+			t.Errorf("spam request: %s %s body=%v", r.Method, r.URL.EscapedPath(), body)
+		}
+		jsonResponse(w, map[string]string{"id": "m/1"})
+	})
+	got, err := c.Mailbox().Spam(t.Context(), []string{"m/1"})
+	if err != nil || !reflect.DeepEqual(got, []model.MutationResult{{ID: "m/1", OK: true}}) || calls != 1 {
+		t.Fatalf("spam=%+v err=%v calls=%d", got, err, calls)
+	}
+}
+
 func TestDraftNewCreatesWithoutSending(t *testing.T) {
 	var paths []string
 	var bodies []map[string]any

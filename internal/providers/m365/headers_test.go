@@ -24,7 +24,7 @@ func TestOnlyEOPAuthenticationResultsWithFailWinsAndWordBoundaries(t *testing.T)
 	for _, tt := range tests {
 		t.Run(tt.value, func(t *testing.T) {
 			c := graphClient(t, func(w http.ResponseWriter, r *http.Request) {
-				jsonResponse(w, map[string]any{"id": "m", "internetMessageHeaders": []any{map[string]string{"name": tt.name, "value": tt.value}}})
+				jsonResponse(w, map[string]any{"id": "m", "parentFolderId": "inbox-id", "internetMessageHeaders": []any{map[string]string{"name": tt.name, "value": tt.value}}})
 			})
 			messages, err := c.Mailbox().Get(context.Background(), []string{"m"}, true)
 			if err != nil {

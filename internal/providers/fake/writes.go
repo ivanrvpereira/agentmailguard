@@ -13,7 +13,7 @@ import (
 	"github.com/ivanrvpereira/agentmailguard/internal/model"
 )
 
-// Folders marks trash and every folder below it, so the guard refuses moves there.
+// Folders marks trash, spam, and every folder below them, so the guard refuses moves there.
 func (b *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
 	db, err := b.p.conn(ctx)
 	if err != nil {
@@ -41,8 +41,8 @@ func (b *mailbox) Folders(ctx context.Context) ([]model.Folder, error) {
 	for i := range out {
 		// The step limit ends parent cycles.
 		for id, steps := out[i].ID, 0; id != "" && steps <= len(parents); id, steps = parents[id], steps+1 {
-			if id == "trash" {
-				out[i].Trash = true
+			if id == "trash" || id == "spam" {
+				out[i].Bin = model.Bin(id)
 				break
 			}
 		}
@@ -112,6 +112,9 @@ func (b *mailbox) Archive(ctx context.Context, ids []string) ([]model.MutationRe
 }
 func (b *mailbox) Trash(ctx context.Context, ids []string) ([]model.MutationResult, error) {
 	return b.Move(ctx, ids, "inbox", "trash")
+}
+func (b *mailbox) Spam(ctx context.Context, ids []string) ([]model.MutationResult, error) {
+	return b.Move(ctx, ids, "inbox", "spam")
 }
 func (b *mailbox) Move(ctx context.Context, ids []string, _, dest string) ([]model.MutationResult, error) {
 	if err := b.folderExists(ctx, dest); err != nil {

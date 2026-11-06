@@ -242,7 +242,7 @@ func TestExpiredUnsafeCredentialUsesOnlyValidatedRefresh(t *testing.T) {
 					if !result.allowed || r.Method != "GET" || r.URL.Path != "/me/messages/message" || r.Header.Get("Authorization") != "Bearer "+result.token {
 						t.Error("Graph used an unvalidated token or unexpected request")
 					}
-					jsonResponse(w, map[string]any{"id": "message"})
+					jsonResponse(w, map[string]any{"id": "message", "parentFolderId": "inbox-id"})
 				}))
 				defer server.Close()
 				c := m365.New(account(), s, m365.Options{HTTPClient: server.Client(), BaseURL: server.URL, AuthorityURL: server.URL, Now: func() time.Time { return now }})
@@ -284,7 +284,7 @@ func TestFreshOverbroadCredentialIsUsedWithoutRefresh(t *testing.T) {
 		} else if r.Header.Get("Authorization") == "Bearer "+token {
 			graphCalls.Add(1)
 		}
-		jsonResponse(w, map[string]any{"id": "message"})
+		jsonResponse(w, map[string]any{"id": "message", "parentFolderId": "inbox-id"})
 	}))
 	defer server.Close()
 	c := m365.New(account(), s, m365.Options{HTTPClient: server.Client(), BaseURL: server.URL, AuthorityURL: server.URL, Now: func() time.Time { return now }})

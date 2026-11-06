@@ -117,6 +117,8 @@ func (a *nativeAPI) graph(w http.ResponseWriter, r *http.Request) {
 		response(w, map[string]string{"userPrincipalName": workEmail})
 	case "/me/mailFolders/deleteditems":
 		response(w, map[string]any{"id": "deleted"})
+	case "/me/mailFolders/junkemail":
+		response(w, map[string]any{"id": "junk"})
 	case "/me/mailFolders":
 		response(w, map[string]any{"value": []any{map[string]any{"id": "f1", "displayName": "Folder", "childFolderCount": 0}}})
 	case "/me/outlook/masterCategories":

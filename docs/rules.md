@@ -22,7 +22,7 @@ The daemon reads `rules.toml` only at start and at a reload. After you edit it, 
 `amgd` never writes `rules.toml`.
 
 A folder target is a mailbox folder ID, `archive`, or `trash`.
-On Microsoft 365, a folder ID of Deleted Items or of a folder below it fails. Use `trash`.
+On every provider, a folder ID in the trash or spam/junk, including their subfolders, fails. Use `trash` for the dedicated trash action under `mail_trash`; no spam action is available.
 A category target must already exist in the mailbox.
 `rules list` shows resolved names and missing-target warnings, never instructions or confidence scores.
 Missing rules produce an empty organizer report without provider or Jev access.

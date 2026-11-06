@@ -131,7 +131,7 @@ func TestGetReadsTheBccRecipientsOfDraftsAndSentMail(t *testing.T) {
 			if !strings.Contains(r.URL.Query().Get("$select"), ",bccRecipients,") {
 				t.Errorf("select=%s", r.URL.Query().Get("$select"))
 			}
-			jsonResponse(w, map[string]any{"id": "m", "isDraft": tc.draft, "from": graphRecipients(tc.from)[0], "bccRecipients": []any{map[string]any{"emailAddress": map[string]any{"name": "Ed", "address": "ed@example.test"}}}})
+			jsonResponse(w, map[string]any{"id": "m", "parentFolderId": "inbox-id", "isDraft": tc.draft, "from": graphRecipients(tc.from)[0], "bccRecipients": []any{map[string]any{"emailAddress": map[string]any{"name": "Ed", "address": "ed@example.test"}}}})
 		})
 		got, err := c.Mailbox().Get(t.Context(), []string{"m"}, false)
 		if err != nil || len(got) != 1 || !reflect.DeepEqual(got[0].BCC, tc.want) {
