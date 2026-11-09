@@ -197,6 +197,6 @@ jobs:
           done > "$RUNNER_TEMP/checksums.txt"
           scripts/release/render-formula.sh "$version" "$RUNNER_TEMP/checksums.txt" > "$RUNNER_TEMP/agentmailguard.rb"
       - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@d482da0e602890d3160aade42e72c8556103bf04 # 2026.10.26.1
+        uses: Homebrew/actions/setup-homebrew@c262868c096d909fc278daa87ed9772967331ea3 # 2026.11.02.1
       - name: Check formula
         run: scripts/release/check-formula.sh "$RUNNER_TEMP/agentmailguard.rb"
