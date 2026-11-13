@@ -264,6 +264,9 @@ func TestMutationsChangeMessagesAndReportMissingIDsInOrder(t *testing.T) {
 	if got := folderOf(t, m, "old"); !reflect.DeepEqual(got.Categories, []string{"Home"}) {
 		t.Fatalf("categories=%v", got.Categories)
 	}
+	if r, err := m.Move(ctx, []string{"arc"}, "projects", "Inbox"); err != nil || len(r) != 1 || !r[0].OK || !reflect.DeepEqual(folderOf(t, m, "arc").Folders, []string{"inbox"}) {
+		t.Fatalf("move to Inbox: result=%+v err=%v", r, err)
+	}
 	if _, err := m.Move(ctx, []string{"new"}, "archive", "nowhere"); err == nil {
 		t.Fatal("move to an unknown folder accepted")
 	}

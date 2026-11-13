@@ -46,6 +46,9 @@ func TestMailboxMutationsAreLabelOnlyAndPerID(t *testing.T) {
 		{"inbox from a label", func(c *gmail.Client) ([]model.MutationResult, error) {
 			return c.Mailbox().Move(context.Background(), []string{"ok", "gone"}, "Label_2", "INBOX")
 		}, []string{"INBOX"}, []string{"Label_2", "TRASH", "SPAM"}, false},
+		{"inbox by name", func(c *gmail.Client) ([]model.MutationResult, error) {
+			return c.Mailbox().Move(context.Background(), []string{"ok", "gone"}, "Label_2", "Inbox")
+		}, []string{"INBOX"}, []string{"Label_2", "TRASH", "SPAM"}, false},
 		{"move from the trash", func(c *gmail.Client) ([]model.MutationResult, error) {
 			return c.Mailbox().Move(context.Background(), []string{"ok", "gone"}, "trash", "Label_1")
 		}, []string{"Label_1"}, []string{"TRASH", "SPAM"}, false},

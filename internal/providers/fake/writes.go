@@ -120,6 +120,7 @@ func (b *mailbox) Spam(ctx context.Context, ids []string) ([]model.MutationResul
 	return b.Move(ctx, ids, "inbox", "spam")
 }
 func (b *mailbox) Move(ctx context.Context, ids []string, _, dest string) ([]model.MutationResult, error) {
+	dest = folderID(dest)
 	if err := b.folderExists(ctx, dest); err != nil {
 		return nil, err
 	}

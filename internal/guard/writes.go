@@ -193,9 +193,10 @@ func (g *Guard) writer(ctx context.Context, op audit.Operation, from string, opt
 	case audit.Spam:
 		call = func(ids []string) ([]model.MutationResult, error) { return g.mailbox.Spam(ctx, ids) }
 	case audit.Move:
-		// A move into trash or spam would bypass mail.trash or mail.spam and their policy keys.
-		bin, _ := model.ParseFolderName(*opts.Folder)
-		if bin != model.Trash && bin != model.Spam {
+		// A move into trash or spam would bypass mail.trash or mail.spam and their policy keys. A common folder name
+		// is a destination on every provider, which maps it in Move.
+		bin, named := model.ParseFolderName(*opts.Folder)
+		if !named {
 			folders, err := g.mailbox.Folders(ctx)
 			if err != nil {
 				return nil, err

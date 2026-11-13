@@ -28,6 +28,10 @@ func TestTrashAndSpamAreReadableAndOnlyTrashAndSpamMoveMailIntoThem(t *testing.T
 	if len(got) != 1 || !got[0].OK || s.value("folder", "lunch") != "projects" {
 		t.Fatalf("restore=%+v folder=%s", got, s.value("folder", "lunch"))
 	}
+	got = decode[[]result](t, s.ok("mail", "move", "Inbox", "lunch"))
+	if len(got) != 1 || !got[0].OK || s.value("folder", "lunch") != "inbox" {
+		t.Fatalf("move to Inbox=%+v folder=%s", got, s.value("folder", "lunch"))
+	}
 	s.refused("move refused: use mail.trash", "mail", "move", "trash", "invoice")
 	s.refused("move refused: use mail.spam", "mail", "move", "spam", "invoice")
 	if s.value("folder", "invoice") != "inbox" {
