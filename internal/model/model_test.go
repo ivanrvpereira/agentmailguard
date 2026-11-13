@@ -90,3 +90,16 @@ func TestReplyRecipientsWithTheAgentCCAndBCC(t *testing.T) {
 		t.Fatalf("empty: %+v", got)
 	}
 }
+
+func TestParseFolderNameAcceptsTheCommonNamesInAnyCase(t *testing.T) {
+	for s, want := range map[string]model.FolderName{"inbox": model.Inbox, "INBOX": model.Inbox, "Trash": model.Trash, "SPAM": model.Spam, "spam": model.Spam} {
+		if got, ok := model.ParseFolderName(s); !ok || got != want {
+			t.Fatalf("%s: got %q %v", s, got, ok)
+		}
+	}
+	for _, s := range []string{"", "sent", "archive", "junkemail", "deleteditems", "TRASH ", "Label_1"} {
+		if got, ok := model.ParseFolderName(s); ok || got != "" {
+			t.Fatalf("%s: got %q %v", s, got, ok)
+		}
+	}
+}

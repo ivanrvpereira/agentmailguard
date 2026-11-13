@@ -510,3 +510,46 @@ func TestCalendarRespondRefusesACommentWithoutNotification(t *testing.T) {
 		t.Fatalf("respond=%v writes=%v", err, w.responses)
 	}
 }
+
+// limitedWriter and limitedMailbox state every model.Limits part, as the Gmail adapter does.
+type limitedWriter struct{ *calendarWriter }
+
+func (limitedWriter) Limits() model.Limits {
+	return model.Limits{NoFlagComplete: true, NoCancelComment: true, NoSilentResponse: true}
+}
+
+type limitedMailbox struct{ *writer }
+
+func (limitedMailbox) Limits() model.Limits { return limitedWriter{}.Limits() }
+
+// A part that the provider's Limits exclude is refused by name before the policy decision: nothing waits for
+// approval, nothing is written or audited. The same calls without that part run.
+func TestLimitsRefuseThePartsAProviderCannotCarryOutBeforeThePolicy(t *testing.T) {
+	policy := allowAll
+	policy.Base.CalendarCancel, policy.Base.CalendarRespond = config.Approve, config.Approve
+	w := meetingWriter()
+	b := limitedMailbox{&writer{mailbox: &mailbox{}}}
+	g, c, path := policyGuard(t, b, limitedWriter{w}, scoring(0.08), policy)
+	ctx := t.Context()
+	for want, call := range map[guard.GuardError]func() error{
+		guard.CalendarCancelCommentUnsupported: func() error { return g.CalendarCancel(ctx, "e1", "CANARY comment") },
+		guard.CalendarNoNotifyUnsupported: func() error {
+			return g.CalendarRespond(ctx, "e1", model.EventResponse{Response: model.ResponseAccept, NoNotify: true})
+		},
+		guard.FlagCompleteUnsupported: func() error { _, err := g.Flag(ctx, []string{"m1"}, model.Complete); return err },
+	} {
+		if err := call(); err != want {
+			t.Fatalf("%s: err=%v", want, err)
+		}
+	}
+	if pending, err := c.ListPending(ctx, 10, "work"); err != nil || len(pending) != 0 || len(w.ids) != 0 || len(b.flags) != 0 || len(auditRecords(t, path)) != 0 {
+		t.Fatalf("pending=%d err=%v writes=%v flags=%v", len(pending), err, w.ids, b.flags)
+	}
+	if _, err := g.Flag(ctx, []string{"m1"}, model.Flagged); err != nil || !reflect.DeepEqual(b.flags, []model.FlagState{model.Flagged}) {
+		t.Fatalf("flagged: err=%v flags=%v", err, b.flags)
+	}
+	var pending guard.PendingError
+	if err := g.CalendarCancel(ctx, "e1", ""); !errors.As(err, &pending) {
+		t.Fatalf("cancel without comment: %v", err)
+	}
+}

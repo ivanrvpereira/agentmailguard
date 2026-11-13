@@ -17,6 +17,8 @@ Without this grant, meeting commands fail with `missing_scopes` before any Graph
 After `missing_scopes`, run `amgd account login ALIAS` again on the daemon host.
 Gmail login requests the `calendar.events.owned` scope. Without this grant, meeting commands fail with `missing_scopes` before any Google Calendar request.
 
+An event's `show_as` is the provider's own value: Graph `showAs` on Microsoft 365 (`free`, `tentative`, `busy`, `oof`, `workingElsewhere`, or `unknown`), and on Gmail `free` for an event that does not block time (transparency `transparent`) and `busy` otherwise.
+
 Times use the format `YYYY-MM-DD HH:MM` in the local timezone of the client.
 The client refuses other formats, times that do not exist because of a DST change, and years outside 1–9999.
 The client does not refuse a time that occurs two times when clocks go back. It uses one of the two offsets, so do not use such a time.
@@ -50,14 +52,14 @@ An update without `--online` leaves the online meeting unchanged. Updates cannot
 Only the organizer can update or cancel an event.
 Only an attendee can respond. The response goes to the organizer unless you use `--no-notify`.
 On Microsoft 365, `calendar respond --no-notify` records your response without notifying the organizer (Graph `sendResponse` set to `false`). `--no-notify` with `--comment` is invalid usage, because the comment would reach nobody; on the HTTP interface it is `invalid request`.
-Google Calendar always notifies the organizer of a response. On Gmail, `calendar respond --no-notify` fails with `calendar response refused: responses without notification are not supported for this account`, before any credential or provider access.
+Google Calendar always notifies the organizer of a response. On Gmail, `calendar respond --no-notify` fails with `calendar response refused: responses without notification are not supported for this account`, before the policy decision and any write.
 There is no proposal of a new time.
 On Gmail, a response changes only your own attendee entry, and the event must list you as an attendee.
 The daemon refuses recurring events and cancelled events. It does not write in these cases.
 
 Every Gmail meeting command notifies all guests (`sendUpdates=all`).
 On Gmail, `calendar cancel` deletes the event and notifies the guests. Google keeps the deleted event on your calendar with the status `cancelled`, so it can be restored from the calendar trash for 30 days. The daemon never deletes an event permanently.
-Google sends no cancellation message. On Gmail, `calendar cancel --comment` fails with `calendar cancel refused: comments are not supported for this account`, before any credential or provider access. On Microsoft 365, the comment goes with the cancellation.
+Google sends no cancellation message. On Gmail, `calendar cancel` with a nonempty `--comment` fails with `calendar cancel refused: comments are not supported for this account`, before the policy decision and any write. On Microsoft 365, the comment goes with the cancellation.
 
 Invites need at least one required attendee address. The daemon sets no maximum on attendee lists: the provider refuses what it does not accept.
 

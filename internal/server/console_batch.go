@@ -25,7 +25,7 @@ func (c *console) batch(ctx context.Context, w http.ResponseWriter, r *http.Requ
 	form, ok := readForm(w, r, maxBatchBytes, "id", "decision", "return")
 	ids := slices.Compact(slices.Sorted(slices.Values(form["id"])))
 	decision := form.Get("decision")
-	if !ok || len(form["decision"]) != 1 || (decision != "approve" && decision != "deny") || len(form["return"]) > 1 ||
+	if !ok || len(form["decision"]) != 1 || (decision != decisionApprove && decision != decisionDeny) || len(form["return"]) > 1 ||
 		len(ids) == 0 || len(ids) > maxBatchIDs || slices.ContainsFunc(ids, func(id string) bool { return !approvalIDPattern.MatchString(id) }) {
 		plain(w, 400, "invalid request")
 		return
@@ -50,12 +50,12 @@ func (c *console) batch(ctx context.Context, w http.ResponseWriter, r *http.Requ
 	// A run that started finishes even when the browser goes away; Close still cancels it.
 	ctx = context.WithoutCancel(ctx)
 	for _, item := range items {
-		if decision == "approve" && needsReview(item) {
+		if decision == decisionApprove && needsReview(item) {
 			n.review++
 			continue
 		}
 		run, ran := c.s.Deny, &n.denied
-		if decision == "approve" {
+		if decision == decisionApprove {
 			run, ran = c.s.Approve, &n.approved
 		}
 		err := run(ctx, item.ID)

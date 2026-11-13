@@ -264,6 +264,9 @@ func TestMutationsChangeMessagesAndReportMissingIDsInOrder(t *testing.T) {
 	if got := folderOf(t, m, "old"); !reflect.DeepEqual(got.Categories, []string{"Home"}) {
 		t.Fatalf("categories=%v", got.Categories)
 	}
+	if r, err := m.Move(ctx, []string{"arc"}, "projects", "Inbox"); err != nil || len(r) != 1 || !r[0].OK || !reflect.DeepEqual(folderOf(t, m, "arc").Folders, []string{"inbox"}) {
+		t.Fatalf("move to Inbox: result=%+v err=%v", r, err)
+	}
 	if _, err := m.Move(ctx, []string{"new"}, "archive", "nowhere"); err == nil {
 		t.Fatal("move to an unknown folder accepted")
 	}
@@ -642,10 +645,20 @@ func TestThreadMessagesInKeepsTheConversationMessagesOfOneFolderNewestFirst(t *t
 		('demo@fake.test', 'filed-reply', 'old-bin', 'ana@example.test', 'Re: Old report', '2026-03-08T09:00:00Z', 0, 'old'),
 		('other', 'their-reply', 'inbox', 'ana@example.test', 'Re: Old report', '2026-03-06T09:00:00Z', 0, 'old')`)
 	seed(t, home, `INSERT INTO folders (account, id, name, parent) VALUES ('demo@fake.test', 'old-bin', 'Old', 'trash')`)
-	for folder, want := range map[string][]string{"inbox": {"inbox-reply", "old"}, "sent": {"sent-reply"}, "archive": {}, "trash": {"binned-reply"}, "old-bin": {"filed-reply"}} {
+	// The common folder names work in any case; other folder IDs are as given.
+	for folder, want := range map[string][]string{"INBOX": {"inbox-reply", "old"}, "sent": {"sent-reply"}, "archive": {}, "Trash": {"binned-reply"}, "old-bin": {"filed-reply"}} {
 		if got, err := m.ThreadMessagesIn(ctx, "old", folder); err != nil || got == nil || !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: ids=%#v err=%v", folder, got, err)
 		}
+		if list, err := m.List(ctx, folder, model.PageRequest{}, false); err != nil || len(list.Messages) < len(want) {
+			t.Errorf("%s: list=%v err=%v", folder, ids(list.Messages), err)
+		}
+		if found, err := m.Search(ctx, model.SearchQuery{Folder: &folder}, model.PageRequest{}, false); err != nil || len(found.Messages) < len(want) {
+			t.Errorf("%s: search=%v err=%v", folder, ids(found.Messages), err)
+		}
+	}
+	if got, err := m.ThreadMessagesIn(ctx, "old", "SENT"); !errors.Is(err, model.MailboxError("NotFoundError")) || len(got) != 0 {
+		t.Errorf("SENT is no folder ID: ids=%v err=%v", got, err)
 	}
 	for _, unknown := range []string{"gone", "theirs"} {
 		if got, err := m.ThreadMessagesIn(ctx, unknown, "inbox"); !errors.Is(err, model.MailboxError("NotFoundError")) || len(got) != 0 {

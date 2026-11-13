@@ -360,6 +360,20 @@ func TestManualFlagAndDraftUpdatePreserveRequestedPayloads(t *testing.T) {
 	}
 }
 
+// The inbox name is a move destination in any case, though no provider lists it among its folder IDs.
+func TestMoveToTheInboxNameReachesTheProvider(t *testing.T) {
+	w := &writer{mailbox: &mailbox{}}
+	g, _, _ := setup(t, w, &screener{verdict: model.Green})
+	for _, dest := range []string{"inbox", "Inbox", "INBOX"} {
+		if got, err := g.Move(context.Background(), []string{"m1"}, dest); err != nil || len(got) != 1 || !got[0].OK {
+			t.Fatalf("%s: results=%+v err=%v", dest, got, err)
+		}
+	}
+	if want := []string{"move", "move", "move"}; !reflect.DeepEqual(w.calls, want) {
+		t.Fatalf("calls=%v", w.calls)
+	}
+}
+
 func TestManualRefusalsKeepFixedReasonsWithoutWriting(t *testing.T) {
 	w := &writer{mailbox: &mailbox{}}
 	g, _, path := setup(t, w, &screener{verdict: model.Green})
@@ -374,6 +388,7 @@ func TestManualRefusalsKeepFixedReasonsWithoutWriting(t *testing.T) {
 		{"spam folder", "move refused: use mail.spam", func() error { _, err := g.Move(ctx, ids, "junk"); return err }},
 		{"trash name", "move refused: use mail.trash", func() error { _, err := g.Move(ctx, ids, "Trash"); return err }},
 		{"spam name", "move refused: use mail.spam", func() error { _, err := g.Move(ctx, ids, "spam"); return err }},
+		{"upper spam name", "move refused: use mail.spam", func() error { _, err := g.Move(ctx, ids, "SPAM"); return err }},
 		{"flag", "flag state must be one of flagged, complete, none", func() error { _, err := g.Flag(ctx, ids, "CANARY flag"); return err }},
 		{"empty categories", "categorize needs at least one category to add or remove", func() error { _, err := g.Categorize(ctx, ids, nil, nil); return err }},
 		{"unknown category", "categorize refused: not in the category list", func() error { _, err := g.Categorize(ctx, ids, []string{"CANARY category"}, nil); return err }},

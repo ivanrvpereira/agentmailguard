@@ -231,6 +231,12 @@ func readForm(w http.ResponseWriter, r *http.Request, limit int64, allowed ...st
 // confirmReviewed is the only value of the confirm field: the owner ticked "I reviewed it".
 const confirmReviewed = "flagged"
 
+// decisionApprove and decisionDeny are the only values of the decision field, as the console forms send them.
+const (
+	decisionApprove = "approve"
+	decisionDeny    = "deny"
+)
+
 // decide approves or denies the action from a form with one decision, an optional confirm, and an optional return,
 // then shows the action page again. An approve of an action that needs review runs only with the confirm.
 func (c *console) decide(ctx context.Context, w http.ResponseWriter, r *http.Request, id string) {
@@ -241,15 +247,15 @@ func (c *console) decide(ctx context.Context, w http.ResponseWriter, r *http.Req
 	}
 	var run func(context.Context, string) error
 	switch form.Get("decision") {
-	case "approve":
+	case decisionApprove:
 		run = c.s.Approve
-	case "deny":
+	case decisionDeny:
 		run = c.s.Deny
 	default:
 		plain(w, 400, "invalid request")
 		return
 	}
-	if form.Get("decision") == "approve" && !form.Has("confirm") {
+	if form.Get("decision") == decisionApprove && !form.Has("confirm") {
 		item, err := c.s.cache.GetPending(ctx, id)
 		if err != nil && !errors.Is(err, cache.ErrPendingNotFound) {
 			plain(w, 500, "approvals unavailable")

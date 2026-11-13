@@ -86,7 +86,7 @@ func calendarRespondCmd(r *runner) *cobra.Command {
 		}
 		return r.call(c, "calendar.respond", p, false)
 	})
-	c.Flags().StringVar(&response, "response", "", "accept, tentative, or decline")
+	c.Flags().StringVar(&response, "response", "", choices(model.MeetingResponses))
 	c.Flags().StringVar(&comment, "comment", "", "message sent to the organizer with the response; not with --no-notify")
 	c.Flags().BoolVar(&noNotify, "no-notify", false, "record the response without notifying the organizer; refused on Gmail, which always notifies")
 	return c

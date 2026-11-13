@@ -69,8 +69,9 @@ func (m *mailbox) Flag(ctx context.Context, ids []string, state model.FlagState)
 // Move adds the dest label and removes the label of from, which becomes a label ID as List makes it
 // (https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/modify). One labels read
 // serves the dest check and the source. A source that is the destination is only added, so no label is both added
-// and removed.
+// and removed. A common folder name as dest maps to its system label.
 func (m *mailbox) Move(ctx context.Context, ids []string, from, dest string) ([]model.MutationResult, error) {
+	dest = labelOf(dest)
 	a, err := m.labels(ctx)
 	if err != nil {
 		return nil, err
@@ -80,7 +81,7 @@ func (m *mailbox) Move(ctx context.Context, ids []string, from, dest string) ([]
 	}
 	// Like Gmail's "Move to", a move also takes the message out of the trash and spam. dest is never one of them.
 	remove := []string{}
-	for _, l := range []string{labelIn(a, from), "TRASH", "SPAM"} {
+	for _, l := range []string{labelOf(from), "TRASH", "SPAM"} {
 		if l != dest && !slices.Contains(remove, l) {
 			remove = append(remove, l)
 		}
